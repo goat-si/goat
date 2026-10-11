@@ -59,6 +59,7 @@ import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateStatusText,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -280,6 +281,7 @@ function AboutVersionTitle() {
 
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
+  const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
 
@@ -449,6 +451,75 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
+      {hasDesktopBridge &&
+      updateState &&
+      typeof window.desktopBridge?.setUpdateInstallPolicy === "function" ? (
+        <SettingsRow
+          id="update-install-policy"
+          title="Update installation"
+          description={getDesktopUpdateStatusText(updateState)}
+          control={
+            <Select
+              value={updateState.installPolicy}
+              onValueChange={(value) => {
+                if (
+                  value !== "restart-when-idle" &&
+                  value !== "install-on-quit" &&
+                  value !== "paused"
+                )
+                  return;
+                const bridge = window.desktopBridge;
+                if (
+                  !bridge ||
+                  typeof bridge.setUpdateInstallPolicy !== "function" ||
+                  value === updateState.installPolicy
+                )
+                  return;
+                setIsChangingUpdatePolicy(true);
+                void bridge
+                  .setUpdateInstallPolicy(value)
+                  .catch((error: unknown) => {
+                    toastManager.add(
+                      stackedThreadToast({
+                        type: "error",
+                        title: "Could not change update installation",
+                        description:
+                          error instanceof Error ? error.message : "Update policy change failed.",
+                      }),
+                    );
+                  })
+                  .finally(() => setIsChangingUpdatePolicy(false));
+              }}
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-48"
+                aria-label="Update installation"
+                disabled={isChangingUpdatePolicy}
+              >
+                <SelectValue>
+                  {updateState.installPolicy === "restart-when-idle"
+                    ? "Restart when idle"
+                    : updateState.installPolicy === "install-on-quit"
+                      ? "Install on quit"
+                      : "Paused"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="restart-when-idle">
+                  Restart when idle
+                </SelectItem>
+                <SelectItem hideIndicator value="install-on-quit">
+                  Install on quit
+                </SelectItem>
+                <SelectItem hideIndicator value="paused">
+                  Paused
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+      ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
           {...searchableSetting("update-track")}

@@ -21,6 +21,10 @@ export function createInitialDesktopUpdateState(
   channel: DesktopUpdateChannel,
 ): DesktopUpdateState {
   return {
+    installPolicy: "restart-when-idle",
+    pendingRestartReason: null,
+    pendingUpdate: null,
+    recoveryStatus: null,
     enabled: false,
     status: "disabled",
     channel,

@@ -1,6 +1,10 @@
 import {
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  DesktopUpdateInstallPolicySchema,
+  DesktopUpdateStateSchema,
+  type DesktopUpdateInstallPolicy,
+  type DesktopUpdateState,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
 } from "@t3tools/contracts";
@@ -33,6 +37,8 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly updateInstallPolicy: DesktopUpdateInstallPolicy;
+  readonly pendingUpdate: DesktopUpdateState["pendingUpdate"];
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
@@ -82,6 +88,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
+  updateInstallPolicy: "restart-when-idle",
+  pendingUpdate: null,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
   wslBackendEnabled: false,
@@ -104,6 +112,8 @@ const DesktopSettingsDocument = Schema.Struct({
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
+  pendingUpdate: Schema.optionalKey(DesktopUpdateStateSchema.fields.pendingUpdate),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   // Newer form of the WSL toggle. `wslMode` is still accepted on load so
@@ -171,6 +181,12 @@ export class DesktopAppSettings extends Context.Service<
       readonly enabled: boolean;
       readonly port: Option.Option<number>;
     }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setUpdateInstallPolicy: (
+      policy: DesktopUpdateInstallPolicy,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setPendingUpdate: (
+      pending: DesktopUpdateState["pendingUpdate"],
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -243,6 +259,8 @@ function normalizeDesktopSettingsDocument(
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
+    updateInstallPolicy: parsed.updateInstallPolicy ?? defaultSettings.updateInstallPolicy,
+    pendingUpdate: parsed.pendingUpdate ?? null,
     updateChannelConfiguredByUser,
     wslBackendEnabled,
     wslDistro: normalizeWslDistro(parsed.wslDistro),
@@ -278,6 +296,9 @@ function toDesktopSettingsDocument(
   if (settings.tailscaleServePort !== defaults.tailscaleServePort) {
     document.tailscaleServePort = settings.tailscaleServePort;
   }
+  if (settings.updateInstallPolicy !== defaults.updateInstallPolicy)
+    document.updateInstallPolicy = settings.updateInstallPolicy;
+  if (settings.pendingUpdate !== null) document.pendingUpdate = settings.pendingUpdate;
   if (settings.updateChannel !== defaults.updateChannel) {
     document.updateChannel = settings.updateChannel;
   }
@@ -350,6 +371,7 @@ function setUpdateChannel(
     ? settings
     : {
         ...settings,
+        pendingUpdate: null,
         updateChannel: requestedChannel,
         updateChannelConfiguredByUser: true,
       };
@@ -558,6 +580,19 @@ export const make = Effect.gen(function* () {
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
       ),
+    setUpdateInstallPolicy: (policy) =>
+      persist((settings) =>
+        settings.updateInstallPolicy === policy
+          ? settings
+          : { ...settings, updateInstallPolicy: policy },
+      ),
+    setPendingUpdate: (pendingUpdate) =>
+      persist((settings) =>
+        settings.pendingUpdate === pendingUpdate ||
+        (pendingUpdate !== null && pendingUpdate.channel !== settings.updateChannel)
+          ? settings
+          : { ...settings, pendingUpdate },
+      ),
     setUpdateChannel: (channel) =>
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
@@ -616,6 +651,19 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
+        setUpdateInstallPolicy: (policy) =>
+          update((settings) =>
+            settings.updateInstallPolicy === policy
+              ? settings
+              : { ...settings, updateInstallPolicy: policy },
+          ),
+        setPendingUpdate: (pendingUpdate) =>
+          update((settings) =>
+            settings.pendingUpdate === pendingUpdate ||
+            (pendingUpdate !== null && pendingUpdate.channel !== settings.updateChannel)
+              ? settings
+              : { ...settings, pendingUpdate },
+          ),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),

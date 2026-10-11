@@ -13,6 +13,10 @@ const NO_ATTEMPTS: RemoteDesktopUpdateAttempts = { checks: 0, downloads: 0 };
 
 function makeState(overrides: Partial<DesktopUpdateState> = {}): DesktopUpdateState {
   return {
+    installPolicy: "restart-when-idle",
+    pendingRestartReason: null,
+    pendingUpdate: null,
+    recoveryStatus: null,
     enabled: true,
     status: "idle",
     channel: "latest",

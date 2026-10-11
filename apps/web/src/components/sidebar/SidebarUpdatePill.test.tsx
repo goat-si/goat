@@ -8,6 +8,10 @@ import {
 } from "./SidebarUpdatePill";
 
 const nightlyState: DesktopUpdateState = {
+  installPolicy: "restart-when-idle",
+  pendingRestartReason: null,
+  pendingUpdate: null,
+  recoveryStatus: null,
   enabled: true,
   status: "available",
   channel: "nightly",

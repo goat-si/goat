@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createDesktopUpdateStateAtom, DesktopUpdateStateReadError } from "./desktopUpdate";
 
 const baseState: DesktopUpdateState = {
+  installPolicy: "restart-when-idle",
+  pendingRestartReason: null,
+  pendingUpdate: null,
+  recoveryStatus: null,
   enabled: true,
   status: "idle",
   channel: "latest",

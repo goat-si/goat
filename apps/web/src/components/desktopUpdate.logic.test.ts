@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { getDesktopUpdateStatusText } from "./desktopUpdate.logic";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
 import {
@@ -16,6 +17,10 @@ import {
 } from "./desktopUpdate.logic";
 
 const baseState: DesktopUpdateState = {
+  installPolicy: "restart-when-idle",
+  pendingRestartReason: null,
+  pendingUpdate: null,
+  recoveryStatus: null,
   enabled: true,
   status: "idle",
   channel: "latest",
@@ -346,4 +351,31 @@ describe("getDesktopUpdateButtonTooltip", () => {
       "Up to date",
     );
   });
+});
+
+it("describes automatic policy, pending work and network recovery", () => {
+  expect(getDesktopUpdateStatusText({ ...baseState, installPolicy: "paused" })).toContain("paused");
+  expect(getDesktopUpdateStatusText({ ...baseState, pendingRestartReason: "busy" })).toContain(
+    "backend work finishes",
+  );
+  expect(
+    getDesktopUpdateStatusText({
+      ...baseState,
+      pendingRestartReason: "unknown",
+      message: "Automatic restart postponed: WSL activity cannot be verified.",
+    }),
+  ).toContain("WSL");
+  expect(
+    getDesktopUpdateStatusText({
+      ...baseState,
+      installPolicy: "install-on-quit",
+      downloadedVersion: "1.2.4",
+    }),
+  ).toContain("when you quit");
+  expect(getDesktopUpdateStatusText({ ...baseState, recoveryStatus: "needs-network" })).toContain(
+    "network",
+  );
+  expect(getDesktopUpdateStatusText({ ...baseState, recoveryStatus: "restoring" })).toContain(
+    "Restoring",
+  );
 });

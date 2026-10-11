@@ -1,6 +1,7 @@
 import {
   DesktopUpdateActionResultSchema,
   DesktopUpdateChannelSchema,
+  DesktopUpdateInstallPolicySchema,
   DesktopUpdateCheckResultSchema,
   DesktopUpdateStateSchema,
 } from "@t3tools/contracts";
@@ -58,5 +59,15 @@ export const checkForUpdate = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.updates.check")(function* () {
     const updates = yield* DesktopUpdates.DesktopUpdates;
     return yield* updates.check("web-ui");
+  }),
+});
+
+export const setUpdateInstallPolicy = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_SET_INSTALL_POLICY_CHANNEL,
+  payload: DesktopUpdateInstallPolicySchema,
+  result: DesktopUpdateStateSchema,
+  handler: Effect.fn("desktop.ipc.updates.setInstallPolicy")(function* (policy) {
+    const updates = yield* DesktopUpdates.DesktopUpdates;
+    return yield* updates.setInstallPolicy(policy);
   }),
 });

@@ -1,3 +1,4 @@
+import { DesktopUpdateInstallPolicySchema, DesktopUpdateStateSchema } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -28,6 +29,8 @@ const DesktopSettingsPatch = Schema.Struct({
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
+  updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
+  pendingUpdate: Schema.optionalKey(DesktopUpdateStateSchema.fields.pendingUpdate),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -91,6 +94,37 @@ function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
 }
 
 describe("DesktopSettings", () => {
+  it.effect("round trips update policies and the durable pending record with sparse defaults", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fs = yield* FileSystem.FileSystem;
+        yield* settings.setUpdateChannel("nightly");
+        yield* settings.setUpdateChannel("nightly");
+        const pending = {
+          version: "1.2.4-nightly.20261012.1",
+          channel: "nightly" as const,
+          downloadedAt: "2026-10-12T00:00:00.000Z",
+        };
+        assert.equal((yield* settings.get).updateInstallPolicy, "restart-when-idle");
+        for (const policy of ["paused", "install-on-quit", "restart-when-idle"] as const) {
+          yield* settings.setUpdateInstallPolicy(policy);
+          yield* settings.setPendingUpdate(pending);
+          const loaded = yield* settings.load;
+          assert.equal(loaded.updateInstallPolicy, policy);
+          assert.deepEqual(loaded.pendingUpdate, pending);
+        }
+        yield* settings.setPendingUpdate(null);
+        const document = yield* decodeDesktopSettingsPatch(
+          yield* fs.readFileString(environment.desktopSettingsPath),
+        );
+        assert.isUndefined(document.pendingUpdate);
+        assert.isUndefined(document.updateInstallPolicy);
+      }),
+    ),
+  );
+
   it.effect(
     "persists disabling and re-enabling local execution without clearing backend settings",
     () =>
@@ -130,6 +164,8 @@ describe("DesktopSettings", () => {
         serverExposureMode: "local-only",
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        updateInstallPolicy: "restart-when-idle",
+        pendingUpdate: null,
         updateChannel: "nightly",
         updateChannelConfiguredByUser: false,
         wslBackendEnabled: false,
@@ -148,6 +184,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
         });
@@ -160,6 +198,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
@@ -268,6 +308,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -325,6 +367,8 @@ describe("DesktopSettings", () => {
             serverExposureMode: "network-accessible",
             tailscaleServeEnabled: true,
             tailscaleServePort: 8443,
+            updateInstallPolicy: "restart-when-idle",
+            pendingUpdate: null,
             updateChannel: "nightly",
             updateChannelConfiguredByUser: true,
             wslBackendEnabled: false,
@@ -391,6 +435,8 @@ describe("DesktopSettings", () => {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* writeSettingsPatch({
           serverExposureMode: "local-only",
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
         });
 
@@ -402,6 +448,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -419,6 +467,8 @@ describe("DesktopSettings", () => {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* writeSettingsPatch({
           serverExposureMode: "local-only",
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
         });
@@ -431,6 +481,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
@@ -459,6 +511,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: true,
           tailscaleServePort: 443,
+          updateInstallPolicy: "restart-when-idle",
+          pendingUpdate: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,

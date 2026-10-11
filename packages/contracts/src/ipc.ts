@@ -267,7 +267,22 @@ export interface DesktopRuntimeInfo {
   runningUnderArm64Translation: boolean;
 }
 
+export const DesktopUpdateInstallPolicySchema = Schema.Literals([
+  "restart-when-idle",
+  "install-on-quit",
+  "paused",
+]);
+export type DesktopUpdateInstallPolicy = typeof DesktopUpdateInstallPolicySchema.Type;
+
 export interface DesktopUpdateState {
+  installPolicy: DesktopUpdateInstallPolicy;
+  pendingRestartReason: null | "busy" | "unknown" | "paused";
+  pendingUpdate: null | {
+    readonly version: string;
+    readonly channel: DesktopUpdateChannel;
+    readonly downloadedAt: string;
+  };
+  recoveryStatus: null | "restoring" | "needs-network";
   enabled: boolean;
   status: DesktopUpdateStatus;
   channel: DesktopUpdateChannel;
@@ -299,6 +314,16 @@ export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
 });
 
 export const DesktopUpdateStateSchema = Schema.Struct({
+  installPolicy: DesktopUpdateInstallPolicySchema,
+  pendingRestartReason: Schema.NullOr(Schema.Literals(["busy", "unknown", "paused"])),
+  pendingUpdate: Schema.NullOr(
+    Schema.Struct({
+      version: Schema.String,
+      channel: DesktopUpdateChannelSchema,
+      downloadedAt: Schema.String,
+    }),
+  ),
+  recoveryStatus: Schema.NullOr(Schema.Literals(["restoring", "needs-network"])),
   enabled: Schema.Boolean,
   status: DesktopUpdateStatusSchema,
   channel: DesktopUpdateChannelSchema,
@@ -1248,6 +1273,7 @@ export interface DesktopBridge {
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
+  setUpdateInstallPolicy: (policy: DesktopUpdateInstallPolicy) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;

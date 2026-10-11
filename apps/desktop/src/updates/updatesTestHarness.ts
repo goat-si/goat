@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState, DesktopUpdateInstallPolicy } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as PlatformError from "effect/PlatformError";
@@ -13,6 +13,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import { HttpClient } from "effect/http";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 /** Shared DesktopUpdates test harness: a fully stubbed updater layer whose
@@ -22,6 +23,12 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 export const flushCallbacks = Effect.yieldNow;
 
 export interface UpdatesHarnessOptions {
+  readonly httpClient?: HttpClient.HttpClient;
+  readonly backendInstances?: readonly DesktopBackendPool.DesktopBackendInstance[];
+  readonly installPolicy?: DesktopUpdateInstallPolicy;
+  readonly initialSettings?: DesktopAppSettings.DesktopSettings;
+  readonly beforeSetPendingUpdate?: Effect.Effect<void>;
+  readonly setPendingUpdateError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly checkForUpdates?: Effect.Effect<
     void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
@@ -29,7 +36,7 @@ export interface UpdatesHarnessOptions {
   readonly beforeSetUpdateChannel?: Effect.Effect<void>;
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
-  readonly downloadUpdate?: Effect.Effect<void>;
+  readonly downloadUpdate?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterDownloadUpdateError>;
   readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly startBackend?: Effect.Effect<void>;
@@ -45,6 +52,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let downloadCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
+  let autoDownload = true;
+  let autoInstallOnAppQuit = true;
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -72,8 +81,14 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         feedUrls.push(options);
       }),
-    setAutoDownload: () => Effect.void,
-    setAutoInstallOnAppQuit: () => Effect.void,
+    setAutoDownload: (value) =>
+      Effect.sync(() => {
+        autoDownload = value;
+      }),
+    setAutoInstallOnAppQuit: (value) =>
+      Effect.sync(() => {
+        autoInstallOnAppQuit = value;
+      }),
     setChannel: () => Effect.void,
     setAllowPrerelease: () => Effect.void,
     allowDowngrade: Effect.sync(() => allowDowngrade),
@@ -145,7 +160,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     }),
     waitForReady: () => Effect.succeed(true),
   };
-  const layerBackend = DesktopBackendPool.layerTest([stubBackendInstance]);
+  const layerBackend = DesktopBackendPool.layerTest(
+    options.backendInstances ?? [stubBackendInstance],
+  );
 
   const layerEnvironment = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
@@ -173,40 +190,58 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   let testSettings: DesktopAppSettings.DesktopSettings = {
     ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    updateInstallPolicy: options.installPolicy ?? "paused",
+    ...options.initialSettings,
   };
   const setUpdateChannelError = options.setUpdateChannelError;
-  const layerSettings =
-    setUpdateChannelError || options.beforeSetUpdateChannel
-      ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
-          get: Effect.sync(() => testSettings),
-          load: Effect.sync(() => testSettings),
-          setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
-          setServerExposureMode: () => Effect.die("unexpected server exposure update"),
-          setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
-          setUpdateChannel: (channel) =>
-            setUpdateChannelError
-              ? Effect.fail(setUpdateChannelError)
-              : (options.beforeSetUpdateChannel ?? Effect.void).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      const changed = testSettings.updateChannel !== channel;
-                      testSettings = {
-                        ...testSettings,
-                        updateChannel: channel,
-                        updateChannelConfiguredByUser: true,
-                      };
-                      return { settings: testSettings, changed };
-                    }),
-                  ),
-                ),
-          setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
-          setWslDistro: () => Effect.die("unexpected WSL distro change"),
-          setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
-          setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
-          applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
-          applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
-        } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
-      : DesktopAppSettings.layer;
+  const layerSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
+    get: Effect.sync(() => testSettings),
+    load: Effect.sync(() => testSettings),
+    setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
+    setServerExposureMode: () => Effect.die("unexpected server exposure update"),
+    setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
+    setUpdateInstallPolicy: (policy) =>
+      Effect.sync(() => {
+        testSettings = { ...testSettings, updateInstallPolicy: policy };
+        return { settings: testSettings, changed: true };
+      }),
+    setPendingUpdate: (pendingUpdate) =>
+      (options.beforeSetPendingUpdate ?? Effect.void).pipe(
+        Effect.andThen(
+          options.setPendingUpdateError
+            ? Effect.fail(options.setPendingUpdateError)
+            : Effect.sync(() => {
+                if (pendingUpdate !== null && pendingUpdate.channel !== testSettings.updateChannel)
+                  return { settings: testSettings, changed: false };
+                testSettings = { ...testSettings, pendingUpdate };
+                return { settings: testSettings, changed: true };
+              }),
+        ),
+      ),
+    setUpdateChannel: (channel) =>
+      setUpdateChannelError
+        ? Effect.fail(setUpdateChannelError)
+        : (options.beforeSetUpdateChannel ?? Effect.void).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                const changed = testSettings.updateChannel !== channel;
+                testSettings = {
+                  ...testSettings,
+                  pendingUpdate: null,
+                  updateChannel: channel,
+                  updateChannelConfiguredByUser: true,
+                };
+                return { settings: testSettings, changed };
+              }),
+            ),
+          ),
+    setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
+    setWslDistro: () => Effect.die("unexpected WSL distro change"),
+    setLocalEnvironmentEnabled: () => Effect.die("unexpected local environment toggle"),
+    setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
+    applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
+    applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
+  } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
 
   // Tracks the restart markers installs leave, so installs stay free of real
   // disk I/O that would outrun the tests' settle loops.
@@ -235,6 +270,12 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   });
 
   const layer = DesktopUpdates.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        options.httpClient ?? HttpClient.make(() => Effect.die("unexpected activity request")),
+      ),
+    ),
     Layer.provide(layerFileSystem),
     Layer.provideMerge(layerUpdater),
     Layer.provideMerge(layerWindow),
@@ -255,6 +296,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   return {
     layer,
+    settings: () => testSettings,
     checkCount: () => checkCount,
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
@@ -262,6 +304,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     downloadCount: () => downloadCount,
     feedUrls: (): ElectronUpdater.ElectronUpdaterFeedUrl[] => feedUrls,
     fullChangelog: () => fullChangelog,
+    allowDowngrade: () => allowDowngrade,
+    autoDownload: () => autoDownload,
+    autoInstallOnAppQuit: () => autoInstallOnAppQuit,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(
         (total, eventListeners) => total + eventListeners.size,

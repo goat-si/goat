@@ -40,6 +40,10 @@ function getDescription(): ReactNode {
 
 function downloadedState(overrides: Partial<DesktopUpdateState> = {}): DesktopUpdateState {
   return {
+    installPolicy: "restart-when-idle",
+    pendingRestartReason: null,
+    pendingUpdate: null,
+    recoveryStatus: null,
     enabled: true,
     status: "downloaded",
     channel: "latest",

@@ -122,3 +122,22 @@ export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
     state.status !== "checking" && state.status !== "downloading" && state.status !== "disabled"
   );
 }
+
+/** Describes the app-owned automatic install policy and pending recovery. */
+export function getDesktopUpdateStatusText(state: DesktopUpdateState): string {
+  if (state.installPolicy === "paused")
+    return "Automatic downloads and installation are paused. You can still check, download, and install manually.";
+
+  if (state.recoveryStatus === "needs-network")
+    return "Connect to the network to restore the downloaded update.";
+  if (state.recoveryStatus === "restoring") return "Restoring the downloaded update…";
+  if (state.pendingRestartReason === "busy")
+    return "Automatic restart postponed until backend work finishes.";
+  if (state.pendingRestartReason === "unknown")
+    return state.message ?? "Automatic restart postponed: backend activity cannot be verified.";
+  if (state.installPolicy === "install-on-quit")
+    return state.downloadedVersion
+      ? "The downloaded update will install when you quit the app."
+      : "Updates download automatically and install when you quit the app.";
+  return "Updates download automatically and restart the app when every backend is idle.";
+}

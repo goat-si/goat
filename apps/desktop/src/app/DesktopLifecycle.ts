@@ -14,6 +14,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -38,10 +39,11 @@ export type DesktopLifecycleRuntimeServices =
 
 type DesktopLifecycleRegistrationServices =
   | DesktopLifecycleRuntimeServices
-  | ElectronWindow.ElectronWindow;
+  | ElectronWindow.ElectronWindow
+  | DesktopUpdates.DesktopUpdates;
 
 /**
- * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow | DesktopUpdates
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -101,6 +103,8 @@ function handleBeforeQuit(
   ) => Promise<A>,
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
+  beginQuit: () => boolean,
+  finishQuit: () => void,
 ): void {
   if (allowQuit()) {
     void runEffect(
@@ -114,10 +118,23 @@ function handleBeforeQuit(
   }
 
   event.preventDefault();
+  if (!beginQuit()) return;
   void runEffect(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      const update = yield* updates.getState;
+      if (
+        !(yield* Ref.get(state.quitting)) &&
+        update.installPolicy === "install-on-quit" &&
+        update.downloadedVersion !== null
+      ) {
+        yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;
+        const installation = yield* updates.installPrepared(update.downloadedVersion);
+        if (installation.accepted)
+          return installation.failed ? ("failed" as const) : ("installing" as const);
+      }
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
       yield* requestDesktopShutdownAndWait(
@@ -127,8 +144,13 @@ function handleBeforeQuit(
           ),
         ),
       );
+      return "shutdown" as const;
     }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).finally(() => {
+  ).then((result) => {
+    if (result !== "shutdown") {
+      if (result === "failed") finishQuit();
+      return;
+    }
     markQuitAllowed();
     void runEffect(
       Effect.gen(function* () {
@@ -198,6 +220,7 @@ export const make = DesktopLifecycle.of({
     const runEffect = Effect.runPromiseWith(context);
     let quitAllowed = false;
     let updaterQuitAllowed = false;
+    let quitInProgress = false;
     yield* electronTheme.onUpdated(() => {
       void runEffect(
         desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
@@ -229,6 +252,14 @@ export const make = DesktopLifecycle.of({
         () => quitAllowed || updaterQuitAllowed,
         () => {
           quitAllowed = true;
+        },
+        () => {
+          if (quitInProgress) return false;
+          quitInProgress = true;
+          return true;
+        },
+        () => {
+          quitInProgress = false;
         },
       );
     });
