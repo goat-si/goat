@@ -1,4 +1,5 @@
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
@@ -288,11 +289,9 @@ function validateNightlyWorkflow(source, yaml) {
         outputs.sha !== "${{ steps.resolve.outputs.sha }}" ||
         outputs.skip !== "${{ steps.resolve.outputs.skip }}" ||
         !Array.isArray(job.steps) ||
-        !job.steps.some(
-          (step) => isMapping(step) && step.id === "resolve" && Object.hasOwn(step, "run"),
-        )
+        !job.steps.some((step) => isMapping(step) && step.id === "resolve" && isPinnedResolve(step))
       ) {
-        fail("jobs.prepare outputs sha and skip must come from its resolve step");
+        fail("jobs.prepare outputs sha and skip must come from its pinned resolve step");
       }
     } else {
       const needs = typeof job.needs === "string" ? [job.needs] : job.needs;
@@ -350,18 +349,31 @@ const secretsContext = /(?:^|[^A-Za-z0-9_-])secrets(?![A-Za-z0-9_-])/i;
  * expression text counts: ${{ … }} segments anywhere, and whole `if` values,
  * which GitHub evaluates as expressions without the wrapper.
  */
+// Any string or mapping key that carries an expression is scanned as a whole, so
+// quoting inside the expression cannot hide the reference.
 function mentionsSecrets(value, key = "") {
   if (typeof value === "string") {
-    if (key === "if") return secretsContext.test(value);
-    return [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((match) =>
-      secretsContext.test(match[1] ?? ""),
-    );
+    return (key === "if" || value.includes("${{")) && secretsContext.test(value);
   }
   if (Array.isArray(value)) return value.some((item) => mentionsSecrets(item));
   if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(([entryKey, item]) => mentionsSecrets(item, entryKey));
+    return Object.entries(value).some(
+      ([entryKey, item]) => mentionsSecrets(entryKey) || mentionsSecrets(item, entryKey),
+    );
   }
   return false;
+}
+
+// prepare's resolve step is what checks the commit against dev; every checkout
+// trusts its sha output. Changing that step means updating this pin on purpose.
+const pinnedResolveSha256 = "0d9767c3212b66697d7f5b49b0fa87681b09c9d57756adcca3bbd2ea7988d15b";
+function isPinnedResolve(step) {
+  const pinned = JSON.stringify({
+    run: step.run,
+    env: step.env ?? null,
+    shell: step.shell ?? null,
+  });
+  return NodeCrypto.createHash("sha256").update(pinned).digest("hex") === pinnedResolveSha256;
 }
 
 let paths;

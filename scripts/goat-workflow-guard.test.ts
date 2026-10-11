@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds real git repositories and hook layouts on disk.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
@@ -694,6 +695,17 @@ const checkout = (ref = "${{ needs.prepare.outputs.sha }}") => ({
   with: { ref, "persist-credentials": false },
 });
 
+// The guard pins prepare's resolve step; reuse the shipped one.
+function shippedResolveStep(): Record<string, unknown> {
+  const yaml = NodeModule.createRequire(import.meta.url)(yamlSource) as {
+    parse: (source: string) => { jobs: { prepare: { steps: Array<Record<string, unknown>> } } };
+  };
+  const shipped = yaml.parse(NodeFS.readFileSync(NodePath.join(sourceRoot, nightlyPath), "utf8"));
+  const step = shipped.jobs.prepare.steps.find((candidate) => candidate.id === "resolve");
+  if (!step) throw new Error("shipped workflow has no resolve step");
+  return step;
+}
+
 type NightlyJobs = Record<string, Record<string, unknown>>;
 function nightlyJobs(): NightlyJobs {
   return {
@@ -705,7 +717,7 @@ function nightlyJobs(): NightlyJobs {
         skip: "${{ steps.resolve.outputs.skip }}",
       },
       steps: [
-        { id: "resolve", run: "echo resolve" },
+        shippedResolveStep(),
         checkout("${{ steps.resolve.outputs.sha }}"),
         { run: "echo prepare" },
       ],
@@ -917,11 +929,35 @@ describe("goat pre-push nightly workflow guard", () => {
     [
       "prepare outputs that do not come from the resolve step",
       withJob("prepare", { outputs: { sha: "main", skip: "false" } }),
-      "jobs.prepare outputs sha and skip must come from its resolve step",
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
     ],
     [
       "a secret read in an if condition",
       withJob("build_mac", { if: `${downstreamGateText} && (secrets.GOAT_RELEASES_APP_ID != '')` }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
+      "a resolve step that does not verify the commit",
+      withJob("prepare", {
+        steps: [
+          { id: "resolve", run: 'echo "sha=main" >> "$GITHUB_OUTPUT"' },
+          checkout("${{ steps.resolve.outputs.sha }}"),
+        ],
+      }),
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
+    ],
+    [
+      "a secret behind a quoted closing brace",
+      withJob("build_mac", {
+        env: { KEY: "${{ format('}}{0}', secrets.GOAT_RELEASES_APP_PRIVATE_KEY) }}" },
+      }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
+      "a secret in an expression-valued key",
+      withJob("build_mac", {
+        env: { "${{ format('KEY_{0}', secrets.GOAT_RELEASES_APP_ID) }}": "value" },
+      }),
       "secrets may only be read by jobs.publish",
     ],
     [
