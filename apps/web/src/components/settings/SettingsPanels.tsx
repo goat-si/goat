@@ -455,7 +455,7 @@ function AboutVersionSection() {
       updateState &&
       typeof window.desktopBridge?.setUpdateInstallPolicy === "function" ? (
         <SettingsRow
-          id="update-install-policy"
+          id={searchableSetting("update-install-policy").id}
           title="Update installation"
           description={getDesktopUpdateStatusText(updateState)}
           control={

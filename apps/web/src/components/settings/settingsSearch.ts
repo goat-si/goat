@@ -532,6 +532,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     releaseChannelOnly: true,
   },
   {
+    id: "update-install-policy",
+    title: "Update installation",
+    to: "/settings/general",
+    searchTerms: ["automatic restart install on quit pause updates idle"],
+    desktopOnly: true,
+  },
+  {
     id: "cli-command",
     title: "goat command",
     to: "/settings/general",
