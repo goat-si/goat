@@ -42,6 +42,7 @@ import {
 } from "./build-desktop-artifact.ts";
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { neutralizeBuildRoot } from "./lib/sea-build-path.ts";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64"]);
@@ -595,7 +596,12 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.makeDirectory(contentDir, { recursive: true });
 
   yield* Effect.log(`[cli-archive] Staging ${stem}...`);
-  yield* fs.copyFile(builtExecutable, path.join(contentDir, executableName));
+  // Neutralize the checkout path Node's SEA blob records before the binary is signed.
+  yield* fs.writeFile(
+    path.join(contentDir, executableName),
+    neutralizeBuildRoot(yield* fs.readFile(builtExecutable), repoRoot),
+  );
+  yield* fs.chmod(path.join(contentDir, executableName), 0o755);
   // Upstream T3 Code's MIT notice travels with every GOAT archive.
   yield* fs.copyFile(path.join(repoRoot, "LICENSE"), path.join(contentDir, "LICENSE-T3CODE.txt"));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
