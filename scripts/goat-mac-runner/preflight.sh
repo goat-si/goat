@@ -106,7 +106,7 @@ if [ -n "$identity_hash" ]; then
     pass "codesign can use the private key unattended"
   else
     fail "codesign could not sign a scratch binary within 60s" \
-      "Allow codesign to use the key without prompting: security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k <login password> login.keychain-db (step 1 of the runbook)."
+      "Allow codesign to use the key without a dialog: run this script once in Terminal and choose Always Allow, or set the key's partition list (docs/operations/goat-mac-release-runner.md, step 1)."
   fi
   rm -rf "$scratch"
 fi

@@ -36,6 +36,25 @@ refused rather than running half-upgraded:
 
 Update the side the notice names, then reconnect.
 
+## Desktop app updates
+
+The GOAT desktop app follows the nightly channel and downloads each new nightly
+by itself. Once it is downloaded, the app restarts to install it when every
+local server reports that no agent work is running.
+
+Choose the behaviour in **Settings → General → Update installation**:
+
+- **Restart when idle** (default) installs as soon as all local servers are idle.
+- **Install on quit** waits until you quit the app.
+- **Paused** stops automatic downloads and installs; you can still update from
+  the version row.
+
+A server running inside WSL cannot report whether it is idle yet, so while one
+is running, **Restart when idle** does not install. Choose **Install on quit**
+or install from the version row instead. Remote runtimes the app started over
+SSH move to the app's version the next time they are idle; until then the
+connection notice says the runtime will be replaced when its work finishes.
+
 ## Update a connected server
 
 The offered action depends on how the server runs:
