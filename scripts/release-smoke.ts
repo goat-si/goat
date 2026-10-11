@@ -272,17 +272,17 @@ try {
   );
   assertContains(
     nightlyReleaseMetadata,
-    "version=9.9.10-nightly.20260413.321",
+    "version=9.9.9-nightly.20260413.321",
     "Expected nightly metadata to contain the derived nightly version.",
   );
   assertContains(
     nightlyReleaseMetadata,
-    "tag=v9.9.10-nightly.20260413.321",
+    "tag=v9.9.9-nightly.20260413.321",
     "Expected nightly metadata to contain the derived nightly tag.",
   );
   assertContains(
     nightlyReleaseMetadata,
-    "name=T3 Code Nightly 9.9.10-nightly.20260413.321 (abcdef123456)",
+    "name=GOAT Nightly 9.9.9-nightly.20260413.321 (abcdef123456)",
     "Expected nightly metadata to include the short commit SHA in the release name.",
   );
 

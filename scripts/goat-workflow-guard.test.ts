@@ -682,3 +682,194 @@ exit 1
     expect(f.ghCalls()).toBe(2);
   });
 });
+
+const nightlyPath = ".github/workflows/goat-nightly.yml";
+const prepareGateText =
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+const downstreamGateText =
+  "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
+const macRunner = ["self-hosted", "macOS", "ARM64", "goat", "mac-studio"];
+const checkout = (ref = "${{ needs.prepare.outputs.sha }}") => ({
+  uses: "actions/checkout@v6",
+  with: { ref, "persist-credentials": false },
+});
+
+type NightlyJobs = Record<string, Record<string, unknown>>;
+function nightlyJobs(): NightlyJobs {
+  return {
+    prepare: {
+      if: prepareGateText,
+      "runs-on": runnerLabels,
+      steps: [checkout("${{ steps.resolve.outputs.sha }}"), { run: "echo prepare" }],
+    },
+    build_mac: {
+      needs: ["prepare"],
+      if: downstreamGateText,
+      "runs-on": macRunner,
+      steps: [checkout(), { run: "echo sign" }],
+    },
+    build_other: {
+      needs: ["prepare"],
+      if: downstreamGateText,
+      "runs-on": "${{ matrix.runner }}",
+      strategy: {
+        matrix: { include: [{ runner: "windows-2025" }, { runner: "ubuntu-24.04-arm" }] },
+      },
+      steps: [{ run: "echo build" }],
+    },
+    publish: {
+      needs: ["prepare", "build_mac"],
+      if: `${downstreamGateText} && (!cancelled() && needs.build_mac.result == 'success')`,
+      "runs-on": "ubuntu-24.04",
+      steps: [
+        checkout(),
+        {
+          id: "app_token",
+          uses: "actions/create-github-app-token@v2",
+          with: { "app-id": "${{ secrets.GOAT_RELEASES_APP_ID }}" },
+        },
+        { run: "echo publish" },
+      ],
+    },
+  };
+}
+function nightly(jobs: NightlyJobs = nightlyJobs(), on: unknown = undefined) {
+  return JSON.stringify({
+    on: on ?? {
+      workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
+      workflow_dispatch: null,
+    },
+    permissions: { contents: "read" },
+    jobs,
+  });
+}
+function withJob(name: string, patch: Record<string, unknown>) {
+  const jobs = nightlyJobs();
+  jobs[name] = { ...jobs[name], ...patch };
+  return nightly(jobs);
+}
+
+describe("goat pre-push nightly workflow guard", () => {
+  function push(content: string) {
+    const f = fixture();
+    f.write(nightlyPath, content);
+    const sha = f.commit();
+    return f.hook(f.record(sha));
+  }
+
+  it("allows the gated nightly workflow", () => {
+    const result = push(nightly());
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("allows the shipped nightly workflow", () => {
+    const shipped = NodePath.join(sourceRoot, nightlyPath);
+    if (!NodeFS.existsSync(shipped)) return;
+    const result = push(NodeFS.readFileSync(shipped, "utf8"));
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it.each<[string, string, string]>([
+    [
+      "a pull_request trigger",
+      nightly(undefined, {
+        workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
+        pull_request: null,
+      }),
+      "on must be workflow_run of goat-ci",
+    ],
+    ["a push trigger", nightly(undefined, { push: null }), "on must be workflow_run of goat-ci"],
+    [
+      "a gate that accepts pull request runs",
+      withJob("prepare", {
+        if: prepareGateText.replace(" && github.event.workflow_run.event == 'push'", ""),
+      }),
+      "jobs.prepare.if must be the dev-push gate",
+    ],
+    [
+      "a missing gate",
+      withJob("prepare", { if: undefined }),
+      "jobs.prepare.if must be the dev-push gate",
+    ],
+    [
+      "a job without needs: prepare",
+      withJob("build_mac", { needs: [] }),
+      "jobs.build_mac.needs must include prepare",
+    ],
+    [
+      "if: always()",
+      withJob("build_mac", { if: "always()" }),
+      "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
+      "an || escape after the gate",
+      withJob("build_mac", { if: `${downstreamGateText} || always()` }),
+      "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
+      "an unparenthesized tail",
+      withJob("build_mac", { if: `${downstreamGateText} && true || always()` }),
+      "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
+      "no if",
+      withJob("build_mac", { if: undefined }),
+      "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
+      "an unknown runner set",
+      withJob("build_mac", { "runs-on": ["self-hosted", "macOS"] }),
+      "jobs.build_mac.runs-on must be an allowed hosted runner",
+    ],
+    [
+      "a matrix with one bad runner",
+      withJob("build_other", {
+        strategy: {
+          matrix: { include: [{ runner: "windows-2025" }, { runner: "ubuntu-latest" }] },
+        },
+      }),
+      "jobs.build_other.runs-on must be an allowed hosted runner",
+    ],
+    [
+      "a disallowed action",
+      withJob("build_mac", { steps: [checkout(), { uses: "some/action@v1" }] }),
+      "jobs.build_mac step 1.uses is not an allowed action",
+    ],
+    [
+      "a secret on the Mac runner",
+      withJob("build_mac", {
+        steps: [checkout(), { run: "echo ${{ secrets.GOAT_RELEASES_APP_PRIVATE_KEY }}" }],
+      }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
+      "the token action outside publish",
+      withJob("build_mac", {
+        steps: [checkout(), { uses: "actions/create-github-app-token@v2" }],
+      }),
+      "only jobs.publish may create a GitHub App token",
+    ],
+    [
+      "publish on a self-hosted runner",
+      withJob("publish", { "runs-on": macRunner }),
+      "jobs.publish must run on ubuntu-24.04",
+    ],
+    [
+      "a checkout of an unverified ref",
+      withJob("build_mac", { steps: [checkout("${{ github.event.workflow_run.head_sha }}")] }),
+      "must check out ${{ needs.prepare.outputs.sha }} with persist-credentials: false",
+    ],
+    [
+      "write permissions",
+      withJob("publish", { permissions: { contents: "write" } }),
+      "jobs.publish must not request write permissions",
+    ],
+  ])("refuses %s", (_name, content, reason) => {
+    const result = push(content);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`goat pre-push: ${nightlyPath} in refs/heads/test (`);
+    expect(result.stderr).toContain(reason);
+  });
+});

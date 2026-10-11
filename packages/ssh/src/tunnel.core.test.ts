@@ -147,7 +147,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(script, "T3_NODE_SCRIPT_PATH=''");
     assert.include(
       script,
-      "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat/releases/download'",
+      "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
     );
     assert.include(
       script,

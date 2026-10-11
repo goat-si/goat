@@ -91,9 +91,9 @@ export const resolveNightlyTargetVersion = (version: string) => {
   if (!match) {
     return Effect.fail(new InvalidDesktopPackageVersionError({ version }));
   }
-
-  const [, major, minor, patch] = match;
-  return Effect.succeed(`${major}.${minor}.${Number(patch) + 1}`);
+  // GOAT nightlies are prereleases of the version in apps/desktop/package.json
+  // (0.1.0 -> 0.1.0-nightly.YYYYMMDD.N); cutting a stable release bumps that file.
+  return Effect.succeed(stableCore);
 };
 
 /** Prerelease trains that share nightly's date-and-run versioning. */
@@ -121,7 +121,7 @@ export const resolveNightlyReleaseMetadata = (
     baseVersion,
     version,
     tag: `v${version}`,
-    name: `T3 Code ${CHANNEL_RELEASE_LABELS[channel]} ${version} (${shortSha})`,
+    name: `GOAT ${CHANNEL_RELEASE_LABELS[channel]} ${version} (${shortSha})`,
     shortSha,
   };
 };

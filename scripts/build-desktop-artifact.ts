@@ -62,7 +62,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "si.goat.desktop";
-const DESKTOP_UPDATE_REPOSITORY = "goat-si/goat";
+const DESKTOP_UPDATE_REPOSITORY = "goat-si/goat-releases";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -1030,6 +1030,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/ssh-runtime/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+  "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
 ] as const;
@@ -1152,6 +1153,11 @@ export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
+  },
+  // Upstream T3 Code's MIT notice ships with every GOAT app (staged from LICENSE).
+  {
+    from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
+    to: "LICENSE-T3CODE.txt",
   },
 ] as const;
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
@@ -4102,6 +4108,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+  yield* fs.copyFile(
+    path.join(repoRoot, "LICENSE"),
+    path.join(stageProdResourcesDir, "LICENSE-T3CODE.txt"),
+  );
 
   const configuredMacPasskeySigning = yield* Effect.try({
     try: () =>

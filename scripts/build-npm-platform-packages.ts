@@ -210,7 +210,7 @@ try {
       "goat: no GOAT CLI build is available for this platform (" + key + ").",
       "Supported platforms: " + SUPPORTED.join(", ") + ".",
       "If yours is listed, reinstall t3 so npm fetches its optional dependency.",
-      "The desktop app and release archives are at https://github.com/goat-si/goat/releases",
+      "The desktop app and release archives are at https://github.com/goat-si/goat-releases/releases",
       "",
     ].join("\\n"),
   );

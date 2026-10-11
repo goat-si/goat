@@ -69,10 +69,17 @@ jobs:
           vp run --filter @t3tools/ssh test
           vp run --filter @t3tools/web test
 
+      # Upstream merges must not bring back 0.0.x or split the four release manifests.
+      - name: Check release version
+        if: matrix.task == 'test'
+        run: node scripts/check-release-version.ts
+
       - name: Test build scripts
         if: matrix.task == 'test'
         working-directory: scripts
-        run: vp test run build-desktop-artifact.test.ts
+        run: >-
+          vp test run build-desktop-artifact.test.ts check-release-version.test.ts
+          resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
 
       - name: Build desktop pipeline
         if: matrix.task == 'build'

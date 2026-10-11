@@ -2,11 +2,12 @@
 # Installs the GOAT CLI from a GitHub Release archive. Needs only sh, tar,
 # sha256sum or shasum, and curl or wget; no Node, npm, or compiler.
 #
-#   curl -fsSL https://t3.codes/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | sh
 #
 # Environment:
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
-#                            (default: stable; preview is a maintainers' test train)
+#                            (default: nightly, the only train GOAT publishes so
+#                            far; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              T3 home directory (default: ~/.t3)
 #   T3CODE_INSTALL_BIN_DIR   where the `goat` symlink goes (default: ~/.local/bin)
@@ -17,7 +18,7 @@
 # instead of fetching the release again.
 set -eu
 
-repo="goat-si/goat"
+repo="goat-si/goat-releases"
 base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
 t3_home="${T3CODE_HOME:-$HOME/.t3}"
 bin_dir="${T3CODE_INSTALL_BIN_DIR:-$HOME/.local/bin}"
@@ -142,7 +143,8 @@ else
   fail "sha256sum or shasum is required"
 fi
 
-channel="${T3CODE_CHANNEL:-stable}"
+# GOAT ships nightlies only until the stable (latest) channel opens.
+channel="${T3CODE_CHANNEL:-nightly}"
 version="${T3CODE_VERSION:-}"
 if [ -z "$version" ]; then
   # Tags are v<semver>; the channel is the prerelease identifier, or none for
@@ -154,10 +156,17 @@ if [ -z "$version" ]; then
     *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
   esac
   tmp_index="$(mktemp)"
-  fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"
+  # Anonymous release listing allows 60 requests an hour per IP, and a
+  # transient failure here is the most common install failure, so retry.
+  attempt=1
+  until fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"; do
+    [ "$attempt" -lt 3 ] || { rm -f "$tmp_index"; fail "could not list ${repo} releases (GitHub API limit or network); set T3CODE_VERSION=<version>"; }
+    sleep "$((attempt * 2))"
+    attempt=$((attempt + 1))
+  done
   version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
   rm -f "$tmp_index"
-  [ -n "$version" ] || fail "could not find a ${channel} release; set T3CODE_VERSION"
+  [ -n "$version" ] || fail "could not find a ${channel} release; set T3CODE_VERSION=<version>"
 fi
 case "$version" in
   *-preview.*)

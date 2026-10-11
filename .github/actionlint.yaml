@@ -1,0 +1,8 @@
+# Labels of GOAT's self-hosted runners (EPYC CI hosts and the Mac Studio release
+# runner) and hosted images newer than actionlint's built-in list.
+self-hosted-runner:
+  labels:
+    - goat
+    - epyc
+    - mac-studio
+    - windows-11-arm

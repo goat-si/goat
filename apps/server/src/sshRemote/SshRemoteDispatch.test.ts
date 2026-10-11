@@ -380,7 +380,7 @@ describe("SSH dispatch release mirror", () => {
       );
       const script = buildRemoteT3RunnerScript(runner);
       expect(script).toContain("T3_RELEASE_BASE_URL='https://mirror.example/goat'");
-      expect(script).not.toContain("github.com/goat-si/goat/releases/download");
+      expect(script).not.toContain("github.com/goat-si/goat-releases/releases/download");
       expect(runner.archiveDirectory).toBe("/fixture/home/runtime/archives");
       expect(runner.keepExistingRunner).toBe(true);
     }),
@@ -401,7 +401,7 @@ describe("SSH dispatch release mirror", () => {
         );
         expect("releaseBaseUrl" in runner).toBe(false);
         expect(buildRemoteT3RunnerScript(runner)).toContain(
-          "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat/releases/download'",
+          "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
         );
         // The library's blank-mirror behavior test separately proves gh acquisition,
         // since running the generated shell directly is outside the guarded path.

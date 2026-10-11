@@ -1870,7 +1870,7 @@ export const prepareRemoteRuntime = (
         (bundleDirectory !== "" && path.resolve(directory) === path.resolve(bundleDirectory))
       ) {
         return yield* new SshLaunchError({
-          message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for goat-si/goat release v${version} or rebuild the packaged archives.`,
+          message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for ${CLI_RELEASE_REPOSITORY} release v${version} or rebuild the packaged archives.`,
           stdout: "",
         });
       }

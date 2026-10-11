@@ -330,6 +330,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
           T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat/extra",
         },
+        // The private source repository is never a feed: binaries live in goat-releases.
+        {
+          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
+        },
       ]) {
         const config = yield* createBuildConfig(
           "mac",
@@ -364,7 +369,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         {
           provider: "github",
           owner: "goat-si",
-          repo: "goat",
+          repo: "goat-releases",
           releaseType: "prerelease",
           channel: "nightly",
         },
@@ -388,7 +393,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: " goat-si/goat ",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: " goat-si/goat-releases ",
               GITHUB_REPOSITORY: "some/fork",
               T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
             },
@@ -481,7 +486,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             ConfigProvider.fromEnv({
               env: {
                 T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
               },
             }),
           ),
@@ -493,7 +498,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             ConfigProvider.fromEnv({
               env: {
                 T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
               },
             }),
           ),
@@ -503,13 +508,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(latestConfig, {
         provider: "github",
         owner: "goat-si",
-        repo: "goat",
+        repo: "goat-releases",
         releaseType: "release",
       });
       assert.deepStrictEqual(nightlyConfig, {
         provider: "github",
         owner: "goat-si",
-        repo: "goat",
+        repo: "goat-releases",
         releaseType: "prerelease",
         channel: "nightly",
       });
@@ -553,7 +558,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         {
           provider: "github",
           owner: "goat-si",
-          repo: "goat",
+          repo: "goat-releases",
           releaseType: "release",
         },
       ]);
@@ -563,7 +568,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.fromEnv({
             env: {
               T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
             },
           }),
         ),
@@ -776,6 +781,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/prod-resources/ssh-runtime/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+      "!apps/desktop/prod-resources/LICENSE-T3CODE.txt",
       "!apps/desktop/gnome-extension",
       "!apps/desktop/gnome-extension/**/*",
     ]);
@@ -2433,6 +2439,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
+      },
+      {
+        from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
+        to: "LICENSE-T3CODE.txt",
       },
     ]);
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
