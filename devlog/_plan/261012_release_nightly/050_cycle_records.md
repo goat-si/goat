@@ -1,0 +1,37 @@
+# 050 — Cycle records
+
+## wp0 (roadmap) — D
+
+Conclusion: the roadmap for stages 1–3 plus the runner kit is written to diff level and passed a four-round audit by gpt-6.1-sol (002). Measurements so far: a gui-domain LaunchAgent can read the login keychain and reach notarytool profiles; a Background session cannot (001 M1). Rosetta, Xcode and Rust are absent on this Mac (M2). Commit `eb83ae52b`.
+
+Did not improve / died: the 050 plan to modify and reuse upstream `release-desktop.yml` died (N-1). The assumption that `workflow_run` works with dev as base died: the default branch is `main` (N-3). The first SSH and updater sketches were too thin to implement (r1 blockers 5–8); the lane designs replaced them and are larger than the "smallest model" ideal — wp3 must watch scope.
+
+Refuting evidence to watch: if wp4 shows the x64 DMG cannot be built or its native modules are arm64, N-5's "both DMGs on Mac Studio" falls back to the 040 alternatives.
+
+Next: wp1 (010), starting with a stale check of its anchors.
+
+## wp1 (foundation) — D
+
+Conclusion: GOAT is 0.1.0; nightlies resolve to `0.1.0-nightly.YYYYMMDD.N` named "GOAT Nightly"; every release consumer points at goat-si/goat-releases; goat-ci checks the release manifests; the pre-push guard accepts only a gated `goat-nightly.yml`; LICENSE-T3CODE.txt ships in apps and CLI archives; `THIRD_PARTY_NOTICES.md` can be rendered from the web license manifest. Commit `7dd7c6f55`.
+
+Evidence: receipt `.codexclaw/evidence/01a12c06-25d3-7e51-a389-4b9056110c41/test-receipt.json` — `check-release-version: ok`, actionlint goat-ci.yml clean, 12 test files passed and 2 Windows-only installer files skipped on macOS (425 tests), tsc clean for scripts/shared/ssh. Micro-audit (gpt-6.1-sol) NEAR-PASS, residuals folded.
+
+Deviations from 010: `check-release-version.ts` drops the desktop app regex import (cross-package file outside the scripts tsconfig) — the feed and CLI rules cover the same pattern; it is written in the Effect CLI style the scripts lint requires. Added `.github/actionlint.yaml` for self-hosted labels. Commits under `devlog/` need `--no-verify` because lint-staged cannot re-stage files ignored by `.git/info/exclude` (only the formatter hook is skipped; files are formatted first).
+
+Did not improve: `release-smoke.ts` was edited but not run (it reinstalls in a temp copy); wp4's dry run covers the resolver path. AUR packaging still points at goat-si/goat (out of scope).
+
+Next: wp2 (020).
+
+## wp2 (pipeline) — D
+
+Conclusion: `goat-nightly.yml` (gated, job-level cancellation, Mac Studio signing jobs, hosted/EPYC builds, assemble, publish-only secrets) plus the scripts it calls are in place: Mac runner preflight, keychain-profile notarization for desktop and CLI (require mode, whole-payload submission, Accepted check), DMG finalize, verifier (payload/mac/assemble, report gate with DMG transforms), publish (idempotent, byte-verified, monotonic, superseded before any write to main) and prune. HEAD `8ee9b5822`.
+
+Evidence: receipt `.codexclaw/evidence/01a12c06-25d3-7e51-a389-4b9056110c41/test-receipt.json` — actionlint (goat-nightly, goat-ci), preflight syntax, 12 test files / 289 tests, scripts tsc, lint scripts + .vite-hooks. Review: Claude Sonnet r1 FAIL (2 blockers: Linux x64 artifact names, verifier keys) → r2 NEAR-PASS (2 small findings) → all fixed. Local dry run (`evidence/dryrun_r3_chain.txt`, `m3_x64_cross_build.md`, `m1b_preflight_sessions.txt`): arm64 and x64 DMGs build unsigned on this Mac (38 s / 52 s) with clean builder payload reports and the feed set to goat-releases; unsigned DMGs are refused by assemble (fail-closed); a real darwin-arm64 CLI archive builds, passes its smoke test and payload scan; assemble writes SHA256SUMS; publish and prune dry runs plan against goat-releases read-only.
+
+Found only by the real build (unit tests passed): the exposure scan flagged third-party code (node_modules TypeScript, native binaries' CI paths, Electron's inline map) — the rule now targets GOAT code plus this machine's paths everywhere; and the Node SEA blob embedded the checkout path (`.../apps/server/dist-exe/bin.mjs`) — `build-cli-archive` now rewrites the checkout root to a same-length neutral path before signing, and the smoke test still passes.
+
+Deviations from 020: Linux x64 desktop joined the `desktop_other` matrix (runner arrays are allowed in matrix rows); EPYC rows keep `dtolnay/rust-toolchain` (cargo not guaranteed there); preflight moved from wp4 into wp2 because the workflow calls it; `render-third-party-notices.ts` added for assemble; verifier `--key` values follow the verifier's own naming (`cli-<platform>-<arch>`, `desktop-mac-<arch>`).
+
+Did not improve / unverified: no real Developer ID signature, notarization, stapling or spctl run (identity and profile not installed — user tasks); Windows/Linux jobs never ran (hosted runners, no workflow execution allowed); x64 binaries cannot execute here (no Rosetta). The unused other-arch `objc-js` prebuild ships in both mac apps (harmless, optional cleanup).
+
+Next: wp3 (030).

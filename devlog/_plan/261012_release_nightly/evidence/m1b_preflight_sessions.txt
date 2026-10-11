@@ -1,0 +1,38 @@
+# preflight.sh in gui/501 LaunchAgent (Aqua), 2026-10-12
+GOAT release runner preflight (team U9ATA49N28, notary profile goat-notary)
+  ok    running in the Aqua (GUI login) session
+  ok    codesign
+  ok    spctl
+  ok    hdiutil
+  ok    ditto
+  ok    security
+  ok    xcrun notarytool
+  ok    xcrun stapler
+  FAIL  rust toolchain
+        Install rustup (https://rustup.rs) for the runner user, then: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+  ok    login keychain is unlocked
+  FAIL  no Developer ID Application identity for team U9ATA49N28 in the login keychain
+        Import the certificate and private key (docs/operations/goat-mac-release-runner.md, step 1).
+  FAIL  notarytool profile 'goat-notary' did not authenticate
+        Store it once in this user's login keychain: xcrun notarytool store-credentials goat-notary --apple-id <Apple ID> --team-id U9ATA49N28 (step 2 of the runbook).
+preflight: 3 check(s) failed
+
+# preflight.sh --offline from agent shell (Background)
+GOAT release runner preflight (team U9ATA49N28, notary profile goat-notary)
+  FAIL  running in the 'Background' session
+        Run the runner as a LaunchAgent of the logged-in user (svc.sh install); SSH and LaunchDaemon sessions cannot use the login keychain.
+  ok    codesign
+  ok    spctl
+  ok    hdiutil
+  ok    ditto
+  ok    security
+  ok    xcrun notarytool
+  ok    xcrun stapler
+  FAIL  rust toolchain
+        Install rustup (https://rustup.rs) for the runner user, then: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+  FAIL  login keychain is locked or unreachable
+        Log in at the console of this Mac; the runner needs the user's GUI session.
+  FAIL  no Developer ID Application identity for team U9ATA49N28 in the login keychain
+        Import the certificate and private key (docs/operations/goat-mac-release-runner.md, step 1).
+  skip  notarytool profile check (--offline)
+preflight: 4 check(s) failed
