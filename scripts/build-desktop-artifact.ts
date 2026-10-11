@@ -4301,7 +4301,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
   // as enabled, so copy the host env and scrub empty values instead of relying
   // on `extendEnv` merging.
-  const buildEnv: NodeJS.ProcessEnv = {
+  let buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
   };
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
@@ -4323,6 +4323,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
   }
+
+  const { resolveMacNotarizationEnv, DesktopNotarizationCredentialsMissingError } =
+    yield* Effect.promise(() => import("./lib/mac-notarization.ts"));
+  const notarization = resolveMacNotarizationEnv(buildEnv, {
+    signed: options.signed,
+    platform: options.platform,
+    requireNotarization:
+      (yield* Config.String("T3CODE_REQUIRE_NOTARIZATION").pipe(Config.withDefault("0"))) === "1",
+  });
+  if (notarization.problem) {
+    return yield* new DesktopNotarizationCredentialsMissingError({ detail: notarization.problem });
+  }
+  buildEnv = notarization.env;
 
   if (hostPlatform === "win32") {
     const python = yield* resolvePythonForNodeGyp();

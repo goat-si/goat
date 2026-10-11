@@ -284,9 +284,12 @@ const stageWebClient = Effect.fn("stageWebClient")(function* (source: string, ta
 
 const MacSigningConfig = Config.all({
   identity: Config.String("T3CODE_CLI_MAC_SIGN_IDENTITY").pipe(Config.option),
+  appleKeychainProfile: Config.String("APPLE_KEYCHAIN_PROFILE").pipe(Config.option),
+  appleKeychain: Config.String("APPLE_KEYCHAIN").pipe(Config.option),
   appleApiKey: Config.String("APPLE_API_KEY").pipe(Config.option),
   appleApiKeyId: Config.String("APPLE_API_KEY_ID").pipe(Config.option),
   appleApiIssuer: Config.String("APPLE_API_ISSUER").pipe(Config.option),
+  requireNotarization: Config.String("T3CODE_REQUIRE_NOTARIZATION").pipe(Config.withDefault("0")),
 });
 
 /**
@@ -296,15 +299,44 @@ const MacSigningConfig = Config.all({
  * notarization requires only loads signed libraries, so every native addon in
  * the archive is signed with the same identity.
  */
-const signMacArchiveContents = Effect.fn("signMacArchiveContents")(function* (input: {
+export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(function* (input: {
   readonly repoRoot: string;
   readonly contentDir: string;
   readonly executablePath: string;
+  readonly requireNotarization: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const signing = yield* MacSigningConfig;
   const identity = Option.getOrUndefined(signing.identity)?.trim() || "-";
+  const {
+    notarytoolAuthArgs,
+    parseNotarytoolSubmitOutput,
+    NotarytoolSubmitError,
+    isNotarytoolSubmitError,
+    CliNotarizationCredentialsMissingError,
+  } = yield* Effect.promise(() => import("./lib/mac-notarization.ts"));
+  const authArgs = notarytoolAuthArgs({
+    appleKeychainProfile: Option.getOrUndefined(signing.appleKeychainProfile),
+    appleKeychain: Option.getOrUndefined(signing.appleKeychain),
+    appleApiKey: Option.getOrUndefined(signing.appleApiKey),
+    appleApiKeyId: Option.getOrUndefined(signing.appleApiKeyId),
+    appleApiIssuer: Option.getOrUndefined(signing.appleApiIssuer),
+  });
+  if (input.requireNotarization || signing.requireNotarization === "1") {
+    if (identity === "-") {
+      return yield* new CliNotarizationCredentialsMissingError({
+        detail:
+          "Required notarization needs a Developer ID in T3CODE_CLI_MAC_SIGN_IDENTITY; ad hoc signing is not allowed.",
+      });
+    }
+    if (!authArgs) {
+      return yield* new CliNotarizationCredentialsMissingError({
+        detail:
+          "Required notarization needs APPLE_KEYCHAIN_PROFILE or the complete APPLE_API_KEY/APPLE_API_KEY_ID/APPLE_API_ISSUER set.",
+      });
+    }
+  }
 
   const entitlements = path.join(input.repoRoot, "apps/server/resources/cli-entitlements.plist");
   const libraries = (yield* fs.readDirectory(input.contentDir, { recursive: true }))
@@ -335,37 +367,93 @@ const signMacArchiveContents = Effect.fn("signMacArchiveContents")(function* (in
     return;
   }
 
-  const apiKey = Option.getOrUndefined(signing.appleApiKey);
-  const apiKeyId = Option.getOrUndefined(signing.appleApiKeyId);
-  const apiIssuer = Option.getOrUndefined(signing.appleApiIssuer);
-  if (!apiKey || !apiKeyId || !apiIssuer) {
+  if (!authArgs) {
     yield* Effect.logWarning(
-      "[cli-archive] Developer ID signed but not notarized (missing APPLE_API_KEY*).",
+      "[cli-archive] Developer ID signed but not notarized (missing profile or complete API credentials).",
     );
     return;
   }
-  // notarytool only accepts archives, and a bare executable cannot be stapled,
-  // so notarize a zip of the binary and rely on the online ticket lookup.
-  const notarizeZip = path.join(path.dirname(input.executablePath), ".notarize-t3.zip");
-  yield* runCommand(
-    ChildProcess.make("ditto", ["-c", "-k", "--keepParent", input.executablePath, notarizeZip]),
-    "ditto (notarization zip)",
-  );
-  yield* runCommand(
-    ChildProcess.make("xcrun", [
-      "notarytool",
+  const Stream = yield* Effect.promise(() => import("effect/Stream"));
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runNotarytool = Effect.fn("runNotarytool")(function* (args: ReadonlyArray<string>) {
+    const child = yield* spawner.spawn(
+      ChildProcess.make("xcrun", ["notarytool", ...args, ...authArgs], {
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    );
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        Stream.mkString(Stream.decodeText(child.stdout)),
+        Stream.mkString(Stream.decodeText(child.stderr)),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    );
+    return { stdout, stderr, exitCode };
+  });
+  // Submit every native dependency alongside the executable. The temporary zip
+  // stays outside the shipped tree, and scoped cleanup also covers rejection.
+  yield* Effect.gen(function* () {
+    const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-notarize-" });
+    const notarizeZip = path.join(tempDir, "goat.zip");
+    yield* runCommand(
+      ChildProcess.make("ditto", ["-c", "-k", "--keepParent", input.contentDir, notarizeZip]),
+      "ditto (notarization zip)",
+    );
+    const submission = yield* runNotarytool([
       "submit",
       notarizeZip,
-      "--key",
-      apiKey,
-      "--key-id",
-      apiKeyId,
-      "--issuer",
-      apiIssuer,
       "--wait",
-    ]),
-    "notarytool submit",
-  ).pipe(Effect.ensuring(fs.remove(notarizeZip, { force: true }).pipe(Effect.ignore)));
+      "--output-format",
+      "json",
+    ]);
+    yield* Effect.try({
+      try: () => parseNotarytoolSubmitOutput(submission.stdout),
+      catch: (cause) =>
+        isNotarytoolSubmitError(cause)
+          ? cause
+          : new NotarytoolSubmitError({ detail: "Could not parse notarytool submission output." }),
+    }).pipe(
+      Effect.filterOrFail(
+        () => submission.exitCode === 0,
+        (accepted) =>
+          new NotarytoolSubmitError({
+            ...accepted,
+            detail: `notarytool submit exited with code ${submission.exitCode}.`,
+          }),
+      ),
+      Effect.catchTags({
+        NotarytoolSubmitError: (error) =>
+          Effect.gen(function* () {
+            const log = error.id
+              ? yield* runNotarytool(["log", error.id]).pipe(
+                  Effect.map((result) =>
+                    [
+                      result.stdout,
+                      result.stderr,
+                      ...(result.exitCode === 0
+                        ? []
+                        : [`notarytool log exited with code ${result.exitCode}.`]),
+                    ]
+                      .filter(Boolean)
+                      .join("\n"),
+                  ),
+                  Effect.catch((cause) =>
+                    Effect.succeed(`Could not fetch notarization log: ${String(cause)}`),
+                  ),
+                )
+              : undefined;
+            return yield* new NotarytoolSubmitError({
+              id: error.id,
+              status: error.status,
+              detail: error.detail,
+              log: [submission.stderr, log].filter(Boolean).join("\n"),
+            });
+          }),
+      }),
+    );
+  }).pipe(Effect.scoped);
   yield* Effect.log("[cli-archive] Notarized goat.");
 });
 
@@ -462,6 +550,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   readonly version: string;
   readonly outputDir: string;
   readonly resourceMonitorDir: Option.Option<string>;
+  readonly requireNotarization: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -521,7 +610,12 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
 
   const executablePath = path.join(contentDir, executableName);
   if (input.platform === "mac") {
-    yield* signMacArchiveContents({ repoRoot, contentDir, executablePath });
+    yield* signMacArchiveContents({
+      repoRoot,
+      contentDir,
+      executablePath,
+      requireNotarization: input.requireNotarization,
+    });
   } else if (input.platform === "win") {
     yield* signWindowsExecutable(executablePath);
   }
@@ -575,6 +669,10 @@ const command = Command.make(
       Flag.withDescription("Release version for the archive name."),
     ),
     outputDir: Flag.String("output-dir").pipe(Flag.withDefault("release-cli")),
+    requireNotarization: Flag.Boolean("require-notarization").pipe(
+      Flag.withDescription("Require Developer ID signing and accepted macOS notarization."),
+      Flag.withDefault(false),
+    ),
     resourceMonitorDir: Flag.String("resource-monitor-dir").pipe(
       Flag.withDescription(
         "Directory laid out like dist/resource-monitor (defaults to apps/server/dist/resource-monitor).",
