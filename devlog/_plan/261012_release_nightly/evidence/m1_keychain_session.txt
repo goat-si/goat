@@ -1,0 +1,12 @@
+manager=Aqua user=jun console=jun
+Keychain "/Users/jun/Library/Keychains/login.keychain-db" no-timeout
+info_rc=0
+  Valid identities only
+     0 valid identities found
+Error: No Keychain password item found for profile: goat-notary-probe-missing
+
+#!/bin/sh
+echo "manager=$(launchctl managername) user=$(id -un) console=$(stat -f %Su /dev/console)"
+security show-keychain-info /Users/jun/Library/Keychains/login.keychain-db; echo "info_rc=$?"
+security find-identity -p codesigning | tail -2
+xcrun notarytool history --keychain-profile goat-notary-probe-missing 2>&1 | head -2
