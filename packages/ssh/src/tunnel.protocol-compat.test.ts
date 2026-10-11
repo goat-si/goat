@@ -25,7 +25,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const result = yield* f.run("launch", true);
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result))
-          assert.include(String(result.failure), `expected SSH=${SSH_RUNTIME_PROTOCOL_VERSION}`);
+          assert.include(String(result.failure), "is incompatible; it was left running");
         assert.deepEqual(yield* f.snapshot, before);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

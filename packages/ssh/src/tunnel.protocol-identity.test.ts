@@ -92,7 +92,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 const fs = require('node:fs');
 const cp = require('node:child_process');
 const args = process.argv.slice(2);
-if (args[3] === ${JSON.stringify(pid)}) fs.appendFileSync(${JSON.stringify(`${f.test}/inspections`)}, JSON.stringify({ runner: fs.readFileSync(${JSON.stringify(`${f.state}/run-t3.sh`)}, 'utf8'), identity: fs.existsSync(${JSON.stringify(`${f.state}/identity`)}) ? fs.readFileSync(${JSON.stringify(`${f.state}/identity`)}, 'utf8') : null, command: cp.execFileSync('/bin/ps', args, {encoding:'utf8'}).trim() }) + '\\n');
+if (args[1] === 'command=' && args[3] === ${JSON.stringify(pid)}) fs.appendFileSync(${JSON.stringify(`${f.test}/inspections`)}, JSON.stringify({ runner: fs.readFileSync(${JSON.stringify(`${f.state}/run-t3.sh`)}, 'utf8'), identity: fs.existsSync(${JSON.stringify(`${f.state}/identity`)}) ? fs.readFileSync(${JSON.stringify(`${f.state}/identity`)}, 'utf8') : null, command: cp.execFileSync('/bin/ps', args, {encoding:'utf8'}).trim() }) + '\\n');
 process.stdout.write(cp.execFileSync('/bin/ps', args));
 `,
           );
@@ -108,7 +108,7 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
             if (Result.isFailure(result)) assert.include(String(result.failure), `kill ${pid}`);
             assert.deepEqual(yield* f.snapshot, before);
             yield* Effect.sync(() => process.kill(Number(pid), 0));
-            assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '\"type\":\"stop\"');
+            assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
             return;
           }
           assert.isTrue(Result.isSuccess(result));
@@ -119,7 +119,12 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           assert.isAtLeast(inspections.length, 2);
           assert.include(inspections[0].runner, entry);
           assert.notInclude(inspections[0].runner, nextEntry);
-          assert.isTrue(inspections.some((inspection) => inspection.runner.includes(nextEntry)));
+          // Publication follows confirmed termination, so every old-PID inspection
+          // must still see the old runner.
+          for (const inspection of inspections) {
+            assert.include(inspection.runner, entry);
+            assert.notInclude(inspection.runner, nextEntry);
+          }
           const expectedIdentity =
             before.identity ??
             `${entry} serve --host 127.0.0.1 --port ${metadata.port} --base-dir ${f.home}/.goat\n`;
@@ -139,6 +144,7 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
             events.filter((event) => event.type === "stop"),
             2,
           );
+          assert.include(events.filter((event) => event.type === "start")[1].runner, nextEntry);
           for (const file of ["pid", "port", "managed", "identity"])
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),

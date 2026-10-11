@@ -10,6 +10,7 @@ import * as NodePath from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 
 import { buildRemoteMcpSessionScript, decodeRemoteMcpSessionOutput } from "./tunnel.ts";
 
@@ -97,30 +98,41 @@ JSON
     runtimeModeCeiling: string | null = options.runtimeModeCeiling,
     retainedSha = NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(runner)).digest("hex"),
   ) => {
-    const stdout = NodeChildProcess.execFileSync(remoteShell, [], {
-      input: buildRemoteMcpSessionScript(
-        stateKey,
-        { ...options, runtimeModeCeiling },
+    const script = buildRemoteMcpSessionScript(
+      stateKey,
+      { ...options, runtimeModeCeiling },
+      {
+        archiveVersion,
+        keepExistingRunner,
+      },
+      {
+        runner: { archiveVersion, keepExistingRunner },
+        version: archiveVersion,
+        requestedVersion: archiveVersion,
+        source: "retained",
+        requireInstalled: true,
+        mayUpgradeOwnedServer: false,
+        retainedRunnerSha256: retainedSha,
+      },
+    );
+    // Await shell completion without blocking the worker or imposing a wall-clock
+    // cutoff on the protocol and hash checks when the full suite is busy.
+    return Effect.callback<string, Error>((resume) => {
+      const child = NodeChildProcess.execFile(
+        remoteShell,
+        [],
         {
-          archiveVersion,
-          keepExistingRunner,
+          cwd: home,
+          env: { HOME: home, PATH: process.env.PATH, LC_ALL: "C" },
+          encoding: "utf8",
         },
-        {
-          runner: { archiveVersion, keepExistingRunner },
-          version: archiveVersion,
-          requestedVersion: archiveVersion,
-          source: "retained",
-          requireInstalled: true,
-          mayUpgradeOwnedServer: false,
-          retainedRunnerSha256: retainedSha,
-        },
-      ),
-      cwd: home,
-      env: { HOME: home, PATH: process.env.PATH, LC_ALL: "C" },
-      encoding: "utf8",
-      timeout: 10_000,
-    });
-    return decodeRemoteMcpSessionOutput(stdout);
+        (error, stdout) => resume(error === null ? Effect.succeed(stdout) : Effect.fail(error)),
+      );
+      child.stdin?.end(script);
+      return Effect.sync(() => {
+        child.kill();
+      });
+    }).pipe(Effect.flatMap(decodeRemoteMcpSessionOutput));
   };
 
   const receivedArgs = (call: number) =>
@@ -214,34 +226,42 @@ JSON
       ).toBe(archiveVersion);
     }),
   );
-  it("rejects changed selected bytes before publishing or issuing auth", () => {
-    const original = installFakeRunner(false);
-    const sha = NodeCrypto.createHash("sha256").update(original).digest("hex");
-    NodeFS.appendFileSync(runner, "\n# replacement\n");
-    expect(() => runSession(true, options.runtimeModeCeiling, sha)).toThrow("changed since probe");
-    expect(() => receivedArgs(1)).toThrow();
-    expect(NodeFS.readFileSync(runner, "utf8")).toBe(original + "\n# replacement\n");
-    expect(
-      NodeFS.readdirSync(NodePath.dirname(runner)).filter(
-        (name) => name.includes(".next.") || name.endsWith(".pin"),
-      ),
-    ).toEqual([]);
-  });
-  it("rechecks selected bytes before retrying a rejected ceiling", () => {
-    const original = installFakeRunner(true);
-    NodeFS.writeFileSync(NodePath.join(home, "change-runner"), "1");
-    expect(() => runSession()).toThrow("changed since probe");
-    expect(receivedArgs(1)).toEqual([
-      ...baseArgs(),
-      "--runtime-mode-ceiling",
-      options.runtimeModeCeiling,
-    ]);
-    expect(() => receivedArgs(2)).toThrow();
-    expect(NodeFS.readFileSync(runner, "utf8")).toBe(original + "# changed during auth\n");
-    expect(
-      NodeFS.readdirSync(NodePath.dirname(runner)).filter(
-        (name) => name.includes(".next.") || name.endsWith(".pin"),
-      ),
-    ).toEqual([]);
-  });
+  it.effect("rejects changed selected bytes before publishing or issuing auth", () =>
+    Effect.gen(function* () {
+      const original = installFakeRunner(false);
+      const sha = NodeCrypto.createHash("sha256").update(original).digest("hex");
+      NodeFS.appendFileSync(runner, "\n# replacement\n");
+      const result = yield* Effect.result(runSession(true, options.runtimeModeCeiling, sha));
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) expect(result.failure.message).toContain("changed since probe");
+      expect(() => receivedArgs(1)).toThrow();
+      expect(NodeFS.readFileSync(runner, "utf8")).toBe(original + "\n# replacement\n");
+      expect(
+        NodeFS.readdirSync(NodePath.dirname(runner)).filter(
+          (name) => name.includes(".next.") || name.endsWith(".pin"),
+        ),
+      ).toEqual([]);
+    }),
+  );
+  it.effect("rechecks selected bytes before retrying a rejected ceiling", () =>
+    Effect.gen(function* () {
+      const original = installFakeRunner(true);
+      NodeFS.writeFileSync(NodePath.join(home, "change-runner"), "1");
+      const result = yield* Effect.result(runSession());
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) expect(result.failure.message).toContain("changed since probe");
+      expect(receivedArgs(1)).toEqual([
+        ...baseArgs(),
+        "--runtime-mode-ceiling",
+        options.runtimeModeCeiling,
+      ]);
+      expect(() => receivedArgs(2)).toThrow();
+      expect(NodeFS.readFileSync(runner, "utf8")).toBe(original + "# changed during auth\n");
+      expect(
+        NodeFS.readdirSync(NodePath.dirname(runner)).filter(
+          (name) => name.includes(".next.") || name.endsWith(".pin"),
+        ),
+      ).toEqual([]);
+    }),
+  );
 });

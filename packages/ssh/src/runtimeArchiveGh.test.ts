@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
+import { afterEach, assert, beforeEach, describe, it, vi } from "@effect/vitest";
 import { CLI_RELEASE_REPOSITORY, cliArchiveFileName } from "@t3tools/shared/cliRelease";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -126,7 +126,14 @@ const fixture = Effect.fn("test.ghFixture")(function* (
       }
       if (command.args.includes("--")) {
         calls.push("launch");
-        return processHandle('{"remotePort":3773,"serverKind":"managed"}');
+        return processHandle(
+          JSON.stringify({
+            status: "ready",
+            remotePort: 3773,
+            serverKind: "managed",
+            selectedVersion: version,
+          }),
+        );
       }
       calls.push("pairing");
       return processHandle('{"credential":"fixture-pairing"}');
@@ -167,6 +174,11 @@ function invoke(entry: "launch" | "pairing" | "mcp", runner: SshTunnel.RemoteT3R
 }
 
 describe("SSH archives from locally authenticated gh", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 404 }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it.effect.each(["launch", "pairing", "mcp"] as const)(
     "verified gh archive is uploaded before %s",
     (entry) =>
@@ -380,8 +392,18 @@ describe("SSH archives from locally authenticated gh", () => {
         assert.include(result.failure.message, "authentication failed");
         assert.include(result.failure.message, "[redacted]");
         assert.notInclude(result.failure.message, diagnosticSecret);
+        // eslint-disable-next-line no-control-regex -- Diagnostics must contain no terminal control bytes.
         assert.notMatch(result.failure.message, /[\x00-\x1f\x7f-\x9f]/u);
-        assert.isAtMost(result.failure.message.length, 1000);
+        const acquisition = result.failure.cause;
+        assert.instanceOf(acquisition, SshLaunchError);
+        const ghFailure = acquisition instanceof SshLaunchError ? acquisition.cause : undefined;
+        assert.instanceOf(ghFailure, SshLaunchError);
+        const diagnostic =
+          ghFailure instanceof SshLaunchError
+            ? / stderr \(last 400 sanitized characters\): (.*)$/u.exec(ghFailure.message)?.[1]
+            : undefined;
+        assert.isDefined(diagnostic);
+        assert.isAtMost(diagnostic?.length ?? Infinity, 400);
       }
       assert.deepEqual(state.calls, ["probe", "gh"]);
       assert.deepEqual(state.uploads, []);
