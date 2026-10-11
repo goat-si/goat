@@ -160,6 +160,11 @@ describe("release payload helpers", () => {
     expect(exposureProblems("main.js", "[`/Users/`,`/home/`,`/tmp/`]", [])).toEqual([]);
     // This build machine's own paths fail in any file, including dependencies.
     const roots = ["/Users/builder/actions-runner/_work/goat/goat"];
+    // A GOAT executable embeds Node, whose binary carries Node's own build paths.
+    expect(exposureProblems("goat", "/Users/admin/build/ws/deps/x.rs", [], true)).toEqual([]);
+    expect(exposureProblems("goat", `${roots[0]}/apps/server/x.ts`, roots, true)).toEqual([
+      "goat: absolute build path",
+    ]);
     expect(
       exposureProblems("node_modules/pkg/addon.node", `${roots[0]}/node_modules/x`, roots),
     ).toEqual(["node_modules/pkg/addon.node: absolute build path"]);

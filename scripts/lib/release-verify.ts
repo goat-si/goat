@@ -175,6 +175,9 @@ export function exposureProblems(
   name: string,
   content = "",
   roots: readonly string[] = defaultBuildRoots,
+  // Compiled binaries carry their toolchain's build paths (Node's own, Electron's);
+  // only this machine's paths matter there.
+  binary = false,
 ): string[] {
   const normalized = name.replace(/\\/g, "/");
   const problems: string[] = [];
@@ -194,7 +197,7 @@ export function exposureProblems(
     (root) =>
       pathContent.includes(`${root}/`) || pathContent.includes(`${root}\\`) || name.includes(root),
   );
-  if (machinePath || (ours && (buildPath.test(pathContent) || buildPath.test(name))))
+  if (machinePath || (ours && !binary && (buildPath.test(pathContent) || buildPath.test(name))))
     problems.push(`${name}: absolute build path`);
   buildPath.lastIndex = 0;
   return problems;
@@ -349,7 +352,15 @@ export const scanReleasePayload = Effect.fn("scanReleasePayload")(function* (
               yield* fs.makeDirectory(nested);
               yield* fs.writeFile(path.join(nested, path.basename(relative)), data);
               pending.push({ dir: nested, label: `${name}!/` });
-            } else problems.push(...exposureProblems(memberName, new TextDecoder().decode(data)));
+            } else
+              problems.push(
+                ...exposureProblems(
+                  memberName,
+                  new TextDecoder().decode(data),
+                  defaultBuildRoots,
+                  isMachO(data),
+                ),
+              );
           }
         } else if (entry.absolute.endsWith(".tar.gz")) {
           const nested = path.join(scratch, `runtime-${counter++}`);
@@ -358,7 +369,14 @@ export const scanReleasePayload = Effect.fn("scanReleasePayload")(function* (
         } else {
           const data = yield* fs.readFile(entry.absolute);
           if (visitMachO && isMachO(data)) yield* visitMachO(entry.absolute, name);
-          problems.push(...exposureProblems(name, new TextDecoder().decode(data)));
+          problems.push(
+            ...exposureProblems(
+              name,
+              new TextDecoder().decode(data),
+              defaultBuildRoots,
+              isMachO(data),
+            ),
+          );
         }
       });
       yield* inspect().pipe(
