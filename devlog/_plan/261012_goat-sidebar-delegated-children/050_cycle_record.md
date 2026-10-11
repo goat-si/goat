@@ -25,3 +25,12 @@
 - SSH 원격이 이 변경 이전 GOAT면 launch는 계보 없이 간다(의도된 동작).
 - 승격은 되돌리지 않는다. 숨기는 출구는 보관이다.
 - 모바일은 승격과 계보를 표시하지 않는다(컴파일과 기존 동작만 확인).
+
+## PR 뒤 수정
+
+- goat-ci goat-test에서 `useThreadActionMenu.test.ts`가 실패했다. 메뉴 훅이 promote 헬퍼를 import하면서 사이드바와 UI 모듈을
+  끌어왔고, 그 테스트는 `react`를 훅 몇 개만 mock한다. `canPromoteThread`를 `threadActionMenu.logic.ts`로 옮기고 훅은 기존
+  명령과 토스트로 승격한다(`5f64fe881`). 로컬에서는 바뀐 모듈을 import하는 웹/클라이언트 테스트 42개(1008 tests)를 돌렸고,
+  CI는 `5f64fe881`에서 check, typecheck, test, build 모두 통과했다.
+- 기록 정정: wp2 이후 일부 lint 비교는 zsh가 `$T`를 단어로 나누지 않아 파일을 읽지 못한 비교였다. 브랜치 전체(ts/tsx 48개)를
+  merge-base 판과 다시 비교해 새 경고 0개를 확인했다.
