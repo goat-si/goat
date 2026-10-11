@@ -41,7 +41,10 @@ export function checkReleaseVersions(versions: Readonly<Record<string, string>>)
     return problems;
   }
   const version = distinct[0] ?? "";
-  if (!/^\d+\.\d+\.\d+$/.test(version) || parseSemver(version) === null) {
+  if (
+    !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version) ||
+    parseSemver(version) === null
+  ) {
     problems.push(
       `version ${version} must be plain x.y.z; nightlies add their suffix at release time`,
     );

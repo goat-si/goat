@@ -845,6 +845,23 @@ describe("goat pre-push nightly workflow guard", () => {
       "secrets may only be read by jobs.publish",
     ],
     [
+      "a bracketed secret on the Mac runner",
+      withJob("build_mac", {
+        env: { KEY: "${{ secrets['GOAT_RELEASES_APP_PRIVATE_KEY'] }}" },
+      }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
+      "the whole secrets context on the Mac runner",
+      withJob("build_mac", { env: { ALL: "${{ toJSON(secrets) }}" } }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
+      "an upper-case secrets context",
+      withJob("build_other", { env: { KEY: "${{ SECRETS.GOAT_RELEASES_APP_ID }}" } }),
+      "secrets may only be read by jobs.publish",
+    ],
+    [
       "the token action outside publish",
       withJob("build_mac", {
         steps: [checkout(), { uses: "actions/create-github-app-token@v2" }],

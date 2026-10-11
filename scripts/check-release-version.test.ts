@@ -26,5 +26,8 @@ describe("checkReleaseVersions", () => {
     expect(checkReleaseVersions(all("0.1.0-beta.1"))).toEqual([
       expect.stringContaining("must be plain x.y.z"),
     ]);
+    expect(checkReleaseVersions(all("0.01.0"))).toEqual([
+      expect.stringContaining("must be plain x.y.z"),
+    ]);
   });
 });

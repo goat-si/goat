@@ -249,7 +249,9 @@ function validateNightlyWorkflow(source, yaml) {
     return fail("jobs.prepare must exist");
   }
   const { publish: publishJob, ...rest } = workflow.jobs;
-  if (JSON.stringify({ ...workflow, jobs: rest }).includes("secrets.")) {
+  // Any mention of the secrets context counts: secrets.X, secrets['X'], toJSON(secrets).
+  // Context names are case-insensitive in expressions.
+  if (/\bsecrets\b/i.test(JSON.stringify({ ...workflow, jobs: rest }))) {
     fail("secrets may only be read by jobs.publish");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
