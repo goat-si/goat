@@ -2,7 +2,11 @@ import type { ServerConfig } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
-import type { ConnectionTarget, SupervisorConnectionState } from "./model.ts";
+import type {
+  ConnectionAttemptStage,
+  ConnectionTarget,
+  SupervisorConnectionState,
+} from "./model.ts";
 import { connectionRouteId, connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 
 export type EnvironmentConnectionPhase =
@@ -18,6 +22,10 @@ export interface EnvironmentConnectionPresentation {
   readonly phase: EnvironmentConnectionPhase;
   readonly error: string | null;
   readonly traceId: string | null;
+  /** The step an attempt in progress has reached. */
+  readonly stage?: ConnectionAttemptStage | null;
+  /** When the next automatic attempt starts (epoch ms), while waiting to retry. */
+  readonly retryAt?: number | null;
 }
 
 export interface EnvironmentPresentation {
@@ -39,6 +47,7 @@ export function presentConnectionState(
         phase: state.attempt <= 1 && state.lastFailure === null ? "connecting" : "reconnecting",
         error: state.lastFailure?.message ?? null,
         traceId: state.lastFailure?.traceId ?? null,
+        stage: state.stage,
       };
     case "connected":
       return { phase: "connected", error: null, traceId: null };
@@ -47,6 +56,7 @@ export function presentConnectionState(
         phase: "reconnecting",
         error: state.lastFailure?.message ?? null,
         traceId: state.lastFailure?.traceId ?? null,
+        retryAt: state.retryAt,
       };
     case "blocked":
       return {
@@ -85,6 +95,49 @@ export function connectionStatusTitle(connection: EnvironmentConnectionPresentat
     return "Failed to connect. Reconnecting...";
   }
   return connectionStatusText({ ...connection, error: null });
+}
+
+function formatRetryDelay(seconds: number): string {
+  return seconds < 60 ? `${seconds}s` : `${Math.ceil(seconds / 60)}m`;
+}
+
+/**
+ * A short label for what the connection is doing right now: the step of the
+ * attempt in progress, or the countdown to the next one. Every surface that
+ * shows a connection's state uses it, so they agree. `nowMs` drives the
+ * countdown; callers that do not tick get the value at render time.
+ */
+export function connectionProgressLabel(
+  connection: EnvironmentConnectionPresentation,
+  nowMs: number,
+): string {
+  switch (connection.phase) {
+    case "connecting":
+    case "reconnecting": {
+      if (connection.retryAt != null) {
+        const seconds = Math.ceil((connection.retryAt - nowMs) / 1000);
+        return seconds > 0 ? `Retrying in ${formatRetryDelay(seconds)}` : "Retrying";
+      }
+      switch (connection.stage) {
+        case "opening":
+          return "Opening connection";
+        case "synchronizing":
+          return "Syncing";
+        default:
+          return connection.phase === "connecting" ? "Connecting" : "Reconnecting";
+      }
+    }
+    case "connected":
+      return "Connected";
+    case "offline":
+      return "Offline";
+    case "available":
+      return "Not connected";
+    case "unsupported":
+      return "Client not supported";
+    case "error":
+      return "Connection failed";
+  }
 }
 
 export function presentEnvironmentConnection(

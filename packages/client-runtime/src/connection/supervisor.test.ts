@@ -1,6 +1,7 @@
 import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -1100,6 +1101,80 @@ describe("EnvironmentSupervisor", () => {
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2 && state.attempt === 1,
       );
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect.each(["application-active-reconnect", "application-active-probe"] as const)(
+    "a desktop %s wakeup during a deep backoff retries at once from the first rung",
+    (reason) =>
+      Effect.gen(function* () {
+        // The host is unreachable while the lid is closed, then answers again.
+        const harness = yield* makeHarness({
+          prepare: (attempt) =>
+            attempt <= 5 ? Effect.fail(transient()) : Effect.succeed(PREPARED_CONNECTION),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        for (const [index, delay] of [2_000, 4_000, 8_000].entries()) {
+          yield* eventuallyState(
+            supervisor.state,
+            (state) => state.phase === "backoff" && state.attempt === index + 1,
+          );
+          yield* TestClock.adjust(delay);
+        }
+        const deep = yield* eventuallyState(
+          supervisor.state,
+          (state) => state.phase === "backoff" && state.attempt === 4,
+        );
+        expect(deep.retryAt! - (yield* Clock.currentTimeMillis)).toBe(16_000);
+
+        // No clock advance: the wakeup itself starts the next attempt.
+        yield* harness.wake(reason);
+        const reset = yield* eventuallyState(
+          supervisor.state,
+          (state) => state.phase === "backoff" && state.attempt === 1,
+        );
+        expect(yield* Ref.get(harness.prepareCount)).toBe(5);
+        expect(reset.retryAt! - (yield* Clock.currentTimeMillis)).toBe(2_000);
+
+        yield* TestClock.adjust(2_000);
+        yield* eventuallyState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.attempt === 2,
+        );
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("an explicit retry restarts a stalled attempt without waiting for its timeout", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        prepare: (attempt) => (attempt === 2 ? Effect.never : Effect.succeed(PREPARED_CONNECTION)),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* harness.closeLatestSession();
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      yield* TestClock.adjust("2 seconds");
+      // A dead SSH forward accepts the socket and never answers.
+      yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connecting" && state.attempt === 2,
+      );
+
+      yield* supervisor.retryNow;
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2 && state.attempt === 1,
+      );
+      expect(yield* Ref.get(harness.prepareCount)).toBe(3);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

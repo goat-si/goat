@@ -16,6 +16,7 @@ import {
 } from "./model.ts";
 import {
   connectionCatalogDisplayUrl,
+  connectionProgressLabel,
   environmentMcpUrl,
   connectionStatusText,
   connectionStatusTitle,
@@ -140,6 +141,7 @@ describe("connection presentation", () => {
       phase: "connecting",
       error: null,
       traceId: null,
+      stage: "preparing",
     });
     expect(
       presentConnectionState(
@@ -157,6 +159,7 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Socket closed.",
       traceId: "trace-previous",
+      stage: "preparing",
     });
     expect(
       presentConnectionState(
@@ -175,6 +178,7 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Disconnected.",
       traceId: "trace-1",
+      retryAt: 1,
     });
   });
 
@@ -196,7 +200,43 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Relay connection timed out.",
       traceId: "trace-retry",
+      stage: "opening",
     });
+  });
+
+  it("names the step a reconnect is on instead of a bare connecting label", () => {
+    const failure = new ConnectionTransientError({ reason: "transport", detail: "Lost." });
+    const label = (overrides: Partial<SupervisorConnectionState>) =>
+      connectionProgressLabel(presentConnectionState(supervisorState(overrides)), 0);
+
+    expect(label({ attempt: 1 })).toBe("Connecting");
+    expect(label({ attempt: 2, lastFailure: failure })).toBe("Reconnecting");
+    expect(label({ attempt: 2, lastFailure: failure, stage: "opening" })).toBe(
+      "Opening connection",
+    );
+    expect(label({ attempt: 2, lastFailure: failure, stage: "synchronizing" })).toBe("Syncing");
+    expect(label({ phase: "offline", stage: null })).toBe("Offline");
+    expect(label({ phase: "blocked", stage: null, lastFailure: failure })).toBe(
+      "Connection failed",
+    );
+  });
+
+  it("counts down to the next retry and stops at zero", () => {
+    const waiting = presentConnectionState(
+      supervisorState({
+        phase: "backoff",
+        stage: null,
+        attempt: 3,
+        retryAt: 100_000,
+        lastFailure: new ConnectionTransientError({ reason: "timeout", detail: "No answer." }),
+      }),
+    );
+
+    expect(connectionProgressLabel(waiting, 88_000)).toBe("Retrying in 12s");
+    // A partial second rounds up, so the label never reads 0s while still waiting.
+    expect(connectionProgressLabel(waiting, 99_500)).toBe("Retrying in 1s");
+    expect(connectionProgressLabel(waiting, 100_000)).toBe("Retrying");
+    expect(connectionProgressLabel(waiting, 100_000 - 240_000)).toBe("Retrying in 4m");
   });
 
   it("combines reconnect progress with the latest failure", () => {

@@ -1116,6 +1116,16 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
 export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
+/**
+ * The machine woke from sleep (`resume`) or the user unlocked the screen.
+ * `asleepMs` is how long the machine was suspended before a resume. It is
+ * null for an unlock, or when the desktop did not see the matching suspend.
+ */
+export interface DesktopSystemWakeEvent {
+  readonly reason: "resume" | "unlock-screen";
+  readonly asleepMs: number | null;
+}
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
@@ -1227,6 +1237,8 @@ export interface DesktopBridge {
   pasteAsText?: () => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
+  /** Sleep and screen-lock wakeups. Optional: older desktop builds never emit them. */
+  onSystemWake?: (listener: (event: DesktopSystemWakeEvent) => void) => () => void;
   /**
    * Quit-confirmation hint pushes. Optional: older desktop builds never emit
    * them.

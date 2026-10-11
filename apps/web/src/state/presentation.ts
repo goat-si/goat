@@ -1,5 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentPresentation } from "@t3tools/client-runtime/connection";
+import type {
+  EnvironmentConnectionPhase,
+  EnvironmentPresentation,
+} from "@t3tools/client-runtime/connection";
 import {
   createEnvironmentPresentationAtoms,
   createEnvironmentSummaryAtoms,
@@ -24,6 +27,21 @@ export const environmentSummaries = createEnvironmentSummaryAtoms({
 const EMPTY_ENVIRONMENT_PRESENTATION_ATOM = Atom.make<EnvironmentPresentation | null>(null).pipe(
   Atom.withLabel("web-environment-presentation:empty"),
 );
+
+// Only the phase, so a list row repaints when the phase changes, not on every
+// step of a connection attempt.
+const environmentConnectionPhaseAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get): EnvironmentConnectionPhase | null =>
+      get(environmentPresentations.presentationAtom(environmentId))?.connection.phase ?? null,
+  ).pipe(Atom.withLabel(`web-environment-connection-phase:${environmentId}`)),
+);
+
+export function useEnvironmentConnectionPhase(
+  environmentId: EnvironmentId,
+): EnvironmentConnectionPhase | null {
+  return useAtomValue(environmentConnectionPhaseAtom(environmentId));
+}
 
 export function useEnvironmentPresentation(environmentId: EnvironmentId | null) {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);

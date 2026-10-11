@@ -91,6 +91,7 @@ describe("SSH dispatch tool compatibility", () => {
             pairingToken: null,
           }),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
+        revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () =>
           Effect.succeed({
             token: "fixture-session",
@@ -486,6 +487,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
                 pairingToken: null,
               }),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
+        revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () =>
           Effect.sync(() => {
             record.sessionsIssued += 1;

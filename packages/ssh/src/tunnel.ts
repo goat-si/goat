@@ -59,6 +59,9 @@ const DEFAULT_REMOTE_PORT = 3773;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
+// How long an open forward has to answer before it counts as dead. A forward
+// whose TCP connection died during sleep accepts locally and never answers.
+const EXISTING_TUNNEL_CHECK_TIMEOUT_MS = 2_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
 const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
@@ -272,6 +275,13 @@ export interface SshEnvironmentManagerShape {
   readonly disconnectEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  /**
+   * Checks every open local forward and closes the ones that no longer
+   * answer, so the next ensure opens a fresh forward instead of handing out
+   * a dead one. Remote servers keep running. Used after the machine wakes,
+   * when ssh itself can take up to its keepalive window (45 s) to notice.
+   */
+  readonly revalidateTunnels: () => Effect.Effect<void, never, SshEnvironmentEffectContext>;
   /**
    * Issues a short-lived `mcp-client` session on the remote environment so
    * this process can call the remote's `/mcp` like an outside agent.
@@ -2801,6 +2811,44 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return tunnelEntry;
   });
 
+  /**
+   * Whether an open local forward still reaches its remote server. One that
+   * does not answer within the check window is closed here; the caller opens
+   * a new one. A failed local forward is not authority to stop its remote
+   * server, so ownership is removed before closing and the scope finalizer
+   * stays local.
+   */
+  const keepAnsweringTunnel = Effect.fn("ssh/tunnel.keepAnsweringTunnel")(function* (
+    key: string,
+    entry: SshTunnelEntry,
+  ) {
+    const logFields = {
+      ...sshTargetLogFields(entry.target),
+      key,
+      localPort: entry.localPort,
+      remotePort: entry.remotePort,
+    };
+    yield* Effect.logDebug("ssh.environment.tunnel.existing.check", logFields);
+    const readinessExit = yield* Effect.exit(
+      waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: EXISTING_TUNNEL_CHECK_TIMEOUT_MS }),
+    );
+    if (Exit.isSuccess(readinessExit)) {
+      yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
+      return true;
+    }
+    yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
+      ...logFields,
+      cause: readinessExit.cause,
+    });
+    yield* Effect.gen(function* () {
+      if (tunnels.get(key) === entry) {
+        tunnels.delete(key);
+      }
+      yield* closeTunnelEntry(entry);
+    }).pipe(Effect.uninterruptible);
+    return false;
+  });
+
   const ensureTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry")(function* (
     key: string,
     resolvedTarget: DesktopSshEnvironmentTarget,
@@ -2816,40 +2864,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         if (tunnels.get(key) === entry) tunnels.delete(key);
         yield* closeTunnelEntry(entry);
       }).pipe(Effect.uninterruptible);
-    } else if (entry !== null) {
-      yield* Effect.logDebug("ssh.environment.tunnel.existing.check", {
-        ...sshTargetLogFields(resolvedTarget),
-        key,
-        localPort: entry.localPort,
-        remotePort: entry.remotePort,
-      });
-      const readinessExit = yield* Effect.exit(
-        waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: 2_000 }),
-      );
-      if (Exit.isSuccess(readinessExit)) {
-        yield* Effect.logDebug("ssh.environment.tunnel.reused", {
-          ...sshTargetLogFields(resolvedTarget),
-          key,
-          localPort: entry.localPort,
-          remotePort: entry.remotePort,
-        });
-        return entry;
-      }
-      yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
-        ...sshTargetLogFields(resolvedTarget),
-        key,
-        localPort: entry.localPort,
-        remotePort: entry.remotePort,
-        cause: readinessExit.cause,
-      });
-      // A failed local forward is not authority to stop its remote server.
-      // Remove ownership before closing so the scope finalizer stays local.
-      yield* Effect.gen(function* () {
-        if (tunnels.get(key) === entry) {
-          tunnels.delete(key);
-        }
-        yield* closeTunnelEntry(entry);
-      }).pipe(Effect.uninterruptible);
+    } else if (entry !== null && (yield* keepAnsweringTunnel(key, entry))) {
+      return entry;
     }
 
     return yield* createTunnelEntry({
@@ -2949,6 +2965,22 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
         };
       }),
+    );
+  });
+
+  const revalidateTunnels = Effect.fn("ssh/tunnel.revalidateTunnels")(function* () {
+    yield* Effect.forEach(
+      [...tunnels.keys()],
+      // The lock waits out an ensure in flight, which may already be replacing the entry.
+      (key) =>
+        withTargetLock(
+          key,
+          Effect.suspend(() => {
+            const entry = tunnels.get(key);
+            return entry === undefined ? Effect.void : keepAnsweringTunnel(key, entry);
+          }),
+        ),
+      { concurrency: "unbounded", discard: true },
     );
   });
 
@@ -3064,6 +3096,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   return SshEnvironmentManager.of({
     ensureEnvironment,
     disconnectEnvironment,
+    revalidateTunnels,
     issueMcpClientSession,
     runRemoteScript,
   });

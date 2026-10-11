@@ -229,6 +229,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.SNAP_SHOT_EVENT_CHANNEL, wrappedListener);
     };
   },
+  onSystemWake: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, wake: unknown) => {
+      if (typeof wake !== "object" || wake === null || !("reason" in wake)) return;
+      if (wake.reason !== "resume" && wake.reason !== "unlock-screen") return;
+      const asleepMs = "asleepMs" in wake ? wake.asleepMs : null;
+      listener({
+        reason: wake.reason,
+        asleepMs: typeof asleepMs === "number" && Number.isFinite(asleepMs) ? asleepMs : null,
+      });
+    };
+
+    ipcRenderer.on(IpcChannels.SYSTEM_WAKE_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.SYSTEM_WAKE_CHANNEL, wrappedListener);
+    };
+  },
   onQuitShortcut: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, hint: unknown) => {
       if (typeof hint !== "object" || hint === null || !("state" in hint)) return;

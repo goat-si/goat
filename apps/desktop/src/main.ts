@@ -50,6 +50,7 @@ import * as DesktopConfig from "./app/DesktopConfig.ts";
 import * as DesktopLifecycle from "./app/DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./app/DesktopLinuxUrlHandler.ts";
 import * as DesktopShutdown from "./app/DesktopShutdown.ts";
+import * as DesktopSystemWake from "./app/DesktopSystemWake.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
 import * as DesktopServerExposure from "./backend/DesktopServerExposure.ts";
 import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
@@ -166,6 +167,10 @@ const layerDesktopSsh = layerDesktopSshEnvironment.pipe(
   Layer.provideMerge(DesktopSshPasswordPrompts.layer()),
 );
 
+// Shares the one SSH environment the IPC handlers use, so a wake check sees
+// the same open forwards.
+const layerDesktopSystemWake = DesktopSystemWake.layer.pipe(Layer.provideMerge(layerDesktopSsh));
+
 const layerDesktopServerExposure = DesktopServerExposure.layer.pipe(
   Layer.provideMerge(DesktopNetworkInterfaces.layer),
   Layer.provideMerge(layerDesktopFoundation),
@@ -227,7 +232,7 @@ const layerDesktopApplication = Layer.mergeAll(
   DesktopLinuxUrlHandler.layer,
   DesktopCliCommand.layer,
   DesktopShellEnvironment.layer,
-  layerDesktopSsh,
+  layerDesktopSystemWake,
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
   Layer.provideMerge(DesktopUpdates.layer),

@@ -635,6 +635,74 @@ describe("ssh tunnel scripts", () => {
       }),
   );
 
+  it.effect("revalidation after sleep keeps a live forward and closes only a dead one", () =>
+    Effect.gen(function* () {
+      let forwards = 0;
+      let kills = 0;
+      let stops = 0;
+      let stale = false;
+      const probeStarted = yield* Deferred.make<void>();
+      const spawner = makeProtocolTestSpawner((command) =>
+        Effect.sync(() => {
+          const args = commandArgs(command);
+          if (args.includes("-G"))
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+          if (args.includes("-N")) {
+            forwards++;
+            return makeRunningProcess(() => {
+              kills++;
+            });
+          }
+          if (args.includes("--")) {
+            stale = false;
+            return makeSuccessfulProcess('{"remotePort":3773,"serverKind":"managed"}');
+          }
+          if (args.includes("sh")) {
+            stops++;
+            return makeSuccessfulProcess('{"stopped":true}');
+          }
+          return makeSuccessfulProcess("");
+        }),
+      );
+      // A forward whose TCP connection died during sleep accepts and never answers.
+      const client = HttpClient.make((request) =>
+        stale
+          ? Deferred.succeed(probeStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, client),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({
+          resolveCliRunner: Effect.succeed(PROTOCOL_ARCHIVE),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget);
+
+        yield* manager.revalidateTunnels();
+        assert.equal(kills, 0);
+
+        stale = true;
+        const revalidation = yield* Effect.forkChild(manager.revalidateTunnels());
+        yield* Deferred.await(probeStarted);
+        yield* TestClock.adjust(Duration.seconds(2));
+        yield* Fiber.join(revalidation);
+        assert.equal(kills, 1);
+        assert.equal(stops, 0);
+
+        // The next ensure opens a new forward instead of probing the dead one again.
+        yield* manager.ensureEnvironment(uploadTarget);
+        assert.equal(forwards, 2);
+        assert.equal(stops, 0);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
   it.effect.each(["successful stop", "failed stop"] as const)(
     "closes the tunnel scope and starts fresh after a %s",
     (mode) => {

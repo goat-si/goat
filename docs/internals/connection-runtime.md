@@ -18,12 +18,16 @@ failures wait for a wakeup instead of spending attempts on unchanged conditions.
 
 Foregrounding, an explicit retry, and an offline report probe the established
 session, and only a failed probe reconnects. Offline reports are often wrong, for
-example for a loopback server. A long mobile background suspension is the one
-exception: it replaces the session at once, because the OS can kill a socket
-without reporting closure, and a probe would hold a dead socket in "Resuming"
-until it times out. That fresh attempt runs even while the network reports
-offline. Foregrounding also wakes a pending retry immediately and
-leaves an ordinary in-flight attempt alone.
+example for a loopback server. A long suspension is the one exception: a long
+mobile background, or a desktop that slept (the main process forwards
+powerMonitor `resume`, since a closed lid may never change page visibility).
+It replaces the session at once, because the OS can kill a socket without
+reporting closure, and a probe would hold a dead socket in "Resuming" until it
+times out. That fresh attempt runs even while the network reports offline. On
+desktop an SSH forward can outlive its dead TCP connection for ssh's 45 s
+keepalive window, so a resume also closes forwards that stop answering.
+Foregrounding also wakes a pending retry immediately and leaves an ordinary
+in-flight attempt alone.
 
 The [registry](../../packages/client-runtime/src/connection/registry.ts) scopes
 connections by environment. An involuntary disconnect retains the registration

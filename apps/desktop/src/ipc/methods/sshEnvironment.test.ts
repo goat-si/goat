@@ -52,6 +52,7 @@ describe("SSH environment IPC", () => {
             discoverHosts: () => Effect.die("unused"),
             resolveHost: () => Effect.die("unused"),
             disconnectEnvironment: () => Effect.die("unused"),
+            revalidateTunnels: Effect.die("unused"),
             ensureEnvironment: (receivedTarget, options) =>
               Effect.sync(() => {
                 received = { target: receivedTarget, options };

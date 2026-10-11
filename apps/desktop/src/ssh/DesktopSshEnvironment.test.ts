@@ -52,6 +52,7 @@ describe("sshEnvironment", () => {
                 };
               }),
             disconnectEnvironment: () => Effect.die("unused"),
+            revalidateTunnels: () => Effect.die("unused"),
             issueMcpClientSession: () => Effect.die("unused"),
             runRemoteScript: () => Effect.die("unused"),
           }),

@@ -52,6 +52,7 @@ import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
+import { desktopWakeups } from "./desktopWakeups";
 import {
   desktopLocalConnectionId,
   readDesktopSecondaryBootstrapsResult,
@@ -125,6 +126,16 @@ const networkPathChanges = Stream.callback<"network-changed">((queue) =>
   ).pipe(Effect.asVoid),
 );
 
+// Without a desktop bridge that reports sleep (a browser tab, an older
+// desktop build), visibility, network type, and credentials are the only wakeups.
+const desktopShellWakeups = Stream.suspend(() => {
+  const onSystemWake =
+    typeof window === "undefined" ? undefined : window.desktopBridge?.onSystemWake;
+  return onSystemWake === undefined
+    ? Stream.empty
+    : desktopWakeups({ onSystemWake, window, nowMs: () => Date.now() });
+});
+
 const layerWakeups = Wakeups.layer({
   changes: Stream.mergeAll(
     [
@@ -149,6 +160,7 @@ const layerWakeups = Wakeups.layer({
         Stream.map(() => "credentials-changed" as const),
       ),
       networkPathChanges,
+      desktopShellWakeups,
     ],
     { concurrency: "unbounded" },
   ),

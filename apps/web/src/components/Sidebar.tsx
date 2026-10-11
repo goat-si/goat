@@ -176,6 +176,10 @@ import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import {
+  SidebarEnvironmentConnectionDot,
+  SidebarEnvironmentConnectionStatus,
+} from "./sidebar/SidebarEnvironmentConnection";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
   buildDraftActionMenuItems,
@@ -490,6 +494,7 @@ function SidebarThreadTooltip({
               className="size-3 shrink-0 stroke-muted-foreground"
             />
             <div className="min-w-0 truncate text-foreground/75">{environmentLabel}</div>
+            <SidebarEnvironmentConnectionStatus environmentId={thread.environmentId} />
           </div>
         ) : null}
         {thread.branch ? (
@@ -2202,6 +2207,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 aria-hidden
                 className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
               >
+                {isRemote ? (
+                  <SidebarEnvironmentConnectionDot environmentId={thread.environmentId} />
+                ) : null}
                 {isRemote && !showsScratchMachine ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
                     <EnvironmentMachineIcon
