@@ -100,16 +100,14 @@ export interface AcpMcpToolCallOptions<E = never, R = never> {
   readonly beforeToolCall?: Effect.Effect<void, E, R>;
 }
 
-/**
- * Call one MCP tool through a fresh authenticated HTTP session.
- *
- * This is the terminal fallback for ACP agents that accept `mcpServers` in
- * `session/new` but fail to expose those tools to their model. Compliant ACP
- * agents continue to use the stdio bridge above.
- */
-export function callAcpMcpTool<E = never, R = never>(
-  options: AcpMcpToolCallOptions<E, R>,
-): Effect.Effect<unknown, AcpMcpBridgeError | E, R> {
+/** Opens an authenticated HTTP MCP session and returns a sender bound to it. */
+function openAcpMcpSession(options: {
+  readonly endpoint: string;
+  readonly authorization: string;
+  readonly fetchImplementation?:
+    | ((url: string, init?: RequestInit) => Promise<Response>)
+    | undefined;
+}) {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   return Effect.gen(function* () {
     // The bridge is single-fibered at creation time; concurrent sends only
@@ -169,6 +167,40 @@ export function callAcpMcpTool<E = never, R = never>(
       );
     }
     yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    return send;
+  });
+}
+
+/** The single response to a request sent on an MCP session, or a protocol error. */
+function requestResult(
+  responses: ReadonlyArray<unknown>,
+  id: string,
+  describe: string,
+): Effect.Effect<unknown, AcpMcpBridgeError> {
+  const envelope = asEnvelope(responses.find((entry) => asEnvelope(entry)?.id === id));
+  if (envelope === null || envelope.error !== undefined) {
+    return Effect.fail(
+      new AcpMcpBridgeError(
+        `${describe} failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
+        { kind: envelope === null ? "protocol" : "rpc" },
+      ),
+    );
+  }
+  return Effect.succeed(envelope.result);
+}
+
+/**
+ * Call one MCP tool through a fresh authenticated HTTP session.
+ *
+ * This is the terminal fallback for ACP agents that accept `mcpServers` in
+ * `session/new` but fail to expose those tools to their model. Compliant ACP
+ * agents continue to use the stdio bridge above.
+ */
+export function callAcpMcpTool<E = never, R = never>(
+  options: AcpMcpToolCallOptions<E, R>,
+): Effect.Effect<unknown, AcpMcpBridgeError | E, R> {
+  return Effect.gen(function* () {
+    const send = yield* openAcpMcpSession(options);
     if (options.beforeToolCall !== undefined) yield* options.beforeToolCall;
 
     const callId = "t3-acp-cli-tool-call";
@@ -178,17 +210,49 @@ export function callAcpMcpTool<E = never, R = never>(
       method: "tools/call",
       params: { name: options.tool, arguments: options.arguments },
     });
-    const response = responses.find((entry) => asEnvelope(entry)?.id === callId);
-    const envelope = asEnvelope(response);
-    if (envelope === null || envelope.error !== undefined) {
-      return yield* Effect.fail(
-        new AcpMcpBridgeError(
-          `GOAT MCP tool call failed${envelope?.error === undefined ? "." : `: ${JSON.stringify(envelope.error)}`}`,
-          { kind: envelope === null ? "protocol" : "rpc" },
-        ),
-      );
-    }
-    return envelope.result;
+    return yield* requestResult(responses, callId, "GOAT MCP tool call");
+  });
+}
+
+/** A tool as `tools/list` describes it: its name and the arguments it declares. */
+export interface AcpMcpListedTool {
+  readonly name: string;
+  readonly argumentNames: ReadonlyArray<string>;
+}
+
+/**
+ * List the tools an MCP endpoint offers, with the top-level arguments each declares.
+ * Callers use it to send an optional argument only to servers that understand it.
+ */
+export function listAcpMcpTools(options: {
+  readonly endpoint: string;
+  readonly authorization: string;
+  readonly fetchImplementation?:
+    | ((url: string, init?: RequestInit) => Promise<Response>)
+    | undefined;
+}): Effect.Effect<ReadonlyArray<AcpMcpListedTool>, AcpMcpBridgeError> {
+  return Effect.gen(function* () {
+    const send = yield* openAcpMcpSession(options);
+    const listId = "t3-acp-cli-tools-list";
+    const responses = yield* send({ jsonrpc: "2.0", id: listId, method: "tools/list" });
+    const result = yield* requestResult(responses, listId, "GOAT MCP tool listing");
+    const tools = (result as { readonly tools?: unknown } | null)?.tools;
+    if (!Array.isArray(tools)) return [];
+    return tools.flatMap((tool): ReadonlyArray<AcpMcpListedTool> => {
+      const entry = tool as {
+        readonly name?: unknown;
+        readonly inputSchema?: { readonly properties?: unknown };
+      };
+      if (typeof entry.name !== "string") return [];
+      const properties = entry.inputSchema?.properties;
+      return [
+        {
+          name: entry.name,
+          argumentNames:
+            typeof properties === "object" && properties !== null ? Object.keys(properties) : [],
+        },
+      ];
+    });
   });
 }
 

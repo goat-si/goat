@@ -1,6 +1,8 @@
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type OrchestrationV2ThreadLauncher,
+  type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -56,7 +58,16 @@ interface ChatHeaderProps {
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
+  launcherThreadLink?:
+    | {
+        ref: ScopedThreadRef;
+        title: string;
+        kind: OrchestrationV2ThreadLauncher["kind"];
+      }
+    | null
+    | undefined;
   onOpenThread: (threadId: ThreadId) => void;
+  onOpenScopedThread?: ((ref: ScopedThreadRef) => void) | undefined;
   rightPanelOpen: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
@@ -92,11 +103,14 @@ export const ChatHeader = memo(function ChatHeader({
   isServerThread,
   activeProject,
   parentThreadLink,
+  launcherThreadLink,
   onOpenThread,
+  onOpenScopedThread,
   rightPanelOpen,
   onNewThreadInProject,
   onOpenProjectSettings,
 }: ChatHeaderProps) {
+  const relatedThreadLink = parentThreadLink ?? (onOpenScopedThread ? launcherThreadLink : null);
   const shownTitle = displayTitle ?? activeThreadTitle;
   // A fixed label is not the thread's own title, so editing it inline would
   // rename something the header never shows.
@@ -144,7 +158,7 @@ export const ChatHeader = memo(function ChatHeader({
   const isRenamingTitle = renamingTitle !== null;
   useEffect(() => {
     const list = breadcrumbContainerRef.current?.querySelector("ol");
-    if (!list || !parentThreadLink) return;
+    if (!list || !relatedThreadLink) return;
     // Measure the untruncated labels, including a collapsed parent's hidden
     // text, so expanding and collapsing never change the fit calculation.
     // Width-capped labels (the project) never grow, so their overflow is skipped.
@@ -180,7 +194,7 @@ export const ChatHeader = memo(function ChatHeader({
     activeProjectName,
     showProjectCrumb,
     shownTitle,
-    parentThreadLink,
+    relatedThreadLink,
     interfaceFont,
     isRenamingTitle,
   ]);
@@ -363,7 +377,7 @@ export const ChatHeader = memo(function ChatHeader({
             </WorkspaceBreadcrumbSeparator>
           </>
         ) : null}
-        {parentThreadLink ? (
+        {relatedThreadLink ? (
           <>
             <WorkspaceBreadcrumbItem>
               <Tooltip>
@@ -371,8 +385,11 @@ export const ChatHeader = memo(function ChatHeader({
                   render={
                     <button
                       type="button"
-                      aria-label={`Open parent thread: ${parentThreadLink.title}`}
-                      onClick={() => onOpenThread(parentThreadLink.threadId)}
+                      aria-label={`${parentThreadLink ? "Open parent thread" : launcherThreadLink?.kind === "promotion" ? "Open original parent thread" : "Open launching thread"}: ${relatedThreadLink.title}`}
+                      onClick={() => {
+                        if (parentThreadLink) onOpenThread(parentThreadLink.threadId);
+                        else if (launcherThreadLink) onOpenScopedThread?.(launcherThreadLink.ref);
+                      }}
                       className="inline-flex min-w-0 max-w-full cursor-pointer items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     />
                   }
@@ -381,7 +398,7 @@ export const ChatHeader = memo(function ChatHeader({
                     aria-hidden
                     className={collapseParentTitle ? "w-0" : undefined}
                   >
-                    {parentThreadLink.title}
+                    {relatedThreadLink.title}
                   </WorkspaceBreadcrumbText>
                   {collapseParentTitle ? (
                     <span aria-hidden data-parent-breadcrumb-ellipsis>
@@ -389,7 +406,7 @@ export const ChatHeader = memo(function ChatHeader({
                     </span>
                   ) : null}
                 </TooltipTrigger>
-                <TooltipPopup side="top">{parentThreadLink.title}</TooltipPopup>
+                <TooltipPopup side="top">{relatedThreadLink.title}</TooltipPopup>
               </Tooltip>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator>

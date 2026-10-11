@@ -1,6 +1,7 @@
 import { OrchestratorMcpFailure, RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -57,6 +58,21 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       const caller = yield* check;
       const runtimeMode = yield* resolveRuntimeMode(caller.limits.runtimeMode, input.runtimeMode);
       const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+      // The thread on this machine that launches; an outside client has none to record.
+      const launcher = caller.caller;
+      const launchedBy =
+        launcher === undefined
+          ? undefined
+          : yield* ServerEnvironment.ServerEnvironment.pipe(
+              Effect.flatMap((environment) => environment.getDescriptor),
+              Effect.map((descriptor) => ({
+                kind: "launch" as const,
+                threadId: launcher.id,
+                environmentId: descriptor.environmentId,
+                environmentLabel: descriptor.label,
+                threadTitle: launcher.title,
+              })),
+            );
       const result = yield* dispatch
         .launchThread(
           {
@@ -73,6 +89,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
             callerRuntimeMode: caller.limits.runtimeMode,
             interactionMode: input.interactionMode,
             allowBroadWorkspaceRoot: input.allowBroadWorkspaceRoot,
+            launchedBy,
           },
           check.pipe(Effect.asVoid),
         )
@@ -81,7 +98,6 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
             error instanceof SshRemoteDispatch.SshRemoteDispatchError ? toMcpFailure(error) : error,
           ),
         );
-      const launcher = caller.caller;
       const watching =
         launcher !== undefined && input.notifyOnCompletion !== false
           ? yield* LaunchWatchService.LaunchWatchService.pipe(

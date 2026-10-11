@@ -72,6 +72,14 @@ function makeParentThread(): OrchestrationV2AppThread {
     snoozedAt,
     deletedAt: null,
     historyOrigin: "v1_import",
+    // An orchestrator launched the parent; its children are delegates, not launches.
+    launchedBy: {
+      kind: "launch",
+      threadId: ThreadId.make("thread:orchestrator"),
+      environmentId: null,
+      environmentLabel: null,
+      threadTitle: "Orchestrator",
+    },
   };
 }
 
@@ -103,6 +111,7 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
   assert.deepEqual(childThread.modelSelection, childModelSelection);
   assert.equal(childThread.activeProviderThreadId, childProviderThreadId);
   assert.isUndefined(childThread.historyOrigin);
+  assert.isUndefined(childThread.launchedBy);
   assert.deepEqual(childThread.lineage, {
     parentThreadId,
     relationshipToParent: "subagent",

@@ -2,6 +2,7 @@ import type {
   DesktopSshEnvironmentTarget,
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  OrchestrationV2ThreadLauncher,
   ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
@@ -25,7 +26,7 @@ import type { ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
-import { AcpMcpBridgeError, callAcpMcpTool } from "../mcp/AcpMcpStdioBridge.ts";
+import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
 import {
   buildRemoteBrowseScript,
   parseRemoteBrowseOutput,
@@ -111,6 +112,11 @@ export interface SshLaunchInput {
   readonly interactionMode?: ProviderInteractionMode | undefined;
   /** Accept a folder that broadWorkspaceRoot rejects; only when the user asked for it. */
   readonly allowBroadWorkspaceRoot?: boolean | undefined;
+  /**
+   * The thread on this machine that asked for the launch. Forwarded only to a remote
+   * whose goat_thread_launch declares launchedBy; older remotes refuse unknown arguments.
+   */
+  readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
 }
 
 export interface SshLaunchResult {
@@ -323,6 +329,9 @@ const make = Effect.gen(function* () {
     string,
     { readonly token: string; readonly expiresAt: number; readonly ceilingApplied: boolean }
   >();
+  // Per session key: whether that remote's goat_thread_launch declares launchedBy.
+  // Cleared with each new session, since the remote may have been updated meanwhile.
+  const launchLineageSupport = new Map<string, boolean>();
   const connected = new Set<string>();
 
   const withRuntime = <A, E>(
@@ -432,8 +441,38 @@ const make = Effect.gen(function* () {
       ceilingApplied: issued.runtimeModeCeilingApplied,
     };
     sessions.set(key, session);
+    launchLineageSupport.delete(key);
     return session;
   });
+
+  /**
+   * Whether the remote's goat_thread_launch accepts launchedBy. A failed listing
+   * counts as no, uncached, so the launch still goes out once without it.
+   */
+  const remoteAcceptsLaunchLineage = Effect.fn("SshRemoteDispatch.remoteAcceptsLaunchLineage")(
+    function* (remote: {
+      readonly target: DesktopSshEnvironmentTarget;
+      readonly httpBaseUrl: string;
+      readonly ceiling: RuntimeMode;
+      readonly token: string;
+    }) {
+      const key = `${remote.target.alias}\u0000${remote.ceiling}`;
+      const known = launchLineageSupport.get(key);
+      if (known !== undefined) return known;
+      const listed = yield* Effect.result(
+        listAcpMcpTools({
+          endpoint: new URL("mcp", remote.httpBaseUrl).toString(),
+          authorization: `Bearer ${remote.token}`,
+        }),
+      );
+      if (listed._tag === "Failure") return false;
+      const accepts = listed.success.some(
+        (tool) => tool.name === "goat_thread_launch" && tool.argumentNames.includes("launchedBy"),
+      );
+      launchLineageSupport.set(key, accepts);
+      return accepts;
+    },
+  );
 
   /**
    * Calls one remote tool with an already issued session. It never issues one
@@ -650,6 +689,8 @@ const make = Effect.gen(function* () {
       notes.push(`Registered ${folder.path} as a new project on ${target.alias}.`);
     }
 
+    const forwardLaunchedBy =
+      input.launchedBy !== undefined && (yield* remoteAcceptsLaunchLineage(remote));
     // The caller's run may have ended, or its modes changed, while SSH ran.
     yield* beforeLaunch;
     const launched = (yield* callRemote({
@@ -663,6 +704,7 @@ const make = Effect.gen(function* () {
         ...(input.interactionMode === undefined ? {} : { interactionMode: input.interactionMode }),
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         ...(input.message === undefined ? {} : { message: input.message }),
+        ...(forwardLaunchedBy ? { launchedBy: input.launchedBy } : {}),
       },
     })) as { readonly threadId?: string; readonly runId?: string | null };
     if (typeof launched?.threadId !== "string") {

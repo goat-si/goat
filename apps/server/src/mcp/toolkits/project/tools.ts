@@ -7,6 +7,7 @@ import {
   RunId,
   OrchestrationV2RunStatus,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  OrchestrationV2ThreadLauncher,
   RuntimeMode,
   ProviderInteractionMode,
   Project,
@@ -153,6 +154,12 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
       Schema.Boolean.annotate({
         description:
           "Default true for a calling GOAT thread: it is woken with a message when the new thread's run ends, waits on a question, or later runs you start with goat_thread_send end. Pass false to follow it yourself.",
+      }),
+    ),
+    launchedBy: Schema.optional(
+      OrchestrationV2ThreadLauncher.annotate({
+        description:
+          "Set by GOAT when it forwards a launch from another machine. Leave unset; a calling GOAT thread is recorded automatically.",
       }),
     ),
   }),

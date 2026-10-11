@@ -59,6 +59,14 @@ function makeSourceThread(): OrchestrationV2AppThread {
     snoozedUntil,
     snoozedAt,
     deletedAt: null,
+    // The source was promoted from a delegated task; a fork is the user's own thread.
+    launchedBy: {
+      kind: "promotion",
+      threadId: ThreadId.make("thread:former-parent"),
+      environmentId: null,
+      environmentLabel: null,
+      threadTitle: "Former parent",
+    },
   };
 }
 
@@ -155,6 +163,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     assert.equal(result.targetThread.branch, sourceThread.branch);
     assert.equal(result.targetThread.worktreePath, sourceThread.worktreePath);
     assert.isNull(result.targetThread.activeProviderThreadId);
+    assert.isUndefined(result.targetThread.launchedBy);
     assert.deepEqual(result.targetThread.lineage, {
       parentThreadId: sourceThreadId,
       relationshipToParent: "fork",

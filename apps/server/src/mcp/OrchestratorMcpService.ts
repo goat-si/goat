@@ -2260,6 +2260,13 @@ const make = Effect.gen(function* () {
                   type: "thread.create",
                   createdBy: "agent",
                   creationSource: "mcp",
+                  launchedBy: {
+                    kind: "launch",
+                    threadId: scope.thread.threadId,
+                    environmentId: null,
+                    environmentLabel: null,
+                    threadTitle: parent.thread.title,
+                  },
                   commandId: stableCommandId({
                     scope,
                     requestKey: key,

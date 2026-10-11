@@ -9,6 +9,7 @@ import {
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
@@ -22,6 +23,7 @@ const shared = {
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
     LaunchWatchService.LaunchWatchService,
+    ServerEnvironment.ServerEnvironment,
   ],
 };
 

@@ -396,6 +396,35 @@ it.effect("retains automation and sender attribution while a message waits in th
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("records the launcher on the thread and on every shell read", () => {
+  const harness = makeHarness({ runSetup: () => Effect.never });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const launchedBy = {
+      kind: "launch" as const,
+      threadId: ThreadId.make("thread:orchestrator"),
+      environmentId: null,
+      environmentLabel: null,
+      threadTitle: "Orchestrator",
+    };
+    const launched = yield* launches.launch({
+      ...launchInput({ command: "command:launched-by", thread: "thread:launched-by" }),
+      createdBy: "agent",
+      creationSource: "mcp",
+      launchedBy,
+    });
+    const projection = yield* threads.getThreadProjection(launched.threadId);
+    assert.deepEqual(projection.thread.launchedBy, launchedBy);
+    assert.deepEqual((yield* threads.getThreadShell(launched.threadId))?.launchedBy, launchedBy);
+    const snapshot = yield* threads.getShellSnapshot();
+    assert.deepEqual(
+      snapshot.threads.find((thread) => thread.id === launched.threadId)?.launchedBy,
+      launchedBy,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("returns a visible preparing message while provisioning is still blocked", () =>
   Effect.gen(function* () {
     const worktreeEntered = yield* Deferred.make<void>();

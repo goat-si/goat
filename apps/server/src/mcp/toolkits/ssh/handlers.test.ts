@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
@@ -25,6 +26,8 @@ const launchFromThread = (
   options: {
     readonly notifyOnCompletion?: boolean;
     readonly registerError?: LaunchWatchService.LaunchWatchStoreError;
+    /** An outside MCP client launches instead of a GOAT thread. */
+    readonly outsideClient?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -32,6 +35,7 @@ const launchFromThread = (
     const providerInstanceId = ProviderInstanceId.make("codex");
     const caller = {
       id: callerThreadId,
+      title: "Orchestrator",
       projectId: ProjectId.make("caller-project"),
       providerInstanceId,
       modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
@@ -42,6 +46,7 @@ const launchFromThread = (
       deletedAt: null,
     } as OrchestrationV2ThreadShell;
     const registrations: Array<Registration> = [];
+    const launchInputs: Array<SshRemoteDispatch.SshLaunchInput> = [];
     const remoteResult: SshRemoteDispatch.SshLaunchResult = {
       host: "box",
       cwd: "/remote/project",
@@ -58,20 +63,31 @@ const launchFromThread = (
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
-        thread: {
-          threadId: callerThreadId,
-          providerSessionId: "session",
-          providerInstanceId,
-        },
-        client: undefined,
+        thread:
+          options.outsideClient === true
+            ? undefined
+            : { threadId: callerThreadId, providerSessionId: "session", providerInstanceId },
+        client:
+          options.outsideClient === true
+            ? { sessionId: "client", label: "Outside agent", access: "full-access" }
+            : undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId: EnvironmentId.make("launcher-environment"),
+          label: "studio",
+        } as never),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(caller),
       }),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-        launchThread: (_input, beforeLaunch) => beforeLaunch.pipe(Effect.as(remoteResult)),
+        launchThread: (input, beforeLaunch) => {
+          launchInputs.push(input);
+          return beforeLaunch.pipe(Effect.as(remoteResult));
+        },
       }),
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         register: (input) =>
@@ -103,8 +119,38 @@ const launchFromThread = (
           : { notifyOnCompletion: options.notifyOnCompletion }),
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    return { result: responses.at(-1)?.result, registrations, callerThreadId, remoteResult };
+    return {
+      result: responses.at(-1)?.result,
+      registrations,
+      launchInputs,
+      callerThreadId,
+      remoteResult,
+    };
   });
+
+it.effect("forwards the calling thread and this machine as the remote thread's launcher", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread();
+    expect(launched.launchInputs.map((input) => input.launchedBy)).toEqual([
+      {
+        kind: "launch",
+        threadId: launched.callerThreadId,
+        environmentId: "launcher-environment",
+        environmentLabel: "studio",
+        threadTitle: "Orchestrator",
+      },
+    ]);
+  }),
+);
+
+it.effect("launches for an outside client without naming a launcher", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({ outsideClient: true });
+    expect(launched.launchInputs).toHaveLength(1);
+    expect(launched.launchInputs[0]?.launchedBy).toBeUndefined();
+    expect(launched.registrations).toEqual([]);
+  }),
+);
 
 it.effect("watches the remote run for its calling thread and explains how to stop reports", () =>
   Effect.gen(function* () {

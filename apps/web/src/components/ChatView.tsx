@@ -453,6 +453,7 @@ import {
   resolveScrollToEndClearance,
 } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
+import { resolveLauncherRef } from "./chat/threadLauncher.logic";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
@@ -2186,6 +2187,37 @@ export default function ChatView(props: ChatViewProps) {
             title: parentSubagentThread?.title ?? "Parent thread",
           },
     [parentSubagentThread?.title, parentSubagentThreadRef],
+  );
+  const launchedBy = serverThread?.source.launchedBy;
+  const launcherOwnEnvironmentId = serverThread?.environmentId;
+  const launcherRelationshipToParent = activeThread?.lineage.relationshipToParent;
+  const launcherThreadRef = useMemo(
+    () =>
+      launcherRelationshipToParent !== "subagent" &&
+      launchedBy !== undefined &&
+      launcherOwnEnvironmentId !== undefined
+        ? resolveLauncherRef(launchedBy, launcherOwnEnvironmentId)
+        : null,
+    [launcherRelationshipToParent, launchedBy, launcherOwnEnvironmentId],
+  );
+  const launcherThread = useThreadShell(launcherThreadRef);
+  const launcherThreadTitle = launcherThread?.title;
+  const launcherKind = launchedBy?.kind;
+  const launcherThreadLink = useMemo(
+    () =>
+      launcherThreadRef !== null && launcherThreadTitle !== undefined && launcherKind !== undefined
+        ? { ref: launcherThreadRef, title: launcherThreadTitle, kind: launcherKind }
+        : null,
+    [launcherKind, launcherThreadTitle, launcherThreadRef],
+  );
+  const onOpenScopedThread = useCallback(
+    (ref: ScopedThreadRef) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(ref),
+      });
+    },
+    [navigate],
   );
   const threadError = isServerThread
     ? (localServerError ?? serverRuntime?.lastError ?? null)
@@ -11378,7 +11410,9 @@ export default function ChatView(props: ChatViewProps) {
             globalAgent={isGlobalAgentActive}
             activeProject={activeProject ?? null}
             parentThreadLink={parentThreadLink}
+            launcherThreadLink={launcherThreadLink}
             onOpenThread={onOpenRelatedThread}
+            onOpenScopedThread={onOpenScopedThread}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProject}
             {...(activeDraftLogicalProjectKey && !isGlobalAgentActive

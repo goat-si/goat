@@ -49,6 +49,7 @@ const launchFromThread = (params: {
   readonly title: string;
   readonly message?: string;
   readonly notifyOnCompletion?: boolean;
+  readonly launchedBy?: ThreadLaunch.ThreadLaunchInput["launchedBy"];
 }) =>
   Effect.gen(function* () {
     const sourceThreadId = ThreadId.make("source-thread");
@@ -57,6 +58,7 @@ const launchFromThread = (params: {
     const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
     const caller = {
       id: sourceThreadId,
+      title: "Orchestrator",
       projectId,
       providerInstanceId,
       modelSelection,
@@ -67,6 +69,7 @@ const launchFromThread = (params: {
       deletedAt: null,
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
+    let launchedBy: ThreadLaunch.ThreadLaunchInput["launchedBy"];
     const registrations: Array<Registration> = [];
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
@@ -89,6 +92,7 @@ const launchFromThread = (params: {
       Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: (input) => {
           launchedSender = input.initialMessage?.senderThreadId;
+          launchedBy = input.launchedBy;
           const messageId = input.initialMessage?.messageId;
           return Effect.succeed({
             threadId: input.threadId,
@@ -124,6 +128,7 @@ const launchFromThread = (params: {
     return {
       result: result.at(-1)?.result,
       launchedSender,
+      launchedBy,
       registrations,
       sourceThreadId,
       projectId,
@@ -139,6 +144,28 @@ it.effect("attributes a launched thread's first message to the calling thread", 
       modelSelection: launched.modelSelection,
     });
     expect(launched.launchedSender).toBe(launched.sourceThreadId);
+  }),
+);
+
+it.effect("records the calling thread as the launcher, whatever launchedBy says", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      launchedBy: {
+        kind: "launch",
+        threadId: ThreadId.make("someone-else"),
+        environmentId: null,
+        environmentLabel: null,
+        threadTitle: "Forged",
+      },
+    });
+    expect(launched.launchedBy).toEqual({
+      kind: "launch",
+      threadId: launched.sourceThreadId,
+      environmentId: null,
+      environmentLabel: null,
+      threadTitle: "Orchestrator",
+    });
   }),
 );
 
@@ -463,6 +490,19 @@ it.effect("a client launches at its ceiling with the project's default model", (
     expect(result.at(-1)?.result).toMatchObject({ projectId, modelSelection });
     expect(launched[0]?.runtimeMode).toBe("auto-accept-edits");
     expect(launched[0]?.initialMessage?.senderThreadId).toBeUndefined();
+    expect(launched[0]?.launchedBy).toBeUndefined();
+
+    // A launch GOAT forwarded from another machine names its launcher there.
+    const forwardedLauncher = {
+      kind: "launch" as const,
+      threadId: ThreadId.make("remote-orchestrator"),
+      environmentId: EnvironmentId.make("remote-environment"),
+      environmentLabel: "studio",
+      threadTitle: "Remote orchestrator",
+    };
+    yield* handle({ title: "Forwarded", projectId, launchedBy: forwardedLauncher });
+    expect(launched[1]?.launchedBy).toEqual(forwardedLauncher);
+    launched.splice(1);
 
     const escalated = yield* handle({ title: "Fix", projectId, runtimeMode: "full-access" });
     expect(escalated.at(-1)?.result).toMatchObject({ code: "runtime_mode_escalation_denied" });

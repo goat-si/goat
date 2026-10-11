@@ -9,6 +9,7 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2ThreadLauncher,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
   type ProviderDriverKind,
@@ -94,6 +95,8 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** The agent thread that asked for this launch; descriptive only. */
+  readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
 }
 
 /** What workspace preparation reads from a launch; a retry rebuilds it from the run. */
@@ -848,6 +851,7 @@ const make = Effect.gen(function* () {
                   : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.launchedBy === undefined ? {} : { launchedBy: input.launchedBy }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(

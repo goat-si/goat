@@ -185,6 +185,21 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               }),
           createdBy: "agent",
           creationSource: "mcp",
+          // The calling thread is the launcher. A launch forwarded over SSH has no
+          // calling thread here and names its launcher on the other machine instead.
+          ...(caller !== undefined
+            ? {
+                launchedBy: {
+                  kind: "launch" as const,
+                  threadId: caller.id,
+                  environmentId: null,
+                  environmentLabel: null,
+                  threadTitle: caller.title,
+                },
+              }
+            : input.launchedBy === undefined
+              ? {}
+              : { launchedBy: input.launchedBy }),
         }).pipe(
           Effect.mapError((error) =>
             error._tag === "AttachmentClaimError"

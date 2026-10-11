@@ -24,7 +24,12 @@ import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadShell,
+  ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import { deriveSubagentElapsedMs } from "@t3tools/shared/orchestrationTiming";
 import { groupBy } from "effect/Array";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +42,7 @@ import {
   LoaderCircleIcon,
   MoreHorizontalIcon,
   PlusIcon,
+  RocketIcon,
   SquareIcon,
   UnplugIcon,
 } from "lucide-react";
@@ -54,6 +60,11 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
+import {
+  isLaunchedFromThread,
+  resolveLauncherRef,
+  threadLauncherLabel,
+} from "./threadLauncher.logic";
 
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -153,6 +164,70 @@ function ThreadLineageGroup(props: {
   );
 }
 
+interface LaunchedThreadRow {
+  readonly ref: ScopedThreadRef;
+  readonly title: string;
+  readonly status: string | null;
+}
+
+function LaunchedThreadGroup(props: {
+  readonly rows: ReadonlyArray<LaunchedThreadRow>;
+  readonly onOpenThread: (ref: ScopedThreadRef) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(props.rows, visibleCount);
+  if (props.rows.length === 0) return null;
+  return (
+    <div>
+      <CollapsibleSectionHeader expanded={expanded} onClick={() => setExpanded(!expanded)}>
+        Launched
+        {!expanded && ` (${props.rows.length})`}
+      </CollapsibleSectionHeader>
+      {expanded ? (
+        <ThreadLineageRowList
+          hiddenCount={hiddenCount}
+          onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
+        >
+          {visibleRows.map((row) => (
+            <li
+              key={scopedThreadKey(row.ref)}
+              className="group relative flex h-8 items-center rounded-lg"
+            >
+              <Tooltip>
+                <TooltipTrigger
+                  delay={200}
+                  render={
+                    <ThreadDetailsControl
+                      size="sm"
+                      variant="ghost"
+                      part="row"
+                      aria-label={`Open launched thread: ${row.title}`}
+                      onClick={() => props.onOpenThread(row.ref)}
+                    />
+                  }
+                >
+                  <ThreadRelationshipIcon fallbackIcon={RocketIcon} status={row.status} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-left text-sm font-medium leading-4 text-foreground/85">
+                      {row.title}
+                    </span>
+                  </span>
+                  <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  <span className="shrink-0 text-2xs text-muted-foreground">
+                    {threadRelationshipStatusLabel(row.status)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipPopup side="left">Open launched thread in this chat</TooltipPopup>
+              </Tooltip>
+            </li>
+          ))}
+        </ThreadLineageRowList>
+      ) : null}
+    </div>
+  );
+}
+
 function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: ThreadId) {
   if (edge.kind === "transfer") return "Context transfer";
   if (edge.kind === "subagent") {
@@ -209,7 +284,10 @@ export function ThreadRelationshipsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
-  const ref = scopeThreadRef(props.environmentId, props.threadId);
+  const ref = useMemo(
+    () => scopeThreadRef(props.environmentId, props.threadId),
+    [props.environmentId, props.threadId],
+  );
   const projection = useThreadProjection(ref)?.projection ?? null;
   const providers = useServerConfigs().get(props.environmentId)?.providers;
   const subagentsByThreadId = useMemo(
@@ -246,6 +324,38 @@ export function ThreadRelationshipsPanel(props: {
     return deriveThreadRelationshipGraph({ threads: shells, projection });
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const currentThread = projection?.thread ?? graph.nodes.get(props.threadId)?.thread;
+  const launchedBy = currentThread?.launchedBy;
+  const launcherRef = useMemo(
+    () => (launchedBy === undefined ? null : resolveLauncherRef(launchedBy, props.environmentId)),
+    [launchedBy, props.environmentId],
+  );
+  const launcherShell = useMemo(
+    () =>
+      launcherRef === null
+        ? undefined
+        : threadShells.find(
+            (shell) =>
+              shell.environmentId === launcherRef.environmentId &&
+              shell.id === launcherRef.threadId,
+          ),
+    [launcherRef, threadShells],
+  );
+  const launchedRows = useMemo<ReadonlyArray<LaunchedThreadRow>>(
+    () =>
+      threadShells
+        .filter((shell) =>
+          isLaunchedFromThread(
+            { launchedBy: shell.source.launchedBy, environmentId: shell.environmentId },
+            ref,
+          ),
+        )
+        .map((shell) => ({
+          ref: scopeThreadRef(shell.environmentId, shell.id),
+          title: shell.title,
+          status: shell.source.activityRunStatus ?? shell.source.status,
+        })),
+    [ref, threadShells],
+  );
   const currentProject = projects.find((project) => project.id === currentThread?.projectId);
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
@@ -292,15 +402,23 @@ export function ThreadRelationshipsPanel(props: {
       (agent) => agent.childThreadId === null && agent.status === "running",
     ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
 
-  if (relationshipRows.length === 0 && runningCount === 0) {
+  if (
+    relationshipRows.length === 0 &&
+    runningCount === 0 &&
+    launchedBy === undefined &&
+    launchedRows.length === 0
+  ) {
     return null;
   }
 
-  const openThread = (threadId: ThreadId) => {
+  const openScopedThread = (threadRef: ScopedThreadRef) => {
     void navigate({
       to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(scopeThreadRef(props.environmentId, threadId)),
+      params: buildThreadRouteParams(threadRef),
     });
+  };
+  const openThread = (threadId: ThreadId) => {
+    openScopedThread(scopeThreadRef(props.environmentId, threadId));
   };
 
   const merge = async () => {
@@ -345,6 +463,8 @@ export function ThreadRelationshipsPanel(props: {
     mergeTargetThreadId === null
       ? null
       : (graph.nodes.get(mergeTargetThreadId)?.thread?.title ?? null);
+  const launcherTitle = launcherShell?.title ?? launchedBy?.threadTitle ?? launchedBy?.threadId;
+  const LauncherIcon = launchedBy?.kind === "promotion" ? CornerLeftUpIcon : RocketIcon;
 
   return (
     <ThreadDetailsSection
@@ -377,6 +497,49 @@ export function ThreadRelationshipsPanel(props: {
         ) : null
       }
     >
+      {launchedBy && launcherRef ? (
+        <ThreadLineageRowList hiddenCount={0} onShowMore={() => {}}>
+          <li className="group relative flex items-center rounded-lg">
+            <Tooltip>
+              <TooltipTrigger
+                delay={200}
+                render={
+                  <ThreadDetailsControl
+                    size="sm"
+                    variant="ghost"
+                    part="row"
+                    multiline
+                    disabled={launcherShell === undefined}
+                    aria-label={`${threadLauncherLabel(launchedBy.kind)}: ${launcherTitle}`}
+                    onClick={() => openScopedThread(launcherRef)}
+                  />
+                }
+              >
+                <LauncherIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block text-2xs text-muted-foreground">
+                    {threadLauncherLabel(launchedBy.kind)}
+                  </span>
+                  <span className="block truncate text-sm font-medium leading-4 text-foreground/85">
+                    {launcherTitle}
+                  </span>
+                  {launchedBy.environmentLabel !== null ? (
+                    <span className="block truncate text-2xs text-muted-foreground">
+                      {launchedBy.environmentLabel}
+                    </span>
+                  ) : null}
+                </span>
+                <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+              </TooltipTrigger>
+              <TooltipPopup side="left">
+                {launcherShell === undefined
+                  ? "This related thread is unavailable"
+                  : `Open ${launchedBy.kind === "promotion" ? "original parent" : "launching"} thread in this chat`}
+              </TooltipPopup>
+            </Tooltip>
+          </li>
+        </ThreadLineageRowList>
+      ) : null}
       {groups.map((group) => (
         <ThreadLineageGroup key={`${scopedThreadKey(ref)}:${group.id}`} {...group}>
           {(visibleRows) =>
@@ -586,6 +749,11 @@ export function ThreadRelationshipsPanel(props: {
           }
         </ThreadLineageGroup>
       ))}
+      <LaunchedThreadGroup
+        key={`${scopedThreadKey(ref)}:launched`}
+        rows={launchedRows}
+        onOpenThread={openScopedThread}
+      />
     </ThreadDetailsSection>
   );
 }
