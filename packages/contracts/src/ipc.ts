@@ -314,6 +314,15 @@ export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
   totalItems: Schema.Number,
 });
 
+/** The downloaded update the desktop app will install; persisted in desktop settings. */
+export const DesktopUpdatePendingRecordSchema = Schema.NullOr(
+  Schema.Struct({
+    version: Schema.String,
+    channel: DesktopUpdateChannelSchema,
+    downloadedAt: Schema.String,
+  }),
+);
+
 export const DesktopUpdateStateSchema = Schema.Struct({
   // These four fields arrived with automatic updates; defaults keep reports from
   // older desktops and servers decodable during a version transition.
@@ -323,13 +332,9 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   pendingRestartReason: Schema.NullOr(Schema.Literals(["busy", "unknown", "paused"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  pendingUpdate: Schema.NullOr(
-    Schema.Struct({
-      version: Schema.String,
-      channel: DesktopUpdateChannelSchema,
-      downloadedAt: Schema.String,
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  pendingUpdate: DesktopUpdatePendingRecordSchema.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   recoveryStatus: Schema.NullOr(Schema.Literals(["restoring", "needs-network"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

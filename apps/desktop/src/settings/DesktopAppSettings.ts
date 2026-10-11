@@ -2,7 +2,7 @@ import {
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
   DesktopUpdateInstallPolicySchema,
-  DesktopUpdateStateSchema,
+  DesktopUpdatePendingRecordSchema,
   type DesktopUpdateInstallPolicy,
   type DesktopUpdateState,
   type DesktopServerExposureMode,
@@ -113,7 +113,7 @@ const DesktopSettingsDocument = Schema.Struct({
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
-  pendingUpdate: Schema.optionalKey(DesktopUpdateStateSchema.fields.pendingUpdate),
+  pendingUpdate: Schema.optionalKey(DesktopUpdatePendingRecordSchema),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   // Newer form of the WSL toggle. `wslMode` is still accepted on load so
