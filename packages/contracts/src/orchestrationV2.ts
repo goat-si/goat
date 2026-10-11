@@ -13,6 +13,7 @@ import {
   ContextHandoffId,
   ContextTransferId,
   EventId,
+  ForwardCompatibleOptional,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -36,6 +37,8 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { ChannelMessageMeta } from "./channelCommon.ts";
+import { ChannelTaskChip } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
@@ -1113,6 +1116,12 @@ export const OrchestrationV2Notification = Schema.Struct({
   outcome: Schema.Literals(["completed", "failed", "cancelled", "updated", "unknown"]),
   summary: TrimmedNonEmptyString,
   detail: Schema.optional(Schema.String),
+  /**
+   * The channel ledger task this notification shows, for GOAT bot task chips. The status here
+   * is the task's; the item status only says the record exists. A chip this build cannot read
+   * decodes as absent, leaving the plain notification.
+   */
+  ledgerTask: ForwardCompatibleOptional(ChannelTaskChip),
 });
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
@@ -1122,6 +1131,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   scheduledTaskId: Schema.optional(ScheduledTaskId),
   // The sending agent's thread in this environment, separate from the receiving thread.
   senderThreadId: Schema.optional(ThreadId),
+  /** Channel metadata on GOAT bot messages; absent on every other thread. */
+  channel: ForwardCompatibleOptional(ChannelMessageMeta),
   id: MessageId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1388,6 +1399,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    channel: ForwardCompatibleOptional(ChannelMessageMeta),
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
@@ -1397,6 +1409,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
     messageId: MessageId,
+    channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
     streaming: Schema.Boolean,
@@ -2167,6 +2180,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    channel: ForwardCompatibleOptional(ChannelMessageMeta),
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
@@ -2176,6 +2190,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
     messageId: MessageId,
+    channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
     streaming: Schema.Boolean,

@@ -1,0 +1,144 @@
+import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+
+import {
+  ChannelTask,
+  ChannelTaskChip,
+  ChannelTaskEvent,
+  ChannelTimelineRecord,
+  isChannelTaskTerminal,
+} from "./index.ts";
+
+const decodeTaskEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+
+const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: unknown) => {
+  const json = Schema.toCodecJson(schema);
+  const decoded = Schema.decodeUnknownSync(json)(value);
+  const encoded = Schema.encodeSync(json)(decoded);
+  expect(Schema.decodeUnknownSync(json)(encoded)).toEqual(decoded);
+  return decoded;
+};
+
+const requester = {
+  ownerId: "owner",
+  principalId: "owner",
+  displayName: "Jun",
+  originKind: "slack",
+  externalActorId: "U123",
+  runtimeModeCeiling: "approval-required",
+  grantedScopes: ["orchestration:read"],
+};
+
+const task = {
+  taskId: "task-1",
+  conversationId: "conv-1",
+  originBindingId: "binding-1",
+  originAddress: {
+    kind: "slack",
+    connectionId: "slack-1",
+    teamId: "T1",
+    channelId: "C1",
+    rootTs: "1760000000.000100",
+  },
+  originInputId: "input-1",
+  requester,
+  title: "Re-verify the Opus 5.5 call",
+  instruction: "Run the call again and report the latency.",
+  status: "running",
+  version: 3,
+  generation: 1,
+  worker: { environmentId: "env-1", threadId: "worker-thread", runId: "run-1", generation: 1 },
+  openQuestions: [],
+  createdAt: "2026-10-12T00:00:00.000Z",
+  updatedAt: "2026-10-12T00:00:05.000Z",
+};
+
+describe("channel tasks", () => {
+  it("round-trips a task with its fixed origin and requester snapshot", () => {
+    expect(roundTrip(ChannelTask, task)).toMatchObject({
+      originAddress: task.originAddress,
+      requester: { externalActorId: "U123" },
+    });
+  });
+
+  it("treats only completed, failed, and cancelled as terminal", () => {
+    expect(
+      (["received", "dispatching", "running", "waiting_input"] as const).map(isChannelTaskTerminal),
+    ).toEqual([false, false, false, false]);
+    expect((["completed", "failed", "cancelled"] as const).map(isChannelTaskTerminal)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("types each event payload by its top-level type", () => {
+    const base = {
+      eventId: "event-1",
+      sequence: 7,
+      taskId: "task-1",
+      taskVersion: 4,
+      occurredAt: "2026-10-12T00:00:06.000Z",
+      actor: "agent",
+    };
+    const completed = roundTrip(ChannelTaskEvent, {
+      ...base,
+      type: "task.completed",
+      payload: { generation: 1, runId: "run-1", summary: "Latency 1.2s" },
+    });
+    expect(completed).toMatchObject({
+      type: "task.completed",
+      payload: { summary: "Latency 1.2s" },
+    });
+    // A payload that belongs to another event type does not decode.
+    expect(() =>
+      decodeTaskEvent({
+        ...base,
+        type: "task.completed",
+        payload: { worker: task.worker },
+      }),
+    ).toThrow();
+    expect(() => decodeTaskEvent({ ...base, type: "task.deleted", payload: {} })).toThrow();
+  });
+});
+
+describe("timeline records", () => {
+  it("carries either a bot message or a task chip", () => {
+    const chip = {
+      taskId: "task-1",
+      conversationId: "conv-1",
+      taskVersion: 3,
+      title: "Re-verify the Opus 5.5 call",
+      status: "running",
+      originKind: "slack",
+      requesterLabel: "Jun",
+      createdAt: "2026-10-12T00:00:00.000Z",
+      updatedAt: "2026-10-12T00:00:05.000Z",
+      worker: { environmentId: "env-1", threadId: "worker-thread" },
+      openQuestionCount: 0,
+    };
+    expect(roundTrip(ChannelTaskChip, chip)).toEqual(chip);
+    expect(
+      roundTrip(ChannelTimelineRecord, {
+        recordKey: "task-chip:task-1",
+        entry: { type: "task_chip", chip },
+      }),
+    ).toMatchObject({ entry: { chip: { worker: { threadId: "worker-thread" } } } });
+    expect(
+      roundTrip(ChannelTimelineRecord, {
+        recordKey: "reply:input-1",
+        entry: {
+          type: "message",
+          role: "assistant",
+          text: "On it.",
+          meta: {
+            conversationId: "conv-1",
+            originKind: "goat",
+            kind: "receipt",
+            inReplyToInputId: "input-1",
+          },
+        },
+      }),
+    ).toMatchObject({ entry: { meta: { inReplyToInputId: "input-1" } } });
+  });
+});

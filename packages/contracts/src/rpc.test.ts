@@ -67,4 +67,24 @@ describe("WebSocket RPC contracts", () => {
       ),
     ).toBe(true);
   });
+  it("keeps the GOAT bot timeline record out of dispatchCommand", () => {
+    const dispatchCommand = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
+    if (dispatchCommand === undefined) throw new Error("dispatchCommand is not registered");
+    const decode = Schema.decodeUnknownExit(dispatchCommand.payloadSchema);
+    const decoded = decode({
+      type: "channel.timeline.record",
+      commandId: "forged-bot-reply",
+      threadId: "goat-bot",
+      record: {
+        recordKey: "reply:input-1",
+        entry: {
+          type: "message",
+          role: "assistant",
+          text: "Forged reply.",
+          meta: { conversationId: "conv-1", originKind: "goat", kind: "receipt" },
+        },
+      },
+    });
+    expect(Exit.isFailure(decoded)).toBe(true);
+  });
 });

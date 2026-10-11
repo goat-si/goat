@@ -1504,3 +1504,127 @@ describe("latestProviderTurnForAttempt", () => {
     expect(latestProviderTurnForAttempt(turns, null)).toBeUndefined();
   });
 });
+
+// The notification schema clients shipped with before task chips.
+const PreChipNotification = Schema.Struct({
+  type: Schema.Literal("notification"),
+  source: Schema.Struct({ kind: Schema.Literal("background_task") }),
+  outcome: Schema.Literals(["completed", "failed", "cancelled", "updated", "unknown"]),
+  summary: Schema.String,
+  detail: Schema.optional(Schema.String),
+});
+const decodePreChipNotification = Schema.decodeUnknownSync(PreChipNotification);
+
+describe("GOAT bot channel metadata", () => {
+  const notificationItem = {
+    id: "chip:task-1",
+    threadId: "goat-bot",
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 3,
+    status: "completed",
+    title: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: "2026-10-12T00:00:05.000Z",
+    type: "notification",
+    source: { kind: "background_task" },
+    outcome: "updated",
+    summary: "Re-verify the Opus 5.5 call",
+  };
+  const chip = {
+    taskId: "task-1",
+    conversationId: "conv-1",
+    taskVersion: 3,
+    title: "Re-verify the Opus 5.5 call",
+    status: "running",
+    originKind: "slack",
+    requesterLabel: "Jun",
+    createdAt: "2026-10-12T00:00:00.000Z",
+    updatedAt: "2026-10-12T00:00:05.000Z",
+    worker: { environmentId: "env-1", threadId: "worker-thread" },
+    openQuestionCount: 0,
+  };
+
+  it("round-trips a task chip on a notification item", () => {
+    const item = decodeOrchestrationV2TurnItemJson({ ...notificationItem, ledgerTask: chip });
+    expect(item).toMatchObject({ type: "notification", ledgerTask: chip });
+    expect(decodeOrchestrationV2TurnItemJson(encodeOrchestrationV2TurnItemJson(item))).toEqual(
+      item,
+    );
+  });
+
+  it("is ignored by clients whose notification schema predates chips", () => {
+    const item = decodeOrchestrationV2TurnItemJson({ ...notificationItem, ledgerTask: chip });
+    const decoded = decodePreChipNotification(encodeOrchestrationV2TurnItemJson(item));
+    expect(decoded).toEqual({
+      type: "notification",
+      source: { kind: "background_task" },
+      outcome: "updated",
+      summary: "Re-verify the Opus 5.5 call",
+    });
+  });
+
+  it("drops a chip this build cannot read and keeps the notification", () => {
+    const item = decodeOrchestrationV2TurnItemJson({
+      ...notificationItem,
+      ledgerTask: { ...chip, status: "paused_by_newer_server" },
+    });
+    expect(item).toMatchObject({ type: "notification", summary: "Re-verify the Opus 5.5 call" });
+    expect(item.type === "notification" ? item.ledgerTask : "not a notification").toBeUndefined();
+    expect(decodeOrchestrationV2TurnItemJson(notificationItem)).not.toHaveProperty("ledgerTask");
+  });
+
+  it("round-trips channel metadata on runless bot messages and decodes messages without it", () => {
+    const base = { ...notificationItem, id: "reply:input-1", ordinal: 4 };
+    delete (base as { source?: unknown }).source;
+    delete (base as { outcome?: unknown }).outcome;
+    delete (base as { summary?: unknown }).summary;
+    const meta = {
+      conversationId: "conv-1",
+      originKind: "goat",
+      kind: "receipt",
+      inputId: "input-2",
+      inReplyToInputId: "input-1",
+      readAt: "2026-10-12T00:00:01.000Z",
+    };
+    const assistant = decodeOrchestrationV2TurnItemJson({
+      ...base,
+      type: "assistant_message",
+      messageId: "reply:input-1",
+      text: "On it.",
+      streaming: false,
+      channel: meta,
+    });
+    expect(assistant).toMatchObject({ runId: null, channel: meta });
+    expect(decodeOrchestrationV2TurnItemJson(encodeOrchestrationV2TurnItemJson(assistant))).toEqual(
+      assistant,
+    );
+    const user = decodeOrchestrationV2TurnItemJson({
+      ...base,
+      id: "input:input-1",
+      type: "user_message",
+      messageId: "input:input-1",
+      createdBy: "user",
+      creationSource: "web",
+      inputIntent: "turn_start",
+      text: "Re-verify the Opus 5.5 call",
+      attachments: [],
+      channel: {
+        conversationId: "conv-1",
+        originKind: "goat",
+        kind: "inbound",
+        inputId: "input-1",
+      },
+    });
+    expect(user).toMatchObject({ channel: { kind: "inbound" } });
+    const { channel: _channel, ...withoutChannel } = encodeOrchestrationV2TurnItemJson(
+      user,
+    ) as Record<string, unknown>;
+    expect(decodeOrchestrationV2TurnItemJson(withoutChannel)).not.toHaveProperty("channel");
+  });
+});

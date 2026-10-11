@@ -1,5 +1,7 @@
 import type {
   BranchNamingOptions,
+  ChannelReceptionInput,
+  ChannelReceptionResult,
   ChatAttachment,
   ModelSelection,
   TextGenerationError,
@@ -74,7 +76,15 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
-/** Commit, change request, branch, and title generation backed by one provider instance. */
+export interface ChannelReceptionGenerationInput {
+  /** An empty scratch directory: reception reads no checkout rules or files. */
+  cwd: string;
+  input: ChannelReceptionInput;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+/** Commit, change request, branch, title, and channel reception generation backed by one provider instance. */
 export interface ProviderTextGeneration {
   /**
    * Generate a commit message from staged change context.
@@ -101,4 +111,12 @@ export interface ProviderTextGeneration {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  /**
+   * Answer one channel message or task event with a short reply and a structured action, with
+   * tools disabled. Providers without it cannot serve as the channel reception model.
+   */
+  readonly generateChannelReception?: (
+    input: ChannelReceptionGenerationInput,
+  ) => Effect.Effect<ChannelReceptionResult, TextGenerationError>;
 }

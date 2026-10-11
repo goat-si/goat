@@ -215,6 +215,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverBrowser: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
+  /** Server runs the channel ledger and the GOAT bot gateway (`channel.*` RPCs). Absent on
+      older servers, so clients keep the bot inert instead of sending to a legacy agent. */
+  channelLedger: Schema.optionalKey(Schema.Boolean),
+  /** Server runs a live Slack channel connection. False while only the settings contract exists. */
+  slackChannel: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

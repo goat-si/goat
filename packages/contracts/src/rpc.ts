@@ -65,6 +65,33 @@ import {
   AcpRegistrySetProviderInput,
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
+import {
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelEnsureBotInput,
+  ChannelEnsureBotResult,
+  ChannelGatewayError,
+  ChannelGetInputInput,
+  ChannelGetTaskInput,
+  ChannelIdentityLinkCreateInput,
+  ChannelIdentityLinkCreateResult,
+  ChannelIdentityUnlinkInput,
+  ChannelIngestInput,
+  ChannelIngestResult,
+  ChannelInputSnapshot,
+  ChannelListTasksInput,
+  ChannelListTasksResult,
+} from "./channelGateway.ts";
+import { ChannelTask } from "./channelLedger.ts";
+import {
+  SLACK_CHANNEL_WS_METHODS,
+  SlackChannelConfigureInput,
+  SlackChannelDisconnectInput,
+  SlackChannelGetSettingsInput,
+  SlackChannelSettings,
+  SlackChannelSettingsError,
+  SlackChannelStatusEvent,
+  SlackChannelSubscribeStatusInput,
+} from "./slackChannel.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
   AuthAccessStreamError,
@@ -1842,6 +1869,85 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   payload: Schema.Struct({}),
   success: ResourceTelemetrySnapshot,
   error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const ChannelRpcError = Schema.Union([ChannelGatewayError, EnvironmentAuthorizationError]);
+
+/*
+ * Channel gateway and Slack settings RPCs. They are declared here so clients and the server
+ * share one schema, and join `WsRpcGroup` together with their handlers and scopes.
+ */
+export const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
+  payload: ChannelEnsureBotInput,
+  success: ChannelEnsureBotResult,
+  error: ChannelRpcError,
+});
+
+export const ChannelIngestRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ingest, {
+  payload: ChannelIngestInput,
+  success: ChannelIngestResult,
+  error: ChannelRpcError,
+});
+
+export const ChannelGetTaskRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getTask, {
+  payload: ChannelGetTaskInput,
+  success: ChannelTask,
+  error: ChannelRpcError,
+});
+
+export const ChannelListTasksRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listTasks, {
+  payload: ChannelListTasksInput,
+  success: ChannelListTasksResult,
+  error: ChannelRpcError,
+});
+
+export const ChannelGetInputRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getInput, {
+  payload: ChannelGetInputInput,
+  success: ChannelInputSnapshot,
+  error: ChannelRpcError,
+});
+
+export const ChannelCreateIdentityLinkRpc = Rpc.make(
+  CHANNEL_GATEWAY_WS_METHODS.createIdentityLink,
+  {
+    payload: ChannelIdentityLinkCreateInput,
+    success: ChannelIdentityLinkCreateResult,
+    error: ChannelRpcError,
+  },
+);
+
+export const ChannelUnlinkIdentityRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity, {
+  payload: ChannelIdentityUnlinkInput,
+  error: ChannelRpcError,
+});
+
+const SlackChannelRpcError = Schema.Union([
+  SlackChannelSettingsError,
+  EnvironmentAuthorizationError,
+]);
+
+export const SlackChannelGetSettingsRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.getSettings, {
+  payload: SlackChannelGetSettingsInput,
+  success: Schema.Array(SlackChannelSettings),
+  error: SlackChannelRpcError,
+});
+
+export const SlackChannelConfigureRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.configure, {
+  payload: SlackChannelConfigureInput,
+  success: SlackChannelSettings,
+  error: SlackChannelRpcError,
+});
+
+export const SlackChannelDisconnectRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.disconnect, {
+  payload: SlackChannelDisconnectInput,
+  error: SlackChannelRpcError,
+});
+
+export const SlackChannelSubscribeStatusRpc = Rpc.make(SLACK_CHANNEL_WS_METHODS.subscribeStatus, {
+  payload: SlackChannelSubscribeStatusInput,
+  success: SlackChannelStatusEvent,
+  error: SlackChannelRpcError,
   stream: true,
 });
 
