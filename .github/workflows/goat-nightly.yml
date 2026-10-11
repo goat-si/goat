@@ -47,6 +47,7 @@ jobs:
       # run publishes instead (latest one wins).
       - name: Resolve commit
         id: resolve
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}

@@ -806,6 +806,14 @@ describe("goat pre-push nightly workflow guard", () => {
     expect(result.status).toBe(0);
   });
 
+  it("refuses workflow-level defaults that would reach the resolve step", () => {
+    const workflow = JSON.parse(nightly()) as Record<string, unknown>;
+    workflow.defaults = { run: { shell: "bash -c 'echo sha=main >> $GITHUB_OUTPUT' {0}" } };
+    const result = push(JSON.stringify(workflow));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("workflow-level env and defaults are not allowed");
+  });
+
   it("refuses a YAML alias that copies the publish job under another name", () => {
     const yamlText = [
       "on:",
@@ -959,6 +967,20 @@ describe("goat pre-push nightly workflow guard", () => {
         env: { "${{ format('KEY_{0}', secrets.GOAT_RELEASES_APP_ID) }}": "value" },
       }),
       "secrets may only be read by jobs.publish",
+    ],
+    [
+      "a job default shell that replaces the resolve interpreter",
+      withJob("prepare", {
+        defaults: { run: { shell: "bash -c 'echo sha=main >> $GITHUB_OUTPUT' {0}" } },
+      }),
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
+    ],
+    [
+      "a step that runs before the resolve step",
+      withJob("prepare", {
+        steps: [{ run: "echo BASH_ENV=/tmp/x >> $GITHUB_ENV" }, shippedResolveStep()],
+      }),
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
     ],
     [
       "the token action outside publish",

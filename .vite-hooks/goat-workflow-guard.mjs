@@ -252,6 +252,10 @@ function validateNightlyWorkflow(source, yaml) {
   ) {
     return fail("permissions must be exactly contents: read");
   }
+  // Workflow-wide env or defaults would reach prepare's resolve step.
+  if (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")) {
+    return fail("workflow-level env and defaults are not allowed");
+  }
   if (!isMapping(workflow.jobs) || !isMapping(workflow.jobs.prepare)) {
     return fail("jobs.prepare must exist");
   }
@@ -288,8 +292,14 @@ function validateNightlyWorkflow(source, yaml) {
       if (
         outputs.sha !== "${{ steps.resolve.outputs.sha }}" ||
         outputs.skip !== "${{ steps.resolve.outputs.skip }}" ||
+        // First step, so no earlier step can change PATH or BASH_ENV; and no job
+        // env or defaults, which could change its environment or interpreter.
         !Array.isArray(job.steps) ||
-        !job.steps.some((step) => isMapping(step) && step.id === "resolve" && isPinnedResolve(step))
+        !isMapping(job.steps[0]) ||
+        job.steps[0].id !== "resolve" ||
+        !isPinnedResolve(job.steps[0]) ||
+        Object.hasOwn(job, "env") ||
+        Object.hasOwn(job, "defaults")
       ) {
         fail("jobs.prepare outputs sha and skip must come from its pinned resolve step");
       }
@@ -366,7 +376,7 @@ function mentionsSecrets(value, key = "") {
 
 // prepare's resolve step is what checks the commit against dev; every checkout
 // trusts its sha output. Changing that step means updating this pin on purpose.
-const pinnedResolveSha256 = "0d9767c3212b66697d7f5b49b0fa87681b09c9d57756adcca3bbd2ea7988d15b";
+const pinnedResolveSha256 = "d07e96a012d967ba5b690e4d31ac7a432b2549f53bf3322fe253bdd914a9b894";
 function isPinnedResolve(step) {
   const pinned = JSON.stringify({
     run: step.run,
