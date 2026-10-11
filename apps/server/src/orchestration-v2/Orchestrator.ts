@@ -7691,12 +7691,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "Turn item " + turnItemId + " is not a task chip.",
           });
         }
-        // An older chip arriving late never replaces a newer one.
+        // An older chip arriving late never replaces a newer one: the current item is
+        // recorded again unchanged, so the command still commits and stays idempotent.
         if (
           existing?.type === "notification" &&
           existing.ledgerTask !== undefined &&
           existing.ledgerTask.taskVersion >= entry.chip.taskVersion
         ) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: existing,
+          });
           return;
         }
         const chip = entry.chip;

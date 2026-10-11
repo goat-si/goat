@@ -33,10 +33,6 @@
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
-        // Channel ports that adapters build against before the server assembles them.
-        "src/channels/ChannelGateway.ts",
-        "src/channels/ChannelTransport.ts",
-        "src/channels/SlackChannelSettings.ts",
       ],
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.

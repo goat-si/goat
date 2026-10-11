@@ -54,7 +54,7 @@ export class ChannelDispatcher extends Context.Service<
 >()("t3/channels/ChannelDispatcher") {}
 
 /** What the worker thread is told besides the instruction itself. */
-export const workerInstruction = (task: ChannelTask) =>
+const workerInstruction = (task: ChannelTask) =>
   [
     task.instruction,
     "",

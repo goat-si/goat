@@ -42,6 +42,8 @@ import {
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2Command,
+  OrchestrationV2ConversationMessage,
+  OrchestrationV2ConversationMessageJson,
   OrchestrationV2LimitRecoveryUpdate,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderCapabilities,
@@ -2151,4 +2153,44 @@ it("round-trips resolution provenance through the question resolution seam", () 
     };
     expect(decodeJson(encode(decode(payload)))).toEqual(payload);
   }
+});
+
+describe("GOAT bot conversation messages", () => {
+  const decodeMessage = Schema.decodeUnknownSync(OrchestrationV2ConversationMessage);
+  const encodeMessageJson = Schema.encodeSync(OrchestrationV2ConversationMessageJson);
+  const decodeMessageJson = Schema.decodeUnknownSync(OrchestrationV2ConversationMessageJson);
+  const message = {
+    createdBy: "agent",
+    creationSource: "server",
+    id: "reply:input-1",
+    threadId: "goat-bot",
+    runId: null,
+    nodeId: null,
+    role: "assistant",
+    text: "On it.",
+    attachments: [],
+    streaming: false,
+    createdAt: DateTime.makeUnsafe("2026-10-12T00:00:01Z"),
+    updatedAt: DateTime.makeUnsafe("2026-10-12T00:00:01Z"),
+  };
+
+  it("round-trips channel metadata with native dates and a string read time", () => {
+    const meta = {
+      conversationId: "conv-1",
+      originKind: "goat",
+      kind: "receipt",
+      inReplyToInputId: "input-1",
+      readAt: "2026-10-12T00:00:00.500Z",
+    };
+    const native = decodeMessage({ ...message, channel: meta });
+    const wire = encodeMessageJson(native);
+    expect(wire).toMatchObject({ createdAt: "2026-10-12T00:00:01.000Z", channel: meta });
+    expect(decodeMessageJson(wire)).toEqual(native);
+  });
+
+  it("decodes messages stored before channel metadata existed", () => {
+    const decoded = decodeMessageJson(encodeMessageJson(decodeMessage(message)));
+    expect(decoded).not.toHaveProperty("channel");
+    expect(decoded).toMatchObject({ role: "assistant", text: "On it." });
+  });
 });

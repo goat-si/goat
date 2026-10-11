@@ -50,7 +50,7 @@ export const makeTaskEvent = (
     payload: spec.payload,
   });
 
-export const chipFor = (task: ChannelTask): ChannelTaskChip => ({
+const chipFor = (task: ChannelTask): ChannelTaskChip => ({
   taskId: task.taskId,
   conversationId: task.conversationId,
   taskVersion: task.version,

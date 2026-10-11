@@ -177,3 +177,49 @@ describe("TextGeneration.make", () => {
     }),
   );
 });
+
+describe("TextGeneration.generateChannelReception", () => {
+  it.effect("refuses providers without channel reception instead of calling them", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("cursor");
+      const generation = yield* TextGeneration.make.pipe(
+        Effect.provideService(
+          ProviderInstanceRegistry.ProviderInstanceRegistry,
+          makeStubRegistry([makeStubInstance(instanceId, makeStubTextGeneration({}))]),
+        ),
+        Effect.provide(
+          Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+            resolveLink: () => Effect.die("reception never resolves links"),
+          }),
+        ),
+      );
+      const generate = generation.generateChannelReception;
+      if (generate === undefined)
+        return yield* Effect.die("server text generation must offer reception");
+      const error = yield* Effect.flip(
+        generate({
+          cwd: process.cwd(),
+          input: {
+            mode: "input",
+            conversationId: "conv-1" as never,
+            originKind: "goat",
+            inputText: "hi",
+            tail: [],
+            tasks: [],
+            allowedTargets: [],
+            requester: {
+              ownerId: "owner",
+              principalId: "owner",
+              displayName: "Owner",
+              originKind: "goat",
+              runtimeModeCeiling: "full-access",
+              grantedScopes: [],
+            },
+          },
+          modelSelection: createModelSelection(instanceId, "composer"),
+        }),
+      );
+      expect(error.detail).toBe("This provider does not support channel reception.");
+    }),
+  );
+});

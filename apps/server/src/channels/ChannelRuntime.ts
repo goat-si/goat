@@ -45,6 +45,10 @@ export class ChannelRuntime extends Context.Service<
     readonly drain: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     /** One pass, without waiting for the receptions it forks. */
     readonly runPass: Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    /** Waits for the named inputs' receptions, if they are running. */
+    readonly settle: (inputIds: ReadonlyArray<ChannelInputId>) => Effect.Effect<void>;
+    /** What a new owner does first: settle deliveries a previous owner left in flight. */
+    readonly recover: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     readonly ownerToken: string;
   }
 >()("t3/channels/ChannelRuntime") {}
@@ -121,6 +125,24 @@ const make = Effect.gen(function* () {
     return running.length;
   });
 
+  const settle = (inputIds: ReadonlyArray<ChannelInputId>) =>
+    Effect.gen(function* () {
+      const running = yield* Ref.get(inFlight);
+      yield* Effect.forEach(
+        inputIds.flatMap((inputId) => {
+          const fiber = running.get(inputId);
+          return fiber === undefined ? [] : [fiber];
+        }),
+        (fiber) => Fiber.await(fiber),
+        { discard: true },
+      );
+    });
+
+  const recover = Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.settleInterruptedDeliveries({ owner, now });
+  });
+
   const drain = Effect.gen(function* () {
     if (!(yield* claim)) return;
     // A forked reception may commit work for the next pass, so stop only when nothing moved.
@@ -131,7 +153,7 @@ const make = Effect.gen(function* () {
     }
   });
 
-  return ChannelRuntime.of({ drain, runPass, ownerToken: owner });
+  return ChannelRuntime.of({ drain, runPass, settle, recover, ownerToken: owner });
 });
 
 /** The runtime service alone, for tests that drive passes themselves. */
@@ -160,10 +182,7 @@ export const layerBackground = Layer.effectDiscard(
       const before = yield* Ref.getAndSet(owning, owns);
       if (owns && !before) {
         // Newly owning: deliveries a previous owner left in flight are settled before new work.
-        yield* ledger.settleInterruptedDeliveries({
-          owner: runtime.ownerToken,
-          now: DateTime.formatIso(now),
-        });
+        yield* runtime.recover;
         yield* wake.wake;
       }
     }).pipe(

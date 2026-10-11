@@ -1,9 +1,4 @@
-import {
-  type ChannelTask,
-  type ChannelTaskEvent,
-  type ChannelTaskStatus,
-  isChannelTaskTerminal,
-} from "@t3tools/contracts";
+import type { ChannelTask, ChannelTaskEvent, ChannelTaskStatus } from "@t3tools/contracts";
 
 /**
  * The task state machine. Every ledger write that moves a task goes through
@@ -178,5 +173,3 @@ export function applyChannelTaskEvent(
     }
   }
 }
-
-export const isTaskTerminal = (task: ChannelTask) => isChannelTaskTerminal(task.status);

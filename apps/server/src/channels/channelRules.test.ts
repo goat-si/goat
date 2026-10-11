@@ -1,0 +1,201 @@
+import { assert, describe, it } from "@effect/vitest";
+import { ChannelGatewayError, ChannelTask, ChannelTaskEvent } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
+
+import { deliveryOutcomeFor } from "./ChannelDeliveryWorker.ts";
+import { effectiveRequester, lowerRuntimeMode } from "./ChannelGateway.ts";
+import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
+
+const decodeTask = Schema.decodeUnknownSync(ChannelTask);
+const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+const NOW = "2026-10-12T00:00:00.000Z";
+
+const task = (overrides: Record<string, unknown> = {}) =>
+  decodeTask({
+    taskId: "task-1",
+    conversationId: "conv-1",
+    originBindingId: "binding-1",
+    originAddress: { kind: "goat", environmentId: "env-1", threadId: "bot" },
+    originInputId: "input-1",
+    requester: {
+      ownerId: "owner",
+      principalId: "owner",
+      displayName: "Owner",
+      originKind: "goat",
+      runtimeModeCeiling: "full-access",
+      grantedScopes: ["orchestration:operate"],
+    },
+    title: "Job",
+    instruction: "Do the job.",
+    status: "running",
+    version: 4,
+    generation: 2,
+    worker: { environmentId: "env-1", threadId: "worker", runId: "run-1", generation: 2 },
+    openQuestions: [],
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  });
+
+const event = (type: string, payload: unknown, taskVersion = 5) =>
+  decodeEvent({
+    eventId: "event-" + taskVersion,
+    sequence: 0,
+    taskId: "task-1",
+    taskVersion,
+    occurredAt: NOW,
+    actor: "system",
+    type,
+    payload,
+  });
+
+describe("task transitions", () => {
+  it("rejects a report from an older generation and a skipped version", () => {
+    const stale = applyChannelTaskEvent(
+      task(),
+      event("task.progress", { generation: 1, summary: "x" }),
+    );
+    assert.isFalse(stale.ok);
+    const skipped = applyChannelTaskEvent(
+      task(),
+      event("task.progress", { generation: 2, summary: "x" }, 6),
+    );
+    assert.isFalse(skipped.ok);
+  });
+
+  it("never finishes a task twice and restarts it only as a new generation", () => {
+    const completed = applyChannelTaskEvent(
+      task(),
+      event("task.completed", { generation: 2, summary: "ok" }),
+    );
+    assert.isTrue(completed.ok);
+    if (!completed.ok) return;
+    assert.strictEqual(completed.task.status, "completed");
+    const again = applyChannelTaskEvent(
+      completed.task,
+      event("task.completed", { generation: 2, summary: "ok" }, 6),
+    );
+    assert.isFalse(again.ok);
+    const sameGeneration = applyChannelTaskEvent(
+      completed.task,
+      event("task.retry.requested", { generation: 2 }, 6),
+    );
+    assert.isFalse(sameGeneration.ok);
+    const retried = applyChannelTaskEvent(
+      completed.task,
+      event("task.retry.requested", { generation: 3 }, 6),
+    );
+    assert.isTrue(retried.ok);
+    if (retried.ok) {
+      assert.strictEqual(retried.task.status, "received");
+      assert.isUndefined(retried.task.worker);
+    }
+  });
+
+  it("sends an answered dispatcher question back to dispatch and a worker question back to the worker", () => {
+    const question = { questionId: "q-1", text: "Which project?", askedAt: NOW };
+    const answer = event("task.question.answered", { questionId: "q-1", answer: "this one" });
+    const noWorker = task({
+      status: "waiting_input",
+      worker: undefined,
+      openQuestions: [question],
+    });
+    const withWorker = task({ status: "waiting_input", openQuestions: [question] });
+    const fromDispatcher = applyChannelTaskEvent(noWorker, answer);
+    const fromWorker = applyChannelTaskEvent(withWorker, answer);
+    assert.strictEqual(fromDispatcher.ok ? fromDispatcher.task.status : undefined, "received");
+    assert.strictEqual(fromWorker.ok ? fromWorker.task.status : undefined, "running");
+    const unknown = applyChannelTaskEvent(
+      withWorker,
+      event("task.question.answered", { questionId: "q-other", answer: "?" }),
+    );
+    assert.isFalse(unknown.ok);
+  });
+});
+
+describe("delivery outcomes", () => {
+  const now = DateTime.makeUnsafe(NOW);
+
+  it("retries a rate limit after Retry-After and gives up on account errors", () => {
+    const rateLimited = deliveryOutcomeFor(
+      new ChannelGatewayError({
+        reason: "delivery_failed",
+        deliveryOutcome: "not_sent",
+        deliveryErrorCode: "rate_limited",
+        retryAfterSeconds: 30,
+      }),
+      1,
+      now,
+    );
+    assert.deepStrictEqual(rateLimited, {
+      type: "retry",
+      at: "2026-10-12T00:00:30.000Z",
+      errorCode: "rate_limited",
+    });
+    for (const code of [
+      "not_in_channel",
+      "channel_not_found",
+      "invalid_auth",
+      "token_revoked",
+    ] as const) {
+      assert.strictEqual(
+        deliveryOutcomeFor(
+          new ChannelGatewayError({
+            reason: "delivery_failed",
+            deliveryOutcome: "not_sent",
+            deliveryErrorCode: code,
+          }),
+          1,
+          now,
+        ).type,
+        "failed",
+      );
+    }
+  });
+
+  it("records a send that may have arrived as ambiguous, and a missing transport as failed", () => {
+    assert.strictEqual(
+      deliveryOutcomeFor(
+        new ChannelGatewayError({
+          reason: "delivery_failed",
+          deliveryOutcome: "unknown",
+          deliveryErrorCode: "timeout",
+        }),
+        1,
+        now,
+      ).type,
+      "ambiguous",
+    );
+    assert.strictEqual(
+      deliveryOutcomeFor(new ChannelGatewayError({ reason: "adapter_unavailable" }), 1, now).type,
+      "failed",
+    );
+  });
+});
+
+describe("linked account permissions", () => {
+  it("takes the lower runtime ceiling and the shared scopes of connection and link", () => {
+    assert.strictEqual(lowerRuntimeMode("full-access", "auto"), "auto");
+    assert.strictEqual(lowerRuntimeMode("approval-required", "full-access"), "approval-required");
+    const requester = effectiveRequester(
+      {
+        ownerId: "owner",
+        principalId: "owner",
+        displayName: "Owner",
+        grantedScopes: ["orchestration:read", "orchestration:operate"],
+        runtimeModeCeiling: "auto-accept-edits",
+      },
+      {
+        ownerId: "owner",
+        principalId: "owner",
+        displayName: "Owner",
+        grantedScopes: ["orchestration:operate", "settings:write"],
+        runtimeModeCeiling: "full-access",
+      },
+      { originKind: "slack", externalActorId: "U1" },
+    );
+    assert.strictEqual(requester.runtimeModeCeiling, "auto-accept-edits");
+    assert.deepStrictEqual(requester.grantedScopes, ["orchestration:operate"]);
+  });
+});

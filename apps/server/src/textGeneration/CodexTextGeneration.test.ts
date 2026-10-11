@@ -765,3 +765,100 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 });
+
+it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
+  const receptionOutput = JSON.stringify({
+    replyText: "On it.",
+    action: "create_task",
+    title: "Re-verify the call",
+    instruction: "Run the Opus 5.5 call again and report latency.",
+    projectId: "project-1",
+    taskId: "",
+    questionId: "",
+    answer: "",
+    question: "",
+  });
+  const receptionInput = {
+    mode: "input" as const,
+    conversationId: "conv-1" as never,
+    originKind: "slack" as const,
+    inputText: "Please re-verify the Opus 5.5 call",
+    tail: [],
+    tasks: [],
+    allowedTargets: [{ projectId: "project-1" as never, label: "GOAT" }],
+    requester: {
+      ownerId: "owner",
+      principalId: "owner",
+      displayName: "Jun",
+      originKind: "slack" as const,
+      runtimeModeCeiling: "full-access" as const,
+      grantedScopes: ["orchestration:operate" as const],
+    },
+  };
+
+  it.effect("runs reception with user config, rules, and tools turned off", () =>
+    withFakeCodexEnv(
+      {
+        output: receptionOutput,
+        requireArg:
+          "--ignore-user-config --ignore-rules --disable shell_tool --disable unified_exec",
+        stdinMustContain: "Please re-verify the Opus 5.5 call",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generate = textGeneration.generateChannelReception;
+          expect(generate).toBeDefined();
+          if (generate === undefined) return;
+          const result = yield* generate({
+            cwd: process.cwd(),
+            input: receptionInput,
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result).toEqual({
+            replyText: "On it.",
+            action: {
+              type: "create_task",
+              title: "Re-verify the call",
+              instruction: "Run the Opus 5.5 call again and report latency.",
+              projectId: "project-1",
+            },
+          });
+        }),
+    ),
+  );
+
+  it.effect("leaves configured launch args out of reception", () =>
+    withFakeCodexEnv(
+      { output: receptionOutput, launchArgs: "--strict-config", forbidArg: "--strict-config" },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generate = textGeneration.generateChannelReception;
+          if (generate === undefined) return yield* Effect.die("reception missing");
+          yield* generate({
+            cwd: process.cwd(),
+            input: receptionInput,
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+        }),
+    ),
+  );
+
+  it.effect("fails when the model picks an action without its fields", () =>
+    withFakeCodexEnv(
+      { output: JSON.stringify({ ...JSON.parse(receptionOutput), title: "" }) },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generate = textGeneration.generateChannelReception;
+          if (generate === undefined) return yield* Effect.die("reception missing");
+          const error = yield* Effect.flip(
+            generate({
+              cwd: process.cwd(),
+              input: receptionInput,
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          );
+          expect(error.operation).toBe("generateChannelReception");
+        }),
+    ),
+  );
+});

@@ -37,6 +37,8 @@ import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import * as RemoteReportHandlers from "./toolkits/remoteReport/handlers.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
+import { ChannelToolkit } from "./toolkits/channel/tools.ts";
+import * as ChannelHandlers from "./toolkits/channel/handlers.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
@@ -955,6 +957,8 @@ export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentHandlers.layer,
 );
 
+const layerChannelToolkit = toolkitRegistration(ChannelToolkit, ChannelHandlers.layer);
+
 export const layerPullRequestsToolkit = toolkitRegistration(
   PullRequestsToolkit,
   PullRequestsHandlers.layer,
@@ -988,6 +992,7 @@ export const layer = Layer.mergeAll(
   layerOrchestratorToolkit,
   layerThreadToolkit,
   layerAttachmentToolkit,
+  layerChannelToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerPreviewControlsRegistration,

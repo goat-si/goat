@@ -1,0 +1,34 @@
+# Channels and the GOAT bot
+
+Input from the GOAT bot, Slack, and agents over MCP goes through one gateway into a ledger in
+`statev2.sqlite`, separate from orchestration events. The ledger owns tasks, where their results go,
+and who asked; coding threads own the work and its history. Code lives in
+[`apps/server/src/channels/`](../../apps/server/src/channels/); the wire types are in
+[`packages/contracts/src/channel*.ts`](../../packages/contracts/src/).
+
+## The bot never runs a provider
+
+The canonical bot thread holds messages and task chips written by the internal
+`channel.timeline.record` command, all runless. A `message.dispatch` to the bot from a client is
+turned into channel input in [`ThreadMessageIntake`](../../apps/server/src/orchestration-v2/ThreadMessageIntake.ts),
+and the orchestrator refuses any other `message.dispatch` to it (MCP sends, schedules), so no path
+starts a provider turn there. Replies come from a one-shot, tool-free text generation per input
+(`generateChannelReception`; Codex and Claude only), not from a session that could queue behind
+work. Chip notifications carry `ledgerTask`; only the ledger writes them.
+
+## Who runs the workers
+
+Background work (reception, dispatch, answer forwarding, wording task updates, delivery) runs in
+the one process holding the worker row in `channel_runtime_state`. Ownership changes only by
+compare-and-set on a stale heartbeat, and every worker write re-checks the token inside its
+transaction, so a process that paused past the heartbeat cannot commit a claim. Any process can
+accept input; the owner picks it up on its next pass.
+
+## Restarts
+
+Recovery reads state, not history. Every id a retry could recreate is derived from its natural
+key (input from the idempotency key, worker launch from task and generation, deliveries from their
+cause), so re-running a step lands on the same row, thread, or message. Task completion is decided
+from the worker thread's current runs on each pass, so replayed or missed run events only change
+timing. External deliveries left in flight become ambiguous rather than being sent again; GOAT bot
+deliveries are retried because recording is idempotent.

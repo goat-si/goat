@@ -105,4 +105,21 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.serverResolvedCommandContext,
     ).toBe(true);
   });
+  it("treats the channel capabilities as off unless a server says otherwise", () => {
+    for (const key of ["channelLedger", "slackChannel"] as const) {
+      expect(decodeDescriptor(descriptor).capabilities[key]).toBeUndefined();
+      expect(
+        decodeDescriptor({
+          ...descriptor,
+          capabilities: { ...descriptor.capabilities, [key]: false },
+        }).capabilities[key],
+      ).toBe(false);
+      expect(
+        decodeDescriptor({
+          ...descriptor,
+          capabilities: { ...descriptor.capabilities, [key]: true },
+        }).capabilities[key],
+      ).toBe(true);
+    }
+  });
 });

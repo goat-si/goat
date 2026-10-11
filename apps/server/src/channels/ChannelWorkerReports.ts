@@ -38,7 +38,7 @@ const TERMINAL_RUN_STATUSES = new Set([
   "rolled_back",
 ]);
 
-export const BACKGROUND_HOLD = "background";
+const BACKGROUND_HOLD = "background";
 
 export class ChannelWorkerReports extends Context.Service<
   ChannelWorkerReports,
@@ -101,7 +101,7 @@ const make = Effect.gen(function* () {
         // The newest run since the bound one is the task's current run: a follow-up or a
         // restart continuation replaces the run it follows.
         const floor = bound?.ordinal ?? 0;
-        current = runs.filter((run) => run.ordinal >= floor).at(-1);
+        current = runs.findLast((run) => run.ordinal >= floor);
       }
       if (current === undefined) return false;
 
@@ -282,9 +282,10 @@ const make = Effect.gen(function* () {
           return;
       }
     }).pipe(
-      Effect.catchTag("ChannelLedgerError", () =>
-        Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" })),
-      ),
+      Effect.catchTags({
+        ChannelLedgerError: () =>
+          Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" })),
+      }),
     );
 
   return ChannelWorkerReports.of({ reconcile, isWorkerThread, report });

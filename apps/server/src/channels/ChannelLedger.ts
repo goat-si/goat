@@ -289,7 +289,6 @@ export class ChannelLedger extends Context.Service<
       readonly legacyThreadId?: ThreadId | undefined;
       readonly now: string;
     }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
-    readonly isBotThread: (threadId: ThreadId) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly findIdentity: (input: {
       readonly connectionId: string;
       readonly externalActorId: string;
@@ -456,10 +455,7 @@ const toIdentity = (row: IdentityRow): ChannelIdentity => ({
 });
 
 /** The receipt view of a stored input: no reply or read time. */
-export const toIngestResult = (
-  stored: ChannelStoredInput,
-  duplicate: boolean,
-): ChannelIngestResult => {
+const toIngestResult = (stored: ChannelStoredInput, duplicate: boolean): ChannelIngestResult => {
   const { readAt: _readAt, reply: _reply, failure: _failure, ...result } = stored.snapshot;
   return { ...result, duplicate };
 };
@@ -1081,16 +1077,6 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(toLedgerError("setBotIfAbsent"))),
-
-    isBotThread: (threadId) =>
-      sql<{ readonly key: string }>`
-        SELECT key FROM channel_runtime_state
-        WHERE key LIKE 'bot:%' AND json_extract(value_json, '$.bot.threadId') = ${threadId}
-        LIMIT 1
-      `.pipe(
-        Effect.map((rows) => rows.length > 0),
-        Effect.mapError(toLedgerError("isBotThread")),
-      ),
 
     findIdentity: (input) =>
       sql<IdentityRow>`

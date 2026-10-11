@@ -42,7 +42,7 @@ import { answerForwardIdsFor, deliveryIdFor, taskEventIdFor, taskIdFor } from ".
 import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
 
 /** How long a reception pass may take before the sender gets a failure note instead. */
-export const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
+const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
 
 export class ChannelReceptionService extends Context.Service<
   ChannelReceptionService,
@@ -203,20 +203,22 @@ const make = Effect.gen(function* () {
                   originKind: message.kind,
                   inputText: message.text,
                   tail: boundTail(
-                    tail
-                      .filter((entry) => entry.inputId !== inputId)
-                      .flatMap((entry) => [
-                        { role: "user" as const, text: entry.text, at: entry.receivedAt },
-                        ...(entry.replyText === undefined
-                          ? []
-                          : [
-                              {
-                                role: "assistant" as const,
-                                text: entry.replyText,
-                                at: entry.receivedAt,
-                              },
-                            ]),
-                      ]),
+                    tail.flatMap((entry) =>
+                      entry.inputId === inputId
+                        ? []
+                        : [
+                            { role: "user" as const, text: entry.text, at: entry.receivedAt },
+                            ...(entry.replyText === undefined
+                              ? []
+                              : [
+                                  {
+                                    role: "assistant" as const,
+                                    text: entry.replyText,
+                                    at: entry.receivedAt,
+                                  },
+                                ]),
+                          ],
+                    ),
                   ),
                   tasks: tasks.map((task) => ({
                     taskId: task.taskId,

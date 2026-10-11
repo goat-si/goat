@@ -509,3 +509,60 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
     ),
   );
 });
+
+it.layer(layerClaudeTextGenerationTest)("channel reception", (it) => {
+  it.effect("runs reception outside the project with tools disabled", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: {
+            replyText: "Which project?",
+            action: "clarify",
+            title: "",
+            instruction: "",
+            projectId: "",
+            taskId: "",
+            questionId: "",
+            answer: "",
+            question: "Which project?",
+          },
+        }),
+        cwdMustNotBe: process.cwd(),
+        stdinMustContain: "Please re-verify the Opus 5.5 call",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generate = textGeneration.generateChannelReception;
+          if (generate === undefined) return yield* Effect.die("reception missing");
+          const result = yield* generate({
+            cwd: process.cwd(),
+            input: {
+              mode: "input" as const,
+              conversationId: "conv-1" as never,
+              originKind: "slack" as const,
+              inputText: "Please re-verify the Opus 5.5 call",
+              tail: [],
+              tasks: [],
+              allowedTargets: [{ projectId: "project-1" as never, label: "GOAT" }],
+              requester: {
+                ownerId: "owner",
+                principalId: "owner",
+                displayName: "Jun",
+                originKind: "slack" as const,
+                runtimeModeCeiling: "full-access" as const,
+                grantedScopes: ["orchestration:operate" as const],
+              },
+            },
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+          expect(result).toEqual({
+            replyText: "Which project?",
+            action: { type: "clarify", question: "Which project?" },
+          });
+        }),
+    ),
+  );
+});

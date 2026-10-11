@@ -28,7 +28,7 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { botLaunchIdsFor } from "./channelIds.ts";
 
-export const GOAT_BOT_TITLE = "GOAT bot";
+const GOAT_BOT_TITLE = "GOAT bot";
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 

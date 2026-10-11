@@ -349,3 +349,85 @@ it("does not scan every row against every run for a streaming item update", () =
   expect(next?.visibleTurnItems[0]).toBe(projection.visibleTurnItems[0]);
   expect(runReads).toBeLessThanOrEqual(100);
 });
+
+describe("GOAT bot timeline", () => {
+  const runlessBase = {
+    threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    status: "completed" as const,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const chipItem = (version: number, status: "running" | "completed"): OrchestrationV2TurnItem => ({
+    ...runlessBase,
+    id: TurnItemId.make("channel-item:chip"),
+    ordinal: 2,
+    type: "notification",
+    source: { kind: "background_task" },
+    outcome: status === "completed" ? "completed" : "updated",
+    summary: "Re-verify the call",
+    ledgerTask: {
+      taskId: "task-1" as never,
+      conversationId: "conv-1" as never,
+      taskVersion: version,
+      title: "Re-verify the call",
+      status,
+      originKind: "slack",
+      requesterLabel: "Jun",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+      openQuestionCount: 0,
+    },
+  });
+  const replyItem: OrchestrationV2TurnItem = {
+    ...runlessBase,
+    id: TurnItemId.make("channel-item:reply"),
+    ordinal: 1,
+    type: "assistant_message",
+    messageId: MessageId.make("channel-message:reply"),
+    text: "On it.",
+    streaming: false,
+    channel: { conversationId: "conv-1" as never, originKind: "goat", kind: "receipt" },
+  };
+  const itemEvent = (id: string, payload: OrchestrationV2TurnItem) =>
+    ({
+      id,
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload,
+    }) as OrchestrationV2DomainEvent;
+
+  it("shows runless replies and chips and updates a chip in place", () => {
+    const withReply = applyOrchestrationV2ProjectionEvent(
+      emptyProjection,
+      itemEvent("event-reply", replyItem),
+    );
+    const withChip = applyOrchestrationV2ProjectionEvent(
+      withReply!,
+      itemEvent("event-chip-1", chipItem(2, "running")),
+    );
+    expect(withChip?.visibleTurnItems.map((row) => row.item.id)).toEqual([
+      replyItem.id,
+      chipItem(2, "running").id,
+    ]);
+    const done = applyOrchestrationV2ProjectionEvent(
+      withChip!,
+      itemEvent("event-chip-2", chipItem(5, "completed")),
+    );
+    expect(done?.visibleTurnItems.map((row) => row.item.id)).toEqual([
+      replyItem.id,
+      chipItem(5, "completed").id,
+    ]);
+    const chip = done?.visibleTurnItems[1]?.item;
+    expect(chip?.type === "notification" ? chip.ledgerTask?.status : undefined).toBe("completed");
+    expect(done?.runs).toEqual([]);
+  });
+});
