@@ -686,6 +686,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "slack-connection",
+    title: "Slack connection",
+    to: "/settings/integrations",
+    targetId: "slack-channel",
+    environmentOnly: true,
+    searchTerms: ["slack socket mode bot app token mention direct message dm channel thread reply"],
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",
