@@ -914,7 +914,11 @@ const make = Effect.gen(function* () {
     if ("type" in bootstrap)
       return yield* failure(
         "host_unavailable",
-        pendingRuntimeMessage(input.target.alias, bootstrap.pending.reason),
+        pendingRuntimeMessage(
+          input.target.alias,
+          bootstrap.pending.reason,
+          bootstrap.pending.detail,
+        ),
       );
     const session = yield* sessionFor(input.target, input.runtimeMode);
     if (!session.ceilingApplied)
@@ -1021,7 +1025,7 @@ const make = Effect.gen(function* () {
     if ("type" in bootstrap)
       return yield* failure(
         "host_unavailable",
-        pendingRuntimeMessage(target.alias, bootstrap.pending.reason),
+        pendingRuntimeMessage(target.alias, bootstrap.pending.reason, bootstrap.pending.detail),
       );
     connected.add(target.alias);
     // Bootstrap may have taken a while; the session carries the caller's authority.
@@ -1212,7 +1216,7 @@ const make = Effect.gen(function* () {
     if ("type" in bootstrap)
       return yield* failure(
         "host_unavailable",
-        pendingRuntimeMessage(target.alias, bootstrap.pending.reason),
+        pendingRuntimeMessage(target.alias, bootstrap.pending.reason, bootstrap.pending.detail),
       );
     connected.add(target.alias);
     // Right before the request: the caller may have lost authority during SSH.
@@ -1350,7 +1354,13 @@ export const layer = Layer.effect(SshRemoteDispatch, make).pipe(
   Layer.provide(NetService.layer),
 );
 
-function pendingRuntimeMessage(alias: string, reason: "busy" | "unknown" | "contended") {
+function pendingRuntimeMessage(
+  alias: string,
+  reason: "busy" | "unknown" | "contended",
+  detail?: "recovery-stale",
+) {
+  if (detail === "recovery-stale")
+    return `${alias}'s recovery is locked. Remove ~/.goat/ssh-launch/replacement.recovery on the remote host after checking that no GOAT client is replacing this runtime.`;
   return reason === "contended"
     ? `Another client is replacing ${alias}'s GOAT runtime; retry later`
     : reason === "unknown"

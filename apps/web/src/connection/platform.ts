@@ -193,15 +193,20 @@ function sshPreparationError(cause: unknown) {
   });
 }
 
-function sshRuntimePendingError(pending: { readonly reason: "busy" | "unknown" | "contended" }) {
+function sshRuntimePendingError(pending: {
+  readonly reason: "busy" | "unknown" | "contended";
+  readonly detail?: "recovery-stale";
+}) {
   return new ConnectionTransientError({
     reason: "remote-unavailable",
     detail:
-      pending.reason === "contended"
-        ? "Another client is replacing the remote runtime."
-        : pending.reason === "unknown"
-          ? "Remote runtime will be replaced when its work finishes. Waiting for a verified idle response."
-          : "Remote runtime will be replaced when its work finishes.",
+      pending.detail === "recovery-stale"
+        ? "Remote recovery is locked. Remove ~/.goat/ssh-launch/replacement.recovery on the remote host after checking that no GOAT client is replacing this runtime."
+        : pending.reason === "contended"
+          ? "Another client is replacing the remote runtime."
+          : pending.reason === "unknown"
+            ? "Remote runtime will be replaced when its work finishes. Waiting for a verified idle response."
+            : "Remote runtime will be replaced when its work finishes.",
   });
 }
 

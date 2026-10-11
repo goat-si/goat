@@ -14,6 +14,29 @@ describe.each([
   { label: "existing SSH connection", consumer: prepareDesktopSshEnvironment },
   { label: "new SSH connection", consumer: provisionDesktopSshEnvironment },
 ])("$label", ({ consumer }) => {
+  it.effect("stranded recovery lock explains remote cleanup before authentication", () =>
+    Effect.gen(function* () {
+      const bridge = {
+        ensureSshEnvironment: async () => ({
+          type: "ssh-runtime-pending",
+          target,
+          pending: {
+            reason: "contended",
+            detail: "recovery-stale",
+            replacement: "incompatible",
+            requestedVersion: "1.2.3",
+            liveVersion: "1.2.2",
+          },
+        }),
+      } as unknown as DesktopBridge;
+      const error = yield* consumer(bridge, target).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "ConnectionTransientError",
+        detail:
+          "Remote recovery is locked. Remove ~/.goat/ssh-launch/replacement.recovery on the remote host after checking that no GOAT client is replacing this runtime.",
+      });
+    }),
+  );
   it.effect.each(["busy", "unknown", "contended"] as const)(
     "pending %s stops before authentication or descriptor calls",
     (reason) =>

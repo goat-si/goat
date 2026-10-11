@@ -32,11 +32,12 @@ import notice. This budget is separate from portable provider handoffs.
 
 ## Client and server cutover
 
-Clients and servers must agree on `ORCHESTRATION_PROTOCOL_VERSION` (currently 2). The client
-runtime appends `orchestrationProtocol=2` to the socket URL, and the `/ws` route rejects a missing
-or mismatched version with HTTP 426 (`orchestration_protocol_incompatible`) before any RPC or auth
-work runs. The client checks the environment descriptor the same way: a missing version means the
-host predates protocol 2, and a different version means both sides need updating. Either direction
+Clients and servers must agree on the current value of `ORCHESTRATION_PROTOCOL_VERSION`
+(1001 in GOAT). The client runtime appends that value as `orchestrationProtocol` to the socket URL,
+and the `/ws` route rejects a missing or mismatched version with HTTP 426
+(`orchestration_protocol_incompatible`) before any RPC or auth work runs. The client checks the
+environment descriptor the same way: a missing version means the host predates protocol version
+reporting, and a different version means both sides need updating. Either direction
 blocks the connection as `unsupported` with a message naming the machine to update rather than
 running half-upgraded. See `packages/client-runtime/src/connection/compatibility.ts` and
 `apps/server/src/ws.ts`.

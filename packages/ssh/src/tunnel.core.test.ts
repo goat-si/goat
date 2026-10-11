@@ -654,11 +654,11 @@ describe("ssh tunnel scripts", () => {
           assert.equal(forwards, mode === "successful reconnect" ? 2 : 1);
           assert.equal(launches, 2);
           assert.equal(Result.isSuccess(result), mode === "successful reconnect");
-          // Pending replacement intent makes disconnect local-only, even when launch failed.
+          // A failed reconnect is not a remote pending result; explicit disconnect still stops.
           yield* manager.disconnectEnvironment(uploadTarget);
-          assert.equal(stops, mode === "successful reconnect" ? 1 : 0);
+          assert.equal(stops, 1);
         }).pipe(Effect.provide(layer), Effect.scoped);
-        assert.equal(stops, mode === "successful reconnect" ? 1 : 0);
+        assert.equal(stops, 1);
       }),
   );
 
@@ -846,7 +846,8 @@ describe("ssh tunnel scripts", () => {
         const pauseShutdown = Deferred.succeed(shutdownStarted, undefined).pipe(
           Effect.andThen(Deferred.await(finishShutdown)),
         );
-        let resolutions = 0;
+        let observeReconnects = false;
+        let reconnectResolutions = 0;
         let launches = 0;
         let tunnels = 0;
         let stops = 0;
@@ -857,7 +858,7 @@ describe("ssh tunnel scripts", () => {
             const args = commandArgs(command);
             const isTarget = args.includes(target.alias);
             if (args.includes("-G")) {
-              if (isTarget && ++resolutions === 4) {
+              if (isTarget && observeReconnects && ++reconnectResolutions === 2) {
                 yield* Deferred.succeed(reconnectsStarted, undefined);
               }
               return makeSuccessfulProcess("");
@@ -913,6 +914,7 @@ describe("ssh tunnel scripts", () => {
           yield* manager.ensureEnvironment(target);
           const disconnect = yield* Effect.forkChild(manager.disconnectEnvironment(target));
           yield* Deferred.await(shutdownStarted);
+          observeReconnects = true;
           const firstReconnect = yield* Effect.forkChild(manager.ensureEnvironment(target));
           const secondReconnect = yield* Effect.forkChild(manager.ensureEnvironment(target));
           yield* Deferred.await(reconnectsStarted);

@@ -22,6 +22,46 @@ const bytes = new Uint8Array([0, 128, 255]);
 const digest = "5240672d7b51756b829ad0ef8d9468b7a078afa2f410484fd3892dab47becb72";
 
 describe("public HTTPS SSH runtime supply", () => {
+  it.effect.each(["content-length", "streamed"] as const)(
+    "caps %s bytes before publishing an oversized archive",
+    (mode) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        let cancelled = false;
+        let reads = 0;
+        const chunk = new Uint8Array(1024 * 1024);
+        const fetchImpl: typeof fetch = async (url) =>
+          String(url).endsWith("SHA256SUMS")
+            ? new Response(`${digest}  ${asset}\n`)
+            : new Response(
+                new ReadableStream<Uint8Array>({
+                  pull(controller) {
+                    reads++;
+                    controller.enqueue(chunk);
+                  },
+                  cancel() {
+                    cancelled = true;
+                  },
+                }),
+                {
+                  headers:
+                    mode === "content-length"
+                      ? { "content-length": String(256 * 1024 * 1024 + 1) }
+                      : {},
+                },
+              );
+        const result = yield* Effect.result(
+          downloadRuntimeArchiveWithHttps(directory, version, "linux-x64", fetchImpl),
+        );
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) assert.include(result.failure.message, "256 MiB");
+        assert.isTrue(cancelled);
+        assert.isAtMost(reads, mode === "content-length" ? 1 : 258);
+        assert.deepEqual(yield* fs.readDirectory(directory), []);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("verifies and caches public bytes; subsequent acquisition reads the cache", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

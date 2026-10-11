@@ -11,7 +11,8 @@ import * as Path from "effect/Path";
 
 import { SshLaunchError } from "./errors.ts";
 
-const MAX_LOCAL_ARCHIVE_BYTES = 256n * 1024n * 1024n;
+export const MAX_RUNTIME_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_LOCAL_ARCHIVE_BYTES = BigInt(MAX_RUNTIME_ARCHIVE_BYTES);
 
 export const readLocalRuntimeArchive = Effect.fn("ssh.runtimeArchive.read")(function* (
   directory: string,

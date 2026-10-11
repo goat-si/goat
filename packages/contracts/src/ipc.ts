@@ -453,6 +453,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
 
 export const SshRuntimePendingReplacementSchema = Schema.Struct({
   reason: Schema.Literals(["busy", "unknown", "contended"]),
+  detail: Schema.optionalKey(Schema.Literal("recovery-stale")),
   replacement: Schema.Literals(["older", "legacy", "incompatible"]),
   requestedVersion: Schema.String,
   liveVersion: Schema.String,

@@ -22,7 +22,7 @@ const current = {
   orchestration: ORCHESTRATION_PROTOCOL_VERSION,
 };
 const liveOwner = () =>
-  `${NodeOS.hostname()}|${process.getuid!()}|${process.pid}|${NodeChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8" }).replace(/\n$/, "")}|fixture`;
+  `${NodeOS.hostname()}|${process.getuid!()}|${process.pid}|${NodeChildProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).replace(/\n$/, "")}|fixture`;
 const deadOwner = () =>
   `${NodeOS.hostname()}|${process.getuid!()}|2147483647|Mon Jan 1 00:00:00 2000|fixture`;
 
@@ -70,6 +70,124 @@ case "$3" in */${name})
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "host-wide replacement symlink mutex",
   () => {
+    it.live("legacy stop failure rolls back identity while holding the replacement lock", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          descriptor404: true,
+        });
+        yield* f.fs.remove(`${f.state}/identity`);
+        const before = yield* f.snapshot;
+        const bin = `${f.test}/rollback-bin`;
+        yield* f.fs.makeDirectory(bin);
+        yield* f.fs.writeFileString(
+          `${bin}/rm`,
+          `#!/bin/sh
+if [ "$2" = '${f.state}/identity' ]; then
+  readlink "$HOME/.goat/ssh-launch/replacement.lock" > "$HOME/.test/rollback-owner"
+fi
+exec /bin/rm "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/rm`, 0o700);
+        f.setRemotePath(`${bin}:${f.test}/identity-bin:${process.env.PATH ?? ""}`);
+        f.setScriptPrefix(
+          'kill() { if [ "$1" = -0 ]; then command kill "$@"; else return 1; fi; }\n',
+        );
+        const result = yield* f.run("launch");
+        assert.isTrue(Result.isFailure(result));
+        assert.isNotEmpty((yield* f.fs.readFileString(`${f.test}/rollback-owner`)).trim());
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.notInclude(
+          yield* f.fs.readDirectory(`${f.home}/.goat/ssh-launch`),
+          "replacement.lock",
+        );
+        yield* Effect.sync(() => process.kill(f.pid, 0));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live.each([
+      { locale: "ko_KR.UTF-8", zone: "Asia/Seoul" },
+      { locale: "C", zone: "Pacific/Honolulu" },
+    ])("locale $locale and TZ $zone cannot prove a live owner dead", ({ locale, zone }) =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          ...current,
+        });
+        const bin = `${f.test}/locale-bin`;
+        yield* f.fs.makeDirectory(bin);
+        yield* f.fs.writeFileString(
+          `${bin}/ps`,
+          `#!/bin/sh
+if [ "$1 $2" = '-o lstart=' ]; then
+  printf '%s %s\\n' "$LC_ALL" "$TZ" >> "$HOME/.test/lock-locale"
+  if [ "$LC_ALL" != C ] || [ "$TZ" != UTC ]; then printf 'different locale or zone\\n'; exit 0; fi
+  exec /bin/ps "$@"
+fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+        );
+        yield* f.fs.chmod(`${bin}/ps`, 0o700);
+        f.setRemotePath(`${bin}:${f.test}/identity-bin:${process.env.PATH ?? ""}`);
+        f.setScriptPrefix(`export LC_ALL='${locale}' TZ='${zone}'\n`);
+        const lock = `${f.home}/.goat/ssh-launch/replacement.lock`;
+        const owner = liveOwner();
+        yield* f.fs.symlink(owner, lock);
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        if (Result.isFailure(result)) throw result.failure;
+        assert.equal(result.success.pending?.reason, "contended");
+        assert.equal(yield* f.fs.readLink(lock), owner);
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isTrue(
+          (yield* f.fs.readFileString(`${f.test}/lock-locale`))
+            .trim()
+            .split("\n")
+            .every((line) => line === "C UTC"),
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live.each(["launch", "pairing", "mcp"] as const)(
+      "unavailable lock identity preserves %s reuse",
+      (entry) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: "1.2.2",
+            ...current,
+          });
+          const bin = `${f.test}/minimal-bin`;
+          yield* f.fs.makeDirectory(bin);
+          yield* f.fs.writeFileString(
+            `${bin}/ps`,
+            `#!/bin/sh
+if [ "$1 $2" = '-o lstart=' ]; then exit 1; fi
+exec "$HOME/.test/identity-bin/ps" "$@"
+`,
+          );
+          yield* f.fs.writeFileString(`${bin}/hostname`, "#!/bin/sh\nexit 1\n");
+          for (const command of ["ps", "hostname"]) yield* f.fs.chmod(`${bin}/${command}`, 0o700);
+          f.setRemotePath(`${bin}:${process.env.PATH ?? ""}`);
+          const before = yield* f.snapshot;
+          const result = yield* f.run(entry, entry !== "launch", {
+            refreshOwnedRuntimeOnFirstConnection: true,
+          });
+          if (Result.isFailure(result)) throw result.failure;
+          if (entry === "launch") assert.equal(result.success.pending?.reason, "contended");
+          else assert.equal(result.success.version, "1.2.2");
+          assert.deepEqual(yield* f.snapshot, before);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live.each(["live", "ownerless", "foreign", "recovery"] as const)(
       "%s owner stays contended and untouched",
       (mode) =>
@@ -98,6 +216,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           });
           if (Result.isFailure(result)) throw result.failure;
           assert.equal(result.success.pending?.reason, "contended");
+          if (mode === "recovery") assert.equal(result.success.pending?.detail, "recovery-stale");
           assert.deepEqual(yield* f.snapshot, before);
           if (mode !== "ownerless") assert.equal(yield* f.fs.readLink(lock), owner);
           if (mode === "recovery") assert.equal(yield* f.fs.readLink(recovery), deadOwner());

@@ -721,19 +721,14 @@ exec "$T3_RUNTIME_DIR/goat" "$@"
 // One host-wide mutex protects publication and server lifecycle across SSH aliases.
 const REMOTE_REPLACEMENT_LOCK_SCRIPT = String.raw`LOCK="$DEFAULT_SERVER_HOME/ssh-launch/replacement.lock"
 RECOVERY="$DEFAULT_SERVER_HOME/ssh-launch/replacement.recovery"
-process_start() { ps -o lstart= -p "$1" 2>/dev/null; }
-LOCK_HELD=0
-LOCK_HOST="$(hostname)"; LOCK_UID="$(id -u)"; LOCK_START="$(process_start "$$")"
-[ -n "$LOCK_HOST" ] && [ -n "$LOCK_START" ] || exit 1
-NONCE="$(basename "$(mktemp -d "$STATE_DIR/lock-owner-XXXXXX")")"
-rmdir "$STATE_DIR/$NONCE"
-OWNER="$LOCK_HOST|$LOCK_UID|$$|$LOCK_START|$NONCE"
+process_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; }
+LOCK_HELD=0; OWNER=; LOCK_DETAIL=
 release_replacement_lock() {
-  if [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$LOCK"; fi
+  if [ -n "$OWNER" ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$LOCK"; fi
   LOCK_HELD=0
 }
 release_recovery_lock() {
-  if [ "$(readlink "$RECOVERY" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$RECOVERY"; fi
+  if [ -n "$OWNER" ] && [ "$(readlink "$RECOVERY" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$RECOVERY"; fi
 }
 owner_proven_dead() {
   recorded="$1"
@@ -749,6 +744,14 @@ owner_proven_dead() {
   [ -n "$current_start" ] && [ "$current_start" != "$owner_start" ]
 }
 acquire_replacement_lock() {
+  LOCK_HOST="$(uname -n 2>/dev/null)" || return 1
+  LOCK_UID="$(id -u 2>/dev/null)" || return 1
+  LOCK_START="$(process_start "$$")" || return 1
+  [ -n "$LOCK_HOST" ] && [ -n "$LOCK_UID" ] && [ -n "$LOCK_START" ] || return 1
+  nonce_dir="$(mktemp -d "$STATE_DIR/lock-owner-XXXXXX")" || return 1
+  NONCE="$(basename "$nonce_dir")"
+  rmdir "$nonce_dir" || return 1
+  OWNER="$LOCK_HOST|$LOCK_UID|$$|$LOCK_START|$NONCE"
   mkdir -p "$DEFAULT_SERVER_HOME/ssh-launch"
   if [ ! -d "$LOCK" ] && ln -s "$OWNER" "$LOCK" 2>/dev/null &&
      [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then LOCK_HELD=1; return 0; fi
@@ -757,6 +760,7 @@ acquire_replacement_lock() {
   if [ -d "$RECOVERY" ] || ! ln -s "$OWNER" "$RECOVERY" 2>/dev/null ||
      [ "$(readlink "$RECOVERY" 2>/dev/null || true)" != "$OWNER" ]; then
     printf 'Recovery is locked; remove %s after checking that no GOAT client is replacing this runtime.\n' "$RECOVERY" >&2
+    LOCK_DETAIL=recovery-stale
     return 1
   fi
   # Only serialized recoverers can remove a dead owner's unchanged link.
@@ -937,11 +941,11 @@ check_retained_runner() {
 mkdir -p "$STATE_DIR"
 @@T3_REPLACEMENT_LOCK@@
 cleanup_runner_next() {
-  release_recovery_lock
-  release_replacement_lock
   if [ "$LEGACY_COMMITTED" = 1 ] && [ "$LEGACY_TERMINATED" = 0 ]; then
     rollback_legacy_switch
   fi
+  release_recovery_lock
+  release_replacement_lock
   rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore"
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
@@ -1011,6 +1015,7 @@ publish_selected_runner() {
 emit_pending() {
   reason="$1"
   pending_fields="$(printf '"reason":"%s","replacement":"%s","requestedVersion":"%s","liveVersion":"%s"' "$reason" "$REPLACEMENT_REASON" "$REQUESTED_VERSION" "$LIVE_VERSION")"
+  if [ "$LOCK_DETAIL" = recovery-stale ]; then pending_fields="$pending_fields,"'"detail":"recovery-stale"'; fi
   # Reuse is independently proven using the retained runner, never the incompatible candidate.
   if [ "$LIVE_COMPATIBLE" = 1 ] && [ -f "$RETAINED_SNAPSHOT_FILE" ] &&
      [ "$(runner_sha256 "$RUNNER_FILE")" = "$EXPECTED_LIVE_RUNNER_SHA256" ] &&
@@ -2721,6 +2726,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const tunnels = new Map<string, SshTunnelEntry>();
   const firstConnectionDecisions = new Set<string>();
   const generations = new Map<string, number>();
+  const resolvedTargets = new Map<string, DesktopSshEnvironmentTarget>();
+  // A disconnect waits on the target lock, then acts on the completed launch result.
+  const cancelledLaunches = new Map<string, boolean>();
   const pendingReplacements = new Map<
     string,
     {
@@ -2774,6 +2782,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     managerScope,
     Effect.sync(() => {
       closed = true;
+      resolvedTargets.clear();
+      cancelledLaunches.clear();
       // Pending shutdown only closes local forwards; the remote may still be working.
       const entries = [...tunnels.values()];
       for (const key of pendingReplacements.keys()) tunnels.delete(key);
@@ -2937,26 +2947,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key: input.key,
     });
     const generation = generations.get(input.key) ?? 0;
-    const now = yield* Clock.currentTimeMillis;
-    // Retain retry intent across transport/forward/pairing failure, including no-port pending.
-    if (
-      input.runner?.archiveVersion &&
-      input.runner.keepExistingRunner !== true &&
-      !pendingReplacements.has(input.key)
-    ) {
-      pendingReplacements.set(input.key, {
-        target: input.resolvedTarget,
-        requestedRunner: input.runner,
-        pending: {
-          reason: "unknown",
-          replacement: "older",
-          requestedVersion: input.runner.archiveVersion,
-          liveVersion: "unknown",
-        },
-        generation,
-        nextAttemptAt: now + 600_000,
-      });
-    }
+    // Only an observed remote pending result grants background replacement intent.
     const operation = (authOptions: SshAuth.SshAuthOptions) =>
       launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner);
     const remoteLaunch = yield* (
@@ -2976,13 +2967,21 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         },
         SshCommandError: (error) => {
           // A newer runtime appearing after preparation is refused by the pinned helper's shell guard.
-          if (error.stderr.trim() === "Remote runtime is newer than this app; update the app.")
+          if (error.stderr.includes("Remote runtime is newer than this app; update the app."))
             pendingReplacements.delete(input.key);
           return Effect.fail(error);
         },
       }),
     );
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
+      const stop = remoteLaunch.status === "ready" && remoteLaunch.pending === undefined;
+      if (closed) {
+        if (stop && options.leaveRemoteServerRunning !== true)
+          yield* stopRemoteServer(input.resolvedTarget, backgroundAuth(input.key)).pipe(
+            Effect.ignore,
+            Effect.uninterruptible,
+          );
+      } else cancelledLaunches.set(input.key, stop);
       return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
     }
     if (remoteLaunch.pending !== undefined && input.runner !== undefined) {
@@ -2991,7 +2990,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         requestedRunner: input.runner,
         pending: remoteLaunch.pending,
         generation,
-        nextAttemptAt: now + 600_000,
+        nextAttemptAt: (yield* Clock.currentTimeMillis) + 600_000,
       });
     }
     if (remoteLaunch.status === "pending")
@@ -3006,9 +3005,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       return input.previous;
     }
     if (input.previous !== undefined) {
+      const previous = input.previous;
       // Remove ownership before scope closure so the old finalizer cannot stop the successor.
-      tunnels.delete(input.key);
-      yield* closeTunnelEntry(input.previous);
+      yield* Effect.gen(function* () {
+        tunnels.delete(input.key);
+        yield* closeTunnelEntry(previous);
+      }).pipe(Effect.uninterruptible);
     }
     const remotePort = remoteLaunch.remotePort;
     yield* Effect.logDebug("ssh.environment.remotePort.ready", {
@@ -3057,6 +3059,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       yield* Scope.close(entryScope, Exit.void);
+      if (!closed) cancelledLaunches.set(input.key, remoteLaunch.pending === undefined);
+      else if (remoteLaunch.pending === undefined && options.leaveRemoteServerRunning !== true)
+        yield* stopRemoteServer(input.resolvedTarget, backgroundAuth(input.key)).pipe(
+          Effect.ignore,
+          Effect.uninterruptible,
+        );
       return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
     }
     tunnels.set(input.key, tunnelEntry);
@@ -3218,7 +3226,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const context = yield* Effect.context<SshEnvironmentEffectContext>();
     yield* Effect.gen(function* () {
       while (true) {
-        yield* Effect.sleep("10 minutes");
+        yield* Effect.sleep("1 minute");
         if (closed) return;
         const now = yield* Clock.currentTimeMillis;
         for (const [key, intent] of pendingReplacements) {
@@ -3232,7 +3240,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                 (generations.get(key) ?? 0) !== intent.generation
               )
                 return;
-              intent.nextAttemptAt = now + 600_000;
+              intent.nextAttemptAt = (yield* Clock.currentTimeMillis) + 600_000;
               const result = yield* ensureTunnelEntry(
                 key,
                 intent.target,
@@ -3276,6 +3284,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...(target.port !== null ? { port: target.port } : {}),
     };
     const key = targetConnectionKey(resolvedTarget);
+    resolvedTargets.set(targetConnectionKey(target), resolvedTarget);
     yield* Effect.logDebug("ssh.environment.target.resolved", {
       ...sshTargetLogFields(resolvedTarget),
       key,
@@ -3367,7 +3376,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     target: DesktopSshEnvironmentTarget,
   ): Effect.fn.Return<void, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
     yield* Effect.logInfo("ssh.environment.disconnect.start", sshTargetLogFields(target));
-    const baseResolved = yield* resolveSshTarget(target.alias || target.hostname);
+    // Stored resolution also covers a launch in flight and aliases removed from ssh config.
+    const requestKey = targetConnectionKey(target);
+    const stored =
+      resolvedTargets.get(requestKey) ??
+      [...resolvedTargets.values()].find((value) => targetConnectionKey(value) === requestKey);
+    const baseResolved = stored ?? (yield* resolveSshTarget(target.alias || target.hostname));
     const resolvedTarget: DesktopSshEnvironmentTarget = {
       ...baseResolved,
       ...(target.username !== null ? { username: target.username } : {}),
@@ -3377,6 +3391,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const hadPending = pendingReplacements.has(key);
     generations.set(key, (generations.get(key) ?? 0) + 1);
     pendingReplacements.delete(key);
+    for (const [request, value] of resolvedTargets)
+      if (targetConnectionKey(value) === key) resolvedTargets.delete(request);
     yield* withTargetLock(
       key,
       Effect.gen(function* () {
@@ -3393,7 +3409,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             yield* closeTunnelEntry(entry);
           }).pipe(Effect.uninterruptible);
         }
-        if (options.leaveRemoteServerRunning !== true && !hadPending) {
+        const stopRemote = cancelledLaunches.get(key) ?? !hadPending;
+        cancelledLaunches.delete(key);
+        if (options.leaveRemoteServerRunning !== true && stopRemote) {
           yield* runWithSshAuth({
             key,
             target: resolvedTarget,

@@ -11,9 +11,13 @@ import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 
 const target = { alias: "build-box", hostname: "build-box", username: null, port: null };
 describe("SSH dispatch pending runtime", () => {
-  it.effect.each(["launch", "tool", "preflight"] as const)(
-    "pending %s issues no session, registers no connected host, and sends no MCP",
-    (operation) =>
+  it.effect.each(
+    (["launch", "tool", "preflight"] as const).flatMap((operation) =>
+      [false, true].map((recovery) => ({ operation, recovery })),
+    ),
+  )(
+    "pending $operation recovery=$recovery issues no session, registers no connected host, and sends no MCP",
+    ({ operation, recovery }) =>
       Effect.gen(function* () {
         let sessions = 0;
         const manager = SshTunnel.SshEnvironmentManager.of({
@@ -22,7 +26,8 @@ describe("SSH dispatch pending runtime", () => {
               type: "ssh-runtime-pending",
               target,
               pending: {
-                reason: "busy",
+                reason: recovery ? "contended" : "busy",
+                ...(recovery ? { detail: "recovery-stale" as const } : {}),
                 replacement: "incompatible",
                 requestedVersion: "1.2.3",
                 liveVersion: "1.2.2",
@@ -101,7 +106,11 @@ describe("SSH dispatch pending runtime", () => {
             ),
           );
           expect(result.failed.reason).toBe("host_unavailable");
-          expect(result.failed.message).toContain("being replaced when its current work finishes");
+          expect(result.failed.message).toContain(
+            recovery
+              ? "Remove ~/.goat/ssh-launch/replacement.recovery"
+              : "being replaced when its current work finishes",
+          );
           expect(result.connected).toEqual([]);
           expect(sessions).toBe(0);
           expect(remoteFetch).not.toHaveBeenCalled();

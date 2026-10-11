@@ -12,7 +12,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { SshLaunchError } from "./errors.ts";
-import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
+import { MAX_RUNTIME_ARCHIVE_BYTES, readLocalRuntimeArchive } from "./runtimeArchive.ts";
 
 export class RuntimeArchiveNotPublished extends Schema.TaggedError<RuntimeArchiveNotPublished>()(
   "RuntimeArchiveNotPublished",
@@ -45,12 +45,48 @@ export const downloadRuntimeArchiveWithHttps = Effect.fn("ssh.runtimeArchive.htt
         });
         if (response.status === 404) throw new RuntimeArchiveNotPublished({ version, asset: name });
         if (!response.ok) throw new Error(`HTTPS release returned status ${response.status}`);
-        return new Uint8Array(await response.arrayBuffer());
+        const tooLarge = () =>
+          new SshLaunchError({
+            message: "Public HTTPS SSH runtime download must be no larger than 256 MiB.",
+            stdout: "",
+          });
+        const length = response.headers.get("content-length");
+        if (length !== null && Number(length) > MAX_RUNTIME_ARCHIVE_BYTES) {
+          await response.body?.cancel();
+          throw tooLarge();
+        }
+        if (response.body === null) return new Uint8Array();
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > MAX_RUNTIME_ARCHIVE_BYTES) {
+              await reader.cancel();
+              throw tooLarge();
+            }
+            chunks.push(chunk.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return bytes;
       },
       catch: (cause) =>
-        isRuntimeArchiveNotPublished(cause)
+        cause instanceof SshLaunchError
           ? cause
-          : new RuntimeArchiveNetworkError({ version, asset: name, cause }),
+          : isRuntimeArchiveNotPublished(cause)
+            ? cause
+            : new RuntimeArchiveNetworkError({ version, asset: name, cause }),
     });
   return yield* cacheLocks
     .withLock(

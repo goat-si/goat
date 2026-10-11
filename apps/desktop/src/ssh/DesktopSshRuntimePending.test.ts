@@ -26,6 +26,18 @@ const pending = {
   },
 } as const;
 describe("desktop SSH pending result", () => {
+  it("round trips the stranded recovery lock detail", () => {
+    const schema = Schema.fromJsonString(DesktopSshEnvironmentEnsureResultSchema);
+    const recovery = {
+      ...pending,
+      pending: {
+        ...pending.pending,
+        reason: "contended" as const,
+        detail: "recovery-stale" as const,
+      },
+    };
+    assert.deepEqual(Schema.decodeSync(schema)(Schema.encodeSync(schema)(recovery)), recovery);
+  });
   it("round trips pending without inventing a port and preserves password cancellation", () => {
     const schema = Schema.fromJsonString(DesktopSshEnvironmentEnsureResultSchema);
     const encoded = Schema.encodeSync(schema)(pending);
