@@ -29,7 +29,7 @@ Branch `goat/release-nightly` (pushed to origin) carries stages 1–3 of the rel
 
 - No real Developer ID signature, notarization, stapling or Gatekeeper assessment has run; the first macOS job is the first proof (fails closed if anything is missing).
 - Windows, Linux arm64 and EPYC jobs have never executed; hosted runner availability (`windows-11-arm`) and costs are unmeasured.
-- The Mac runner boundary depends on the advisory guard on the free plan (task 9).
+- The Mac runner boundary depends on the advisory guard on the free plan (task 9). The guard pins prepare's resolve step by hash: editing that step requires updating the pin in .vite-hooks/goat-workflow-guard.mjs, and any expression string mentioning "secrets" outside publish is refused.
 - Idle detection: a race remains between the last idle probe and stopping a backend or remote runtime; WSL backends always postpone automatic restart; legacy runtimes without the activity endpoint stay pending.
 - A crashed recovery lock on a remote needs manual removal (the UI says which path).
 - The SEA path rewrite relies on the checkout root appearing verbatim; the payload scan fails the build if any machine path survives.
