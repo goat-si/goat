@@ -26,6 +26,7 @@ const ManifestJson = Schema.fromJsonString(
     ),
   }),
 );
+const decodeManifest = Schema.decodeUnknownEffect(ManifestJson);
 
 const command = Command.make(
   "render-third-party-notices",
@@ -36,9 +37,7 @@ const command = Command.make(
   ({ input, output }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const manifest = yield* Schema.decodeUnknownEffect(ManifestJson)(
-        yield* fs.readFileString(input),
-      );
+      const manifest = yield* decodeManifest(yield* fs.readFileString(input));
       yield* fs.writeFileString(output, renderThirdPartyNotices(manifest));
     }),
 ).pipe(Command.withDescription("Render THIRD_PARTY_NOTICES.md from the web license manifest."));
