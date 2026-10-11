@@ -17,7 +17,7 @@ devlog/_chase/
   000_baseline.md              reviewed-through 기준선과 사이클 로그
   010_fork_delta.md            GOAT 의도적 분기 레지스트리 (영역 슬러그, 충돌 정책)
   020_cycle_runbook.md         사이클 절차와 명령
-  scan.sh                      기준선, trial merge 충돌, 마이그레이션 id, 이름 누수, workflow 스캔
+  scan.sh                      기준선, fork delta ID, trial merge 충돌, 마이그레이션 id, 이름 누수, workflow 스캔
   10_t3_chase_MOC.md           T3 축 카드 목록과 상태
   10.NNN_t3_chase_<topic>.md   열린 카드
   _fin/10/                     닫힌 카드

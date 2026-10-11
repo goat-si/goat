@@ -1,22 +1,67 @@
 #!/usr/bin/env bash
 # Scan GOAT against upstream T3 for a chase cycle (see devlog/_chase/020_cycle_runbook.md).
-# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [target-ref, default origin/dev]
+# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [--delta] [target-ref, default origin/dev]
+# --delta checks only the fork delta registry and exits 1 on a problem; it needs no upstream remote.
 # Read-only apart from fetching upstream main and origin.
 set -euo pipefail
 
 fetch=1
 commits=0
+delta_only=0
 target=origin/dev
 for arg in "$@"; do
   case "$arg" in
     --no-fetch) fetch=0 ;;
     --commits) commits=1 ;;
-    -h | --help) sed -n '2,4p' "$0"; exit 0 ;;
+    --delta) delta_only=1 ;;
+    -h | --help) sed -n '2,5p' "$0"; exit 0 ;;
     *) target=$arg ;;
   esac
 done
 
 cd "$(git rev-parse --show-toplevel)"
+
+# Fork delta areas (devlog/_chase/010_fork_delta.md) are "### `slug` title" blocks. Slugs must be
+# unique, well formed and in byte order, and every hash on a "- 커밋:" line must be reachable from
+# the target. Branches cite PR numbers there, which this check skips.
+check_fork_delta() {
+  local registry=devlog/_chase/010_fork_delta.md
+  local ids problems="" id="" line sha
+  ids=$(sed -nE 's/^### `([^`]*)`.*/\1/p' "$registry")
+  echo "## fork delta registry ($(printf '%s\n' "$ids" | grep -c .) areas)"
+  for id in $(printf '%s\n' "$ids" | sort | uniq -d); do problems+="  duplicate id: $id"$'\n'; done
+  for id in $(printf '%s\n' "$ids" | grep -vE '^[a-z0-9]+(-[a-z0-9]+)*$' || true); do
+    problems+="  id is not a kebab-case slug: $id"$'\n'
+  done
+  if [ "$ids" != "$(printf '%s\n' "$ids" | LC_ALL=C sort)" ]; then
+    problems+="  areas are not in alphabetical order: $(printf '%s\n' "$ids" | LC_ALL=C sort | paste -sd' ' -)"$'\n'
+  fi
+  id=""
+  while IFS= read -r line; do
+    case "$line" in
+      '### `'*) id=$(printf '%s\n' "$line" | sed -E 's/^### `([^`]*)`.*/\1/') ;;
+      '- 커밋:'*)
+        for sha in $(printf '%s\n' "$line" | grep -oE '`[0-9a-f]{7,40}`' | tr -d '`' || true); do
+          if ! git merge-base --is-ancestor "$sha" "$target" 2>/dev/null; then
+            problems+="  $id: $sha is not reachable from $target (cite the PR number until it lands)"$'\n'
+          fi
+        done
+        ;;
+    esac
+  done <"$registry"
+  if [ -n "$problems" ]; then
+    printf '%s' "$problems"
+    return 1
+  fi
+  echo "  ok"
+}
+
+if [ "$delta_only" = 1 ]; then
+  if [ "$fetch" = 1 ]; then git fetch --quiet origin; fi
+  check_fork_delta
+  exit
+fi
+
 if ! git remote get-url upstream >/dev/null 2>&1; then
   echo "missing remote 'upstream'. Run once:" >&2
   echo "  git remote add upstream https://github.com/pingdotgg/t3code.git" >&2
@@ -38,6 +83,10 @@ echo "upstream         $(git log -1 --format='%h %cs %s' "$up")"
 echo "reviewed-through $(git log -1 --format='%h %cs %s' "$base")"
 echo "goat-only        $(git rev-list --count "$up..$target") commits"
 echo "upstream-ahead   $(git rev-list --count "$target..$up") commits"
+
+echo
+status=0
+check_fork_delta || status=1
 
 echo
 echo "## trial merge conflicts"
@@ -107,3 +156,5 @@ if [ "$commits" = 1 ]; then
       "$(git log -1 --format=%s "$commit")"
   done
 fi
+
+exit "$status"
