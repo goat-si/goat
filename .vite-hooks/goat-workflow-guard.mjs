@@ -161,6 +161,9 @@ function normalizeExpression(value) {
   let text = value.trim();
   const wrapped = /^\$\{\{([\s\S]*)\}\}$/.exec(text);
   if (wrapped) text = wrapped[1] ?? "";
+  // A partial wrapper turns the condition into a format() string, which is always
+  // truthy, so delimiters may only wrap the whole condition.
+  if (text.includes("${{") || text.includes("}}")) return undefined;
   return text.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")").trim();
 }
 
@@ -299,7 +302,8 @@ function validateNightlyWorkflow(source, yaml) {
         job.steps[0].id !== "resolve" ||
         !isPinnedResolve(job.steps[0]) ||
         Object.hasOwn(job, "env") ||
-        Object.hasOwn(job, "defaults")
+        Object.hasOwn(job, "defaults") ||
+        Object.hasOwn(job, "continue-on-error")
       ) {
         fail("jobs.prepare outputs sha and skip must come from its pinned resolve step");
       }
@@ -376,13 +380,21 @@ function mentionsSecrets(value, key = "") {
 
 // prepare's resolve step is what checks the commit against dev; every checkout
 // trusts its sha output. Changing that step means updating this pin on purpose.
-const pinnedResolveSha256 = "d07e96a012d967ba5b690e4d31ac7a432b2549f53bf3322fe253bdd914a9b894";
+// The whole step is pinned (any added key such as if or continue-on-error changes it).
+const pinnedResolveSha256 = "7e2fda2ab95f3ce5626b6e0fcc95eb39f3d9c99e19590a610a6e0e9996543fd0";
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .toSorted()
+        .map((key) => [key, canonical(value[key])]),
+    );
+  }
+  return value;
+}
 function isPinnedResolve(step) {
-  const pinned = JSON.stringify({
-    run: step.run,
-    env: step.env ?? null,
-    shell: step.shell ?? null,
-  });
+  const pinned = JSON.stringify(canonical(step));
   return NodeCrypto.createHash("sha256").update(pinned).digest("hex") === pinnedResolveSha256;
 }
 

@@ -983,6 +983,21 @@ describe("goat pre-push nightly workflow guard", () => {
       "jobs.prepare outputs sha and skip must come from its pinned resolve step",
     ],
     [
+      "a resolve step that can be skipped",
+      withJob("prepare", {
+        steps: [
+          { ...shippedResolveStep(), if: "false" },
+          checkout("${{ steps.resolve.outputs.sha }}"),
+        ],
+      }),
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
+    ],
+    [
+      "a partial expression wrapper after the gate",
+      withJob("build_mac", { if: `${downstreamGateText} && (${"${{"} always() }})` }),
+      "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
       "the token action outside publish",
       withJob("build_mac", {
         steps: [checkout(), { uses: "actions/create-github-app-token@v2" }],
