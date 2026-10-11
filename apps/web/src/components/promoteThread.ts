@@ -8,7 +8,7 @@ import { useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { canPromoteThread } from "./Sidebar.logic";
+import { canPromoteThread } from "./threadActionMenu.logic";
 import { toastManager } from "./ui/toast";
 
 /** Whether the user may promote this thread: a delegated task on a server that supports it. */

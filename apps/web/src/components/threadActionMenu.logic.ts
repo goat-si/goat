@@ -1,5 +1,25 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
+
+/**
+ * A delegated task's child thread can become a top-level thread when its server
+ * understands thread.promote. Provider-native subagents belong to their provider.
+ * Shared by the sidebar child menu, the thread action menu and the command palette.
+ */
+export function canPromoteThread(
+  thread: Pick<EnvironmentThreadShell, "lineage" | "source" | "deletedAt" | "forkedFrom">,
+  capabilities: { readonly threadPromotion?: boolean } | undefined,
+): boolean {
+  return (
+    capabilities?.threadPromotion === true &&
+    thread.deletedAt === null &&
+    thread.lineage.relationshipToParent === "subagent" &&
+    thread.lineage.parentThreadId !== null &&
+    thread.source.creationSource === "mcp" &&
+    thread.forkedFrom?.type === "node"
+  );
+}
 
 /**
  * Ids for the per-thread action menu. Snooze presets are dispatched as

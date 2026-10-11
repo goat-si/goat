@@ -16,10 +16,9 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
-import { canPromoteThread } from "../components/Sidebar.logic";
-import { usePromoteThread } from "../components/promoteThread";
 import {
   buildThreadActionMenuItems,
+  canPromoteThread,
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
@@ -109,7 +108,9 @@ export function useThreadActionMenu(input: {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
-  const promoteThread = usePromoteThread();
+  const promoteThread = useOrchestrationCommand(threadEnvironment.promote, {
+    reportFailure: false,
+  });
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -206,9 +207,20 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
-          case "promote":
-            await promoteThread(threadRef);
+          case "promote": {
+            const result = await promoteThread({
+              environmentId: threadRef.environmentId,
+              input: { threadId: threadRef.threadId },
+            });
+            if (result._tag === "Failure") {
+              if (!isAtomCommandInterrupted(result)) {
+                failureToast("Could not promote task", squashAtomCommandFailure(result));
+              }
+              return;
+            }
+            toastManager.add({ type: "success", title: "Promoted to a thread" });
             return;
+          }
           case "project-settings": {
             const project = projects.find(
               (candidate) =>

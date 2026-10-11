@@ -7,7 +7,6 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
-  canPromoteThread,
   buildSidebarDelegatedChildIndex,
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
@@ -66,6 +65,7 @@ import {
   type SidebarSection,
   resolveSidebarDropVerb,
 } from "./Sidebar.logic";
+import { canPromoteThread } from "./threadActionMenu.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {

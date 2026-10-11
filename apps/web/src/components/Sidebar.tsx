@@ -192,11 +192,11 @@ import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
+  canPromoteThread,
   threadActionRequiresOperate,
 } from "./threadActionMenu.logic";
 import {
   animateSidebarLayoutChanges,
-  canPromoteThread,
   canStopSidebarDelegatedChild,
   resolveSidebarDelegatedChildWindow,
   type SidebarDelegatedChildren as SidebarDelegatedChildrenEntry,

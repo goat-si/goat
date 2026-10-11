@@ -49,6 +49,7 @@ vi.mock("../state/session", () => ({
 vi.mock("../state/entities", () => ({
   readEnvironmentSupportsAutoSettleOptOut: () => true,
   readEnvironmentSupportsPinning: () => true,
+  readEnvironmentSupportsPromotion: () => false,
   readEnvironmentSupportsSettlement: () => true,
   readEnvironmentSupportsSnooze: () => true,
   readEnvironmentSupportsTitleRegeneration: () => true,
@@ -61,6 +62,10 @@ vi.mock("../state/entities", () => ({
     worktreePath: null,
     runtime: null,
     latestRun: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "thread" },
+    source: { creationSource: "web" },
+    deletedAt: null,
+    forkedFrom: null,
   }),
   useProjects: () => [{ id: "project", environmentId: "secondary" }],
 }));
