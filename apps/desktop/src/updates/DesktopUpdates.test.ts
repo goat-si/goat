@@ -339,6 +339,9 @@ describe("DesktopUpdates", () => {
 
             const installResult = yield* updates.install;
             assert.isFalse(installResult.accepted);
+            assert.isFalse(
+              (yield* updates.installPrepared("1.2.4", { waitForCheck: false })).accepted,
+            );
 
             yield* Deferred.succeed(releaseCheck, undefined);
             const checkResult = yield* Fiber.join(checkFiber);

@@ -379,3 +379,19 @@ it("describes automatic policy, pending work and network recovery", () => {
     "Restoring",
   );
 });
+
+it("shows download failures instead of recovery advice", () => {
+  expect(
+    getDesktopUpdateStatusText({
+      ...baseState,
+      recoveryStatus: "restoring",
+      errorContext: "download",
+      message: "checksum mismatch",
+    }),
+  ).toBe("checksum mismatch");
+});
+it("does not show recovery advice when the updater is disabled", () => {
+  expect(
+    getDesktopUpdateStatusText({ ...baseState, enabled: false, recoveryStatus: "restoring" }),
+  ).toBe("Automatic updates are disabled.");
+});

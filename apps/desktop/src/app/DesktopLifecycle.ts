@@ -124,6 +124,7 @@ function handleBeforeQuit(
       const state = yield* DesktopState.DesktopState;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       const updates = yield* DesktopUpdates.DesktopUpdates;
+      if (yield* updates.isInstallActive) return "installing" as const;
       const update = yield* updates.getState;
       if (
         !(yield* Ref.get(state.quitting)) &&
@@ -131,7 +132,9 @@ function handleBeforeQuit(
         update.downloadedVersion !== null
       ) {
         yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;
-        const installation = yield* updates.installPrepared(update.downloadedVersion);
+        const installation = yield* updates.installPrepared(update.downloadedVersion, {
+          waitForCheck: false,
+        });
         if (installation.accepted)
           return installation.failed ? ("failed" as const) : ("installing" as const);
       }
@@ -146,19 +149,22 @@ function handleBeforeQuit(
       );
       return "shutdown" as const;
     }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).then((result) => {
-    if (result !== "shutdown") {
-      if (result === "failed") finishQuit();
-      return;
-    }
-    markQuitAllowed();
-    void runEffect(
-      Effect.gen(function* () {
-        const electronApp = yield* ElectronApp.ElectronApp;
-        yield* electronApp.quit;
-      }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
-    );
-  });
+  )
+    .catch(() => "shutdown" as const)
+    .then((result) => {
+      // The guard owns this handler promise only. After an accepted installation,
+      // isInstallActive decides whether a later quit belongs to the updater or
+      // should retry ordinary shutdown after native installer recovery.
+      finishQuit();
+      if (result !== "shutdown") return;
+      markQuitAllowed();
+      void runEffect(
+        Effect.gen(function* () {
+          const electronApp = yield* ElectronApp.ElectronApp;
+          yield* electronApp.quit;
+        }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
+      );
+    });
 }
 
 function quitFromSignal(

@@ -235,6 +235,139 @@ describe("DesktopUpdates automatic coordinator", () => {
       }),
   );
 
+  it.effect("preserves an in-session downgrade across checks and installs when idle", () =>
+    Effect.gen(function* () {
+      const downgrade = "1.2.2";
+      const installed = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        quitAndInstall: Deferred.succeed(installed, undefined).pipe(Effect.asVoid),
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          yield* updates.setChannel("nightly");
+          yield* updates.setChannel("latest");
+          const ready = yield* observe(
+            updates,
+            (state) => state.downloadedVersion === downgrade,
+          ).pipe(Effect.forkChild);
+          harness.emit("update-downloaded", { version: downgrade });
+          yield* Fiber.join(ready);
+          yield* updates.check("poll");
+          assert.equal(harness.settings().pendingUpdate?.version, downgrade);
+          assert.equal((yield* updates.getState).pendingUpdate?.version, downgrade);
+          const checked = yield* observe(updates, (state) => state.status === "downloaded").pipe(
+            Effect.forkChild,
+          );
+          harness.emit("update-not-available");
+          yield* Fiber.join(checked);
+          yield* updates.setInstallPolicy("restart-when-idle");
+          yield* Deferred.await(installed);
+          assert.equal(harness.quitAndInstalls(), 1);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect.each(["update-not-available", "ignored-channel"])(
+    "clears unrestorable recovery when the feed reports %s",
+    (event) => {
+      const harness = makeHarness({
+        initialSettings: { ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, pendingUpdate: pending },
+      });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          yield* updates.check("startup");
+          assert.equal((yield* updates.getState).recoveryStatus, "restoring");
+          const checked = yield* observe(updates, (state) => state.status === "up-to-date").pipe(
+            Effect.forkChild,
+          );
+          if (event === "ignored-channel")
+            harness.emit("update-available", { version: "1.2.4-nightly.20261012.1" });
+          else harness.emit("update-not-available");
+          const state = yield* Fiber.join(checked);
+          assert.isNull(state.recoveryStatus);
+          assert.isNull(state.pendingRestartReason);
+          assert.isNull(state.pendingUpdate);
+          assert.isNull(harness.settings().pendingUpdate);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("disabled updater retains intent without pretending to restore", () => {
+    const harness = makeHarness({
+      initialSettings: { ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, pendingUpdate: pending },
+      env: { T3CODE_DISABLE_AUTO_UPDATE: "true" },
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const state = yield* updates.getState;
+        assert.equal(state.status, "disabled");
+        assert.isNull(state.recoveryStatus);
+        assert.deepEqual(state.pendingUpdate, pending);
+        assert.equal(harness.listenerCount(), 0);
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("download recovery failure exposes its error without network advice", () => {
+    const harness = makeHarness({
+      initialSettings: { ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, pendingUpdate: pending },
+      downloadUpdate: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+          channel: "latest",
+          cause: new Error("checksum mismatch"),
+        }),
+      ),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const failed = yield* observe(updates, (state) => state.errorContext === "download").pipe(
+          Effect.forkChild,
+        );
+        harness.emit("update-available", { version });
+        const state = yield* Fiber.join(failed);
+        assert.isNull(state.recoveryStatus);
+        assert.isNotNull(state.message);
+        assert.deepEqual(state.pendingUpdate, pending);
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("manual failure consumes the automatic attempt for that generation", () => {
+    const harness = makeHarness({
+      downloadUpdate: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+          channel: "latest",
+          cause: new Error("disk full"),
+        }),
+      ),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const available = yield* observe(updates, (state) => state.status === "available").pipe(
+          Effect.forkChild,
+        );
+        harness.emit("update-available", { version });
+        yield* Fiber.join(available);
+        assert.isFalse((yield* updates.download).completed);
+        yield* updates.setInstallPolicy("install-on-quit");
+        yield* TestClock.adjust("60 seconds");
+        assert.equal(harness.downloadCount(), 1);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect("offline metadata retains pending intent without enabling installation", () => {
     const harness = makeHarness({
       initialSettings: { ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, pendingUpdate: pending },
@@ -393,6 +526,66 @@ describe("DesktopUpdates automatic coordinator", () => {
 });
 
 describe("DesktopUpdates idle convergence", () => {
+  it.effect("re-probes activity at admission and refuses a backend that became busy", () => {
+    let requests = 0;
+    const config = {
+      httpBaseUrl: new URL("http://127.0.0.1:4444"),
+      executablePath: "node",
+    } as DesktopBackendStartConfig;
+    const primary: DesktopBackendPool.DesktopBackendInstance = {
+      id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
+      label: Effect.succeed("primary"),
+      start: Effect.void,
+      stop: () => Effect.die("busy backend must not stop"),
+      currentConfig: Effect.succeedSome(config),
+      snapshot: Effect.succeed({
+        desiredRunning: true,
+        ready: true,
+        activePid: Option.some(42),
+        restartAttempt: 0,
+        restartScheduled: false,
+      }),
+      waitForReady: () => Effect.succeed(true),
+    };
+    const harness = makeHarness({
+      installPolicy: "restart-when-idle",
+      backendInstances: [primary],
+      httpClient: HttpClient.make((request) =>
+        Effect.sync(() => {
+          requests += 1;
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              activity: requests === 1 ? "idle" : "busy",
+              pid: 42,
+              serverVersion: "1.2.3",
+            }),
+          );
+        }),
+      ),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        const postponed = yield* observe(
+          updates,
+          (state) => state.pendingRestartReason === "busy",
+        ).pipe(Effect.forkChild);
+        harness.emit("update-downloaded", { version });
+        yield* Fiber.join(postponed);
+        assert.equal(requests, 2);
+        assert.equal(harness.quitAndInstalls(), 0);
+        // A fresh busy probe is meaningful; publishing the identical reason again isn't.
+        yield* TestClock.adjust("60 seconds");
+        const afterFirstWake = harness.sentStates.length;
+        yield* TestClock.adjust("60 seconds");
+        assert.equal(harness.sentStates.length, afterFirstWake);
+        assert.equal(harness.quitAndInstalls(), 0);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   it.effect.each(["busy", "unknown", "wsl"])(
     "postpones %s and installs after a 60-second idle probe",
     (initial) =>

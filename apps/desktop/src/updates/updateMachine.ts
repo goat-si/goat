@@ -134,6 +134,9 @@ export function reduceDesktopUpdateStateOnNoUpdate(
   return {
     ...state,
     status: "up-to-date",
+    pendingUpdate: null,
+    recoveryStatus: null,
+    pendingRestartReason: null,
     availableVersion: null,
     downloadedVersion: null,
     releaseNotes: [],

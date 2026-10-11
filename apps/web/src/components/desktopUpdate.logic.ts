@@ -125,6 +125,8 @@ export function canCheckForUpdate(state: DesktopUpdateState | null): boolean {
 
 /** Describes the app-owned automatic install policy and pending recovery. */
 export function getDesktopUpdateStatusText(state: DesktopUpdateState): string {
+  if (!state.enabled) return "Automatic updates are disabled.";
+  if (state.errorContext === "download" && state.message) return state.message;
   if (state.installPolicy === "paused")
     return "Automatic downloads and installation are paused. You can still check, download, and install manually.";
 
