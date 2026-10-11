@@ -29,15 +29,15 @@ import {
   type ReleaseAsset,
   type ReleaseCommandRunner,
   type ReleaseReport,
-} from "./release-verify.ts";
-import { finalizeMacosDmgs, rewriteDmgManifest } from "../finalize-macos-dmg.ts";
-import { verifyMacPayload, verifyReleaseDirectory } from "../verify-release-artifacts.ts";
-import { mergeUpdateManifestFiles } from "../merge-update-manifests.ts";
+} from "./lib/release-verify.ts";
+import { finalizeMacosDmgs, rewriteDmgManifest } from "./finalize-macos-dmg.ts";
+import { verifyMacPayload, verifyReleaseDirectory } from "./verify-release-artifacts.ts";
+import { mergeUpdateManifestFiles } from "./merge-update-manifests.ts";
 import {
   parseUpdateManifest,
   serializeUpdateManifest,
   type UpdateManifest,
-} from "./update-manifest.ts";
+} from "./lib/update-manifest.ts";
 
 const version = "0.1.0-nightly.20261012.1";
 const bytes = (text: string) => new TextEncoder().encode(text);

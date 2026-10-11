@@ -7,14 +7,14 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { signMacArchiveContents } from "../build-cli-archive.ts";
+import { signMacArchiveContents } from "./build-cli-archive.ts";
 import {
   NotarytoolSubmitError,
   isNotarytoolSubmitError,
   notarytoolAuthArgs,
   parseNotarytoolSubmitOutput,
   resolveMacNotarizationEnv,
-} from "./mac-notarization.ts";
+} from "./lib/mac-notarization.ts";
 
 const requiredMac = { signed: true, platform: "mac", requireNotarization: true };
 const apiEnv = { APPLE_API_KEY: "/key.p8", APPLE_API_KEY_ID: "key-id", APPLE_API_ISSUER: "issuer" };
