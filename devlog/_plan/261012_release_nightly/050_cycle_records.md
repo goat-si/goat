@@ -49,3 +49,9 @@ Deviations from 030: WSL backends stay "unknown" (restart postponed) as designed
 Did not improve / unverified: no real SSH host, two-Mac convergence or electron-updater install ran (needs published nightlies and the bootstrap, 050 §11); the probe-to-stop race and older clients ignoring the remote lock remain (bootstrap quits both old apps first). Pre-existing, unrelated: `DesktopApplicationMenu.test.ts` expects "goat (Nightly)" while the app name has been "GOAT" since `b79ff462c`; desktop tests are not in goat-ci.
 
 Next: wp4 (040).
+
+## wp4 (runner, measurements, delivery) — D
+
+Conclusion: the Mac runner kit (`preflight.sh`, `install-runner.sh`, `docs/operations/goat-mac-release-runner.md`) and the user documentation are in place; dev was merged into the branch with the SSH conflicts resolved; the final cross-family review of the main agent's own code found and fixed guard false negatives (bracketed or whitespace-prefixed secrets, an aliased publish job, an unbound prepare output) and false positives. User tasks and risks: `060_handoff.md`.
+
+Did not improve: nothing ran on a real runner, App or notary service; the guard remains advisory on the free plan.
