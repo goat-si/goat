@@ -1,6 +1,6 @@
 /** Shows startup failures before React can replace the boot splash. */
 export function showBootError(error: unknown) {
-  console.error("T3 Code failed to start.", error);
+  console.error("GOAT failed to start.", error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
 

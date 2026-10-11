@@ -116,7 +116,7 @@ export class KdeCaptureSetup {
       if (!bundle)
         return {
           status: "error",
-          message: "The capture helper is missing from this build. Update or reinstall T3 Code.",
+          message: "The capture helper is missing from this build. Update or reinstall GOAT.",
         };
       if (!installed.equals(bundle) || entry.toString() !== kdeCaptureDesktopEntry(executable))
         return {
@@ -161,9 +161,7 @@ export class KdeCaptureSetup {
     } else {
       const bundle = await regularFile(this.paths.bundle);
       if (!bundle)
-        throw new Error(
-          "The capture helper is missing from this build. Update or reinstall T3 Code.",
-        );
+        throw new Error("The capture helper is missing from this build. Update or reinstall GOAT.");
       await NodeFSP.mkdir(directory, { recursive: true });
       await NodeFSP.mkdir(NodePath.dirname(desktop), { recursive: true });
       const staging = await NodeFSP.mkdtemp(NodePath.join(directory, ".install-"));

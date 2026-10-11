@@ -1,6 +1,6 @@
 # Outside agents
 
-Agents that T3 Code did not start can work with an environment through its MCP
+Agents that GOAT did not start can work with an environment through its MCP
 server. They can read projects and threads, start and message threads, and
 check which providers and models are available. This covers Claude Code or
 Codex in your own terminal, ChatGPT, and bots that support MCP. Each agent signs
@@ -76,7 +76,7 @@ codex mcp login t3
 Add the environment as a custom MCP app in ChatGPT's apps settings:
 
 1. Create a new app or plugin with a custom MCP server.
-2. Set the server URL to `https://<environment-address>/mcp`, using the T3
+2. Set the server URL to `https://<environment-address>/mcp`, using the GOAT
    Connect address.
 3. Choose **OAuth** for authentication. ChatGPT discovers the rest; you do not
    need a client ID or secret.

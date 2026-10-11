@@ -1,6 +1,6 @@
 # Remote access
 
-Connect a phone, browser, or another desktop app to T3 Code running on a different
+Connect a phone, browser, or another desktop app to GOAT running on a different
 machine. That machine must stay running and reachable while you work.
 
 ## T3 Connect
@@ -73,7 +73,7 @@ Pairing the same machine again over another address also adds a route instead
 of a second machine. A new route is placed by speed, in that order, and you can
 reorder routes at any time.
 
-While connected through T3 Connect or a paired address, T3 Code also learns the
+While connected through T3 Connect or a paired address, GOAT also learns the
 machine's current LAN and Tailscale addresses and adds them as routes, so
 pairing once through T3 Connect is enough to use the LAN at home. When the
 machine's LAN address changes, for example after it joins another Wi-Fi network,
@@ -82,10 +82,10 @@ address to be learned. You can reorder a learned route, but not remove it; it
 goes away with the route it was learned through, or when the machine stops
 reporting that address.
 
-T3 Code connects over the first route that answers. Away from home, a LAN
+GOAT connects over the first route that answers. Away from home, a LAN
 address that does not answer is checked briefly and skipped. It is only tried
 again, after the other routes, if none of them connect. While connected over a
-later route, T3 Code checks the earlier ones when your network changes, when you
+later route, GOAT checks the earlier ones when your network changes, when you
 return to the app, and every minute, and moves back as soon as one works.
 
 On web and desktop, select the route count under the machine's name in
@@ -160,7 +160,7 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add environment**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
+**SSH**, and enter a host or SSH alias such as `user@example.com`. GOAT starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
 
@@ -182,7 +182,7 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that T3 Code launched; a server that was already
+the connection stops a server that GOAT launched; a server that was already
 running is left alone.
 
 For Antigravity's Google callback on a remote host, see
@@ -195,13 +195,13 @@ example, to "run this in ~/work/api on mini". It lists the hosts in this
 machine's `~/.ssh/config` and `known_hosts`, browses folders and Git worktrees on
 the one you name, and starts a thread there in that folder or in a new worktree.
 The folder becomes a project on that machine, and the thread runs in that
-machine's own T3 Code, which is started the same way as above if needed.
+machine's own GOAT, which is started the same way as above if needed.
 
 Only SSH keys or a running ssh-agent are used; a host that asks for a password
 is refused. Starting a thread needs a full-access thread or a full-access
 outside agent. To watch the new thread, add the same host under
 **Settings → Connections**. Each start issues a 12-hour sign-in on that
-machine, listed with its other clients. A machine running an older T3 Code
+machine, listed with its other clients. A machine running an older GOAT
 only accepts approval-required threads in folders that are already projects
 there.
 
@@ -221,7 +221,7 @@ directly. Every other device, and the desktop app for other environments,
 streams them from the host. Agents keep using them while no device is
 connected, and `localhost` addresses reach servers on the host.
 
-The first tab downloads a headless Chrome, about 120 MB, into the T3 home. It
+The first tab downloads a headless Chrome, about 120 MB, into the GOAT home. It
 is the same browser [HTML renders](html-renders.md) use, so a host downloads it
 only once. Some Linux hosts need [setup](#browser-host-setup) before it can
 start.
@@ -264,7 +264,7 @@ set `T3CODE_SERVER_BROWSER_SANDBOX=0` for the environment to run without it.
 
 ## Connect an outside agent
 
-Claude Code, Codex, ChatGPT and other agents T3 Code did not start can drive
+Claude Code, Codex, ChatGPT and other agents GOAT did not start can drive
 threads on an environment through its MCP server. See
 [outside agents](./outside-agents.md) for setup.
 
@@ -331,8 +331,8 @@ creates a replacement tunnel on its own. You do not need to pair again. Cleanup
 usually runs five to ten minutes after the tunnel goes down.
 
 T3 Connect also removes the tunnel of an environment running an older version of
-T3 Code once it has been offline for seven days. That environment shows a message
-asking you to update. Start T3 Code on that computer and update it to the latest
+GOAT once it has been offline for seven days. That environment shows a message
+asking you to update. Start GOAT on that computer and update it to the latest
 version; it reconnects at the same address without pairing again.
 
 On a command-line host, `goat connect unlink` disables exposure while retaining
@@ -351,9 +351,9 @@ when SSH closes, see [background-service troubleshooting](./background-service.m
 
 | Error                                                     | Recovery                                                                                                                                          |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart T3 Code on the host.                                                                               |
+| `environment_link_limit_exceeded` or managed tunnel limit | Deregister an unused environment, then restart GOAT on the host.                                                                                  |
 | `auth_invalid` or `invalid_bearer`                        | Run `goat connect login`. If credentials were revoked, run `goat connect logout`, then `goat connect` again. Restart the server after signing in. |
-| Expired or invalid link proof                             | Check the host's date and time, update T3 Code, then restart it.                                                                                  |
+| Expired or invalid link proof                             | Check the host's date and time, update GOAT, then restart it.                                                                                     |
 | HTTP 403 without a recognized error                       | Check relay access, proxies, and firewall rules. Keep any Cloudflare Ray ID for a bug report.                                                     |
 | HTTP 408, 429, or 5xx                                     | Check network and relay availability. Startup retries temporary failures for up to ten minutes.                                                   |
 
@@ -363,13 +363,13 @@ foreground server, stop it and run `goat serve` again with your usual options.
 Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both
-devices. For server version warnings, follow [Updating T3 Code](./updating.md).
+devices. For server version warnings, follow [Updating GOAT](./updating.md).
 
 ## Using the Desktop App as a Remote Only
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the
 desktop app, open **Settings → Connections** and switch off **Local
-environment**. T3 Code restarts without a local server: no local agents or terminals run, WSL
+environment**. GOAT restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
 history, and saved connections are kept, and you keep working through pairing, T3 Connect, or SSH.
 

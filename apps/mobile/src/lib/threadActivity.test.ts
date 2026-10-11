@@ -91,14 +91,14 @@ it("expands a T3 Code notice to the prompt the agent got", () => {
     type: "notification",
     source: { kind: "system" },
     outcome: "updated",
-    summary: "T3 Code restarted and resumed this turn",
+    summary: "GOAT restarted and resumed this turn",
     detail: "Continue where you left off.",
   } as OrchestrationV2TurnItem;
   const [activity] = buildThreadFeed([projected(item, 0)]).flatMap((entry) =>
     entry.type === "activity-group" ? entry.activities : [],
   );
 
-  expect(activity?.summary).toBe("T3 Code restarted and resumed this turn");
+  expect(activity?.summary).toBe("GOAT restarted and resumed this turn");
   expect(activity?.canExpand).toBe(true);
   expect(activity?.getFullDetail()).toBe("Continue where you left off.");
 });
@@ -1445,9 +1445,9 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([projected(toolItem, 0)]);
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
-    expect(activity?.summary).toBe("Read a T3 thread");
+    expect(activity?.summary).toBe("Read a GOAT thread");
     expect(activity?.logo).toBe("t3-code");
-    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a T3 thread");
+    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a GOAT thread");
   });
 
   it("uses the CUA action title in the mobile feed", () => {

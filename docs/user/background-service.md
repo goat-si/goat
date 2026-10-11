@@ -1,12 +1,12 @@
-# Running T3 Code in the background
+# Running GOAT in the background
 
-On Linux and macOS, T3 Code can run as a service for your user so you do not need
+On Linux and macOS, GOAT can run as a service for your user so you do not need
 to keep a terminal open.
 
 ## Manage the service
 
-Install the `goat` CLI first ([Install T3 Code](./install.md#command-line)), then
-run these commands on the machine that will host T3 Code:
+Install the `goat` CLI first ([Install GOAT](./install.md#command-line)), then
+run these commands on the machine that will host GOAT:
 
 | Task                            | Command                  |
 | ------------------------------- | ------------------------ |
@@ -27,7 +27,7 @@ the old version until you run `goat service restart`. Pass `--yes` from a
 script. A server you started by hand is left running; stop and start it again
 to pick up the new version. Wait for any remote update already in progress
 before updating; to match a remote client's version, follow
-[Updating T3 Code](./updating.md).
+[Updating GOAT](./updating.md).
 
 Pass an exact version (`goat update 0.0.42`) to pin one, `--channel nightly` to
 switch trains, or `--allow-downgrade` to move backwards. `preview` is a
@@ -42,7 +42,7 @@ script.
 
 ## Platform support
 
-Linux needs systemd user services. Setup enables lingering so T3 Code starts at
+Linux needs systemd user services. Setup enables lingering so GOAT starts at
 boot and keeps running after logout. If this needs administrator permission,
 setup prints a recovery command before changing the service.
 
@@ -76,7 +76,7 @@ ssh -t your-server 'sudo loginctl enable-linger "$(id -un)"'
 ```
 
 Then retry service setup as your normal user. Run only the `loginctl` command
-with sudo; running T3 Code as root creates a separate installation and Connect
+with sudo; running GOAT as root creates a separate installation and Connect
 identity. Without administrator access, run `goat serve` in a terminal and keep
 that session open.
 
@@ -84,7 +84,7 @@ that session open.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `linger-unavailable`                    | Run `loginctl show-user "$(id -un)" --property=Linger` and check that systemd-logind is available.                             |
 | `user-manager-unavailable`              | Run `systemctl --user status` in a login session for the service user; check your distribution's systemd user-session support. |
-| `service-disabled` or `service-stopped` | Read the log and `systemctl --user status t3code.service`, then use the repair command printed by T3 Code.                     |
+| `service-disabled` or `service-stopped` | Read the log and `systemctl --user status t3code.service`, then use the repair command printed by GOAT.                        |
 | `restart-pending`                       | A newer version is installed but the service still runs the previous one. Run `goat service restart`.                          |
 
 On macOS, check **System Settings → General → Login Items** if the service no

@@ -2362,7 +2362,7 @@ describe("MessagesTimeline", () => {
 
     // The goat mark replaces the generic tool icon for GOAT MCP calls.
     expect(markup).toContain('viewBox="92 92 1070 1070"');
-    expect(markup).toContain("Read a T3 thread");
+    expect(markup).toContain("Read a GOAT thread");
     expect(markup).not.toContain("mcp__t3-code__goat_thread_read");
   });
 

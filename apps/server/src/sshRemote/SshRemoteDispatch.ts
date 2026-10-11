@@ -210,7 +210,7 @@ const keyOnlyPasswordPrompt = SshAuth.SshPasswordPrompt.of({
   request: (request) =>
     Effect.fail(
       new SshPasswordPromptError({
-        message: `${request.destination} asked for a password. T3 agents connect only with SSH keys or a running ssh-agent; set up key authentication for this host first.`,
+        message: `${request.destination} asked for a password. GOAT agents connect only with SSH keys or a running ssh-agent; set up key authentication for this host first.`,
       }),
     ),
 });
@@ -418,7 +418,7 @@ const make = Effect.gen(function* () {
     if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
     const issued = yield* withRuntime(
       manager.issueMcpClientSession(target, {
-        label: `T3 SSH dispatch (${ceiling})`,
+        label: `GOAT SSH dispatch (${ceiling})`,
         ttl: SESSION_TTL,
         runtimeModeCeiling: ceiling,
       }),
@@ -457,7 +457,7 @@ const make = Effect.gen(function* () {
           sessions.delete(`${input.target.alias}\u0000${input.ceiling}`);
           return failure(
             "remote_refused",
-            `${input.target.alias} rejected this machine's T3 session; call the tool again to sign in anew.`,
+            `${input.target.alias} rejected this machine's GOAT session; call the tool again to sign in anew.`,
           );
         }
         return failure(
@@ -611,7 +611,7 @@ const make = Effect.gen(function* () {
     if (!session.ceilingApplied && input.runtimeMode !== "approval-required") {
       return yield* failure(
         "remote_refused",
-        `T3 on ${target.alias} is too old to let an outside agent start ${input.runtimeMode} threads. Update T3 there, or pass runtimeMode "approval-required" and approve its actions from a client connected to ${target.alias}.`,
+        `GOAT on ${target.alias} is too old to let an outside agent start ${input.runtimeMode} threads. Update GOAT there, or pass runtimeMode "approval-required" and approve its actions from a client connected to ${target.alias}.`,
       );
     }
 
@@ -622,7 +622,7 @@ const make = Effect.gen(function* () {
       if (!session.ceilingApplied) {
         return yield* failure(
           "remote_refused",
-          `${folder.path} is not a project on ${target.alias}, and T3 there is too old to let an outside agent register one. Add it as a project from a client connected to ${target.alias}, or update T3 there.`,
+          `${folder.path} is not a project on ${target.alias}, and GOAT there is too old to let an outside agent register one. Add it as a project from a client connected to ${target.alias}, or update GOAT there.`,
         );
       }
       yield* beforeLaunch;
@@ -670,7 +670,7 @@ const make = Effect.gen(function* () {
       );
     }
     notes.push(
-      `The thread lives in the T3 environment on ${target.alias}. Follow it from here with goat_thread_wait / goat_thread_read and send to it with goat_thread_send, passing host "${target.alias}" and this threadId. The user can watch it by connecting to ${target.alias} (Settings → Connections → SSH).`,
+      `The thread lives in the GOAT environment on ${target.alias}. Follow it from here with goat_thread_wait / goat_thread_read and send to it with goat_thread_send, passing host "${target.alias}" and this threadId. The user can watch it by connecting to ${target.alias} (Settings → Connections → SSH).`,
     );
     return {
       host: target.alias,
@@ -725,7 +725,7 @@ const make = Effect.gen(function* () {
         if (call.writes && !session.ceilingApplied) {
           return yield* failure(
             "remote_refused",
-            `T3 on ${target.alias} is too old to limit what an outside agent may change. Update T3 there before calling ${call.tool} on it.`,
+            `GOAT on ${target.alias} is too old to limit what an outside agent may change. Update GOAT there before calling ${call.tool} on it.`,
           );
         }
         const answer = yield* callAcpMcpTool({
@@ -760,7 +760,7 @@ const make = Effect.gen(function* () {
               ? Effect.fail(
                   failure(
                     "remote_refused",
-                    `${target.alias} rejected this machine's T3 session twice.`,
+                    `${target.alias} rejected this machine's GOAT session twice.`,
                   ),
                 )
               : attempt(true);
@@ -769,11 +769,11 @@ const make = Effect.gen(function* () {
             error.kind === "transport" || error.kind === "http"
               ? failure(
                   "host_unavailable",
-                  `T3 on ${target.alias} is unavailable: ${describe(error)}`,
+                  `GOAT on ${target.alias} is unavailable: ${describe(error)}`,
                 )
               : failure(
                   "remote_refused",
-                  `T3 on ${target.alias} could not run ${call.tool}: ${describe(error)}`,
+                  `GOAT on ${target.alias} could not run ${call.tool}: ${describe(error)}`,
                 ),
           );
         }),

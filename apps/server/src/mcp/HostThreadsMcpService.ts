@@ -253,7 +253,7 @@ const make = Effect.gen(function* () {
           ? Effect.fail(
               failure(
                 "invalid_request",
-                `T3 on ${host} is too old to list every project; update T3 there or pass one of its projectIds, which goat_project_list with this host lists.`,
+                `GOAT on ${host} is too old to list every project; update GOAT there or pass one of its projectIds, which goat_project_list with this host lists.`,
               ),
             )
           : Effect.fail(error),

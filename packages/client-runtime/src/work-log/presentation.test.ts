@@ -475,8 +475,8 @@ describe("resolveWorkEntryToolPresentation", () => {
       "Stopping recording the preview browser",
       "Stopped recording the preview browser",
     ],
-    ["goat_thread_read", "Reading a T3 thread", "Read a T3 thread"],
-    ["goat_thread_send", "Sending to a T3 thread", "Sent to a T3 thread"],
+    ["goat_thread_read", "Reading a GOAT thread", "Read a GOAT thread"],
+    ["goat_thread_send", "Sending to a GOAT thread", "Sent to a GOAT thread"],
     [
       "goat_worktree_handoff",
       "Handing off thread to a git worktree",

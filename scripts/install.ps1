@@ -110,7 +110,7 @@ if ($interactive) {
   [Console]::Error.WriteLine()
   for ($i = 0; $i -lt $mark.Length; $i++) {
     $row = $mark[$i].Replace('#', [char]0x2588).Replace('^', [char]0x2580).Replace('_', [char]0x2584)
-    $label = if ($i -eq 1) { "     ${bold}T3 Code$reset" } elseif ($i -eq 2) { "     ${muted}CLI installer$reset" } else { "" }
+    $label = if ($i -eq 1) { "     ${bold}GOAT$reset" } elseif ($i -eq 2) { "     ${muted}CLI installer$reset" } else { "" }
     [Console]::Error.WriteLine("  $bold$row$reset$label")
   }
   [Console]::Error.WriteLine()

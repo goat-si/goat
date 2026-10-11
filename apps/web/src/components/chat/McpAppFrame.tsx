@@ -306,7 +306,7 @@ export function McpAppFrame(props: {
       // No dialog host is mounted, so nobody was asked; say so rather than
       // reporting that the user declined.
       if (approved === undefined) {
-        throw new McpAppHostRefusal("T3 could not ask for approval here.");
+        throw new McpAppHostRefusal("GOAT could not ask for approval here.");
       }
       return approved;
     };

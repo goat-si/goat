@@ -2125,7 +2125,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
       Effect.mapError(
         (cause) =>
           new SshPairingError({
-            message: "The remote T3 CLI did not return an MCP session.",
+            message: "The remote GOAT CLI did not return an MCP session.",
             stdout: result.stdout,
             cause,
           }),
@@ -2133,7 +2133,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
     );
     if (session.token.trim().length === 0) {
       return yield* new SshPairingError({
-        message: "The remote T3 CLI returned an empty MCP session token.",
+        message: "The remote GOAT CLI returned an empty MCP session token.",
         stdout: result.stdout,
       });
     }

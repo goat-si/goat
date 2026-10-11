@@ -111,7 +111,7 @@ const PI_REQUEST_TIMEOUT_MS = 15_000;
 // Session lifecycle hooks reload extensions, MCP servers and language servers.
 const PI_SESSION_TIMEOUT_MS = 60_000;
 const PI_UNSOLICITED_ACTIVITY_ERROR =
-  "Pi started agent work outside an active T3 turn. The session was stopped to prevent invisible tool execution.";
+  "Pi started agent work outside an active GOAT turn. The session was stopped to prevent invisible tool execution.";
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 
