@@ -35,3 +35,17 @@ Deviations from 020: Linux x64 desktop joined the `desktop_other` matrix (runner
 Did not improve / unverified: no real Developer ID signature, notarization, stapling or spctl run (identity and profile not installed — user tasks); Windows/Linux jobs never ran (hosted runners, no workflow execution allowed); x64 binaries cannot execute here (no Rosetta). The unused other-arch `objc-js` prebuild ships in both mac apps (harmless, optional cleanup).
 
 Next: wp3 (030).
+
+## wp3 (wiring) — D
+
+Conclusion: the app downloads nightlies automatically and restarts to install when every backend reports idle (policy `restart-when-idle` default, `install-on-quit`, `paused`; durable pending record; settings row and search entry). SSH runtimes come from goat-releases over HTTPS with SHA256SUMS before the gh fallback, every replacement is idle-only and never downgrades, a host-scope symlink lock with locale/TZ-independent dead-owner proof serializes replacement, and pending replacement intent survives reconnects and retries every minute-scan up to its own deadline. Both protocol constants are 1001 (0.0.45 servers read as "needs a newer server"). `goat update` listing retries and caches. Commits from `fe3c5c893` to `c767da4b4`.
+
+Evidence: receipt `.codexclaw/evidence/01a12c06-25d3-7e51-a389-4b9056110c41/test-receipt.json` (`/tmp/goat-wp3-check.sh`): full `@t3tools/ssh` suite 21 files / 438 tests; server CLI/SSH/desktop-update, client-runtime connection, contracts, shared, desktop updates/settings/lifecycle/ssh, web connection/update/settings: 237 files / 3451 tests; `tsc --noEmit` clean in ssh, contracts, shared, client-runtime, server, desktop, web, mobile, scripts. Reviews (Claude Sonnet): updater FAIL (3 blockers) → PASS; SSH FAIL (3 blockers: locale-dependent lock owner, lost uninterruptible close, placeholder intent changing disconnect stop) → PASS.
+
+Integration finds (main agent): lane R's tests assumed protocol 1/2, so combining R with P broke 10 SSH tests (fixed in `3920084ab`); `scripts/lib/*.test.ts` importing `scripts/*.ts` broke the desktop project's typecheck (tests moved to `scripts/`); the new update-state fields needed decode defaults so reports from older desktops and servers still decode, and the persisted record keeps its own schema without the wire default.
+
+Deviations from 030: WSL backends stay "unknown" (restart postponed) as designed; retries scan every minute and honor each intent's 10-minute deadline; a stale recovery lock surfaces as `recovery-stale` with the manual-removal hint.
+
+Did not improve / unverified: no real SSH host, two-Mac convergence or electron-updater install ran (needs published nightlies and the bootstrap, 050 §11); the probe-to-stop race and older clients ignoring the remote lock remain (bootstrap quits both old apps first). Pre-existing, unrelated: `DesktopApplicationMenu.test.ts` expects "goat (Nightly)" while the app name has been "GOAT" since `b79ff462c`; desktop tests are not in goat-ci.
+
+Next: wp4 (040).
