@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - drives the real Slack SDK against local HTTP and TCP servers.
+import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
+
 import { SocketModeClient } from "@slack/socket-mode";
 import {
   WebAPIHTTPError,
@@ -154,6 +158,71 @@ describe("bridgeSocketModeClient", () => {
     // leaked the token through console output during the failed start.
     for (const call of consoleCalls) {
       expect(JSON.stringify(call.mock.calls)).not.toContain("SENTINEL");
+    }
+  });
+});
+
+describe("bridgeSocketModeClient retirement", () => {
+  it("closes a socket that start() opens after the session was retired, without a hello", async () => {
+    // A TCP server that accepts the WebSocket connection but never answers it, so the SDK
+    // stays in its connecting state and start() would otherwise never settle.
+    let markClosed!: () => void;
+    const lateSocketClosed = new Promise<void>((resolve) => {
+      markClosed = resolve;
+    });
+    let accepted = 0;
+    const socketServer = NodeNet.createServer((socket) => {
+      accepted += 1;
+      socket.once("close", () => markClosed());
+    });
+    await new Promise<void>((resolve) => socketServer.listen(0, "127.0.0.1", resolve));
+    const socketPort = (socketServer.address() as NodeNet.AddressInfo).port;
+
+    // A Slack API whose apps.connections.open reply the test releases after retiring.
+    let releaseUrl!: () => void;
+    const urlReleased = new Promise<void>((resolve) => {
+      releaseUrl = resolve;
+    });
+    let markRequested!: () => void;
+    const urlRequested = new Promise<void>((resolve) => {
+      markRequested = resolve;
+    });
+    const apiServer = NodeHttp.createServer((request, response) => {
+      request.resume();
+      markRequested();
+      void urlReleased.then(() => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ ok: true, url: `ws://127.0.0.1:${socketPort}/` }));
+      });
+    });
+    await new Promise<void>((resolve) => apiServer.listen(0, "127.0.0.1", resolve));
+    const apiPort = (apiServer.address() as NodeNet.AddressInfo).port;
+
+    try {
+      const client = new SocketModeClient({
+        appToken: APP_TOKEN,
+        autoReconnectEnabled: false,
+        clientOptions: {
+          slackApiUrl: `http://127.0.0.1:${apiPort}/api/`,
+          retryConfig: { retries: 0 },
+        },
+      });
+      const session = bridgeSocketModeClient(client);
+      const started = session.start().then(
+        () => "resolved",
+        () => "rejected",
+      );
+      await urlRequested;
+      await session.disconnect();
+      releaseUrl();
+
+      // The SDK opens its socket late; the bridge closes it again without a hello.
+      await lateSocketClosed;
+      expect(accepted).toBe(1);
+      expect(await started).toBe("rejected");
+    } finally {
+      await new Promise<void>((resolve) => apiServer.close(() => resolve()));
+      await new Promise<void>((resolve) => socketServer.close(() => resolve()));
     }
   });
 });

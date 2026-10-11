@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { classifySlackEvent, type SlackClassifierConfig } from "./slackEventMapping.ts";
+import {
+  classifySlackEvent,
+  toSlackInboundMessage,
+  type SlackClassifierConfig,
+} from "./slackEventMapping.ts";
 
 const config: SlackClassifierConfig = {
   teamId: "T0TEAM",
@@ -145,19 +149,26 @@ describe("classifySlackEvent", () => {
     expect(result).toMatchObject({ _tag: "link", code: "ABC123", event: { text: "" } });
   });
 
-  it("treats a malformed DM link command as a link without a code", () => {
+  it("asks for link help when a DM link command has no code", () => {
     expect(classifySlackEvent(envelope(directMessage({ text: "link" })), config)).toMatchObject({
-      _tag: "link",
-      code: undefined,
+      _tag: "link_notice",
+      notice: "link_help",
+      event: { text: "" },
     });
-    expect(
-      classifySlackEvent(envelope(directMessage({ text: "link ABC123 extra" })), config),
-    ).toMatchObject({ _tag: "link", code: undefined });
   });
 
-  it("drops a link code posted in a channel", () => {
+  it("reports a DM link command with extra words as invalid and drops its words", () => {
+    const result = classifySlackEvent(
+      envelope(directMessage({ text: "link ABC123 extra" })),
+      config,
+    );
+    expect(result).toMatchObject({ _tag: "link_notice", notice: "link_invalid" });
+    expect(JSON.stringify(result)).not.toContain("ABC123");
+  });
+
+  it("drops a link code posted in a channel and asks for link help", () => {
     const result = classifySlackEvent(envelope(mention({ text: "<@U0BOT> link ABC123" })), config);
-    expect(result._tag).toBe("link_in_channel");
+    expect(result).toMatchObject({ _tag: "link_notice", notice: "link_help" });
     expect(JSON.stringify(result)).not.toContain("ABC123");
   });
 
@@ -167,5 +178,37 @@ describe("classifySlackEvent", () => {
       config,
     );
     expect(result).toMatchObject({ _tag: "message", event: { text: "linking the repos" } });
+  });
+
+  it("builds a gateway message that replies to the thread root", () => {
+    const result = classifySlackEvent(
+      envelope(mention({ ts: "1760000000.000300", thread_ts: "1760000000.000100" })),
+      config,
+    );
+    if (result._tag !== "message") throw new Error("expected a message");
+    expect(
+      toSlackInboundMessage(result.event, {
+        connectionId: "slack-0123456789ab",
+        receivedAt: "2026-10-12T00:00:00.000Z",
+      }),
+    ).toEqual({
+      kind: "slack",
+      connectionId: "slack-0123456789ab",
+      conversationKey: "T0TEAM:C0ALLOWED:1760000000.000100",
+      externalMessageId: "1760000000.000300",
+      idempotencyKey: "T0TEAM:Ev0001AAAA",
+      actor: { externalActorId: "U0ALICE" },
+      replyAddress: {
+        kind: "slack",
+        connectionId: "slack-0123456789ab",
+        teamId: "T0TEAM",
+        channelId: "C0ALLOWED",
+        rootTs: "1760000000.000100",
+      },
+      text: "fix the login bug",
+      attachments: [],
+      receivedAt: "2026-10-12T00:00:00.000Z",
+      intent: "message",
+    });
   });
 });

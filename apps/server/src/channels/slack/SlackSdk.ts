@@ -90,6 +90,8 @@ const SlackSdkFailureCategory = Schema.Literals([
   "platform",
   "network",
   "http",
+  /** The call returned without the receipt it should carry; it may still have taken effect. */
+  "unconfirmed",
   "unknown",
 ]);
 export type SlackSdkFailureCategory = typeof SlackSdkFailureCategory.Type;
@@ -200,11 +202,32 @@ interface SlackEventPayload {
   readonly retry_reason?: string;
 }
 
-/** Adapts a SocketModeClient to {@link SlackSocketSession}. */
+/**
+ * Adapts a SocketModeClient to {@link SlackSocketSession}. A session is single use: once
+ * disconnected it stays retired, including a socket that `start()` creates afterwards.
+ */
 export function bridgeSocketModeClient(client: SocketModeClient): SlackSocketSession {
+  let retired = false;
+  const closeQuietly = () => client.disconnect().catch(() => undefined);
+  // start() opens its socket only after fetching the URL, and emits `connecting` right before
+  // connecting it. A session retired while the URL was in flight closes that socket here, after
+  // the synchronous connect call, without waiting for a hello that may never arrive. This
+  // listener stays for the client's lifetime, independent of the caller's listeners.
+  client.on("connecting", () => {
+    if (retired) queueMicrotask(() => void closeQuietly());
+  });
   return {
-    start: () => client.start().then(() => undefined, rejectWith("socket.start")),
-    disconnect: () => client.disconnect().catch(rejectWith("socket.disconnect")),
+    start: () =>
+      client.start().then(() => {
+        if (retired) {
+          void closeQuietly();
+          throw new SlackSdkFailure({ operation: "socket.start", category: "network" });
+        }
+      }, rejectWith("socket.start")),
+    disconnect: () => {
+      retired = true;
+      return client.disconnect().catch(rejectWith("socket.disconnect"));
+    },
     onEnvelope: (listener) => {
       const handler = (payload: SlackEventPayload) =>
         listener({
@@ -280,7 +303,7 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack's chat.postMessage, not window.postMessage.
       return client.chat.postMessage(message).then((response) => {
         if (!nonEmpty(response.ts)) {
-          throw new SlackSdkFailure({ operation: "chat.postMessage", category: "platform" });
+          throw new SlackSdkFailure({ operation: "chat.postMessage", category: "unconfirmed" });
         }
         return { ts: response.ts };
       }, rejectWith("chat.postMessage"));

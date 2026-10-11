@@ -9,6 +9,12 @@
  *
  * @module slackEventMapping
  */
+import type {
+  ChannelActorRef,
+  ChannelInboundMessage,
+  ChannelNoticeKind,
+  ChannelReplyAddress,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -87,14 +93,17 @@ export type SlackIgnoredReason =
 export type SlackEventClassification =
   | { readonly _tag: "ignored"; readonly reason: SlackIgnoredReason }
   | { readonly _tag: "message"; readonly event: SlackClassifiedMessage }
-  /** Identity link command in a DM. `code` is undefined when the command is malformed. */
+  /** `link CODE` sent to the bot in a DM. */
+  | { readonly _tag: "link"; readonly event: SlackClassifiedMessage; readonly code: string }
+  /**
+   * A link command that cannot be used: no code, extra words, or posted in a channel where the
+   * code would be public. Any code is dropped; the gateway sends the matching notice.
+   */
   | {
-      readonly _tag: "link";
+      readonly _tag: "link_notice";
       readonly event: SlackClassifiedMessage;
-      readonly code: string | undefined;
-    }
-  /** Link command posted in a channel. The code is dropped; the user should DM the bot instead. */
-  | { readonly _tag: "link_in_channel"; readonly event: SlackClassifiedMessage };
+      readonly notice: ChannelNoticeKind;
+    };
 
 const ignored = (reason: SlackIgnoredReason): SlackEventClassification => ({
   _tag: "ignored",
@@ -161,10 +170,56 @@ export function classifySlackEvent(
   });
 
   if (LINK_PREFIX.test(text)) {
-    if (surface === "mention") return { _tag: "link_in_channel", event: classified("") };
-    const code = LINK_COMMAND.exec(text)?.[1];
-    return { _tag: "link", event: classified(""), code };
+    if (surface === "mention") {
+      return { _tag: "link_notice", event: classified(""), notice: "link_help" };
+    }
+    const command = LINK_COMMAND.exec(text);
+    if (command === null) {
+      return { _tag: "link_notice", event: classified(""), notice: "link_invalid" };
+    }
+    const code = command[1];
+    return code === undefined
+      ? { _tag: "link_notice", event: classified(""), notice: "link_help" }
+      : { _tag: "link", event: classified(""), code };
   }
   if (text.length === 0) return ignored("empty");
   return { _tag: "message", event: classified(text) };
+}
+
+/** Replies always go to the thread root, never to the reply that triggered them. */
+export function slackReplyAddress(
+  event: SlackClassifiedMessage,
+  connectionId: string,
+): ChannelReplyAddress {
+  return {
+    kind: "slack",
+    connectionId,
+    teamId: event.teamId,
+    channelId: event.channelId,
+    rootTs: event.rootTs,
+  };
+}
+
+/** What Slack told us about the sender. Never a source of permissions. */
+export function slackActor(event: SlackClassifiedMessage): ChannelActorRef {
+  return { externalActorId: event.userId };
+}
+
+export function toSlackInboundMessage(
+  event: SlackClassifiedMessage,
+  input: { readonly connectionId: string; readonly receivedAt: string },
+): ChannelInboundMessage {
+  return {
+    kind: "slack",
+    connectionId: input.connectionId,
+    conversationKey: event.conversationKey,
+    externalMessageId: event.ts,
+    idempotencyKey: event.dedupeKey,
+    actor: slackActor(event),
+    replyAddress: slackReplyAddress(event, input.connectionId),
+    text: event.text,
+    attachments: [],
+    receivedAt: input.receivedAt,
+    intent: "message",
+  };
 }
