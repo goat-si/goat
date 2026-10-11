@@ -249,9 +249,9 @@ function validateNightlyWorkflow(source, yaml) {
     return fail("jobs.prepare must exist");
   }
   const { publish: publishJob, ...rest } = workflow.jobs;
-  // Any mention of the secrets context counts: secrets.X, secrets['X'], toJSON(secrets).
-  // Context names are case-insensitive in expressions.
-  if (/\bsecrets\b/i.test(JSON.stringify({ ...workflow, jobs: rest }))) {
+  // Any mention of the secrets context counts: secrets.X, secrets['X'], toJSON(secrets),
+  // in any case and after any whitespace. Decoded strings are inspected, not JSON text.
+  if (mentionsSecrets({ ...workflow, jobs: rest })) {
     fail("secrets may only be read by jobs.publish");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
@@ -318,6 +318,18 @@ function validateNightlyWorkflow(source, yaml) {
       }
     }
   }
+}
+
+/** True when any key or string value inside value mentions the secrets context. */
+function mentionsSecrets(value) {
+  if (typeof value === "string") return /(?:^|[^A-Za-z0-9_-])secrets(?![A-Za-z0-9_-])/i.test(value);
+  if (Array.isArray(value)) return value.some(mentionsSecrets);
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(
+      ([key, item]) => mentionsSecrets(key) || mentionsSecrets(item),
+    );
+  }
+  return false;
 }
 
 let paths;

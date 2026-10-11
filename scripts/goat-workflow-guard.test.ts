@@ -861,6 +861,16 @@ describe("goat pre-push nightly workflow guard", () => {
       withJob("build_other", { env: { KEY: "${{ SECRETS.GOAT_RELEASES_APP_ID }}" } }),
       "secrets may only be read by jobs.publish",
     ],
+    ...(["\n", "\t", "\r"] as const).map(
+      (space) =>
+        [
+          `a secret after ${JSON.stringify(space)}`,
+          withJob("build_mac", {
+            env: { KEY: `${"${{"}${space}secrets['GOAT_RELEASES_APP_PRIVATE_KEY'] }}` },
+          }),
+          "secrets may only be read by jobs.publish",
+        ] as [string, string, string],
+    ),
     [
       "the token action outside publish",
       withJob("build_mac", {
