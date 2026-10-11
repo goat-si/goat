@@ -432,6 +432,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.create":
     case "thread.archive":
     case "thread.unarchive":
+    case "thread.promote":
     case "thread.delete":
     case "thread.settle":
     case "thread.auto-settle":
@@ -571,6 +572,9 @@ function delegatedCompletionWakeDetail(taskIds: ReadonlyArray<string>): string {
     ? `Delegated task ${taskList} reached a terminal state. Use task_status with taskId ${taskList} to read the result.`
     : `Delegated tasks ${taskList} reached terminal states. Use task_status with each taskId to read the results.`;
 }
+
+/** Bounds the lineage walk of a Stop cascade; delegation never nests this deep. */
+const MAX_DELEGATION_DEPTH = 64;
 
 function isTerminalDelegatedTaskStatus(status: OrchestrationV2Subagent["status"]): boolean {
   return (
@@ -1954,7 +1958,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         task.completionDelivery?.state === state ||
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
-          task.completionDelivery?.state === "disposed")
+          task.completionDelivery?.state === "disposed") ||
+        // A task_cancel that read the task before it was promoted must not
+        // discard the promotion notice the parent is still owed.
+        (command.type === "delegated_task.completion-delivery.dispose" &&
+          task.promotedAt !== undefined)
       ) {
         yield* emitEvent({
           type: "subagent.updated",
@@ -2227,6 +2235,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         relationshipToParent: null,
         rootThreadId: command.threadId,
       },
+      ...(command.launchedBy === undefined ? {} : { launchedBy: command.launchedBy }),
       forkedFrom: null,
       createdAt: now,
       updatedAt: now,
@@ -9263,6 +9272,202 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   /**
+   * Whether `thread` is still delegated, through any number of subagent links, under
+   * `ancestorId`. Lineage only ever detaches, so committed reads of the chain suffice.
+   */
+  const isDelegatedDescendantOf = (thread: OrchestrationV2AppThread, ancestorId: ThreadId) =>
+    Effect.gen(function* () {
+      let current = thread;
+      for (let depth = 0; depth < MAX_DELEGATION_DEPTH; depth += 1) {
+        const parentId = current.lineage.parentThreadId;
+        if (current.lineage.relationshipToParent !== "subagent" || parentId === null) return false;
+        if (parentId === ancestorId) return true;
+        const parent = yield* Effect.option(projectionStore.getThread(parentId));
+        if (Option.isNone(parent)) return false;
+        current = parent.value;
+      }
+      return false;
+    });
+
+  /**
+   * Detaches a delegated task's child thread into a top-level thread. The child keeps its
+   * id, history and running work. Every app-owned task on the parent that points at it is
+   * marked promoted, so stops and cancellations from the parent no longer reach it, and a
+   * task still running ends as cancelled so the parent is woken like for any finished task.
+   */
+  const dispatchThreadPromote = (
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.promote" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      const child = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (child.deletedAt !== null) return yield* reject(`Thread ${child.id} is deleted.`);
+      const emitEvent = emit(events, command);
+      const now = yield* DateTime.now;
+      if (child.lineage.relationshipToParent === null && child.launchedBy?.kind === "promotion") {
+        // A retry after the promotion landed: record the unchanged thread.
+        yield* emitEvent({
+          type: "thread.metadata-updated",
+          threadId: child.id,
+          providerInstanceId: child.providerInstanceId,
+          occurredAt: now,
+          payload: child,
+        });
+        return;
+      }
+      const parentThreadId = child.lineage.parentThreadId;
+      if (
+        child.lineage.relationshipToParent !== "subagent" ||
+        parentThreadId === null ||
+        child.forkedFrom?.type !== "node"
+      ) {
+        return yield* reject("Only delegated tasks can be promoted.");
+      }
+      const parent = yield* readCommandProjection(parentThreadId);
+      const tasks = parent.subagents.filter(
+        (task) =>
+          task.origin === "app_owned" &&
+          task.childThreadId === child.id &&
+          task.promotedAt === undefined,
+      );
+      if (tasks.length === 0) return yield* reject("Only delegated tasks can be promoted.");
+      const subagentItems = yield* projectionStore
+        .getThreadRecords(parentThreadId, ["turnItems"], { turnItemTypes: ["subagent"] })
+        .pipe(
+          Effect.map((records) => records.turnItems),
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: parentThreadId, cause }),
+          ),
+        );
+
+      yield* emitEvent({
+        type: "thread.metadata-updated",
+        threadId: child.id,
+        providerInstanceId: child.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          ...child,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: child.id },
+          launchedBy: {
+            kind: "promotion",
+            threadId: parentThreadId,
+            environmentId: null,
+            environmentLabel: null,
+            threadTitle: parent.thread.title,
+          },
+          updatedAt: now,
+        },
+      });
+
+      const result = `Promoted to top-level thread ${child.id} by the user; it no longer reports to this thread.`;
+      for (const task of tasks) {
+        if (isTerminalDelegatedTaskStatus(task.status)) {
+          yield* emitEvent({
+            type: "subagent.updated",
+            threadId: parentThreadId,
+            ...(task.runId === null ? {} : { runId: task.runId }),
+            nodeId: task.id,
+            driver: task.driver,
+            providerInstanceId: task.providerInstanceId,
+            occurredAt: now,
+            payload: { ...task, promotedAt: now, updatedAt: now },
+          });
+          continue;
+        }
+        // Tasks of one parent run share its completion cohort, so plan each against
+        // the events already written for the previous ones.
+        const current = yield* getProjectionWithPendingEvents(parentThreadId, events);
+        const parentRun =
+          task.runId === null ? undefined : current.runs.find((run) => run.id === task.runId);
+        const plan = yield* planDelegatedCompletionDelivery({
+          parentProjection: current,
+          parentRun,
+          task,
+          updatedTask: {
+            ...task,
+            status: "cancelled",
+            result,
+            promotedAt: now,
+            completedAt: now,
+            updatedAt: now,
+          },
+          now,
+        });
+        yield* emitEvent({
+          type: "subagent.updated",
+          threadId: parentThreadId,
+          ...(task.runId === null ? {} : { runId: task.runId }),
+          nodeId: task.id,
+          driver: task.driver,
+          providerInstanceId: task.providerInstanceId,
+          occurredAt: now,
+          payload: plan.task,
+        });
+        if (plan.parentRun !== undefined) {
+          yield* emitEvent({
+            type: "run.updated",
+            threadId: parentThreadId,
+            runId: plan.parentRun.id,
+            ...(plan.parentRun.rootNodeId === null ? {} : { nodeId: plan.parentRun.rootNodeId }),
+            providerInstanceId: plan.parentRun.providerInstanceId,
+            occurredAt: now,
+            payload: plan.parentRun,
+          });
+        }
+        if (plan.message !== undefined) {
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: parentThreadId,
+            ...(plan.message.runId === null ? {} : { runId: plan.message.runId }),
+            ...(plan.message.nodeId === null ? {} : { nodeId: plan.message.nodeId }),
+            providerInstanceId:
+              plan.parentRun?.providerInstanceId ?? parent.thread.providerInstanceId,
+            occurredAt: now,
+            payload: plan.message,
+          });
+        }
+        const node = current.nodes.find((candidate) => candidate.id === task.id);
+        if (node !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: parentThreadId,
+            ...(node.runId === null ? {} : { runId: node.runId }),
+            nodeId: node.id,
+            driver: task.driver,
+            occurredAt: now,
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+        const item = subagentItems.find(
+          (candidate) => candidate.type === "subagent" && candidate.subagentId === task.id,
+        );
+        if (item !== undefined) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: parentThreadId,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+            driver: task.driver,
+            occurredAt: now,
+            payload: { ...item, status: "cancelled", result, completedAt: now, updatedAt: now },
+          });
+        }
+      }
+    });
+
+  /**
    * Stop for a thread whatever it is doing, the way the Stop button stops the run it
    * shows: the running turn (or one whose background work is still pending) is interrupted,
    * and the rest of the thread is held. A turn that cannot be interrupted still leaves the
@@ -9285,6 +9490,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
       if (projection.thread.deletedAt !== null) return undefined;
+      // A cascade reaches only threads still delegated under the thread it started from:
+      // a task promoted after the cascade read it, or anything below that task, keeps running.
+      if (
+        command.stopCascadeFrom !== undefined &&
+        !(yield* isDelegatedDescendantOf(projection.thread, command.stopCascadeFrom))
+      ) {
+        return undefined;
+      }
       // Queued messages never started and cannot own background work.
       const latestRun = projection.runs.findLast((run) => run.status !== "queued");
       const target =
@@ -9572,8 +9785,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   /**
    * Parent thread of an app-owned delegated child, or undefined when the
-   * thread is not one. Thread lineage and fork origin are immutable, so this
-   * is safe to read without holding either thread's dispatch lock.
+   * thread is not one. Lineage only ever detaches (thread.promote), so a stale
+   * read costs at most one extra parent lock; handlers revalidate after locking.
    */
   const appOwnedSubagentParentThreadId = (childThreadId: ThreadId) =>
     Effect.gen(function* () {
@@ -10448,6 +10661,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
         break;
+      case "thread.promote":
+        yield* dispatchThreadPromote(command, events);
+        break;
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
         break;
@@ -10900,6 +11116,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (command.type === "delegated_task.wake-policy") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.parentThreadId));
     }
+    if (command.type === "thread.promote") {
+      // The promotion may have queued a wake on the former parent.
+      const parentThreadId = committed.storedEvents.find(
+        (stored) => stored.event.type === "subagent.updated",
+      )?.event.threadId;
+      if (parentThreadId !== undefined) {
+        yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(parentThreadId));
+      }
+    }
 
     return {
       sequence: committed.receipt.resultSequence,
@@ -10913,17 +11138,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandThreadId(command),
         dispatchWithReceiptEffect(command),
       );
-      if (
-        command.type !== "message.dispatch" ||
-        (command.createdBy !== "user" && command.creationSource !== "mcp")
-      )
-        return yield* dispatch;
+      const serializesOnParent =
+        command.type === "thread.promote" ||
+        (command.type === "message.dispatch" &&
+          (command.createdBy === "user" || command.creationSource === "mcp"));
+      if (!serializesOnParent) return yield* dispatch;
       const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
         Effect.mapError(
           (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
         ),
       );
-      // Follow-up intake and Stop serialize on the parent before taking the child lock.
+      // Follow-up intake, Stop and promotion serialize on the parent before taking the child lock.
       return yield* parentThreadId === undefined
         ? dispatch
         : threadDispatch.withLock(parentThreadId, dispatch);

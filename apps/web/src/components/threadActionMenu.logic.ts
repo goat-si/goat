@@ -8,6 +8,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  */
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
+  | "promote"
   | "filter-by-project"
   | "project-settings"
   | "pin"
@@ -88,6 +89,8 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
+  /** The thread is a delegated task the user may turn into a top-level thread. */
+  readonly canPromote?: boolean | undefined;
   /** Archive rejects a thread with an attached provider, so disable it here rather than let the action fail. */
   readonly isRunning: boolean;
   readonly supports: {
@@ -137,6 +140,15 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const allItems: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.canPromote
+      ? [
+          {
+            id: "promote" as const,
+            label: "Promote to thread",
+            icon: "arrow-up-from-line",
+          },
+        ]
+      : []),
     ...(state.branch
       ? [
           {

@@ -34,6 +34,10 @@
 goalplan의 id는 등록 순서라 wp2(승격)가 wp3(계보)보다 번호가 작지만, 승격이 `launchedBy`
 (`kind: "promotion"`)를 쓰므로 실행은 wp3 → wp2 순서다. 문서 번호는 실행 순서를 따른다.
 
+**수정 (wp1 종료 뒤):** goalplan이 wp1 다음으로 wp2를 열었다. 계보 id 순서를 바꾸지 않고 의존 순서를 지키도록
+020의 계약 기반(`OrchestrationV2ThreadLauncher`, `launchedBy` 필드와 shell/생성 명령 전달, fork·subagent 상속 제거)을
+wp2 사이클 앞부분에서 먼저 넣고, 020의 나머지(local/SSH/`create_threads` 설정 경로, 웹 표시)는 wp3에서 한다.
+
 ## 서브에이전트 운용
 
 조사, 구현 조각, 리뷰는 GPT-6.1-Sol(`codex` / `gpt-6.1-sol`)에 `delegate_task`로 보낸다. 리뷰는

@@ -509,4 +509,32 @@ describe("web thread lineage ordering", () => {
       }),
     ).toEqual([first, second, third]);
   });
+
+  it("drops the subagent edge to a task the user promoted to its own thread", () => {
+    const parent = ThreadId.make("parent");
+    const promoted = ThreadId.make("promoted");
+    const graph = deriveThreadRelationshipGraph({
+      threads: [
+        { id: parent, status: "running", lineage: { parentThreadId: null } },
+        {
+          id: promoted,
+          status: "running",
+          forkedFrom: null,
+          lineage: { rootThreadId: promoted, parentThreadId: null, relationshipToParent: null },
+        },
+      ] as never,
+      projection: {
+        thread: { id: parent },
+        subagents: [
+          {
+            childThreadId: promoted,
+            status: "cancelled",
+            promotedAt: DateTime.makeUnsafe("2026-10-12T00:00:00Z"),
+          },
+        ],
+        contextTransfers: [],
+      } as never,
+    });
+    expect(graph.edges).toEqual([]);
+  });
 });

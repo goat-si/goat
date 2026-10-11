@@ -602,6 +602,24 @@ export function isSidebarDelegatedChildThread(thread: SidebarChildInput): boolea
 
 export type SidebarDelegatedChildState = "attention" | "working" | "queued" | "finished";
 
+/**
+ * A delegated task's child thread can become a top-level thread when its server
+ * understands thread.promote. Provider-native subagents belong to their provider.
+ */
+export function canPromoteThread(
+  thread: Pick<SidebarThreadSummary, "lineage" | "source" | "deletedAt" | "forkedFrom">,
+  capabilities: { readonly threadPromotion?: boolean } | undefined,
+): boolean {
+  return (
+    capabilities?.threadPromotion === true &&
+    thread.deletedAt === null &&
+    thread.lineage.relationshipToParent === "subagent" &&
+    thread.lineage.parentThreadId !== null &&
+    thread.source.creationSource === "mcp" &&
+    thread.forkedFrom?.type === "node"
+  );
+}
+
 export function sidebarDelegatedChildState(
   thread: Pick<
     SidebarChildInput,

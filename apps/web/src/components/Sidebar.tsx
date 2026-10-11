@@ -171,6 +171,7 @@ import {
   useSidebarDelegatedChildrenUiStore,
 } from "./sidebar/SidebarDelegatedChildren";
 import { useSidebarDelegatedChildIndex } from "./sidebar/delegatedChildIndex";
+import { usePromoteThread } from "./promoteThread";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import {
   buildThreadRouteParams,
@@ -195,6 +196,7 @@ import {
 } from "./threadActionMenu.logic";
 import {
   animateSidebarLayoutChanges,
+  canPromoteThread,
   canStopSidebarDelegatedChild,
   resolveSidebarDelegatedChildWindow,
   type SidebarDelegatedChildren as SidebarDelegatedChildrenEntry,
@@ -2437,6 +2439,7 @@ export default function Sidebar() {
   const threads = useThreadShells();
   const delegatedChildIndex = useSidebarDelegatedChildIndex();
   const delegatedChildrenUi = useSidebarDelegatedChildrenUiStore((state) => state.parents);
+  const promoteDelegatedChild = usePromoteThread();
   const interruptDelegatedTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -4749,7 +4752,13 @@ export default function Sidebar() {
                 label: "Archive",
                 disabled: !canOperate || !threadRuntimeCanArchive(thread.runtime),
               },
-              // Delegated-child promotion menu hook: wp2 adds its action here.
+              ...(canOperate &&
+              canPromoteThread(
+                thread,
+                serverConfigs.get(threadRef.environmentId)?.environment.capabilities,
+              )
+                ? [{ id: "promote", label: "Promote to thread" }]
+                : []),
             ],
             position,
           ),
@@ -4765,10 +4774,13 @@ export default function Sidebar() {
           case "archive":
             await attemptArchive(threadRef);
             return;
+          case "promote":
+            await promoteDelegatedChild(threadRef);
+            return;
         }
       })();
     },
-    [attemptArchive, navigateToThread, onStopDelegatedChild],
+    [attemptArchive, navigateToThread, onStopDelegatedChild, promoteDelegatedChild, serverConfigs],
   );
 
   const handleThreadContextMenu = useCallback(

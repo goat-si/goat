@@ -51,8 +51,10 @@ export function makeSubagentChildThread(input: {
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }): OrchestrationV2AppThread {
+  // A child is the parent's delegate, not a launched top-level thread.
+  const { launchedBy: _parentLauncher, ...parentThread } = input.parentThread;
   return {
-    ...input.parentThread,
+    ...parentThread,
     createdBy: input.createdBy,
     creationSource: input.creationSource,
     id: input.childThreadId,

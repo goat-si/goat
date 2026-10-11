@@ -16,6 +16,8 @@ import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
+import { canPromoteThread } from "../components/Sidebar.logic";
+import { usePromoteThread } from "../components/promoteThread";
 import {
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
@@ -28,6 +30,7 @@ import { readEnvironmentScope } from "../state/session";
 import {
   readEnvironmentSupportsAutoSettleOptOut,
   readEnvironmentSupportsPinning,
+  readEnvironmentSupportsPromotion,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
@@ -106,6 +109,7 @@ export function useThreadActionMenu(input: {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
+  const promoteThread = usePromoteThread();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -160,6 +164,9 @@ export function useThreadActionMenu(input: {
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
           isRunning: !threadRuntimeCanArchive(thread.runtime),
+          canPromote: canPromoteThread(thread, {
+            threadPromotion: readEnvironmentSupportsPromotion(threadRef.environmentId),
+          }),
           supports,
           snoozePresets,
           globalAgent,
@@ -199,6 +206,9 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "promote":
+            await promoteThread(threadRef);
+            return;
           case "project-settings": {
             const project = projects.find(
               (candidate) =>
@@ -361,6 +371,7 @@ export function useThreadActionMenu(input: {
       projectCwd,
       projectGroupingSettings,
       projects,
+      promoteThread,
       router,
       setThreadAutoSettle,
       settleThread,

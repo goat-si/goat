@@ -12,6 +12,7 @@ import {
   CommandId,
   ContextHandoffId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   ForwardCompatibleOptional,
   IsoDateTime,
@@ -114,6 +115,24 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   rootThreadId: ThreadId,
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
+
+/**
+ * Who started a top-level thread: an agent thread through goat_thread_launch,
+ * goat_ssh_thread_launch or create_threads ("launch"), or the user promoting a
+ * delegated task ("promotion"). Descriptive only: thread.create is a client
+ * command and SSH forwards it unauthenticated, so never authorize with it.
+ */
+export const OrchestrationV2ThreadLauncher = Schema.Struct({
+  kind: Schema.Literals(["launch", "promotion"]),
+  threadId: ThreadId,
+  /** Environment of the launcher thread; null means the launched thread's own environment. */
+  environmentId: Schema.NullOr(EnvironmentId),
+  /** Launcher environment label at launch time, set for launches from another machine. */
+  environmentLabel: Schema.NullOr(Schema.String),
+  /** Launcher thread title at launch time, shown when the thread cannot be resolved. */
+  threadTitle: Schema.NullOr(Schema.String),
+});
+export type OrchestrationV2ThreadLauncher = typeof OrchestrationV2ThreadLauncher.Type;
 
 export const OrchestrationV2ContextTransferType = Schema.Literals([
   "fork",
@@ -384,6 +403,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
+  /** Who started this top-level thread; absent for user-created threads and older servers. */
+  launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -690,6 +711,11 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // blocking tool call). Absent on legacy records; treated as settled_only.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
+  /**
+   * Set when the user promoted the child thread to a top-level thread. The task no
+   * longer owns it: stops and cancellations from this thread do not reach it.
+   */
+  promotedAt: Schema.optional(Schema.DateTimeUtc),
   status: Schema.Literals([
     "idle",
     "pending",
@@ -1869,6 +1895,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   lineage: OrchestrationV2AppThreadLineage,
+  /** Who started this top-level thread; absent for user-created threads and older servers. */
+  launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
@@ -2063,6 +2091,7 @@ export type OrchestrationV2ExecutionNodeJson = typeof OrchestrationV2ExecutionNo
 
 export const OrchestrationV2SubagentJson = OrchestrationV2Subagent.mapFields((fields) => ({
   ...fields,
+  promotedAt: Schema.optional(Schema.DateTimeUtcFromString),
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   updatedAt: Schema.DateTimeUtcFromString,
@@ -2653,9 +2682,20 @@ export const OrchestrationV2Command = Schema.Union([
         metadata: Schema.optional(OrchestrationV2ProviderThreadNativeMetadata),
       }),
     ),
+    /** Agent thread or user action that started this thread; descriptive only. */
+    launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
+  /**
+   * Detaches a delegated task's child thread into an ordinary top-level thread that
+   * keeps its history. The task ends on its parent, which is woken like any finished task.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.promote"),
     commandId: CommandId,
     threadId: ThreadId,
   }),
@@ -3135,6 +3175,12 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     reason: Schema.optional(Schema.String),
+    /**
+     * The thread whose Stop or task_cancel cascaded here. The stop is an accepted no-op
+     * unless this thread is still a delegated descendant of it, so a task promoted
+     * after the cascade began keeps running.
+     */
+    stopCascadeFrom: Schema.optional(ThreadId),
   }),
   /**
    * Records or updates a secret an agent asked the user for. Internal so no

@@ -7,6 +7,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
+  canPromoteThread,
   buildSidebarDelegatedChildIndex,
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
@@ -69,6 +70,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   EnvironmentId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -117,6 +119,37 @@ const delegatedParentKey = scopedThreadKey(
 );
 
 describe("sidebar delegated children", () => {
+  it("offers promotion only for delegated tasks on servers that understand it", () => {
+    const supported = { threadPromotion: true };
+    const task = delegatedChild("task", { forkedFrom: { type: "node", nodeId: NodeId.make("n") } });
+    expect(canPromoteThread(task, supported)).toBe(true);
+    expect(canPromoteThread(task, {})).toBe(false);
+    expect(canPromoteThread(task, undefined)).toBe(false);
+    const notTasks = [
+      delegatedChild("provider", {
+        creationSource: "provider",
+        forkedFrom: { type: "node", nodeId: NodeId.make("n") },
+      }),
+      delegatedChild("promoted", {
+        lineage: {
+          rootThreadId: ThreadId.make("promoted"),
+          parentThreadId: null,
+          relationshipToParent: null,
+        },
+        forkedFrom: { type: "node", nodeId: NodeId.make("n") },
+      }),
+      delegatedChild("deleted", {
+        deletedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z"),
+        forkedFrom: { type: "node", nodeId: NodeId.make("n") },
+      }),
+    ];
+    expect(notTasks.map((thread) => canPromoteThread(thread, supported))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
   it("indexes only live MCP subagent children and scopes parent ids by environment", () => {
     const local = delegatedChild("local");
     const remote = delegatedChild("remote", {}, EnvironmentId.make("remote"));

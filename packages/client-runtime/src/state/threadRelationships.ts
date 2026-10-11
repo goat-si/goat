@@ -96,7 +96,8 @@ export function deriveThreadRelationshipGraph(input: {
   if (input.projection !== null) {
     const ownerThreadId = input.projection.thread.id;
     for (const subagent of input.projection.subagents) {
-      if (subagent.childThreadId === null) continue;
+      // A promoted child is its own top-level thread now; its spawn transfer stays as history.
+      if (subagent.childThreadId === null || subagent.promotedAt !== undefined) continue;
       const child = threadsById.get(subagent.childThreadId);
       // The row describes the child conversation, including queued follow-ups
       // and their outcomes. A child without an app run still uses its task.

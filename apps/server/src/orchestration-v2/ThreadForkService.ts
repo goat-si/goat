@@ -85,8 +85,10 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             cause: forkableSourceRunStatusError(input.sourceRun),
           });
         }
+        // A fork is the user's own thread: it does not inherit who launched the source.
+        const { launchedBy: _sourceLauncher, ...sourceThread } = input.sourceProjection.thread;
         const targetThread: OrchestrationV2AppThread = {
-          ...input.sourceProjection.thread,
+          ...sourceThread,
           createdBy: input.createdBy,
           creationSource: input.creationSource,
           id: input.targetThreadId,

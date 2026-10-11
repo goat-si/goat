@@ -373,12 +373,16 @@ export interface ThreadManagementServiceShape {
    * limits the walk to those tasks and the tasks under them. Command IDs derive from
    * `commandId`, so a retry repeats nothing that already stopped. A task that cannot be
    * stopped does not keep the others running: all are tried, then it fails.
+   * Each stop names the thread the walk started from, so a task promoted to a top-level
+   * thread while the walk runs is left running together with everything under it.
    */
   readonly stopDelegatedTasks: (input: {
     readonly threadId: ThreadId;
     readonly commandId: CommandId;
     readonly childThreadIds?: ReadonlyArray<ThreadId> | undefined;
     readonly reason?: string | undefined;
+    /** The thread the cascade started from; defaults to `threadId`. */
+    readonly stopCascadeFrom?: ThreadId | undefined;
   }) => Effect.Effect<void, Orchestrator.OrchestratorV2Error>;
   readonly getThreadEventSequence: Orchestrator.OrchestratorV2["Service"]["getThreadEventSequence"];
   readonly recoverDelegatedTask: Orchestrator.OrchestratorV2["Service"]["recoverDelegatedTask"];
@@ -437,8 +441,14 @@ export function makeStopDelegatedTasks(deps: {
     Effect.gen(function* () {
       const { subagents } = yield* deps.getThreadRecords(input.threadId, ["subagents"]);
       const failures: Array<Orchestrator.OrchestratorV2Error> = [];
+      const stopCascadeFrom = input.stopCascadeFrom ?? input.threadId;
       for (const task of subagents) {
-        if (task.origin !== "app_owned" || task.childThreadId === null) continue;
+        if (
+          task.origin !== "app_owned" ||
+          task.childThreadId === null ||
+          task.promotedAt !== undefined
+        )
+          continue;
         const threadId = task.childThreadId;
         if (input.childThreadIds !== undefined && !input.childThreadIds.includes(threadId))
           continue;
@@ -448,9 +458,17 @@ export function makeStopDelegatedTasks(deps: {
             commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
             threadId,
             ...(input.reason === undefined ? {} : { reason: input.reason }),
+            stopCascadeFrom,
           })
           .pipe(
-            Effect.andThen(stopDelegatedTasks({ ...input, threadId, childThreadIds: undefined })),
+            Effect.andThen(
+              stopDelegatedTasks({
+                ...input,
+                threadId,
+                childThreadIds: undefined,
+                stopCascadeFrom,
+              }),
+            ),
             Effect.catch((error) =>
               Effect.logWarning("Unable to stop a delegated task", {
                 parentThreadId: input.threadId,

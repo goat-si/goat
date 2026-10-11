@@ -84,6 +84,7 @@ export interface ThreadCommandInput extends CommandMetadata {
 export type DeleteThreadInput = ThreadCommandInput;
 export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
+export type PromoteThreadInput = ThreadCommandInput;
 export type SettleThreadInput = ThreadCommandInput;
 
 export interface UnsettleThreadInput extends ThreadCommandInput {
@@ -414,6 +415,7 @@ function simpleThreadCommand(
     | "thread.delete"
     | "thread.archive"
     | "thread.unarchive"
+    | "thread.promote"
     | "thread.settle"
     | "thread.pin"
     | "thread.unpin",
@@ -434,6 +436,13 @@ export const archiveThread = Effect.fn("EnvironmentCommands.archiveThread")(func
   input: ArchiveThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.archive", input);
+});
+
+/** Turns a delegated task's child thread into a top-level thread that keeps its history. */
+export const promoteThread = Effect.fn("EnvironmentCommands.promoteThread")(function* (
+  input: PromoteThreadInput,
+) {
+  return yield* simpleThreadCommand("thread.promote", input);
 });
 
 export const unarchiveThread = Effect.fn("EnvironmentCommands.unarchiveThread")(function* (

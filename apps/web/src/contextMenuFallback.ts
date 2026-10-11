@@ -10,6 +10,11 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "path", attrs: { d: "M10 12h4" } },
   ],
   check: [{ tag: "path", attrs: { d: "M20 6 9 17l-5-5" } }],
+  "arrow-up-from-line": [
+    { tag: "path", attrs: { d: "m18 9-6-6-6 6" } },
+    { tag: "path", attrs: { d: "M12 3v14" } },
+    { tag: "path", attrs: { d: "M5 21h14" } },
+  ],
   timer: [
     { tag: "line", attrs: { x1: "10", x2: "14", y1: "2", y2: "2" } },
     { tag: "line", attrs: { x1: "12", x2: "15", y1: "14", y2: "11" } },

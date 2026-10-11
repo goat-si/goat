@@ -2045,6 +2045,18 @@ const make = Effect.gen(function* () {
         const current = yield* readTask(scope, input.taskId);
         const key = yield* requestKey(input.clientRequestId);
         const parentProjection = yield* loadProjection(scope.thread.threadId);
+        // The user promoted the child to a top-level thread: it is no longer this task's to stop.
+        if (
+          parentProjection.subagents.some(
+            (task) => task.id === input.taskId && task.promotedAt !== undefined,
+          )
+        ) {
+          // Promotion ends a running task as cancelled; a finished one keeps its status.
+          return {
+            taskId: input.taskId,
+            status: isTerminalTaskStatus(current.status) ? current.status : "cancelled",
+          } satisfies OrchestratorMcpTaskCancelResult;
+        }
         // Cancelling stops the child and every task under it, each a write to a
         // thread its user may have raised above the parent's modes since it was
         // delegated. All of them are checked before anything is stopped.
@@ -2065,7 +2077,11 @@ const make = Effect.gen(function* () {
               .getThreadRecords(threadId, ["subagents"])
               .pipe(Effect.mapError(threadManagementFailure));
             for (const task of subagents) {
-              if (task.origin === "app_owned" && task.childThreadId !== null) {
+              if (
+                task.origin === "app_owned" &&
+                task.childThreadId !== null &&
+                task.promotedAt === undefined
+              ) {
                 yield* assertStoppable(task.childThreadId);
               }
             }
@@ -2109,6 +2125,7 @@ const make = Effect.gen(function* () {
               commandId,
               threadId: current.childThreadId,
               ...(reason === undefined ? {} : { reason }),
+              stopCascadeFrom: scope.thread.threadId,
             })
             .pipe(
               Effect.mapError((error) =>
@@ -2120,7 +2137,12 @@ const make = Effect.gen(function* () {
             );
           // A retry with the same clientRequestId repeats only the stops that failed.
           yield* threadManagement
-            .stopDelegatedTasks({ threadId: current.childThreadId, commandId, reason })
+            .stopDelegatedTasks({
+              threadId: current.childThreadId,
+              commandId,
+              reason,
+              stopCascadeFrom: scope.thread.threadId,
+            })
             .pipe(
               Effect.mapError((error) =>
                 failure(
