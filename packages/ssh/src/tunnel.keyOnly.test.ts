@@ -56,7 +56,9 @@ describe.each([
           };
         if (args.includes("-N")) return makeRunningProcess(() => undefined);
         return makeSuccessfulProcess(
-          args.includes("--") ? '{"remotePort":3773}' : '{"credential":"fixture-pairing"}',
+          args.includes("--")
+            ? '{"status":"ready","remotePort":3773,"selectedVersion":"0.1.0"}'
+            : '{"credential":"fixture-pairing"}',
         );
       }),
     );
@@ -79,6 +81,7 @@ describe.each([
           keyOnly: true,
           issuePairingToken: true,
         });
+        if ("type" in result) throw new Error("unexpected pending runtime replacement");
         assert.equal(result.pairingToken, "fixture-pairing");
         assert.isAtLeast(keyCalls.length, 3);
       }

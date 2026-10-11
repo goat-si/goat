@@ -62,7 +62,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
                   forwardKills++;
                 });
               if (args.includes("--")) {
-                return makeSuccessfulProcess('{"remotePort":3773,"serverKind":"managed"}');
+                return makeSuccessfulProcess(
+                  '{"status":"ready","selectedVersion":"1.2.3-preview.20260911.4","remotePort":3773,"serverKind":"managed"}',
+                );
               }
               if (args.includes("sh")) {
                 remoteStops++;
@@ -237,20 +239,23 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("verifies, publishes, stops, then starts on a successful upgrade", () =>
+    it.live("verifies, stops, publishes, then starts on a successful upgrade", () =>
       Effect.gen(function* () {
         const f = yield* fixture("none");
         const before = yield* f.snapshot;
-        const psPath = `${f.home}/.test/identity-bin/ps`;
-        const originalPs = yield* f.fs.readFileString(psPath);
-        // Observe publication at the ownership check that immediately precedes signaling.
+        const mvPath = `${f.home}/.test/identity-bin/mv`;
+        // Publication is observed after rename, using the captured old process identity.
         yield* f.fs.writeFileString(
-          psPath,
-          originalPs.replace(
-            "  printf '%s",
-            `  if grep -F "T3_ARCHIVE_VERSION='${nextVersion}'" '${f.state}/run-t3.sh' >/dev/null; then if kill -0 "$(cat '${f.state}/pid')" 2>/dev/null; then observed_alive=true; else observed_alive=false; fi; printf '{"type":"publication","oldAlive":%s}\\n' "$observed_alive" >> '${f.home}/.test/events'; fi\n  printf '%s`,
-          ),
+          mvPath,
+          `#!/bin/sh
+/bin/mv "$@" || exit $?
+if [ "$2" = '${f.state}/run-t3.sh' ]; then
+  if kill -0 '${f.oldProcess!.pid}' 2>/dev/null; then observed_alive=true; else observed_alive=false; fi
+  printf '{"type":"publication","oldAlive":%s}\\n' "$observed_alive" >> '${f.home}/.test/events'
+fi
+`,
         );
+        yield* f.fs.chmod(mvPath, 0o700);
         const result = yield* shell(f.home, f.scripts.launch, [stateKey]);
         assert.equal(result.code, 0, result.stderr);
         const events = yield* f.events;
@@ -267,9 +272,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isAtLeast(verified, 0);
         assert.include(events[verified]!.runner!, `T3_ARCHIVE_VERSION='${oldVersion}'`);
         assert.isTrue(events[verified]!.oldAlive);
-        assert.isTrue(events[published]!.oldAlive);
+        assert.isFalse(events[published]!.oldAlive);
         assert.isBelow(verified, published);
-        assert.isBelow(published, stopped);
+        assert.isBelow(stopped, published);
         assert.isBelow(verified, stopped);
         assert.isBelow(stopped, started);
         assert.include(events[started]!.installed!, `T3_ARCHIVE_VERSION='${nextVersion}'`);

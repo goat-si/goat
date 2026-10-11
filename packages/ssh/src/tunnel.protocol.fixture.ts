@@ -29,6 +29,7 @@ export const protocolExecutable = (
     ssh?: number;
     orchestration?: number;
     missingCommand?: boolean;
+    missingComparison?: boolean;
     ownTokens?: string;
     liveTokens?: string;
     descriptor404?: boolean;
@@ -70,6 +71,10 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
   value.sshRuntimeProtocolVersion ?? "unknown", value.orchestrationProtocolVersion ?? "unknown",
   value.pid ?? 0, value.port ?? 0].join(" "));
   } else console.log(JSON.stringify(value));
+} else if (args[0] === "__ssh-helper" && args[1] === "compare-version") {
+  if (${JSON.stringify(signals.missingComparison ?? false)}) process.exit(2);
+  const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareSemverVersions(args[2], args[3]);
+  console.log(comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
 } else if (args[0] === "__ssh-helper" && args[1] === "activity") {
   const value = await (await import(${JSON.stringify(helperUrl)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1]));
   event("activity", { value }); console.log(value);
@@ -110,7 +115,9 @@ if (req.url === "/.well-known/t3/activity") {
   fs.writeFileSync(countFile, String(count+1));
   const activity = values[Math.min(count, values.length-1)];
   if (activity !== "idle" && activity !== "busy") { res.statusCode=404; res.end("{}"); return; }
-  res.end(JSON.stringify({activity, serverVersion: version, pid: process.pid})); return;
+  const pidFile = path.join(test, "activity-pid");
+  const activityPid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : process.pid;
+  res.end(JSON.stringify({activity, serverVersion: version, pid: activityPid})); return;
 }
 res.end(req.url === "/.well-known/t3/environment" ? JSON.stringify(descriptor) : "ok");
   });
@@ -143,10 +150,12 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   ssh?: number;
   orchestration?: number;
   missingCommand?: boolean;
+  missingComparison?: boolean;
   ownTokens?: string;
   liveTokens?: string;
   descriptor404?: boolean;
   nodeMode?: boolean;
+  candidateSignals?: { ssh: number; orchestration: number };
 }) {
   const fs = yield* FileSystem.FileSystem;
   const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -182,6 +191,8 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       ? path.slice(0, path.length - inherited.length) + `${portShim}:${inherited}`
       : path;
   yield* fs.writeFileString(`${test}/events`, "");
+  // A ready modern fixture has no work; tests can explicitly make activity busy or unavailable.
+  yield* fs.writeFileString(`${test}/activity`, "idle");
   yield* fs.writeFileString(`${test}/pids`, "");
   const fifo = yield* realSpawner.spawn(ChildProcess.make("mkfifo", [`${test}/ready.fifo`]));
   assert.equal(Number(yield* fifo.exitCode), 0);
@@ -271,7 +282,11 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   yield* fs.makeDirectory(stage, { recursive: true });
   yield* fs.writeFileString(
     `${stage}/goat`,
-    protocolExecutable(ARCHIVE.archiveVersion, { ssh: 1, orchestration: 2 }, state),
+    protocolExecutable(
+      ARCHIVE.archiveVersion,
+      input.candidateSignals ?? { ssh: 1, orchestration: 2 },
+      state,
+    ),
   );
   yield* fs.chmod(`${stage}/goat`, 0o700);
   const packed = yield* realSpawner.spawn(
@@ -322,6 +337,10 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   const setRemotePath = (value: string) => {
     remotePath = value;
   };
+  let scriptPrefix = "";
+  const setScriptPrefix = (value: string) => {
+    scriptPrefix = value;
+  };
   let beforeCommand: ((script: string) => ReturnType<typeof fs.writeFileString>) | undefined;
   const setBeforeCommand = (callback: typeof beforeCommand) => {
     beforeCommand = callback;
@@ -371,7 +390,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
         ChildProcess.make(remoteShell, ["-c", [remoteShellCommand, ...args].join(" ")], {
           env: { HOME: home, PATH: withPortShim(remotePath), LC_ALL: "C" },
           extendEnv: false,
-          stdin: { ...stdin, stream: Stream.make(new TextEncoder().encode(script)) },
+          stdin: { ...stdin, stream: Stream.make(new TextEncoder().encode(scriptPrefix + script)) },
         }),
       );
     });
@@ -387,14 +406,21 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       entry === "launch"
         ? SshTunnel.launchOrReuseRemoteServer(uploadTarget, {}, inputRunner).pipe(
             Effect.map((result) => ({
-              version: result.selectedRuntime.version,
-              port: result.remotePort,
-              refresh: result.refresh,
+              status: result.status,
+              pending: result.pending,
+              version:
+                result.status === "ready"
+                  ? result.selectedRuntime.version
+                  : result.pending.liveVersion,
+              port: result.status === "ready" ? result.remotePort : 0,
+              refresh: result.status === "ready" ? result.refresh : undefined,
             })),
           )
         : entry === "pairing"
           ? SshTunnel.issueRemotePairingToken(uploadTarget, {}, inputRunner, prepared).pipe(
               Effect.map((result) => ({
+                status: "ready" as const,
+                pending: undefined,
                 version: result.credential,
                 port: 0,
                 refresh: undefined,
@@ -407,7 +433,13 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
               inputRunner,
               prepared,
             ).pipe(
-              Effect.map((result) => ({ version: result.token, port: 0, refresh: undefined })),
+              Effect.map((result) => ({
+                status: "ready" as const,
+                pending: undefined,
+                version: result.token,
+                port: 0,
+                refresh: undefined,
+              })),
             );
     return action.pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, transport),
@@ -443,6 +475,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     fs,
     realSpawner,
     setBeforeCommand,
+    setScriptPrefix,
     setRemotePath,
     counters: () => ({ uploads, gh, cacheReads }),
     remoteCommands,

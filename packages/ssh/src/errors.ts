@@ -19,6 +19,7 @@ export class SshCommandError extends Data.TaggedError("SshCommandError")<{
 }> {}
 
 export class SshLaunchError extends Data.TaggedError("SshLaunchError")<{
+  readonly reason?: "runtime-newer";
   readonly message: string;
   readonly stdout: string;
   readonly cause?: unknown;

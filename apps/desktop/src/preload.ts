@@ -60,7 +60,9 @@ if (clientPlatform === "darwin") {
   window.addEventListener("resize", syncWindowControlInset);
 }
 
-function unwrapEnsureSshEnvironmentResult(result: unknown) {
+function unwrapEnsureSshEnvironmentResult(
+  result: unknown,
+): Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>> {
   if (
     typeof result === "object" &&
     result !== null &&

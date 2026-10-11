@@ -451,6 +451,24 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
   remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
 });
 
+export const SshRuntimePendingReplacementSchema = Schema.Struct({
+  reason: Schema.Literals(["busy", "unknown", "contended"]),
+  replacement: Schema.Literals(["older", "legacy", "incompatible"]),
+  requestedVersion: Schema.String,
+  liveVersion: Schema.String,
+});
+export type SshRuntimePendingReplacement = typeof SshRuntimePendingReplacementSchema.Type;
+
+export const DesktopSshRuntimePendingResultSchema = Schema.Struct({
+  type: Schema.Literal("ssh-runtime-pending"),
+  target: DesktopSshEnvironmentTargetSchema,
+  pending: SshRuntimePendingReplacementSchema,
+});
+export type DesktopSshRuntimePendingResult = typeof DesktopSshRuntimePendingResultSchema.Type;
+export type DesktopSshEnvironmentReadyOrPending =
+  | DesktopSshEnvironmentBootstrap
+  | DesktopSshRuntimePendingResult;
+
 export interface DesktopSshPasswordPromptRequest {
   requestId: string;
   destination: string;
@@ -478,6 +496,7 @@ export const DesktopSshEnvironmentEnsureInputSchema = Schema.Struct({
 
 export const DesktopSshEnvironmentEnsureResultSchema = Schema.Union([
   DesktopSshEnvironmentBootstrapSchema,
+  DesktopSshRuntimePendingResultSchema,
   DesktopSshPasswordPromptCancelledResultSchema,
 ]);
 
@@ -1203,7 +1222,7 @@ export interface DesktopBridge {
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean; keyOnly?: boolean },
-  ) => Promise<DesktopSshEnvironmentBootstrap>;
+  ) => Promise<DesktopSshEnvironmentReadyOrPending>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (

@@ -193,6 +193,18 @@ function sshPreparationError(cause: unknown) {
   });
 }
 
+function sshRuntimePendingError(pending: { readonly reason: "busy" | "unknown" | "contended" }) {
+  return new ConnectionTransientError({
+    reason: "remote-unavailable",
+    detail:
+      pending.reason === "contended"
+        ? "Another client is replacing the remote runtime."
+        : pending.reason === "unknown"
+          ? "Remote runtime will be replaced when its work finishes. Waiting for a verified idle response."
+          : "Remote runtime will be replaced when its work finishes.",
+  });
+}
+
 export const provisionDesktopSshEnvironment = Effect.fn(
   "web.connectionPlatform.ssh.provisionDesktop",
 )(function* (
@@ -209,6 +221,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
       }),
     catch: sshPreparationError,
   });
+  if ("type" in bootstrap) return yield* sshRuntimePendingError(bootstrap.pending);
   const pairingToken = bootstrap.pairingToken;
   if (pairingToken === null) {
     return yield* new ConnectionBlockedError({
@@ -237,6 +250,33 @@ export const provisionDesktopSshEnvironment = Effect.fn(
     bearerToken: access.access_token,
   };
 });
+
+export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ssh.prepareDesktop")(
+  function* (bridge: DesktopBridge, target: DesktopSshEnvironmentTarget) {
+    const bootstrap = yield* Effect.tryPromise({
+      try: () =>
+        bridge.ensureSshEnvironment(target, {
+          issuePairingToken: true,
+        }),
+      catch: sshPreparationError,
+    });
+    if ("type" in bootstrap) return yield* sshRuntimePendingError(bootstrap.pending);
+    if (bootstrap.pairingToken === null) {
+      return yield* new ConnectionBlockedError({
+        reason: "authentication",
+        detail: "The SSH environment did not issue a pairing credential.",
+      });
+    }
+    const access = yield* Effect.tryPromise({
+      try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
+      catch: sshPreparationError,
+    });
+    return {
+      bootstrap,
+      bearerToken: access.access_token,
+    };
+  },
+);
 
 const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {
@@ -312,28 +352,7 @@ const layerCapabilities = Layer.effectContext(
             detail: "SSH environments are only available in the desktop app.",
           });
         }
-        const bootstrap = yield* Effect.tryPromise({
-          try: () =>
-            bridge.ensureSshEnvironment(input.target, {
-              issuePairingToken: true,
-            }),
-          catch: sshPreparationError,
-        });
-        if (bootstrap.pairingToken === null) {
-          return yield* new ConnectionBlockedError({
-            reason: "authentication",
-            detail: "The SSH environment did not issue a pairing credential.",
-          });
-        }
-        const access = yield* Effect.tryPromise({
-          try: () =>
-            bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
-          catch: sshPreparationError,
-        });
-        return {
-          bootstrap,
-          bearerToken: access.access_token,
-        };
+        return yield* prepareDesktopSshEnvironment(bridge, input.target);
       }),
       disconnect: Effect.fn("web.connectionPlatform.ssh.disconnect")(function* (target) {
         const bridge = window.desktopBridge;

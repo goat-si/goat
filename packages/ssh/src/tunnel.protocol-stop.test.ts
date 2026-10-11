@@ -54,11 +54,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             const manager = yield* SshTunnel.SshEnvironmentManager;
             yield* manager.ensureEnvironment(uploadTarget);
             current = { ...f.runner, archiveVersion: "9.9.9" };
-            assert.equal(
-              (yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true }))
-                .pairingToken,
-              "1.2.2",
-            );
+            const result = yield* manager.ensureEnvironment(uploadTarget, {
+              issuePairingToken: true,
+            });
+            if ("type" in result) throw new Error("Expected a ready environment");
+            assert.equal(result.pairingToken, "1.2.2");
             yield* f.fs.writeFileString(`${f.test}/reject-ceiling`, "1");
             const session = yield* manager.issueMcpClientSession(uploadTarget, {
               label: "fixture",
@@ -250,8 +250,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               yield* f.fs.writeFileString(
                 `${bin}/ps`,
                 mode === "runtime command"
-                  ? `#!/bin/sh\nprintf '%s\\n' "$HOME/.goat/runtime/goat/versions/1.2.2/goat serve --host 127.0.0.1 --port ${f.port} --base-dir $HOME/.goat"\n`
-                  : "#!/bin/sh\nprintf 'unavailable command identity\\n'\n",
+                  ? `#!/bin/sh\nif [ "$1 $2" != '-o command=' ]; then exec /bin/ps "$@"; fi\nprintf '%s\\n' "$HOME/.goat/runtime/goat/versions/1.2.2/goat serve --host 127.0.0.1 --port ${f.port} --base-dir $HOME/.goat"\n`
+                  : "#!/bin/sh\nif [ \"$1 $2\" != '-o command=' ]; then exec /bin/ps \"$@\"; fi\nprintf 'unavailable command identity\\n'\n",
               );
               yield* f.fs.chmod(`${bin}/ps`, 0o700);
               f.setRemotePath(`${bin}:${process.env.PATH ?? ""}`);

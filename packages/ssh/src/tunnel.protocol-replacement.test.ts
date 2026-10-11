@@ -10,7 +10,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
     it.live.each([false, true])(
-      "rolls back a failed legacy runner publication and retries; partial=%s",
+      "retries a failed publication after confirmed legacy termination; partial=%s",
       (partial) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
@@ -39,9 +39,13 @@ exec /bin/mv "$@"
           yield* f.fs.chmod(`${bin}/mv`, 0o700);
           f.setRemotePath(`${bin}:${f.test}/identity-bin:${process.env.PATH ?? ""}`);
           assert.isTrue(Result.isFailure(yield* f.run("launch")));
-          yield* Effect.sync(() => process.kill(f.pid, 0));
-          assert.deepEqual(yield* f.snapshot, before);
-          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+          const failed = yield* f.snapshot;
+          assert.equal(failed.pid, null);
+          assert.equal(failed.identity, null);
+          assert.equal(failed.oldExecutable, before.oldExecutable);
+          assert.equal(failed.oldMarker, before.oldMarker);
+          if (!partial) assert.equal(failed["run-t3.sh"], before["run-t3.sh"]);
+          assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
           assert.isFalse(
             (yield* f.fs.readDirectory(f.state)).some(
               (name) => name.includes(".next.") || name.includes(".retained."),
@@ -134,7 +138,7 @@ console.log(command);
               `${f.test}/identity-bin/ps`,
               ps.replace(
                 "  printf '%s",
-                `  if grep -q "T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'" "$HOME/.goat/ssh-launch/${f.state.slice(f.state.lastIndexOf("/") + 1)}/run-t3.sh"; then printf 'external\\n' > '${f.state}/managed'; fi\n  printf '%s`,
+                `  if [ -f '${f.state}/identity' ]; then printf 'external\\n' > '${f.state}/managed'; fi\n  printf '%s`,
               ),
             );
           } else {

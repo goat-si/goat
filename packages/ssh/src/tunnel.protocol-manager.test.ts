@@ -23,7 +23,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
     it.live.each(["busy", "unknown", "idle", "failure"] as const)(
-      "manager consumes its startup decision once: %s",
+      "manager consumes settled startup decisions and retries pending ones: %s",
       (mode) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
@@ -80,15 +80,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
             yield* manager.disconnectEnvironment(uploadTarget);
             yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true });
-            assert.equal(yield* f.fs.readFileString(`${f.test}/activity-requests`), count);
+            assert.equal(
+              yield* f.fs.readFileString(`${f.test}/activity-requests`),
+              mode === "busy" || mode === "unknown" ? "3" : count,
+            );
             const events = (yield* f.fs.readFileString(`${f.test}/events`))
               .trim()
               .split("\n")
               .map((line) => JSON.parse(line));
-            assert.equal(
-              events.filter((event) => event.type === "stop").length,
-              mode === "busy" || mode === "unknown" ? 0 : 1,
-            );
+            assert.equal(events.filter((event) => event.type === "stop").length, 1);
           }).pipe(Effect.provide(layer), Effect.scoped);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

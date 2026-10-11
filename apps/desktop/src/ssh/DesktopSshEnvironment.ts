@@ -1,6 +1,6 @@
 import type {
   DesktopDiscoveredSshHost,
-  DesktopSshEnvironmentBootstrap,
+  DesktopSshEnvironmentReadyOrPending,
   DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
@@ -59,7 +59,7 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: { readonly issuePairingToken?: boolean; readonly keyOnly?: boolean },
-    ) => Effect.Effect<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
+    ) => Effect.Effect<DesktopSshEnvironmentReadyOrPending, DesktopSshEnvironmentOperationError>;
     readonly disconnectEnvironment: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;

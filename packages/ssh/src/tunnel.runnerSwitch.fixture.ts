@@ -74,6 +74,11 @@ if (args[0] === "--version") {
 const flag = name => {const at = args.indexOf(name); return at < 0 ? undefined : args[at+1];};
 const value = args.includes("--runtime-file") ? await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readLiveSshRuntimeProtocol(flag("--runtime-file"), flag("--port-file"), flag("--pid-file")) : {serverVersion:version,sshRuntimeProtocolVersion: version === ${JSON.stringify(nextVersion)} || config.compatible ? 1 : 99,orchestrationProtocolVersion:2};
 console.log((value.status ? value.status+" " : "") + [value.serverVersion ?? "unknown",value.sshRuntimeProtocolVersion ?? "unknown",value.orchestrationProtocolVersion ?? "unknown",value.pid ?? 0,value.port ?? 0].join(" "));
+  } else if (args[1] === "compare-version") {
+const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareSemverVersions(args[2], args[3]);
+console.log(comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
+  } else if (args[1] === "activity") {
+console.log(await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1])));
   } else if (args[1] === "runtime-port") {
 const current = runtime();
 if (!config.publishDefault || !current || !alive(current.pid)) process.exit(1);
@@ -111,7 +116,7 @@ request.on("error", () => process.exit(1));
   const requested = args.indexOf("--port");
   const port = requested < 0 ? 0 : Number(args[requested + 1]);
   const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? 1 : 99,orchestrationProtocolVersion:2};
-  const server = http.createServer((request, response) => response.end(request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
+  const server = http.createServer((request, response) => response.end(request.url === "/.well-known/t3/activity" ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
   process.on("SIGTERM", () => {
 event("stop");
 if (runtime()?.pid === process.pid) fs.unlinkSync(runtimeFile);

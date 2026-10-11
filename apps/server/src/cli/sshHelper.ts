@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/cli";
 import { ExecutionEnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import packageJson from "../../package.json" with { type: "json" };
@@ -452,7 +453,25 @@ const activity = Command.make("activity", {
   ),
 );
 
+/** Compare validated SemVer tokens for the pinned SSH replacement candidate. */
+const compareVersion = Command.make("compare-version", {
+  live: Argument.String("live-version"),
+  requested: Argument.String("requested-version"),
+}).pipe(
+  Command.withHandler(({ live, requested }) =>
+    Effect.sync(() => {
+      if (!protocolVersion(live) || !protocolVersion(requested)) {
+        process.stderr.write("Invalid SSH version comparison tokens.\n");
+        process.exitCode = 1;
+        return;
+      }
+      const comparison = compareSemverVersions(live, requested);
+      process.stdout.write((comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal") + "\n");
+    }),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
-  Command.withSubcommands([pickPort, waitReady, runtimePort, protocol, activity]),
+  Command.withSubcommands([pickPort, waitReady, runtimePort, protocol, activity, compareVersion]),
 );
