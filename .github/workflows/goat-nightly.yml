@@ -1,0 +1,715 @@
+name: goat-nightly
+
+# GOAT nightly channel (devlog/_plan/261012_release_nightly/020_wp2_pipeline.md).
+# A successful goat-ci run of a dev push builds every platform from that commit,
+# signs and notarizes macOS on the Mac Studio, verifies everything, and publishes
+# a prerelease to the public goat-si/goat-releases repository. Only the hosted
+# publish job can read the goat-releases App credentials. The pre-push guard
+# (.vite-hooks/goat-workflow-guard.mjs) enforces the gates below.
+on:
+  workflow_run:
+    workflows: [goat-ci]
+    types: [completed]
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: dev commit to build (default dev tip)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# No workflow-level concurrency: cancelling an older run must never cancel its
+# publish job. Build jobs cancel per target; publish serializes on its own.
+
+jobs:
+  prepare:
+    name: Prepare
+    if: >-
+      github.repository == 'goat-si/goat' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'dev' &&
+      github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 15
+    outputs:
+      skip: ${{ steps.resolve.outputs.skip }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      name: ${{ steps.release.outputs.name }}
+    steps:
+      # A merge that landed while goat-ci ran makes this run stale; the newer
+      # run publishes instead (latest one wins).
+      - name: Resolve commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api repos/goat-si/goat/commits/dev --jq .sha)"
+          skip=false
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            sha="$(gh api "repos/goat-si/goat/commits/${INPUT_SHA:-$tip}" --jq .sha)"
+            status="$(gh api "repos/goat-si/goat/compare/${sha}...${tip}" --jq .status)"
+            case "$status" in
+              identical | ahead) ;;
+              *) echo "::error::$sha is not on dev ($status)"; exit 1 ;;
+            esac
+          else
+            sha="$RUN_SHA"
+            if [ "$sha" != "$tip" ]; then
+              echo "dev moved to $tip after goat-ci started on $sha; skipping"
+              skip=true
+            fi
+          fi
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::unexpected commit '$sha'"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.resolve.outputs.skip == 'false'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        if: steps.resolve.outputs.skip == 'false'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install script dependencies
+        if: steps.resolve.outputs.skip == 'false'
+        run: vp install --filter=@t3tools/scripts...
+
+      - name: Resolve nightly version
+        id: release
+        if: steps.resolve.outputs.skip == 'false'
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node scripts/check-release-version.ts
+          node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" \
+            --run-number "$GITHUB_RUN_NUMBER" --sha "$SHA" --github-output
+
+  js_bundle:
+    name: JS bundle
+    needs: [prepare]
+    if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 30
+    concurrency:
+      group: goat-nightly-js-bundle
+      cancel-in-progress: true
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install bundle dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      # No relay, Clerk or tracing configuration: the GOAT nightly bundle bakes in
+      # no upstream service endpoints (PR-preview style, D-10).
+      - name: Build JS bundle
+        run: vp run build:desktop
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  cli:
+    name: CLI ${{ matrix.key }}
+    needs: [prepare, js_bundle]
+    if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    concurrency:
+      group: goat-nightly-cli-${{ matrix.key }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: darwin-arm64
+            platform: mac
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            runner: [self-hosted, macOS, ARM64, goat, mac-studio]
+          - key: linux-x64
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+            runner: [self-hosted, linux, x64, goat, epyc]
+          - key: linux-arm64
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - key: win32-x64
+            platform: win
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            runner: windows-2025
+          - key: win32-arm64
+            platform: win
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      T3CODE_DESKTOP_SIGNED: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          clean: true
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Download JS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: js-bundle
+          path: apps
+
+      # The Mac Studio keeps its own toolchain and keychain; the preflight checks
+      # them and exports the signing identity and notary profile settings.
+      - name: Mac signing preflight
+        if: matrix.platform == 'mac'
+        run: bash scripts/goat-mac-runner/preflight.sh --ci
+
+      - name: Setup Rust
+        if: matrix.platform != 'mac'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build resource monitor
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ matrix.rust_target }}"
+          name=t3-resource-monitor
+          if [ "${{ matrix.platform }}" = win ]; then name="$name.exe"; fi
+          mkdir -p "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}"
+          cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/$name" "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}/$name"
+
+      - name: Build CLI single-executable
+        env:
+          # Exact version; keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts.
+          VP_NODE_VERSION: "26.8.2"
+        run: node apps/server/scripts/cli.ts build-exe --verbose
+
+      - name: Build CLI archive
+        env:
+          APPLE_KEYCHAIN_PROFILE: ${{ matrix.platform == 'mac' && 'goat-notary' || '' }}
+          T3CODE_REQUIRE_NOTARIZATION: ${{ matrix.platform == 'mac' && '1' || '' }}
+        run: |
+          set -euo pipefail
+          args=(--platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --version "$VERSION"
+            --resource-monitor-dir "$RUNNER_TEMP/cli-resource-monitor" --output-dir release-cli)
+          if [ "${{ matrix.platform }}" = mac ]; then args+=(--require-notarization); fi
+          node scripts/build-cli-archive.ts "${args[@]}"
+
+      - name: Smoke-test CLI archive
+        run: node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
+      - name: Verify CLI payload
+        run: |
+          mkdir -p reports
+          node scripts/verify-release-artifacts.ts payload --dir release-cli --version "$VERSION" \
+            --key "cli-${{ matrix.key }}" --report "reports/verify-cli-${{ matrix.key }}.json"
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.key }}
+          path: release-cli/*
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-cli-${{ matrix.key }}
+          path: reports/*
+          if-no-files-found: error
+          retention-days: 3
+
+  desktop_mac:
+    name: Desktop macOS ${{ matrix.arch }}
+    needs: [prepare, js_bundle, cli]
+    if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
+    runs-on: [self-hosted, macOS, ARM64, goat, mac-studio]
+    timeout-minutes: 90
+    concurrency:
+      group: goat-nightly-desktop-mac-${{ matrix.arch }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        arch: [arm64, x64]
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true"
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      T3CODE_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-mac-${{ matrix.arch }}.json
+      APPLE_KEYCHAIN_PROFILE: goat-notary
+      T3CODE_REQUIRE_NOTARIZATION: "1"
+      T3CODE_APPLE_TEAM_ID: U9ATA49N28
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          clean: true
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Download JS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: js-bundle
+          path: apps
+
+      - name: Download SSH runtime archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: ssh-runtime-archives
+
+      # Exports CSC_NAME, CSC_KEYCHAIN, APPLE_KEYCHAIN and T3CODE_CLI_MAC_SIGN_IDENTITY.
+      - name: Mac signing preflight
+        run: bash scripts/goat-mac-runner/preflight.sh --ci
+
+      - name: Build, sign and notarize desktop app
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch "${{ matrix.arch }}" \
+            --build-version "$VERSION" --skip-build --signed \
+            --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes \
+            --output-dir release --verbose
+
+      - name: Sign, notarize and staple the DMG
+        run: node scripts/finalize-macos-dmg.ts --dir release --report "$T3CODE_DESKTOP_PAYLOAD_REPORT"
+
+      - name: Verify signatures and payload
+        run: |
+          node scripts/verify-release-artifacts.ts mac --dir release --version "$VERSION" \
+            --team U9ATA49N28 --require-signing --key "mac-${{ matrix.arch }}" \
+            --report "reports/verify-mac-${{ matrix.arch }}.json"
+
+      - name: Collect release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for file in release/*.dmg release/*.zip release/*.blockmap release/*.yml; do
+            [[ "$file" == */builder-debug.yml ]] && continue
+            cp "$file" release-publish/
+          done
+          if [ "${{ matrix.arch }}" != arm64 ]; then
+            for manifest in release-publish/*-mac.yml; do mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"; done
+          fi
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mac-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload verification reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-desktop-mac-${{ matrix.arch }}
+          path: reports/*
+          if-no-files-found: error
+          retention-days: 3
+
+  desktop_other:
+    name: Desktop ${{ matrix.platform }} ${{ matrix.arch }}
+    needs: [prepare, js_bundle, cli]
+    if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 70
+    concurrency:
+      group: goat-nightly-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+            target: AppImage
+            rust_target: x86_64-unknown-linux-gnu
+            runner: [self-hosted, linux, x64, goat, epyc]
+          - platform: linux
+            arch: arm64
+            target: AppImage
+            rust_target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - platform: win
+            arch: x64
+            target: nsis
+            rust_target: x86_64-pc-windows-msvc
+            runner: windows-2025
+          - platform: win
+            arch: arm64
+            target: nsis
+            rust_target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      T3CODE_DESKTOP_SIGNED: "false"
+      T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true"
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      T3CODE_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-${{ matrix.platform }}-${{ matrix.arch }}.json
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          clean: true
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install dependencies
+        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Download JS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: js-bundle
+          path: apps
+
+      - name: Download SSH runtime archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: ssh-runtime-archives
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux build libraries
+        if: matrix.platform == 'linux'
+        run: |
+          set -euo pipefail
+          # EPYC runners already carry these (goat-ci builds the desktop there).
+          if ! pkg-config --exists libsecret-1 2>/dev/null ||
+            ! { command -v magick || command -v convert; } >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+          fi
+
+      - name: Install Spectre-mitigated MSVC libraries
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $component = "Microsoft.VisualStudio.Component.VC.Runtimes.${{ matrix.arch == 'arm64' && 'ARM64' || 'x86.x64' }}.Spectre"
+          $proc = Start-Process -FilePath $setupExe -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", $component, "--quiet", "--norestart" -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) { exit 1 }
+
+      - name: Build desktop app (unsigned)
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          args=(--platform "${{ matrix.platform }}" --target "${{ matrix.target }}" --arch "${{ matrix.arch }}"
+            --build-version "$VERSION" --skip-build --output-dir release --verbose
+            --ssh-runtime-archive-dir "$GITHUB_WORKSPACE/ssh-runtime-archives" --require-all-ssh-runtimes)
+          if [ "${{ matrix.platform }}" = win ]; then
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/ssh-runtime-archives/goat-*-linux-${{ matrix.arch }}.tar.gz)
+          fi
+          node scripts/build-desktop-artifact.ts "${args[@]}"
+
+      - name: Collect release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for file in release/*.AppImage release/*.deb release/*.exe release/*.blockmap release/*.yml; do
+            [[ "$file" == */builder-debug.yml ]] && continue
+            cp "$file" release-publish/
+          done
+          if [ "${{ matrix.platform }}" = win ]; then
+            for manifest in release-publish/*.yml; do mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"; done
+          fi
+
+      - name: Upload desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: reports/*
+          if-no-files-found: error
+          retention-days: 3
+
+  assemble:
+    name: Assemble and verify
+    needs: [prepare, js_bundle, cli, desktop_mac, desktop_other]
+    if: >-
+      needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
+      (!cancelled() && needs.cli.result == 'success' &&
+      needs.desktop_mac.result == 'success' && needs.desktop_other.result == 'success')
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          clean: true
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Install script dependencies
+        run: vp install --filter=@t3tools/scripts...
+
+      - name: Download desktop assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release
+
+      - name: Download CLI archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release
+
+      - name: Download verification reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: verify-*
+          merge-multiple: true
+          path: reports
+
+      - name: Download JS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: js-bundle
+          path: apps
+
+      - name: Merge update manifests
+        run: |
+          set -euo pipefail
+          node scripts/merge-update-manifests.ts --platform mac release/nightly-mac.yml release/nightly-mac-x64.yml
+          node scripts/merge-update-manifests.ts --platform win release/nightly-win-x64.yml release/nightly-win-arm64.yml release/nightly.yml
+          rm -f release/nightly-mac-x64.yml release/nightly-win-x64.yml release/nightly-win-arm64.yml
+
+      - name: Add installers and notices
+        run: |
+          set -euo pipefail
+          cp LICENSE release/LICENSE-T3CODE.txt
+          cp scripts/install.sh scripts/install.ps1 release/
+          node scripts/render-third-party-notices.ts \
+            --input apps/server/dist/client/third-party-licenses.json --output release/THIRD_PARTY_NOTICES.md
+
+      - name: Verify release and write SHA256SUMS
+        run: node scripts/verify-release-artifacts.ts assemble --dir release --reports reports --version "$VERSION"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to goat-releases
+    needs: [prepare, assemble]
+    if: >-
+      needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
+      (!cancelled() && needs.assemble.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: goat-releases
+    concurrency:
+      group: goat-nightly-publish
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_NAME: ${{ needs.prepare.outputs.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install script dependencies
+        run: vp install --filter=@t3tools/scripts...
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release
+
+      # The only step in this workflow that reads a secret. The token is scoped to
+      # goat-si/goat-releases by the App installation.
+      - name: Create goat-releases token
+        id: app_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GOAT_RELEASES_APP_ID }}
+          private-key: ${{ secrets.GOAT_RELEASES_APP_PRIVATE_KEY }}
+          owner: goat-si
+          repositories: goat-releases
+
+      - name: Publish prerelease
+        id: publish
+        env:
+          GOAT_RELEASES_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          node scripts/publish-nightly-release.ts --repo goat-si/goat-releases --dir release \
+            --version "$VERSION" --name "$RELEASE_NAME"
+
+      - name: Prune old nightlies
+        if: steps.publish.outputs.outcome == 'published'
+        env:
+          GOAT_RELEASES_TOKEN: ${{ steps.app_token.outputs.token }}
+          GOAT_PROTECTED_TAGS: ${{ vars.GOAT_PROTECTED_TAGS }}
+        run: |
+          node scripts/prune-nightly-releases.ts --repo goat-si/goat-releases --keep 30 \
+            --max-age-days 30 --protect "$GOAT_PROTECTED_TAGS"
