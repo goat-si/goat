@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { ChannelBotRef, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -6,7 +6,7 @@ import type { DraftId } from "./composerDraftStore";
 import { resolveStorage } from "./lib/storage";
 
 export const GLOBAL_AGENT_STORAGE_KEY = "t3code:global-agent:v1";
-export const GLOBAL_AGENT_STORAGE_VERSION = 1;
+export const GLOBAL_AGENT_STORAGE_VERSION = 2;
 
 /**
  * The one projectless thread T3 opens on launch and from the sidebar logo.
@@ -20,8 +20,14 @@ export interface GlobalAgentRef {
 
 export interface GlobalAgentStoreState {
   ref: GlobalAgentRef | null;
+  /**
+   * The server's GOAT Bot thread, as last confirmed. It marks which thread is the bot, so it
+   * survives archive and delete; whether the bot can take messages is decided per connection.
+   */
+  botRef: ChannelBotRef | null;
   setRef: (ref: GlobalAgentRef) => void;
-  /** Forgets the global agent when the given thread is it (archived or deleted here). */
+  setBotRef: (botRef: ChannelBotRef) => void;
+  /** Forgets the global agent when the given thread is it (archived or deleted here). The bot ref stays. */
   clearIfThread: (target: {
     readonly environmentId: EnvironmentId;
     readonly threadId: ThreadId;
@@ -41,14 +47,32 @@ export function isGlobalAgentRef(value: unknown): value is GlobalAgentRef {
   );
 }
 
+export function isChannelBotRef(value: unknown): value is ChannelBotRef {
+  if (typeof value !== "object" || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(ref.environmentId) &&
+    isNonEmptyString(ref.projectId) &&
+    isNonEmptyString(ref.threadId)
+  );
+}
+
 function readPersistedRef(persisted: unknown): GlobalAgentRef | null {
   const ref = (persisted as { ref?: unknown } | null | undefined)?.ref;
   return isGlobalAgentRef(ref) ? ref : null;
 }
 
-/** Hydration from another storage version. */
-export function migratePersistedGlobalAgent(persisted: unknown): { ref: GlobalAgentRef | null } {
-  return { ref: readPersistedRef(persisted) };
+function readPersistedBotRef(persisted: unknown): ChannelBotRef | null {
+  const botRef = (persisted as { botRef?: unknown } | null | undefined)?.botRef;
+  return isChannelBotRef(botRef) ? botRef : null;
+}
+
+/** Hydration from another storage version. Versions before GOAT Bot had no bot to keep. */
+export function migratePersistedGlobalAgent(persisted: unknown): {
+  ref: GlobalAgentRef | null;
+  botRef: ChannelBotRef | null;
+} {
+  return { ref: readPersistedRef(persisted), botRef: null };
 }
 
 /** Same-version hydration: zustand skips migrate here, so validate again. */
@@ -56,14 +80,16 @@ export function mergePersistedGlobalAgent(
   persisted: unknown,
   current: GlobalAgentStoreState,
 ): GlobalAgentStoreState {
-  return { ...current, ref: readPersistedRef(persisted) };
+  return { ...current, ref: readPersistedRef(persisted), botRef: readPersistedBotRef(persisted) };
 }
 
 export const useGlobalAgentStore = create<GlobalAgentStoreState>()(
   persist(
     (set) => ({
       ref: null,
+      botRef: null,
       setRef: (ref) => set({ ref }),
+      setBotRef: (botRef) => set({ botRef }),
       clearIfThread: (target) =>
         set((state) =>
           state.ref !== null &&
@@ -81,7 +107,7 @@ export const useGlobalAgentStore = create<GlobalAgentStoreState>()(
       version: GLOBAL_AGENT_STORAGE_VERSION,
       migrate: (persisted) => migratePersistedGlobalAgent(persisted) as GlobalAgentStoreState,
       merge: (persisted, current) => mergePersistedGlobalAgent(persisted, current),
-      partialize: ({ ref }) => ({ ref }),
+      partialize: ({ ref, botRef }) => ({ ref, botRef }),
     },
   ),
 );

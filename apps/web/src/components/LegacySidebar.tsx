@@ -1335,6 +1335,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const openPrLink = useOpenPrLink();
   const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
@@ -1434,6 +1435,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         excludeGlobalAgentThreads(
           projectThreads.filter(isProjectsViewListedThread),
           globalAgentRef,
+          goatBotRef,
         ),
         threadSortOrder,
       );
@@ -1447,6 +1449,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   }, [
     childAttentionByKey,
     globalAgentRef,
+    goatBotRef,
     pinnedThreads,
     projectThreads,
     threadLastVisitedAts,
@@ -3422,11 +3425,12 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 export default function LegacySidebar() {
   const projects = useProjects();
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const allThreadShells = useThreadShells();
   // The global agent opens from the logo; keep it out of rows, shortcuts and keyboard order.
   const sidebarThreads = useMemo(
-    () => excludeGlobalAgentThreads(allThreadShells, globalAgentRef),
-    [allThreadShells, globalAgentRef],
+    () => excludeGlobalAgentThreads(allThreadShells, globalAgentRef, goatBotRef),
+    [allThreadShells, globalAgentRef, goatBotRef],
   );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);

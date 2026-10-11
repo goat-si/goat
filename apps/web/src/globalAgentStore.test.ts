@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { createJSONStorage } from "zustand/middleware";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -27,7 +27,7 @@ async function hydrateFrom(raw: unknown) {
 }
 
 beforeEach(() => {
-  useGlobalAgentStore.setState({ ref: null });
+  useGlobalAgentStore.setState({ ref: null, botRef: null });
 });
 
 describe("isGlobalAgentRef", () => {
@@ -45,10 +45,10 @@ describe("isGlobalAgentRef", () => {
 
 describe("persisted global agent", () => {
   it("migrate keeps a valid ref", () => {
-    expect(migratePersistedGlobalAgent({ ref: REF })).toEqual({ ref: REF });
+    expect(migratePersistedGlobalAgent({ ref: REF })).toEqual({ ref: REF, botRef: null });
   });
   it("migrate drops an invalid ref", () => {
-    expect(migratePersistedGlobalAgent({ ref: 1 })).toEqual({ ref: null });
+    expect(migratePersistedGlobalAgent({ ref: 1 })).toEqual({ ref: null, botRef: null });
   });
   it("merge drops an invalid ref and keeps actions", () => {
     const current = useGlobalAgentStore.getState();
@@ -57,10 +57,10 @@ describe("persisted global agent", () => {
     expect(merged.setRef).toBe(current.setRef);
   });
   it("same-version hydration drops an invalid ref (merge path)", async () => {
-    expect(await hydrateFrom({ state: { ref: { ...REF, threadId: "" } }, version: 1 })).toBeNull();
+    expect(await hydrateFrom({ state: { ref: { ...REF, threadId: "" } }, version: 2 })).toBeNull();
   });
   it("same-version hydration keeps a valid ref", async () => {
-    expect(await hydrateFrom({ state: { ref: REF }, version: 1 })).toEqual(REF);
+    expect(await hydrateFrom({ state: { ref: REF }, version: 2 })).toEqual(REF);
   });
   it("older-version hydration keeps a valid ref (migrate path)", async () => {
     expect(await hydrateFrom({ state: { ref: REF }, version: 0 })).toEqual(REF);
@@ -80,6 +80,33 @@ describe("clearIfThread", () => {
     useGlobalAgentStore
       .getState()
       .clearIfThread({ environmentId: REF.environmentId, threadId: "thread-2" as ThreadId });
+    expect(useGlobalAgentStore.getState().ref).toEqual(REF);
+  });
+});
+
+describe("GOAT Bot ref", () => {
+  const BOT = {
+    environmentId: REF.environmentId,
+    projectId: "scratch" as ProjectId,
+    threadId: "bot" as ThreadId,
+  };
+
+  it("starts empty when upgrading from before GOAT Bot", async () => {
+    await hydrateFrom({ state: { ref: REF, botRef: BOT }, version: 1 });
+    expect(useGlobalAgentStore.getState().botRef).toBeNull();
+  });
+  it("keeps a valid bot ref and drops a broken one on same-version hydration", async () => {
+    await hydrateFrom({ state: { ref: REF, botRef: BOT }, version: 2 });
+    expect(useGlobalAgentStore.getState().botRef).toEqual(BOT);
+    await hydrateFrom({ state: { ref: REF, botRef: { ...BOT, projectId: "" } }, version: 2 });
+    expect(useGlobalAgentStore.getState().botRef).toBeNull();
+  });
+  it("keeps marking the bot thread after it is archived here", () => {
+    useGlobalAgentStore.setState({ ref: REF, botRef: BOT });
+    useGlobalAgentStore
+      .getState()
+      .clearIfThread({ environmentId: BOT.environmentId, threadId: BOT.threadId });
+    expect(useGlobalAgentStore.getState().botRef).toEqual(BOT);
     expect(useGlobalAgentStore.getState().ref).toEqual(REF);
   });
 });

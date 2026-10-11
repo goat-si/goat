@@ -6,6 +6,11 @@ import type { ThreadRouteTarget } from "./threadRoutes";
 
 export const GLOBAL_AGENT_TITLE = "Global agent";
 
+/** GOAT Bot's entry route. */
+export const GOAT_BOT_PATH = "/bot";
+
+type GoatBotThreadRef = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+
 export function isGlobalAgentThread(
   thread: { readonly environmentId: string; readonly id: string },
   ref: GlobalAgentRef | null,
@@ -13,10 +18,13 @@ export function isGlobalAgentThread(
   return ref !== null && thread.environmentId === ref.environmentId && thread.id === ref.threadId;
 }
 
+/** Both the global agent and GOAT Bot have their own entry points, so thread lists leave them out. */
 export function excludeGlobalAgentThreads<
   T extends { readonly environmentId: string; readonly id: string },
->(threads: readonly T[], ref: GlobalAgentRef | null): T[] {
-  return threads.filter((thread) => !isGlobalAgentThread(thread, ref));
+>(threads: readonly T[], ref: GlobalAgentRef | null, botRef: GoatBotThreadRef | null = null): T[] {
+  return threads.filter(
+    (thread) => !isGlobalAgentThread(thread, ref) && !isGoatBotThread(thread, botRef),
+  );
 }
 
 /**
@@ -56,4 +64,30 @@ export function legacyGlobalAgentRoute(
   }
   if (shell === null && draftUnpromoted) return { kind: "draft", draftId: ref.draftId };
   return null;
+}
+
+/** True for the server's GOAT Bot thread. */
+export function isGoatBotThread(
+  thread: { readonly environmentId: string; readonly id: string },
+  botRef: GoatBotThreadRef | null,
+): boolean {
+  return (
+    botRef !== null &&
+    thread.environmentId === botRef.environmentId &&
+    thread.id === botRef.threadId
+  );
+}
+
+/** True on /bot and on the bot thread's own route. */
+export function isGoatBotRoute(
+  pathname: string,
+  target: ThreadRouteTarget | null,
+  botRef: GoatBotThreadRef | null,
+): boolean {
+  if (pathname === GOAT_BOT_PATH) return true;
+  if (botRef === null || target === null || target.kind !== "server") return false;
+  return (
+    target.threadRef.environmentId === botRef.environmentId &&
+    target.threadRef.threadId === botRef.threadId
+  );
 }

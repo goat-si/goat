@@ -7,6 +7,8 @@ import {
   excludeGlobalAgentThreads,
   isGlobalAgentRoute,
   isGlobalAgentThread,
+  isGoatBotRoute,
+  isGoatBotThread,
   legacyGlobalAgentRoute,
 } from "./globalAgentRoute";
 
@@ -87,5 +89,29 @@ describe("legacyGlobalAgentRoute", () => {
     });
     expect(legacyGlobalAgentRoute(REF, { archivedAt: "2026-10-12T00:00:00Z" }, false)).toBeNull();
     expect(legacyGlobalAgentRoute(null, null, true)).toBeNull();
+  });
+});
+
+describe("GOAT Bot routes", () => {
+  const BOT = { environmentId: ENV, threadId: "bot" as ThreadId };
+
+  it("recognizes the bot thread and leaves it out of thread lists", () => {
+    const threads = [
+      { environmentId: ENV, id: "bot" },
+      { environmentId: ENV, id: "thread-1" },
+      { environmentId: ENV, id: "thread-2" },
+    ];
+    expect(isGoatBotThread({ environmentId: ENV, id: "bot" }, BOT)).toBe(true);
+    expect(isGoatBotThread({ environmentId: OTHER_ENV, id: "bot" }, BOT)).toBe(false);
+    expect(excludeGlobalAgentThreads(threads, REF, BOT).map((thread) => thread.id)).toEqual([
+      "thread-2",
+    ]);
+  });
+
+  it("is active on /bot and on the bot thread", () => {
+    expect(isGoatBotRoute("/bot", null, null)).toBe(true);
+    expect(isGoatBotRoute("/env-1/bot", serverTarget(ENV, "bot"), BOT)).toBe(true);
+    expect(isGoatBotRoute("/env-1/thread-1", serverTarget(ENV, "thread-1"), BOT)).toBe(false);
+    expect(isGoatBotRoute("/env-1/bot", serverTarget(ENV, "bot"), null)).toBe(false);
   });
 });

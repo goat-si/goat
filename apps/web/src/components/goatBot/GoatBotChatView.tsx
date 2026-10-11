@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 import { APP_DISPLAY_NAME } from "~/branding";
 import { isElectron } from "~/env";
-import type { GlobalAgentLegacyRoute } from "~/globalAgentRoute";
+import { GOAT_BOT_PATH, type GlobalAgentLegacyRoute } from "~/globalAgentRoute";
 
 import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
@@ -26,6 +26,8 @@ export interface GoatBotChatViewProps {
   readonly onRetryAvailability?: (() => void) | undefined;
   /** The old global agent, which keeps its coding view and history. */
   readonly legacyAgentRoute: GlobalAgentLegacyRoute | null;
+  /** The bot thread was archived or deleted, here or on another device. */
+  readonly removed?: boolean | undefined;
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
@@ -37,9 +39,10 @@ export function GoatBotChatView({
   onRetryInput,
   onRetryAvailability,
   legacyAgentRoute,
+  removed = false,
 }: GoatBotChatViewProps) {
-  const ready = availability.kind === "ready";
-  const canSend = canSendToGoatBot(availability, canOperate);
+  const ready = availability.kind === "ready" && !removed;
+  const canSend = !removed && canSendToGoatBot(availability, canOperate);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <WorkspacePageHeader electron={isElectron} className="border-b border-border">
@@ -47,12 +50,17 @@ export function GoatBotChatView({
           <GoatBotAvatar size="md" />
           <div className="flex min-w-0 flex-col">
             <h1 className="truncate text-sm font-medium text-foreground">{GOAT_BOT_TITLE}</h1>
-            <p className="truncate text-xs text-muted-foreground">{statusLine(availability)}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {removed ? "Archived or deleted" : statusLine(availability)}
+            </p>
           </div>
         </div>
       </WorkspacePageHeader>
-      {ready && rows.length > 0 ? (
+      {rows.length > 0 ? (
+        // History stays readable while the bot is unavailable; only sending stops.
         <GoatBotTimeline rows={rows} onRetry={onRetryInput} />
+      ) : removed ? (
+        <GoatBotRemovedNotice />
       ) : (
         <GoatBotNotice
           availability={availability}
@@ -71,6 +79,27 @@ export function GoatBotChatView({
         onSend={onSend}
       />
     </div>
+  );
+}
+
+function GoatBotRemovedNotice() {
+  return (
+    <Empty className="min-h-0 flex-1">
+      <EmptyHeader className="max-w-md">
+        <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+        <EmptyTitle>This chat is no longer available</EmptyTitle>
+        <EmptyDescription>
+          It was archived or deleted. GOAT Bot keeps going in its current chat.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <div className="flex justify-center">
+          <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
+            Open GOAT Bot
+          </Button>
+        </div>
+      </EmptyContent>
+    </Empty>
   );
 }
 

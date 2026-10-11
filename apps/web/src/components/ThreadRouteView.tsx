@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
+import { GoatBotThreadView } from "./goatBot/GoatBotThreadView";
 import { resolveDraftPromotionNavigationTarget, threadHasStarted } from "./ChatView.logic";
 import { waitForDraftHeroTransition } from "./chat/draftHeroTransition";
 import { SidebarInset } from "./ui/sidebar";
@@ -13,6 +14,8 @@ import {
   useBackgroundDraftSubmissionPending,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import { isGoatBotThread } from "../globalAgentRoute";
+import { useGlobalAgentStore } from "../globalAgentStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
@@ -38,6 +41,15 @@ import {
  */
 export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const navigate = useNavigate();
+  const goatBotRef = useGlobalAgentStore((state) => state.botRef);
+  // GOAT Bot's thread always shows as the bot, even while missing or unsupported, so the
+  // coding composer never appears on it and its own notice replaces the redirect below.
+  const goatBotTarget =
+    target.kind === "server" &&
+    isGoatBotThread(
+      { environmentId: target.threadRef.environmentId, id: target.threadRef.threadId },
+      goatBotRef,
+    );
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -142,7 +154,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   }, [canonicalThreadRef, draftSession, navigate, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete) {
+    if (target.kind !== "server" || !bootstrapComplete || goatBotTarget) {
       return;
     }
     // Navigation already resolved onto this path, so a drop aimed here
@@ -155,7 +167,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+  }, [bootstrapComplete, environmentHasAnyThreads, goatBotTarget, navigate, renderState, target]);
 
   useEffect(() => {
     if (target.kind !== "server" || !serverThreadStarted || !draftThread) {
@@ -178,6 +190,13 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         />
       );
     }
+  } else if (goatBotTarget) {
+    view = (
+      <GoatBotThreadView
+        environmentId={target.threadRef.environmentId}
+        threadId={target.threadRef.threadId}
+      />
+    );
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView

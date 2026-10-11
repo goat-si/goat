@@ -2737,6 +2737,7 @@ export default function Sidebar() {
     readonly assignedKeys: ReadonlyMap<string, string>;
   } | null>(null);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   // Rows Priority showed in this Activity session. The bell unmounts this sidebar, so
   // switching away and back lets threads read in the meantime leave Priority.
   const priorityHoldsRef = useRef<SidebarPriorityHolds>(new Map());
@@ -2762,6 +2763,7 @@ export default function Sidebar() {
     const visible = excludeGlobalAgentThreads(
       filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
       globalAgentRef,
+      goatBotRef,
     );
     const priority: EnvironmentThreadShell[] = [];
     const priorityRanks = new Map<string, number>();
@@ -2873,6 +2875,7 @@ export default function Sidebar() {
     };
   }, [
     globalAgentRef,
+    goatBotRef,
     nowMinute,
     optimisticDrop,
     scopedProjectKeys,
