@@ -84,6 +84,5 @@ export function canSendToGoatBot(availability: GoatBotAvailability, canOperate: 
 export function environmentSupportsChannelLedger(
   capabilities: ExecutionEnvironmentCapabilities | undefined,
 ): boolean {
-  if (capabilities === undefined || !("channelLedger" in capabilities)) return false;
-  return capabilities.channelLedger === true;
+  return capabilities?.channelLedger === true;
 }

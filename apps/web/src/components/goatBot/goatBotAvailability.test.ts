@@ -127,5 +127,11 @@ describe("environmentSupportsChannelLedger", () => {
   it("treats a server that does not advertise channels as unsupported", () => {
     expect(environmentSupportsChannelLedger(undefined)).toBe(false);
     expect(environmentSupportsChannelLedger({ repositoryIdentity: true })).toBe(false);
+    expect(
+      environmentSupportsChannelLedger({ repositoryIdentity: true, channelLedger: false }),
+    ).toBe(false);
+    expect(
+      environmentSupportsChannelLedger({ repositoryIdentity: true, channelLedger: true }),
+    ).toBe(true);
   });
 });
