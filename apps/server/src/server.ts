@@ -1,6 +1,7 @@
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
+import * as ChannelLayers from "./channels/ChannelLayers.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Clock from "effect/Clock";
@@ -589,6 +590,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerProviderInstallationRefresh,
   ReplayMarkers.layer,
 ).pipe(
+  // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
+  // Same EventSink layer reference as orchestration, so memoization shares one instance.
+  Layer.provideMerge(ChannelLayers.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink))),
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),

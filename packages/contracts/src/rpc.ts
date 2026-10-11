@@ -1894,10 +1894,7 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
 
 const ChannelRpcError = Schema.Union([ChannelGatewayError, EnvironmentAuthorizationError]);
 
-/*
- * Channel gateway and Slack settings RPCs. They are declared here so clients and the server
- * share one schema, and join `WsRpcGroup` together with their handlers and scopes.
- */
+/** Channel gateway and Slack settings RPCs. */
 export const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot, {
   payload: ChannelEnsureBotInput,
   success: ChannelEnsureBotResult,
@@ -2039,6 +2036,17 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  ChannelEnsureBotRpc,
+  ChannelIngestRpc,
+  ChannelGetTaskRpc,
+  ChannelListTasksRpc,
+  ChannelGetInputRpc,
+  ChannelCreateIdentityLinkRpc,
+  ChannelUnlinkIdentityRpc,
+  SlackChannelGetSettingsRpc,
+  SlackChannelConfigureRpc,
+  SlackChannelDisconnectRpc,
+  SlackChannelSubscribeStatusRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

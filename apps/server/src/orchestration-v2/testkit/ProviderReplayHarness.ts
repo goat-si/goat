@@ -54,6 +54,7 @@ import * as RuntimePolicy from "../RuntimePolicy.ts";
 import * as TurnItemPositionStore from "../TurnItemPositionStore.ts";
 import * as RuntimeRequestService from "../RuntimeRequestService.ts";
 import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
+import * as ChannelBotDirectory from "../../channels/ChannelBotDirectory.ts";
 import * as ThreadForkService from "../ThreadForkService.ts";
 import {
   runOrchestratorV2Scenario,
@@ -450,6 +451,7 @@ export function layerWithRegistry<Error>(
         layerProviderSwitchServiceProvided,
         layerRunExecutionServiceProvided,
         ThreadForkService.layer,
+        ChannelBotDirectory.layer.pipe(Layer.provide(layerDatabase)),
       ),
     ),
   );

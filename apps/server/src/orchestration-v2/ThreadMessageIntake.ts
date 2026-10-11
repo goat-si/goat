@@ -2,11 +2,18 @@ import { remapComposerContextAttachments } from "@t3tools/shared/composerContext
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
 import type { ChatAttachment, OrchestrationV2Command } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
+import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
+import * as ChannelGateway from "../channels/ChannelGateway.ts";
+import type { ChannelConnectionOwner } from "../channels/ChannelIngressContext.ts";
+import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import { ChannelGatewayError } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as AttachmentClaims from "./AttachmentClaims.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -51,10 +58,68 @@ const releaseUnusedClaims = Effect.fn("ThreadMessageIntake.releaseUnusedClaims")
   );
 });
 
+/**
+ * A §message.dispatch§ to the GOAT bot becomes channel input: stored by the gateway and answered
+ * by reception, never a provider turn. The result reports the orchestration sequence that
+ * recorded the user's message, which is what older clients wait for.
+ */
+const dispatchToBot = Effect.fn("ThreadMessageIntake.dispatchToBot")(function* (
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+  owner: ChannelConnectionOwner | undefined,
+) {
+  if (owner === undefined) return yield* new ChannelGatewayError({ reason: "forbidden" });
+  // The bot timeline has no attachment field yet, so the bot takes text only.
+  if (command.attachments.length > 0) {
+    return yield* new ChannelGatewayError({ reason: "invalid_input" });
+  }
+  const ledgerOption = yield* Effect.serviceOption(ChannelLedger.ChannelLedger);
+  const gatewayOption = yield* Effect.serviceOption(ChannelGateway.ChannelGateway);
+  if (Option.isNone(ledgerOption) || Option.isNone(gatewayOption)) {
+    return yield* new ChannelGatewayError({ reason: "adapter_unavailable" });
+  }
+  const ledger = ledgerOption.value;
+  const gateway = gatewayOption.value;
+  const bot = yield* ledger
+    .getBot(owner.ownerId)
+    .pipe(Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })));
+  if (bot === undefined || bot.bot.threadId !== command.threadId) {
+    return yield* new ChannelGatewayError({ reason: "forbidden" });
+  }
+  const receivedAt = DateTime.formatIso(yield* DateTime.now);
+  const result = yield* gateway.ingest(
+    {
+      kind: "goat",
+      connectionId: ChannelGateway.GOAT_CONNECTION_ID,
+      conversationKey: command.threadId,
+      externalMessageId: command.messageId,
+      idempotencyKey: command.commandId,
+      actor: {},
+      replyAddress: {
+        kind: "goat",
+        environmentId: bot.bot.environmentId,
+        threadId: command.threadId,
+      },
+      text: command.text,
+      attachments: [],
+      receivedAt,
+      intent: "message",
+    },
+    { ...owner, caller: { type: "intake", commandId: command.commandId } },
+  );
+  return { sequence: result.timelineSequence ?? 0, storedEvents: [] };
+});
+
 export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(function* (
   command: OrchestrationV2Command,
+  channelOwner?: ChannelConnectionOwner,
 ) {
   const threads = yield* ThreadManagement.ThreadManagementService;
+  // Servers assembled without the channel layer (some tests) have no GOAT bot to route to.
+  const botDirectory = yield* Effect.serviceOption(ChannelBotDirectory.ChannelBotDirectory);
+  if (command.type === "message.dispatch" && Option.isSome(botDirectory)) {
+    const isBot = yield* botDirectory.value.isBotThread(command.threadId);
+    if (isBot) return yield* dispatchToBot(command, channelOwner);
+  }
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;
     const incomingByQuestionId = command.attachmentsByQuestionId;

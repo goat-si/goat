@@ -7,12 +7,14 @@
  * @module textGeneration/TextGenerationOperations
  */
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { type ChatAttachment, type ModelSelection, TextGenerationError } from "@t3tools/contracts";
 import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
+import { buildChannelReceptionPrompt, toChannelReceptionResult } from "./channelReceptionPrompt.ts";
 import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
@@ -64,8 +66,20 @@ export const decodeJsonReply = <S extends Schema.Top>(
   );
 };
 
+export interface FromRunnerOptions {
+  /**
+   * Also offer channel reception. Only providers whose runner has been checked to run it with
+   * tools off and in an empty directory turn this on.
+   */
+  readonly channelReception?: boolean;
+}
+
 /** The text generation service over `run`. `name` prefixes each operation's span. */
-export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
+export function fromRunner(
+  name: string,
+  run: Runner,
+  options: FromRunnerOptions = {},
+): ProviderTextGeneration {
   const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
     `${name}.generateCommitMessage`,
   )(function* (input) {
@@ -148,10 +162,29 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     };
   });
 
+  const generateChannelReception: NonNullable<ProviderTextGeneration["generateChannelReception"]> =
+    Effect.fn(`${name}.generateChannelReception`)(function* (input) {
+      const generated = yield* run({
+        operation: "generateChannelReception",
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        ...buildChannelReceptionPrompt(input.input),
+      });
+      const result = toChannelReceptionResult(generated);
+      if (Option.isNone(result)) {
+        return yield* new TextGenerationError({
+          operation: "generateChannelReception",
+          detail: "The model chose an action without the fields it needs.",
+        });
+      }
+      return result.value;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    ...(options.channelReception === true ? { generateChannelReception } : {}),
   } satisfies ProviderTextGeneration;
 }

@@ -1,0 +1,208 @@
+/**
+ * ChannelRuntime - runs the channel workers in the one process that owns them.
+ *
+ * The owner holds the ledger's worker row (refreshed every few seconds) and runs one pass of
+ * work whenever a writer signals or a short interval passes: answer new inputs (up to four at
+ * once, each on its own fiber), dispatch received tasks, forward answers, word task updates,
+ * bring running tasks in line with their worker threads, and deliver due outbox rows. Run
+ * events from worker threads only wake the loop; every pass decides from the ledger and the
+ * thread projections, so restarts and missed signals change only timing.
+ *
+ * @module ChannelRuntime
+ */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the owner token only needs a random UUID.
+import * as NodeCrypto from "node:crypto";
+
+import type { ChannelInputId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
+import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelWake from "./ChannelWake.ts";
+import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+
+const HEARTBEAT_MS = 10_000;
+const STALE_MS = 30_000;
+const SCAN_MS = 5_000;
+const RECEPTION_CONCURRENCY = 4;
+
+export class ChannelRuntime extends Context.Service<
+  ChannelRuntime,
+  {
+    /** Runs passes until a pass starts nothing new and every reception it started finished. */
+    readonly drain: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    /** One pass, without waiting for the receptions it forks. */
+    readonly runPass: Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    readonly ownerToken: string;
+  }
+>()("t3/channels/ChannelRuntime") {}
+
+const make = Effect.gen(function* () {
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const reception = yield* ChannelReceptionService.ChannelReceptionService;
+  const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+  const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const owner = "channel-owner:" + NodeCrypto.randomUUID();
+  const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
+  const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
+  const scope = yield* Effect.scope;
+
+  const claim = Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    return yield* ledger.claimOwnership({
+      token: owner,
+      now: DateTime.formatIso(now),
+      staleBefore: DateTime.formatIso(DateTime.subtractDuration(now, Duration.millis(STALE_MS))),
+    });
+  });
+
+  const startReception = (inputId: ChannelInputId) =>
+    Effect.gen(function* () {
+      const running = yield* Ref.get(inFlight);
+      if (running.has(inputId)) return false;
+      const fiber = yield* receptionSlots
+        .withPermits(1)(reception.receive(inputId, owner))
+        .pipe(
+          Effect.tapCause((cause) =>
+            Effect.logWarning("channel reception crashed", { inputId, cause }),
+          ),
+          Effect.ignore,
+          Effect.ensuring(
+            Ref.update(inFlight, (current) => {
+              const next = new Map(current);
+              next.delete(inputId);
+              return next;
+            }),
+          ),
+          Effect.forkIn(scope),
+        );
+      yield* Ref.update(inFlight, (current) => new Map(current).set(inputId, fiber));
+      return true;
+    });
+
+  const runPass = Effect.gen(function* () {
+    let started = 0;
+    for (const inputId of yield* ledger.listPendingInputs(100)) {
+      if (yield* startReception(inputId)) started += 1;
+    }
+    for (const stored of yield* ledger.listTasksByStatus(["received", "dispatching"])) {
+      yield* dispatcher.dispatch(stored.task.taskId, owner);
+      started += 1;
+    }
+    for (const pending of yield* ledger.listPendingForwards(50)) {
+      yield* dispatcher.forward(pending, owner);
+      started += 1;
+    }
+    for (const pending of yield* ledger.listPendingNarrations(50)) {
+      yield* reception.narrate(pending, owner);
+      started += 1;
+    }
+    started += yield* reports.reconcile(owner);
+    started += yield* delivery.deliverDue(owner);
+    return started;
+  });
+
+  const awaitReceptions = Effect.gen(function* () {
+    const running = [...(yield* Ref.get(inFlight)).values()];
+    yield* Effect.forEach(running, (fiber) => Fiber.await(fiber), { discard: true });
+    return running.length;
+  });
+
+  const drain = Effect.gen(function* () {
+    if (!(yield* claim)) return;
+    // A forked reception may commit work for the next pass, so stop only when nothing moved.
+    for (let pass = 0; pass < 50; pass += 1) {
+      const started = yield* runPass;
+      const awaited = yield* awaitReceptions;
+      if (started === 0 && awaited === 0) return;
+    }
+  });
+
+  return ChannelRuntime.of({ drain, runPass, ownerToken: owner });
+});
+
+/** The runtime service alone, for tests that drive passes themselves. */
+export const layer = Layer.effect(ChannelRuntime, make);
+
+/**
+ * The runtime plus its background loops: ownership heartbeat, wake-driven passes with a short
+ * scan interval, and run events from worker threads as extra wake-ups.
+ */
+export const layerBackground = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const runtime = yield* ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const wake = yield* ChannelWake.ChannelWake;
+    const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const owning = yield* Ref.make(false);
+
+    const heartbeat = Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const owns = yield* ledger.claimOwnership({
+        token: runtime.ownerToken,
+        now: DateTime.formatIso(now),
+        staleBefore: DateTime.formatIso(DateTime.subtractDuration(now, Duration.millis(STALE_MS))),
+      });
+      const before = yield* Ref.getAndSet(owning, owns);
+      if (owns && !before) {
+        // Newly owning: deliveries a previous owner left in flight are settled before new work.
+        yield* ledger.settleInterruptedDeliveries({
+          owner: runtime.ownerToken,
+          now: DateTime.formatIso(now),
+        });
+        yield* wake.wake;
+      }
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logWarning("channel ownership check failed", { cause })),
+    );
+
+    const passes = Effect.gen(function* () {
+      yield* Effect.raceFirst(wake.next, Effect.sleep(Duration.millis(SCAN_MS)));
+      if (!(yield* Ref.get(owning))) return;
+      yield* runtime.runPass.pipe(
+        Effect.catchCause((cause) => Effect.logWarning("channel worker pass failed", { cause })),
+      );
+    });
+
+    const runEvents = Stream.unwrap(
+      eventSink
+        .latestSequence()
+        .pipe(
+          Effect.map((latest) =>
+            eventSink.stream({ afterSequence: latest, eventType: "run.updated" }),
+          ),
+        ),
+    ).pipe(
+      Stream.runForEach((stored) =>
+        reports.isWorkerThread(stored.event.threadId).pipe(
+          Effect.flatMap((isWorker) => (isWorker ? wake.wake : Effect.void)),
+          Effect.ignore,
+        ),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel run event stream stopped", { cause }),
+      ),
+    );
+
+    yield* heartbeat.pipe(
+      Effect.repeat(Schedule.spaced(Duration.millis(HEARTBEAT_MS))),
+      Effect.forkScoped,
+    );
+    yield* passes.pipe(Effect.forever, Effect.forkScoped);
+    yield* runEvents.pipe(Effect.forkScoped);
+  }),
+);

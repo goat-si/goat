@@ -264,6 +264,9 @@ export const make = Effect.gen(function* () {
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
       sshActivity: true,
+      channelLedger: true,
+      // No live Slack runtime is assembled yet; the settings RPCs answer adapter_unavailable.
+      slackChannel: false,
     },
   };
 

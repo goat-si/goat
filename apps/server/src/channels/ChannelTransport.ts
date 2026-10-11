@@ -14,8 +14,10 @@ import type {
   ChannelOutboundMessage,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 
 export interface ChannelTransport {
@@ -37,3 +39,24 @@ export class ChannelTransportRegistry extends Context.Service<
     readonly resolve: (kind: ChannelKind) => Effect.Effect<Option.Option<ChannelTransport>>;
   }
 >()("t3/channels/ChannelTransport/ChannelTransportRegistry") {}
+
+const makeRegistry = Effect.gen(function* () {
+  const transports = yield* Ref.make(new Map<ChannelKind, ChannelTransport>());
+  return ChannelTransportRegistry.of({
+    register: (transport) =>
+      Effect.acquireRelease(
+        Ref.update(transports, (current) => new Map(current).set(transport.kind, transport)),
+        () =>
+          Ref.update(transports, (current) => {
+            if (current.get(transport.kind) !== transport) return current;
+            const next = new Map(current);
+            next.delete(transport.kind);
+            return next;
+          }),
+      ),
+    resolve: (kind) =>
+      Ref.get(transports).pipe(Effect.map((current) => Option.fromNullishOr(current.get(kind)))),
+  });
+});
+
+export const layer = Layer.effect(ChannelTransportRegistry, makeRegistry);

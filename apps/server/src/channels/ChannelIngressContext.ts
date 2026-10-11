@@ -26,11 +26,19 @@ export type ChannelIngressCaller =
   /** A legacy `message.dispatch` to the GOAT bot, redirected by thread message intake. */
   | { readonly type: "intake"; readonly commandId: CommandId };
 
-export interface ChannelIngressContext {
+/**
+ * The host owner a connection acts for, with the scopes and runtime ceiling allowed to that
+ * connection. A Slack connection stores the owner who configured it; each event's context is
+ * that owner plus the transport caller.
+ */
+export interface ChannelConnectionOwner {
   readonly ownerId: string;
   readonly principalId: string;
   readonly displayName: string;
   readonly grantedScopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly runtimeModeCeiling: RuntimeMode;
+}
+
+export interface ChannelIngressContext extends ChannelConnectionOwner {
   readonly caller: ChannelIngressCaller;
 }

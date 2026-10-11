@@ -1,4 +1,10 @@
-import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, type WsRpcGroup } from "@t3tools/contracts";
+import {
+  CHANNEL_GATEWAY_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
+  SLACK_CHANNEL_WS_METHODS,
+  WS_METHODS,
+  type WsRpcGroup,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -92,6 +98,17 @@ const RPC_AGGREGATES = {
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: "scheduledTasks",
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: "scheduledTasks",
   [WS_METHODS.secretsAnswerRequest]: "secrets",
+  [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listTasks]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.getInput]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: "channel",
+  [SLACK_CHANNEL_WS_METHODS.getSettings]: "channel",
+  [SLACK_CHANNEL_WS_METHODS.configure]: "channel",
+  [SLACK_CHANNEL_WS_METHODS.disconnect]: "channel",
+  [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: "channel",
   [WS_METHODS.cloudGetRelayClientStatus]: "cloud",
   [WS_METHODS.cloudInstallRelayClient]: "cloud",
   [WS_METHODS.pullRequestsList]: "pull-requests",

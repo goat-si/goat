@@ -39,7 +39,7 @@ import {
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChannelMessageMeta } from "./channelCommon.ts";
-import { ChannelTaskChip } from "./channelLedger.ts";
+import { ChannelTaskChip, ChannelTimelineRecord } from "./channelLedger.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
@@ -3259,6 +3259,16 @@ const OrchestrationV2InternalCommand = Schema.Union([
      * after the cascade began keeps running.
      */
     stopCascadeFrom: Schema.optional(ThreadId),
+  }),
+  /**
+   * Writes one GOAT bot message or task chip without a provider run. Internal so no client
+   * can put words in the bot's mouth; the channel gateway sends it after the ledger commits.
+   */
+  Schema.Struct({
+    type: Schema.Literal("channel.timeline.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    record: ChannelTimelineRecord,
   }),
   /**
    * Records or updates a secret an agent asked the user for. Internal so no

@@ -133,6 +133,8 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
+import { timelineIdsFor } from "../channels/channelIds.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
@@ -199,6 +201,16 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
 ) {
   override get message(): string {
     return "This subagent is run by its provider and cannot take messages. Message the parent thread instead.";
+  }
+}
+
+/** The GOAT bot answers through its reception service; it never runs a coding turn. */
+export class OrchestratorChannelBotThreadError extends Schema.TaggedError<OrchestratorChannelBotThreadError>()(
+  "OrchestratorChannelBotThreadError",
+  { commandId: CommandId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return "This thread is the GOAT bot. Send it messages through the GOAT bot chat or channel_ingest.";
   }
 }
 
@@ -291,6 +303,7 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorCommandIdConflictError,
   OrchestratorSubagentThreadReadOnlyError,
   OrchestratorThreadAboveModeLimitError,
+  OrchestratorChannelBotThreadError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -522,6 +535,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.created.record":
       return command.parentThreadId;
     case "secret_request.record":
+    case "channel.timeline.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -848,6 +862,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
+  const botDirectory = yield* ChannelBotDirectory.ChannelBotDirectory;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
       Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
@@ -7605,6 +7620,176 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  /**
+   * One GOAT bot message or task chip, recorded without a run, provider session, or effect.
+   * Ids come from the record key, so a redelivered record updates its own item in place.
+   */
+  const dispatchChannelTimelineRecord = Effect.fn("orchestrationV2.dispatch.channelTimelineRecord")(
+    function* (
+      command: Extract<
+        OrchestrationV2InternalCommand,
+        { readonly type: "channel.timeline.record" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const isBot = yield* botDirectory
+        .isBotThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (!isBot) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Thread " + command.threadId + " is not the GOAT bot.",
+        });
+      }
+      const { record } = command;
+      const { messageId, turnItemId } = timelineIdsFor(record.recordKey, "");
+      const existing = yield* projectionStore
+        .getTurnItem({ threadId: command.threadId, itemId: turnItemId })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const now = yield* DateTime.now;
+      const ordinal =
+        existing?.ordinal ??
+        (yield* projectionStore
+          .getNextTurnItemOrdinal(command.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          ));
+      const base = {
+        id: turnItemId,
+        threadId: command.threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal,
+        status: "completed" as const,
+        title: null,
+        startedAt: existing?.startedAt ?? now,
+        completedAt: existing?.completedAt ?? now,
+        updatedAt: now,
+      };
+      const emitEvent = emit(events, command);
+      const entry = record.entry;
+      if (entry.type === "task_chip") {
+        if (existing !== undefined && existing !== null && existing.type !== "notification") {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Turn item " + turnItemId + " is not a task chip.",
+          });
+        }
+        // An older chip arriving late never replaces a newer one.
+        if (
+          existing?.type === "notification" &&
+          existing.ledgerTask !== undefined &&
+          existing.ledgerTask.taskVersion >= entry.chip.taskVersion
+        ) {
+          return;
+        }
+        const chip = entry.chip;
+        const turnItem: OrchestrationV2TurnItem = {
+          ...base,
+          type: "notification",
+          source: { kind: "background_task" },
+          outcome:
+            chip.status === "completed"
+              ? "completed"
+              : chip.status === "failed"
+                ? "failed"
+                : chip.status === "cancelled"
+                  ? "cancelled"
+                  : "updated",
+          summary: chip.title,
+          ...(chip.summary === undefined || chip.summary.trim() === ""
+            ? {}
+            : { detail: chip.summary }),
+          ledgerTask: chip,
+        };
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: turnItem,
+        });
+        return;
+      }
+      if (
+        existing !== undefined &&
+        existing !== null &&
+        existing.type !== (entry.role === "user" ? "user_message" : "assistant_message")
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Turn item " + turnItemId + " is not a " + entry.role + " message.",
+        });
+      }
+      const createdBy = entry.role === "user" ? ("user" as const) : ("agent" as const);
+      const message: OrchestrationV2ConversationMessage = {
+        createdBy,
+        creationSource: "server",
+        channel: entry.meta,
+        id: messageId,
+        threadId: command.threadId,
+        runId: null,
+        nodeId: null,
+        role: entry.role,
+        text: entry.text,
+        attachments: [],
+        streaming: false,
+        createdAt: base.startedAt,
+        updatedAt: now,
+      };
+      const turnItem: OrchestrationV2TurnItem =
+        entry.role === "user"
+          ? {
+              ...base,
+              createdBy,
+              creationSource: "server",
+              type: "user_message",
+              messageId,
+              channel: entry.meta,
+              // A channel input starts no provider turn; runId null marks it as runless.
+              inputIntent: "turn_start",
+              text: entry.text,
+              attachments: [],
+            }
+          : {
+              ...base,
+              type: "assistant_message",
+              messageId,
+              channel: entry.meta,
+              text: entry.text,
+              streaming: false,
+            };
+      yield* emitEvent({
+        type: "message.updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: message,
+      });
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: turnItem,
+      });
+    },
+  );
+
   const dispatchRuntimeRequestRespond = (
     command: Extract<OrchestrationV2Command, { readonly type: "runtime-request.respond" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -11158,6 +11343,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadId: command.threadId,
           });
         }
+        const isBot = yield* botDirectory
+          .isBotThread(command.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          );
+        if (isBot) {
+          return yield* new OrchestratorChannelBotThreadError({
+            commandId: command.commandId,
+            threadId: command.threadId,
+          });
+        }
+        // Task chips come only from the channel ledger, through channel.timeline.record.
+        if (command.notification?.ledgerTask !== undefined) {
+          return yield* new OrchestratorCommandRejectedError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Notifications sent as messages cannot carry a ledger task.",
+          });
+        }
         yield* dispatchMessage(command, events, effects);
         yield* recordSubagentFollowup(command, events).pipe(mapDispatchError(command));
         break;
@@ -11295,6 +11501,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "secret_request.record":
         yield* dispatchSecretRequestRecord(command, events);
+        break;
+      case "channel.timeline.record":
+        yield* dispatchChannelTimelineRecord(command, events);
         break;
       default:
         return yield* dispatchUnsupported(command);
@@ -11882,6 +12091,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 export const layer: Layer.Layer<
   OrchestratorV2,
   never,
+  | ChannelBotDirectory.ChannelBotDirectory
   | CheckpointServiceV2
   | FileSystem.FileSystem
   | Path.Path

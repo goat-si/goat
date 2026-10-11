@@ -29,6 +29,30 @@ import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const CODEX_TIMEOUT_MS = 180_000;
+/**
+ * Channel reception answers from its prompt alone: no user config (and so no configured MCP
+ * servers), no exec rules, and no shell, apps, plugins, browser, computer, image, or hook tools.
+ */
+const CODEX_CHANNEL_RECEPTION_ARGS = [
+  "--ignore-user-config",
+  "--ignore-rules",
+  "--disable",
+  "shell_tool",
+  "--disable",
+  "unified_exec",
+  "--disable",
+  "apps",
+  "--disable",
+  "plugins",
+  "--disable",
+  "browser_use",
+  "--disable",
+  "computer_use",
+  "--disable",
+  "view_image",
+  "--disable",
+  "hooks",
+] as const;
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -183,6 +207,22 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           (candidate) => !candidate.isCustom && codexModelFamily(candidate.slug) === requestedModel,
         )?.slug ??
         requestedModel;
+      const isChannelReception = operation === "generateChannelReception";
+      // Reception runs in an empty directory so nothing in a checkout reaches the model.
+      const workingDirectory = isChannelReception
+        ? yield* fileSystem
+            .makeTempDirectoryScoped({ prefix: "t3code-codex-reception-" })
+            .pipe(
+              Effect.mapError((cause) =>
+                normalizeCliError(
+                  "codex",
+                  operation,
+                  cause,
+                  "Failed to create reception directory",
+                ),
+              ),
+            )
+        : cwd;
       const launchArgs = resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
       const reasoningEffort =
         getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
@@ -192,7 +232,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         effectiveConfig.binaryPath || "codex",
         [
           "exec",
-          ...codexExecLaunchArgs(launchArgs),
+          ...(isChannelReception ? CODEX_CHANNEL_RECEPTION_ARGS : codexExecLaunchArgs(launchArgs)),
           "--ephemeral",
           "--skip-git-repo-check",
           "-s",
@@ -223,7 +263,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
               }
             : {}),
         },
-        cwd,
+        cwd: workingDirectory,
         shell: spawnCommand.shell,
         stdin: {
           stream: Stream.encodeText(Stream.make(prompt)),
@@ -310,5 +350,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }).pipe(Effect.ensuring(cleanup));
   });
 
-  return TextGenerationOperations.fromRunner("CodexTextGeneration", runCodexJson);
+  return TextGenerationOperations.fromRunner("CodexTextGeneration", runCodexJson, {
+    channelReception: true,
+  });
 });

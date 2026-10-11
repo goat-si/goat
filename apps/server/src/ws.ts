@@ -1,5 +1,10 @@
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelGatewayError,
+  OrchestrationDispatchCommandError,
+  SLACK_CHANNEL_WS_METHODS,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 
@@ -210,6 +215,13 @@ import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
+import * as ChannelGateway from "./channels/ChannelGateway.ts";
+import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
+import * as ChannelLedger from "./channels/ChannelLedger.ts";
+import * as SlackChannelSettings from "./channels/SlackChannelSettings.ts";
+import { ownerFromSession } from "./channels/channelOwner.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
@@ -1201,7 +1213,19 @@ const layerWsRpc = (
         | ThreadLaunchService.ThreadLaunchService
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
+        | ChannelBotDirectory.ChannelBotDirectory
+        | ChannelLedger.ChannelLedger
+        | ChannelGateway.ChannelGateway
       >();
+      const channelGateway = yield* ChannelGateway.ChannelGateway;
+      const channelLedger = yield* ChannelLedger.ChannelLedger;
+      const channelBots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      const channelIdentities = yield* ChannelIdentityService.ChannelIdentityService;
+      const slackChannelSettings = yield* SlackChannelSettings.SlackChannelSettings;
+      const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
+        .getEnvironmentId;
+      // Channel calls act for the authenticated session; nothing here comes from client input.
+      const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
@@ -1857,6 +1881,7 @@ const layerWsRpc = (
                           creationSource:
                             "creationSource" in command ? command.creationSource : "web",
                         }),
+                        channelOwner,
                       )
                   ).pipe(Effect.provide(intakeContext)),
                 )
@@ -2073,6 +2098,54 @@ const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
+        [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
+        // Waits only for durable storage; the reply arrives later on the bot thread.
+        [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
+          channelGateway.ingest(input, {
+            ...channelOwner,
+            caller: { type: "rpc", clientId: currentSessionId },
+          }),
+        [CHANNEL_GATEWAY_WS_METHODS.getTask]: (input) =>
+          channelLedger.getTask(input.taskId).pipe(
+            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+            Effect.flatMap((stored) =>
+              stored === undefined || stored.ownerId !== channelOwner.ownerId
+                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
+                : Effect.succeed(stored.task),
+            ),
+          ),
+        [CHANNEL_GATEWAY_WS_METHODS.listTasks]: (input) =>
+          channelLedger
+            .listTasks({
+              ownerId: channelOwner.ownerId,
+              statuses: input.status,
+              limit: input.limit ?? 50,
+              cursor: input.cursor,
+            })
+            .pipe(
+              Effect.map((page) => ({
+                tasks: page.tasks,
+                ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+              })),
+              Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+            ),
+        [CHANNEL_GATEWAY_WS_METHODS.getInput]: (input) =>
+          channelLedger.getInput(input.inputId).pipe(
+            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+            Effect.flatMap((stored) =>
+              stored === undefined || stored.ownerId !== channelOwner.ownerId
+                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
+                : Effect.succeed(stored.snapshot),
+            ),
+          ),
+        [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: (input) =>
+          channelIdentities.createLink(input, channelOwner),
+        [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: (input) => channelIdentities.unlink(input),
+        [SLACK_CHANNEL_WS_METHODS.getSettings]: () => slackChannelSettings.get(),
+        [SLACK_CHANNEL_WS_METHODS.configure]: (input) =>
+          slackChannelSettings.configure(input, channelOwner),
+        [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
+        [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
         [WS_METHODS.secretsAnswerRequest]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),

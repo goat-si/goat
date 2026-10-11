@@ -12,21 +12,47 @@
  *
  * @module ChannelGateway
  */
-import type {
-  ChannelDeliveryReceipt,
+import {
+  type ChannelDeliveryReceipt,
   ChannelGatewayError,
-  ChannelIdentityLinkConsumeInput,
-  ChannelIdentityLinkConsumeResult,
-  ChannelIngestInput,
-  ChannelIngestResult,
-  ChannelNoticeInput,
-  ChannelNoticeReceipt,
-  ChannelOutboundMessage,
+  type ChannelIdentityLinkConsumeInput,
+  type ChannelIdentityLinkConsumeResult,
+  type ChannelIngestInput,
+  type ChannelIngestResult,
+  type ChannelInputId,
+  type ChannelKind,
+  type ChannelNoticeInput,
+  type ChannelNoticeReceipt,
+  type ChannelOutboundMessage,
+  type ChannelReplyAddress,
+  type ChannelRequester,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
-import type { ChannelIngressContext } from "./ChannelIngressContext.ts";
+import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
+import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelTransport from "./ChannelTransport.ts";
+import * as ChannelWake from "./ChannelWake.ts";
+import { CHANNEL_COPY } from "./channelCopy.ts";
+import {
+  bindingIdFor,
+  contentHashFor,
+  conversationIdFor,
+  deliveryIdFor,
+  inputIdFor,
+  linkCodeHashFor,
+} from "./channelIds.ts";
+
+/** The fixed connection id of the GOAT bot channel. */
+export const GOAT_CONNECTION_ID = "goat";
+/** The fixed connection id of agent input over MCP; the request namespace scopes it. */
+export const MCP_CONNECTION_ID = "mcp";
 
 export class ChannelGateway extends Context.Service<
   ChannelGateway,
@@ -54,3 +80,335 @@ export class ChannelGateway extends Context.Service<
     ) => Effect.Effect<ChannelDeliveryReceipt, ChannelGatewayError>;
   }
 >()("t3/channels/ChannelGateway") {}
+
+const RUNTIME_MODE_ORDER: ReadonlyArray<RuntimeMode> = [
+  "approval-required",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+];
+
+/** The lower of two runtime-mode ceilings. */
+export const lowerRuntimeMode = (left: RuntimeMode, right: RuntimeMode): RuntimeMode =>
+  RUNTIME_MODE_ORDER.indexOf(left) <= RUNTIME_MODE_ORDER.indexOf(right) ? left : right;
+
+/** What a linked account may do: the connection's ceiling and the link's, whichever is lower. */
+export const effectiveRequester = (
+  owner: ChannelConnectionOwner,
+  identity: ChannelLedger.ChannelIdentity,
+  input: { readonly originKind: ChannelKind; readonly externalActorId: string },
+): ChannelRequester => ({
+  ownerId: owner.ownerId,
+  principalId: identity.principalId,
+  displayName: identity.displayName,
+  originKind: input.originKind,
+  externalActorId: input.externalActorId,
+  runtimeModeCeiling: lowerRuntimeMode(owner.runtimeModeCeiling, identity.runtimeModeCeiling),
+  grantedScopes: owner.grantedScopes.filter((scope) => identity.grantedScopes.includes(scope)),
+});
+
+const replyAddressKey = (address: ChannelReplyAddress) => {
+  switch (address.kind) {
+    case "goat":
+      return "goat:" + address.environmentId + ":" + address.threadId;
+    case "slack":
+      return (
+        "slack:" +
+        address.connectionId +
+        ":" +
+        address.teamId +
+        ":" +
+        address.channelId +
+        ":" +
+        address.rootTs
+      );
+    case "mcp":
+      return (
+        "mcp:" +
+        address.connectionId +
+        ":" +
+        address.requestNamespace +
+        ":" +
+        address.conversationKey
+      );
+  }
+};
+
+const ledgerFailure = (cause: ChannelLedger.ChannelLedgerError) =>
+  new ChannelGatewayError({
+    reason: cause.reason === "idempotency_conflict" ? "idempotency_conflict" : "persistence_failed",
+  });
+
+const forbidden = () => new ChannelGatewayError({ reason: "forbidden" });
+
+const noticeDelivery = (
+  causeKey: string,
+  destination: ChannelReplyAddress,
+  text: string,
+  mentionActorId: string | undefined,
+  inputId?: ChannelInputId,
+): ChannelLedger.ChannelOutboxInsert => {
+  const deliveryId = deliveryIdFor(causeKey);
+  return {
+    deliveryId,
+    causeKey,
+    ...(inputId === undefined ? {} : { inputId }),
+    message: {
+      deliveryId,
+      destination,
+      kind: "receipt",
+      text,
+      ...(inputId === undefined ? {} : { inReplyToInputId: inputId }),
+      ...(mentionActorId === undefined ? {} : { mentionActorId }),
+    },
+  };
+};
+
+const make = Effect.gen(function* () {
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const registry = yield* ChannelTransport.ChannelTransportRegistry;
+  const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
+  const wake = yield* ChannelWake.ChannelWake;
+
+  /** Checks that the caller may speak for this channel, conversation, and reply address. */
+  const checkCaller = (input: ChannelIngestInput, context: ChannelIngressContext) =>
+    Effect.gen(function* () {
+      const caller = context.caller;
+      const address = input.replyAddress;
+      if (address.kind !== input.kind) return yield* forbidden();
+      switch (input.kind) {
+        case "goat": {
+          if (caller.type !== "rpc" && caller.type !== "intake") return yield* forbidden();
+          if (address.kind !== "goat" || input.connectionId !== GOAT_CONNECTION_ID) {
+            return yield* forbidden();
+          }
+          const bot = yield* ledger.getBot(context.ownerId).pipe(Effect.mapError(ledgerFailure));
+          if (bot === undefined || bot.bot.threadId !== address.threadId) {
+            return yield* forbidden();
+          }
+          if (input.conversationKey !== address.threadId) return yield* forbidden();
+          if (input.attachments.length > 0) {
+            return yield* new ChannelGatewayError({ reason: "invalid_input" });
+          }
+          return;
+        }
+        case "mcp": {
+          if (caller.type !== "mcp" || address.kind !== "mcp") return yield* forbidden();
+          if (
+            input.connectionId !== MCP_CONNECTION_ID ||
+            address.connectionId !== MCP_CONNECTION_ID ||
+            address.requestNamespace !== caller.requestNamespace ||
+            address.conversationKey !== input.conversationKey
+          ) {
+            return yield* forbidden();
+          }
+          return;
+        }
+        case "slack": {
+          if (
+            caller.type !== "transport" ||
+            caller.kind !== "slack" ||
+            caller.connectionId !== input.connectionId ||
+            address.kind !== "slack" ||
+            address.connectionId !== input.connectionId
+          ) {
+            return yield* forbidden();
+          }
+          return;
+        }
+      }
+    });
+
+  /** Who is asking. Undefined means an unlinked transport account. */
+  const resolveRequester = (input: ChannelIngestInput, context: ChannelIngressContext) =>
+    Effect.gen(function* () {
+      if (input.kind !== "slack") {
+        const requester: ChannelRequester = {
+          ownerId: context.ownerId,
+          principalId: context.principalId,
+          displayName: context.displayName,
+          originKind: input.kind,
+          ...(input.actor.externalActorId === undefined
+            ? {}
+            : { externalActorId: input.actor.externalActorId }),
+          runtimeModeCeiling: context.runtimeModeCeiling,
+          grantedScopes: [...context.grantedScopes],
+        };
+        return requester;
+      }
+      const externalActorId = input.actor.externalActorId;
+      if (externalActorId === undefined) return undefined;
+      const identity = yield* ledger
+        .findIdentity({ connectionId: input.connectionId, externalActorId })
+        .pipe(Effect.mapError(ledgerFailure));
+      if (identity === undefined) return undefined;
+      return effectiveRequester(context, identity, { originKind: "slack", externalActorId });
+    });
+
+  const recordBotInput = (input: ChannelIngestInput, result: ChannelIngestResult) =>
+    Effect.gen(function* () {
+      if (input.replyAddress.kind !== "goat") return result;
+      const sequence = yield* timeline.record({
+        threadId: input.replyAddress.threadId,
+        record: {
+          recordKey: "input:" + result.inputId,
+          entry: {
+            type: "message",
+            role: "user",
+            text: input.text,
+            meta: {
+              conversationId: result.conversationId,
+              originKind: "goat",
+              kind: "inbound",
+              inputId: result.inputId,
+            },
+          },
+        },
+        revision: "accepted",
+      });
+      yield* ledger
+        .setTimelineSequence(result.inputId, sequence)
+        .pipe(Effect.mapError(ledgerFailure));
+      return { ...result, timelineSequence: sequence };
+    });
+
+  const ingest: ChannelGateway["Service"]["ingest"] = (input, context) =>
+    Effect.gen(function* () {
+      if (input.intent === "report") {
+        // Workers report through channel_task_report, which checks their assignment.
+        return yield* new ChannelGatewayError({ reason: "invalid_input" });
+      }
+      yield* checkCaller(input, context);
+      const requester = yield* resolveRequester(input, context);
+      const conversationId = conversationIdFor({
+        ownerId: context.ownerId,
+        kind: input.kind,
+        connectionId: input.connectionId,
+        conversationKey: input.conversationKey,
+      });
+      const inputId = inputIdFor({
+        ownerId: context.ownerId,
+        kind: input.kind,
+        connectionId: input.connectionId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      const acceptedAt = DateTime.formatIso(yield* DateTime.now);
+      const result = yield* ledger
+        .acceptInput({
+          ownerId: context.ownerId,
+          inputId,
+          conversationId,
+          bindingId: bindingIdFor(conversationId, replyAddressKey(input.replyAddress)),
+          message: input,
+          contentHash: contentHashFor(input),
+          requester,
+          acceptedAt,
+          ...(requester === undefined
+            ? {
+                rejectNotice: noticeDelivery(
+                  "unlinked:" + inputId,
+                  input.replyAddress,
+                  CHANNEL_COPY.unlinkedInput,
+                  input.actor.externalActorId,
+                  inputId,
+                ),
+              }
+            : {}),
+        })
+        .pipe(Effect.mapError(ledgerFailure));
+      // A retry after a crash between storing and recording finds no sequence and records again;
+      // the record's ids are fixed, so the bot shows the message once.
+      const recorded =
+        result.timelineSequence === undefined && result.state !== "rejected"
+          ? yield* recordBotInput(input, result)
+          : result;
+      yield* wake.wake;
+      return recorded;
+    });
+
+  const linkIdentity: ChannelGateway["Service"]["linkIdentity"] = (input, context) =>
+    Effect.gen(function* () {
+      const caller = context.caller;
+      if (
+        caller.type !== "transport" ||
+        caller.connectionId !== input.connectionId ||
+        input.replyAddress.kind !== caller.kind
+      ) {
+        return yield* forbidden();
+      }
+      const causeKey = "link:" + input.connectionId + ":" + input.idempotencyKey;
+      const now = DateTime.formatIso(yield* DateTime.now);
+      // Success and failure share one cause key, so a retried code keeps the first answer.
+      const outcome = yield* ledger
+        .consumeIdentityLink({
+          codeHash: linkCodeHashFor(input.connectionId, input.code),
+          connectionId: input.connectionId,
+          externalActorId: input.externalActorId,
+          now,
+          notice: noticeDelivery(
+            causeKey,
+            input.replyAddress,
+            CHANNEL_COPY.linked,
+            input.externalActorId,
+          ),
+          failureNotice: noticeDelivery(
+            causeKey,
+            input.replyAddress,
+            CHANNEL_COPY.linkInvalid,
+            input.externalActorId,
+          ),
+        })
+        .pipe(Effect.mapError(ledgerFailure));
+      yield* wake.wake;
+      if (outcome.type === "invalid") return yield* forbidden();
+      return { principalId: outcome.identity.principalId, linkedAt: outcome.linkedAt };
+    });
+
+  const requestNotice: ChannelGateway["Service"]["requestNotice"] = (input, context) =>
+    Effect.gen(function* () {
+      const caller = context.caller;
+      if (
+        caller.type !== "transport" ||
+        caller.connectionId !== input.connectionId ||
+        input.replyAddress.kind !== caller.kind
+      ) {
+        return yield* forbidden();
+      }
+      const causeKey = "notice:" + input.connectionId + ":" + input.idempotencyKey;
+      const deliveryId = deliveryIdFor(causeKey);
+      const existing = yield* ledger
+        .getDeliveryState(deliveryId)
+        .pipe(Effect.mapError(ledgerFailure));
+      if (existing !== undefined) return { deliveryId, duplicate: true };
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger
+        .enqueueDeliveries(
+          [
+            noticeDelivery(
+              causeKey,
+              input.replyAddress,
+              input.notice === "link_help" ? CHANNEL_COPY.linkHelp : CHANNEL_COPY.linkInvalid,
+              input.actor.externalActorId,
+            ),
+          ],
+          now,
+        )
+        .pipe(Effect.mapError(ledgerFailure));
+      yield* wake.wake;
+      return { deliveryId, duplicate: false };
+    });
+
+  const send: ChannelGateway["Service"]["send"] = (message) =>
+    registry.resolve(message.destination.kind).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(new ChannelGatewayError({ reason: "adapter_unavailable" })),
+          onSome: (transport) => transport.send(message),
+        }),
+      ),
+    );
+
+  return ChannelGateway.of({ ingest, linkIdentity, requestNotice, send });
+});
+
+export const layer = Layer.effect(ChannelGateway, make);
