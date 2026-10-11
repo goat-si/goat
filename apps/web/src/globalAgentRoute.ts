@@ -1,3 +1,6 @@
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+
+import type { DraftId } from "./composerDraftStore";
 import type { GlobalAgentRef } from "./globalAgentStore";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
@@ -32,4 +35,25 @@ export function isGlobalAgentRoute(
     target.threadRef.environmentId === ref.environmentId &&
     target.threadRef.threadId === ref.threadId
   );
+}
+
+/** Where the old global agent opens in its coding view, or null when nothing is left to open. */
+export type GlobalAgentLegacyRoute =
+  | { readonly kind: "thread"; readonly environmentId: EnvironmentId; readonly threadId: ThreadId }
+  | { readonly kind: "draft"; readonly draftId: DraftId };
+
+export function legacyGlobalAgentRoute(
+  ref: GlobalAgentRef | null,
+  shell: {
+    readonly archivedAt: string | null;
+    readonly deletedAt?: string | null | undefined;
+  } | null,
+  draftUnpromoted: boolean,
+): GlobalAgentLegacyRoute | null {
+  if (ref === null) return null;
+  if (shell !== null && shell.archivedAt === null && shell.deletedAt == null) {
+    return { kind: "thread", environmentId: ref.environmentId, threadId: ref.threadId };
+  }
+  if (shell === null && draftUnpromoted) return { kind: "draft", draftId: ref.draftId };
+  return null;
 }

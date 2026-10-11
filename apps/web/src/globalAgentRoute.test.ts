@@ -7,6 +7,7 @@ import {
   excludeGlobalAgentThreads,
   isGlobalAgentRoute,
   isGlobalAgentThread,
+  legacyGlobalAgentRoute,
 } from "./globalAgentRoute";
 
 const ENV = "env-1" as EnvironmentId;
@@ -67,5 +68,24 @@ describe("isGlobalAgentRoute", () => {
   });
   it("is inactive without a saved ref", () => {
     expect(isGlobalAgentRoute("/env-1/thread-1", serverTarget(ENV, "thread-1"), null)).toBe(false);
+  });
+});
+
+describe("legacyGlobalAgentRoute", () => {
+  it("opens the old global agent's thread directly, never through /", () => {
+    expect(legacyGlobalAgentRoute(REF, { archivedAt: null, deletedAt: null }, false)).toEqual({
+      kind: "thread",
+      environmentId: ENV,
+      threadId: REF.threadId,
+    });
+  });
+
+  it("falls back to its unsent draft, and to nothing once it is gone", () => {
+    expect(legacyGlobalAgentRoute(REF, null, true)).toEqual({
+      kind: "draft",
+      draftId: REF.draftId,
+    });
+    expect(legacyGlobalAgentRoute(REF, { archivedAt: "2026-10-12T00:00:00Z" }, false)).toBeNull();
+    expect(legacyGlobalAgentRoute(null, null, true)).toBeNull();
   });
 });

@@ -1,0 +1,106 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { Link } from "@tanstack/react-router";
+import {
+  ArrowUpRightIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  CircleDotIcon,
+  CircleIcon,
+  MessageCircleQuestionIcon,
+} from "lucide-react";
+import { useMemo } from "react";
+
+import { cn } from "~/lib/utils";
+import { useAllEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
+import { useConnectedEnvironmentIds } from "~/state/environments";
+
+import { Button } from "../ui/button";
+import type { GoatBotCardTarget, GoatBotCardTone, GoatBotTaskCard } from "./goatBotRows";
+
+const TONE_ICON = {
+  neutral: CircleIcon,
+  active: CircleDotIcon,
+  attention: MessageCircleQuestionIcon,
+  success: CircleCheckIcon,
+  danger: CircleAlertIcon,
+} satisfies Record<GoatBotCardTone, unknown>;
+
+const TONE_TEXT = {
+  neutral: "text-muted-foreground",
+  active: "text-info-foreground",
+  attention: "text-warning-foreground",
+  success: "text-success-foreground",
+  danger: "text-destructive-foreground",
+} satisfies Record<GoatBotCardTone, string>;
+
+/** One piece of work GOAT Bot started. Its details live in the worker's own thread. */
+export function GoatBotTaskChip({ card }: { readonly card: GoatBotTaskCard }) {
+  const Icon = TONE_ICON[card.tone];
+  return (
+    <div className="flex w-72 max-w-full flex-col gap-1.5 rounded-xl border border-border bg-card p-3 text-card-foreground">
+      <div className={cn("flex items-center gap-1.5 text-xs font-medium", TONE_TEXT[card.tone])}>
+        <Icon className="size-3.5 shrink-0" />
+        <span className="truncate">{card.statusLabel}</span>
+        {card.attentionLabel ? (
+          <span className="ml-auto shrink-0 text-warning-foreground">{card.attentionLabel}</span>
+        ) : null}
+      </div>
+      <div className="text-sm font-medium break-words">{card.title}</div>
+      {card.sourceLabel ? (
+        <div className="truncate text-xs text-muted-foreground">{card.sourceLabel}</div>
+      ) : null}
+      {card.summary ? (
+        <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
+      ) : null}
+      <div className="pt-0.5">
+        <GoatBotTaskTarget target={card.target} />
+      </div>
+    </div>
+  );
+}
+
+function GoatBotTaskTarget({ target }: { readonly target: GoatBotCardTarget }) {
+  if (target.kind === "none") return <DisabledTarget label={target.label} />;
+  return <GoatBotThreadTarget target={target} />;
+}
+
+function GoatBotThreadTarget({
+  target,
+}: {
+  readonly target: Extract<GoatBotCardTarget, { kind: "thread" }>;
+}) {
+  const threadRef = useMemo(
+    () => scopeThreadRef(target.environmentId, target.threadId),
+    [target.environmentId, target.threadId],
+  );
+  const shell = useThreadShell(threadRef);
+  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const connected = useConnectedEnvironmentIds().includes(target.environmentId);
+  if (!connected) return <DisabledTarget label="Computer offline" />;
+  if (bootstrapped && (shell === null || shell.deletedAt != null)) {
+    return <DisabledTarget label="Thread unavailable" />;
+  }
+  return (
+    <Button
+      size="xs"
+      variant="outline"
+      render={
+        <Link
+          to="/$environmentId/$threadId"
+          params={{ environmentId: target.environmentId, threadId: target.threadId }}
+        />
+      }
+    >
+      Open thread
+      <ArrowUpRightIcon />
+    </Button>
+  );
+}
+
+function DisabledTarget({ label }: { readonly label: string }) {
+  return (
+    <Button size="xs" variant="outline" disabled>
+      {label}
+    </Button>
+  );
+}

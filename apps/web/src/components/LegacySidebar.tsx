@@ -240,6 +240,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
 const projectsViewEnvironments = createProjectsViewEnvironmentAtoms({
   catalogAtom: environmentCatalog.catalogValueAtom,
   presentationsAtom: environmentPresentations.presentationsAtom,
@@ -3217,7 +3218,16 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   );
 
   return (
-    <SidebarContent>
+    <SidebarContent
+      fixedHeader={
+        // GOAT Bot stays put above Pinned and the projects, whatever the scroll.
+        <SidebarGroup className="z-[1]">
+          <SidebarMenu>
+            <GoatBotSidebarRow />
+          </SidebarMenu>
+        </SidebarGroup>
+      }
+    >
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
         <SidebarGroup>
           <Alert variant="warning">

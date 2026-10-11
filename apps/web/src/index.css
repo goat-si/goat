@@ -234,6 +234,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
+  /* GOAT Bot's user bubbles: a light tint of the theme's warning hue with dark text. */
+  --color-goat-bubble: color-mix(in srgb, var(--warning) 45%, white);
+  --color-goat-bubble-foreground: var(--color-zinc-950);
   --color-error-foreground: var(--error-foreground);
   --color-tool-error-icon: var(--tool-error-icon);
   --color-error: var(--error);

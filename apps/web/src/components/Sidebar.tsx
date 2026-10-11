@@ -298,7 +298,8 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "./ui/combobox";
-import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarMenu, useSidebar } from "./ui/sidebar";
+import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { subscribeSidebarSearchFocus } from "./sidebar/sidebarSearchFocus";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
@@ -5261,6 +5262,9 @@ export default function Sidebar() {
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            <SidebarMenu className="mt-1">
+              <GoatBotSidebarRow />
+            </SidebarMenu>
           </SidebarGroup>
         }
       >
