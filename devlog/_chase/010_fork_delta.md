@@ -57,8 +57,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `devlog` devlog
 
 - 커밋: `24d4ee846` `37073207d`
-- 경로: `devlog/`
-- 정책: GOAT 전용, 충돌 없음.
+- 경로: `devlog/`, `.gitignore`의 `!/devlog/`
+- 정책: GOAT 전용, 충돌 없음. `.gitignore` 충돌에서는 `!/devlog/` 줄을 남긴다.
 
 ### `global-agent` 글로벌 에이전트
 

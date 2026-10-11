@@ -45,3 +45,8 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+# devlog/ is tracked. This overrides a machine-local "devlog/" in .git/info/exclude or a global
+# gitignore, which would make git add, lint-staged and vp fmt skip it. Patterns that match paths
+# inside it, such as "devlog/*", still apply.
+!/devlog/
