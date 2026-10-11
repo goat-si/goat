@@ -157,6 +157,8 @@ export function isMachO(bytes: Uint8Array): boolean {
 // source checks and generic path patterns apply to GOAT code only. Paths of this build
 // machine (its home, workspace and checkout) fail anywhere they appear.
 const thirdParty = /(?:^|\/)node_modules\/|\/Contents\/Frameworks\//;
+// GOAT's own workspace packages stay GOAT code even when they land in node_modules.
+const goatPackage = /(?:^|\/)node_modules\/@t3tools\//;
 const buildPath =
   /\/Users\/[A-Za-z0-9._-]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
 
@@ -164,7 +166,7 @@ const buildPath =
 export function localBuildRoots(env: Readonly<Record<string, string | undefined>>, cwd: string) {
   const roots = [env.HOME, env.GITHUB_WORKSPACE, env.RUNNER_WORKSPACE, env.RUNNER_TEMP, cwd]
     .map((root) => root?.replace(/[\\/]+$/, ""))
-    .filter((root): root is string => root !== undefined && root.length >= 6);
+    .filter((root): root is string => root !== undefined && root.length >= 5);
   return [...new Set(roots)];
 }
 const defaultBuildRoots = localBuildRoots(process.env, process.cwd());
@@ -176,7 +178,7 @@ export function exposureProblems(
 ): string[] {
   const normalized = name.replace(/\\/g, "/");
   const problems: string[] = [];
-  const ours = !thirdParty.test(normalized);
+  const ours = !thirdParty.test(normalized) || goatPackage.test(normalized);
   if (ours && /\.map$/i.test(normalized)) problems.push(`${name}: source map`);
   if (ours && /\.(?:ts|tsx|mts|cts)$/i.test(normalized)) problems.push(`${name}: original source`);
   if (/(?:^|\/)\.git(?:\/|$)/.test(normalized)) problems.push(`${name}: git metadata`);
@@ -188,7 +190,10 @@ export function exposureProblems(
     problems.push(`${name}: private repository URL`);
   // V8/Node's diagnostic code embeds this documented Windows example literally.
   const pathContent = content.replace(/C:\\(?:\\)?a\\(?:\\)?b\\(?:\\)?c(?=["'`\s)]|$)/g, "");
-  const machinePath = roots.some((root) => pathContent.includes(`${root}/`) || name.includes(root));
+  const machinePath = roots.some(
+    (root) =>
+      pathContent.includes(`${root}/`) || pathContent.includes(`${root}\\`) || name.includes(root),
+  );
   if (machinePath || (ours && (buildPath.test(pathContent) || buildPath.test(name))))
     problems.push(`${name}: absolute build path`);
   buildPath.lastIndex = 0;
@@ -649,7 +654,7 @@ export const assembleRelease = Effect.fn("assembleRelease")(function* (
             : name === "nightly-linux-arm64.yml"
               ? /^GOAT-.*-arm64\.AppImage$/.test(asset.name)
               : name === "nightly-linux.yml"
-                ? /^GOAT-.*-x64\.AppImage$/.test(asset.name)
+                ? /^GOAT-.*-x86_64\.AppImage$/.test(asset.name)
                 : false,
       );
       for (const asset of expected)

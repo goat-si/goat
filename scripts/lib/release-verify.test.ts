@@ -148,6 +148,13 @@ describe("release payload helpers", () => {
       ["GOAT.app/Contents/Frameworks/Electron Framework", "sourceMappingURL=data:x"],
     ] as const)
       expect(exposureProblems(name, content, [])).toEqual([]);
+    // GOAT workspace packages are GOAT sources wherever they are installed.
+    expect(exposureProblems("app.asar!/node_modules/@t3tools/shared/src/x.ts", "", [])).toEqual([
+      "app.asar!/node_modules/@t3tools/shared/src/x.ts: original source",
+    ]);
+    expect(
+      exposureProblems("x.js", "C:\\Users\\runneradmin\\work\\x", ["C:\\Users\\runneradmin"]),
+    ).toEqual(["x.js: absolute build path"]);
     // Placeholders and prefix lists in GOAT code are not paths.
     expect(exposureProblems("main.js", "`/Users/<user>/.claude`", [])).toEqual([]);
     expect(exposureProblems("main.js", "[`/Users/`,`/home/`,`/tmp/`]", [])).toEqual([]);
