@@ -35,6 +35,15 @@ describe("orchestration protocol compatibility", () => {
     expect(socketUrl.searchParams.get("connectionMethod")).toBe("relay");
   });
 
+  it("requires a newer server for upstream 0.0.45 with protocol 2", () => {
+    const error = orchestrationProtocolCompatibilityError({
+      ...descriptor(2),
+      serverVersion: "0.0.45",
+    });
+    expect(error).toMatchObject({ reason: "unsupported" });
+    expect(error?.message).toContain("This client requires a newer server");
+  });
+
   it("treats missing metadata as protocol 1", () => {
     const error = orchestrationProtocolCompatibilityError(descriptor());
     if (Number(ORCHESTRATION_PROTOCOL_VERSION) === 1) {

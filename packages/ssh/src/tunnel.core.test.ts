@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert, describe, it, beforeEach, afterEach, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
@@ -1010,7 +1012,7 @@ describe("runtime preparation", () => {
             `#!/bin/sh
 if [ "$1" = --version ]; then printf 'goat v${retainedVersion}\\n';
 elif [ "$2" = protocol ]; then
-  case " $* " in *" --runtime-file "*) printf 'none unknown unknown unknown 0 0\\n';; *) printf '${retainedVersion} 1 2 0 0\\n';; esac
+  case " $* " in *" --runtime-file "*) printf 'none unknown unknown unknown 0 0\\n';; *) printf '${retainedVersion} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0\\n';; esac
 else exit 2; fi
 `,
           );
@@ -1147,7 +1149,7 @@ const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("goat v${ARCHIVE.archiveVersion}"); }
 else if (args[0] === "__ssh-helper") {
   if (args[1] === "protocol") {
-    if (!args.includes("--runtime-file")) console.log("${ARCHIVE.archiveVersion} 1 2 0 0");
+    if (!args.includes("--runtime-file")) console.log("${ARCHIVE.archiveVersion} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0");
     else {
             const at = args.indexOf("--runtime-file");
       const value = await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readLiveSshRuntimeProtocol(args[at+1]);
@@ -1163,7 +1165,7 @@ else if (args[0] === "__ssh-helper") {
 } else if (args[0] === "auth") { console.log(JSON.stringify({ credential: "fixture-pairing" })); }
 else {
   fs.appendFileSync("${root}/starts", "start\\n");
-  const fields = {serverVersion:"${ARCHIVE.archiveVersion}",sshRuntimeProtocolVersion:1,orchestrationProtocolVersion:2};
+  const fields = {serverVersion:"${ARCHIVE.archiveVersion}",sshRuntimeProtocolVersion:${SSH_RUNTIME_PROTOCOL_VERSION},orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
   const server = http.createServer((request,response) => response.end(request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
   process.on("SIGTERM", () => { fs.appendFileSync("${root}/stops", "stop\\n"); server.close(); });
   server.listen(0, "127.0.0.1", () => {
@@ -1988,7 +1990,7 @@ fs.copyFileSync(fileURLToPath(url), output);
           devScript,
           `
 if (process.argv[2] === "--version") console.log("dev build without archive version");
-else if (process.argv[2] === "__ssh-helper" && process.argv[3] === "protocol") console.log(process.argv.includes("--runtime-file") ? "none unknown unknown unknown 0 0" : "1.2.3 1 2 0 0");
+else if (process.argv[2] === "__ssh-helper" && process.argv[3] === "protocol") console.log(process.argv.includes("--runtime-file") ? "none unknown unknown unknown 0 0" : "1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0");
 else if (process.argv[2] === "auth") console.log(JSON.stringify({ credential: "dev-pairing" }));
 else process.exit(2);
 `,
@@ -2036,7 +2038,7 @@ describe("bundled runtime acquisition", () => {
         const cache = `${root}/cache`;
         const asset = `goat-${ARCHIVE.archiveVersion}-${platform}-${arch}.tar.gz`;
         const executable = (version: string, origin: string) =>
-          `#!/bin/sh\nif [ "$1" = "--version" ]; then\n  printf 'goat v${version}\\n'\nelif [ "$1" = "__ssh-helper" ] && [ "$2" = "protocol" ]; then\n  case " $* " in *" --runtime-file "*) printf 'none unknown unknown unknown 0 0\\n';; *) printf '${version} 1 2 0 0\\n';; esac\nelif [ "$1" = "auth" ] && [ "$2" = "pairing" ]; then\n  printf '{"credential":"${origin}-pairing"}\\n'\nelse\n  exit 64\nfi\n`;
+          `#!/bin/sh\nif [ "$1" = "--version" ]; then\n  printf 'goat v${version}\\n'\nelif [ "$1" = "__ssh-helper" ] && [ "$2" = "protocol" ]; then\n  case " $* " in *" --runtime-file "*) printf 'none unknown unknown unknown 0 0\\n';; *) printf '${version} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0\\n';; esac\nelif [ "$1" = "auth" ] && [ "$2" = "pairing" ]; then\n  printf '{"credential":"${origin}-pairing"}\\n'\nelse\n  exit 64\nfi\n`;
         const makeArchive = (directory: string, origin: string) =>
           Effect.gen(function* () {
             const stem = asset.slice(0, -7);
@@ -2459,7 +2461,7 @@ cat "$HOME/.test/command"
             startedAt: "2026-10-11T00:00:00.000Z",
             serverVersion: "1.2.2",
             sshRuntimeProtocolVersion: 99,
-            orchestrationProtocolVersion: 2,
+            orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
             pid: Number(pid),
             port: Number(port),
             origin: `http://127.0.0.1:${port}`,
@@ -2473,8 +2475,8 @@ if [ "$1" = --version ]; then printf '%s\\n' 'goat v${ARCHIVE.archiveVersion}'; 
 if [ "$1 $2" = '__ssh-helper compare-version' ]; then printf 'older\\n'; exit 0; fi
 if [ "$1 $2" = '__ssh-helper protocol' ]; then
   case " $* " in
-    *' --runtime-file '*) printf '%s\\n' 'live 1.2.2 99 2 ${pid} ${port}' ;;
-    *) printf '%s\\n' '${ARCHIVE.archiveVersion} 1 2 0 0' ;;
+    *' --runtime-file '*) printf '%s\\n' 'live 1.2.2 99 ${ORCHESTRATION_PROTOCOL_VERSION} ${pid} ${port}' ;;
+    *) printf '%s\\n' '${ARCHIVE.archiveVersion} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0' ;;
   esac
   exit 0
 fi

@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -79,7 +81,15 @@ exec /bin/mv "$@"
           const nextEntry = `${f.home}/new entry.cjs`;
           yield* f.fs.writeFileString(
             nextEntry,
-            protocolExecutable("1.2.3", { ssh: 1, orchestration: 2, nodeReadiness: true }, f.state),
+            protocolExecutable(
+              "1.2.3",
+              {
+                ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+                orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+                nodeReadiness: true,
+              },
+              f.state,
+            ),
           );
           const file = `${f.state}/run-t3.sh`;
           const runner = yield* f.fs.readFileString(file);
@@ -198,7 +208,7 @@ console.log(command);
             kind: "managed",
             oldVersion: "1.2.2",
             ssh: 99,
-            orchestration: 2,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
             descriptor404: failure === "descriptor 404",
           });
           if (failure === "stale metadata") {
@@ -242,8 +252,8 @@ console.log(command);
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
-            ssh: 1,
-            orchestration: 2,
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           let replaced = false;
           f.setBeforeCommand((script) => {
@@ -285,13 +295,13 @@ console.log(command);
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
         (
           [
-            "unknown 1 2 0 0",
-            "1.2.3 1 2 garbage garbage",
+            `unknown ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0`,
+            `1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} garbage garbage`,
             "1.2.3 0 2 0 0",
             "1.2.3 1 -2 0 0",
             "1.2.3 01 2 0 0",
-            "1.2.3-01 1 2 0 0",
-            "1.2.3 1 2 0 1234",
+            `1.2.3-01 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0`,
+            `1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 1234`,
           ] as const
         ).map((tokens) => ({ entry, tokens })),
       ),
@@ -301,8 +311,8 @@ console.log(command);
           live: false,
           kind: "managed",
           oldVersion: ARCHIVE.archiveVersion,
-          ssh: 1,
-          orchestration: 2,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           ownTokens: tokens,
         });
         const before = yield* f.snapshot;

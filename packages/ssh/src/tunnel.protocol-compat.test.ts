@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -10,6 +12,24 @@ import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixtu
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
+    it.live("rejects an upstream SSH helper identity with protocol 1", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          ssh: 1, // Upstream helper identity intentionally remains incompatible.
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", true);
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result))
+          assert.include(String(result.failure), `expected SSH=${SSH_RUNTIME_PROTOCOL_VERSION}`);
+        assert.deepEqual(yield* f.snapshot, before);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
         [false, true].map((live) => ({ entry, live })),
@@ -20,8 +40,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live,
           kind: "external",
           oldVersion: "1.2.2",
-          ssh: 1,
-          orchestration: 2,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
         });
         const before = yield* f.snapshot;
         const result = yield* f.run(entry);
@@ -54,7 +74,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             kind: "managed",
             oldVersion: "1.2.2",
             ssh: 99,
-            orchestration: 2,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           const before = yield* f.snapshot;
           const result = yield* f.run(entry, true);
@@ -84,8 +104,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             kind: "managed",
             oldVersion: "1.2.2",
             descriptor404,
-            ssh: 1,
-            orchestration: 2,
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
             nodeMode: mode === "node",
           });
           yield* f.fs.remove(`${f.state}/identity`);
@@ -95,7 +115,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               nextEntry,
               protocolExecutable(
                 "1.2.3",
-                { ssh: 1, orchestration: 2, nodeReadiness: true },
+                {
+                  ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+                  orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+                  nodeReadiness: true,
+                },
                 f.state,
               ),
             );

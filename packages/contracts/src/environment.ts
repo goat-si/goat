@@ -9,9 +9,10 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 
-/** Wire version for orchestration snapshots, streams, commands, and RPC payloads. */
-export const ORCHESTRATION_PROTOCOL_VERSION = 2;
-export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = "2";
+/** Wire version for orchestration snapshots, streams, commands, and RPC payloads.
+ * GOAT 1001 <-> upstream 2. GOAT protocol numbers only increase. */
+export const ORCHESTRATION_PROTOCOL_VERSION = 1001;
+export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = `${ORCHESTRATION_PROTOCOL_VERSION}` as const;
 export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
 export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 

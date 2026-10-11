@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
@@ -72,7 +74,7 @@ if (args[0] === "--version") {
 } else if (args[0] === "__ssh-helper") {
   if (args[1] === "protocol") {
 const flag = name => {const at = args.indexOf(name); return at < 0 ? undefined : args[at+1];};
-const value = args.includes("--runtime-file") ? await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readLiveSshRuntimeProtocol(flag("--runtime-file"), flag("--port-file"), flag("--pid-file")) : {serverVersion:version,sshRuntimeProtocolVersion: version === ${JSON.stringify(nextVersion)} || config.compatible ? 1 : 99,orchestrationProtocolVersion:2};
+const value = args.includes("--runtime-file") ? await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readLiveSshRuntimeProtocol(flag("--runtime-file"), flag("--port-file"), flag("--pid-file")) : {serverVersion:version,sshRuntimeProtocolVersion: version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
 console.log((value.status ? value.status+" " : "") + [value.serverVersion ?? "unknown",value.sshRuntimeProtocolVersion ?? "unknown",value.orchestrationProtocolVersion ?? "unknown",value.pid ?? 0,value.port ?? 0].join(" "));
   } else if (args[1] === "compare-version") {
 const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareSemverVersions(args[2], args[3]);
@@ -115,7 +117,7 @@ request.on("error", () => process.exit(1));
 } else if (args[0] === "serve") {
   const requested = args.indexOf("--port");
   const port = requested < 0 ? 0 : Number(args[requested + 1]);
-  const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? 1 : 99,orchestrationProtocolVersion:2};
+  const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
   const server = http.createServer((request, response) => response.end(request.url === "/.well-known/t3/activity" ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
   process.on("SIGTERM", () => {
 event("stop");
@@ -317,7 +319,7 @@ export const fixture = Effect.fn("test.runnerSwitch.fixture")(function* (
     const probe = yield* shell(home, scripts.probe);
     assert.equal(probe.code, 0, probe.stderr);
     const observed = JSON.parse(probe.stdout);
-    assert.equal(observed.retainedSignals.sshRuntimeProtocolVersion, 1);
+    assert.equal(observed.retainedSignals.sshRuntimeProtocolVersion, SSH_RUNTIME_PROTOCOL_VERSION);
     const selectedRunner = { ...runner, archiveVersion: previous };
     scripts = yield* nativeScripts(selectedRunner, {
       runner: selectedRunner,

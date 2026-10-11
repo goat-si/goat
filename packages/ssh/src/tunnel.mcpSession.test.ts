@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 // Execute the generated remote script without contacting SSH or a release server.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
@@ -48,7 +50,7 @@ if [ "$1" = --version ]; then printf 'goat v${archiveVersion}\\n'; exit 0; fi
 if [ "$1" = __ssh-helper ] && [ "$2" = protocol ]; then
   case " $* " in
     *" --runtime-file "*) printf 'none unknown unknown unknown 0 0\\n' ;;
-    *) printf '${archiveVersion} 1 2 0 0\\n' ;;
+    *) printf '${archiveVersion} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0\\n' ;;
   esac
   exit 0
 fi

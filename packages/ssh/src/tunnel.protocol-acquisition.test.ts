@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -20,8 +22,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               live: false,
               kind: "managed",
               oldVersion: ARCHIVE.archiveVersion,
-              ssh: 1,
-              orchestration: 2,
+              ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+              orchestration: ORCHESTRATION_PROTOCOL_VERSION,
               missingCommand,
             });
             // A legacy helper cannot inspect remembered state; test cold absence with no runtime/identity files.
@@ -35,10 +37,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
         [
-          { ownTokens: "unknown 1 2 0 0" },
-          { ownTokens: "1.2.3 1 2 garbage garbage" },
-          { liveTokens: "live unknown 1 2 0 1234" },
-          { liveTokens: "live 1.2.3 1 2 garbage garbage" },
+          {
+            ownTokens: `unknown ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0`,
+          },
+          {
+            ownTokens: `1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} garbage garbage`,
+          },
+          {
+            liveTokens: `live unknown ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 1234`,
+          },
+          {
+            liveTokens: `live 1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} garbage garbage`,
+          },
         ].map((injected) => ({ entry, injected })),
       ),
     )("rejects malformed Node $entry tokens: $injected", ({ entry, injected }) =>
@@ -47,8 +57,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: false,
           kind: "managed",
           oldVersion: "1.2.2",
-          ssh: 1,
-          orchestration: 2,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
         });
         const cli = `${f.home}/fixture-cli.cjs`;
         yield* f.fs.writeFileString(
@@ -56,8 +66,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           protocolExecutable(
             "1.2.3",
             {
-              ssh: 1,
-              orchestration: 2,
+              ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+              orchestration: ORCHESTRATION_PROTOCOL_VERSION,
               ...injected,
             },
             f.state,
@@ -87,7 +97,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
-        ["live unknown 1 2 0 1234", "live 1.2.3 1 2 garbage garbage"].map((liveTokens) => ({
+        [
+          `live unknown ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 1234`,
+          `live 1.2.3 ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} garbage garbage`,
+        ].map((liveTokens) => ({
           entry,
           liveTokens,
         })),
@@ -98,8 +111,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: false,
           kind: "managed",
           oldVersion: ARCHIVE.archiveVersion,
-          ssh: 1,
-          orchestration: 2,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           liveTokens,
         });
         const before = yield* f.snapshot;
@@ -113,9 +126,13 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
-        ([{ missingCommand: true }, { ssh: 1 }, { ssh: 99, orchestration: 2 }] as const).map(
-          (metadata) => ({ entry, metadata }),
-        ),
+        (
+          [
+            { missingCommand: true },
+            { ssh: SSH_RUNTIME_PROTOCOL_VERSION },
+            { ssh: 99, orchestration: ORCHESTRATION_PROTOCOL_VERSION },
+          ] as const
+        ).map((metadata) => ({ entry, metadata })),
       ),
     )("acquires exact $entry for dormant incompatible metadata $metadata", ({ entry, metadata }) =>
       Effect.gen(function* () {
@@ -147,7 +164,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             kind: "managed",
             oldVersion: ARCHIVE.archiveVersion,
             ssh: 99,
-            orchestration: 2,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           const before = yield* f.snapshot;
           assert.isTrue(Result.isFailure(yield* f.run(entry)));
@@ -166,8 +183,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
-          ssh: 1,
-          orchestration: 2,
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
         });
         const before = yield* f.snapshot;
         let removed = false;
@@ -197,7 +214,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             kind: "managed",
             oldVersion: "1.2.2",
             ssh: 99,
-            orchestration: 2,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           const before = yield* f.snapshot;
           const result = yield* f.run("launch");

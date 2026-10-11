@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import {
+  ExecutionEnvironmentDescriptor,
+  ORCHESTRATION_PROTOCOL_HEADER,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+} from "./environment.ts";
+import { EnvironmentHttpApi } from "./environmentHttp.ts";
 
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
@@ -104,5 +110,24 @@ describe("ExecutionEnvironmentDescriptor", () => {
         },
       }).capabilities.serverResolvedCommandContext,
     ).toBe(true);
+  });
+});
+
+describe("GOAT orchestration protocol", () => {
+  it("derives the HTTP protocol text from the wire version", () => {
+    expect(ORCHESTRATION_PROTOCOL_VERSION_TEXT).toBe(String(ORCHESTRATION_PROTOCOL_VERSION));
+  });
+
+  it("rejects upstream header 2 on authenticated orchestration endpoints", () => {
+    for (const endpoint of Object.values(EnvironmentHttpApi.groups.orchestration.endpoints)) {
+      const headers = endpoint.headers;
+      expect(headers).toBeDefined();
+      if (headers === undefined) throw new Error("Missing protocol headers");
+      const acceptsHeaders = Schema.is(headers);
+      expect(acceptsHeaders({ [ORCHESTRATION_PROTOCOL_HEADER]: "2" })).toBe(false);
+      expect(
+        acceptsHeaders({ [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT }),
+      ).toBe(true);
+    }
   });
 });

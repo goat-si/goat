@@ -1,12 +1,14 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
+  CLI_RELEASE_REPOSITORY,
   CLI_RELEASE_CHANNELS,
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
   newestCliReleaseVersion,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
+import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,9 +16,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
-import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
@@ -54,38 +57,153 @@ const RELEASE_INDEX_TIMEOUT = Duration.seconds(30);
 // a channel genuinely has nothing published.
 const RELEASE_INDEX_MAX_PAGES = 10;
 
-/** Asks GitHub for the newest published version on a channel, page by page. */
-const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (
-  channel: CliReleaseChannel,
+const RELEASE_INDEX_CACHE_TTL_MS = 10 * 60 * 1000;
+const ReleaseIndexCache = Schema.Array(
+  Schema.Struct({
+    repository: Schema.String,
+    channel: Schema.Literals(CLI_RELEASE_CHANNELS),
+    cachedAt: Schema.Number,
+    releases: ReleaseIndex,
+  }),
+);
+const encodeReleaseIndexCache = Schema.encodeEffect(Schema.fromJsonString(ReleaseIndexCache));
+const decodeReleaseIndexCache = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ReleaseIndexCache),
+);
+
+class CliReleaseIndexError extends Schema.TaggedError<CliReleaseIndexError>()(
+  "CliReleaseIndexError",
+  {
+    failure: Schema.Literals(["http", "network", "timeout", "invalid", "unpublished"]),
+    channel: Schema.Literals(CLI_RELEASE_CHANNELS),
+    status: Schema.optional(Schema.Number),
+    secondaryRateLimit: Schema.optional(Schema.Boolean),
+    cause: Schema.optional(Schema.Defect()),
+  },
 ) {
+  override get message(): string {
+    const reason =
+      this.failure === "timeout"
+        ? "Timed out listing goat releases."
+        : this.failure === "invalid"
+          ? "The goat release index had an unexpected shape."
+          : this.failure === "unpublished"
+            ? `No published ${this.channel} release was found.`
+            : `Could not list goat releases${this.status === undefined ? "" : ` (HTTP ${this.status})`}.`;
+    return `${reason} Run goat update <version>, or set T3CODE_VERSION to an exact published version when running the installer to bypass release discovery.`;
+  }
+}
+
+/** Lists releases for one T3 home, reusing a recent repository/channel index. */
+export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (input: {
+  readonly channel: CliReleaseChannel;
+  readonly baseDir: string;
+}) {
+  const { channel } = input;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const httpClient = yield* HttpClient.HttpClient;
-  for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
-    const body = yield* httpClient
-      .execute(
-        HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
-          HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.text),
-        Effect.mapError(() => new CliUpdateError({ reason: "Could not list goat releases." })),
-        Effect.timeoutOrElse({
-          duration: RELEASE_INDEX_TIMEOUT,
-          orElse: () =>
-            Effect.fail(new CliUpdateError({ reason: "Timed out listing goat releases." })),
-        }),
-      );
-    const releases = yield* decodeReleaseIndex(body).pipe(
-      Effect.mapError(
-        () => new CliUpdateError({ reason: "The goat release index had an unexpected shape." }),
-      ),
-    );
-    const version = newestCliReleaseVersion(releases, channel);
+  const cacheDirectory = path.join(input.baseDir, "cache");
+  const cachePath = path.join(cacheDirectory, "release-index.json");
+  const now = yield* Clock.currentTimeMillis;
+  const cache = yield* fs.readFileString(cachePath).pipe(
+    Effect.flatMap(decodeReleaseIndexCache),
+    Effect.orElseSucceed(() => []),
+  );
+  const fresh = cache.filter(
+    (entry) => now >= entry.cachedAt && now - entry.cachedAt < RELEASE_INDEX_CACHE_TTL_MS,
+  );
+  const cached = fresh.find(
+    (entry) => entry.repository === CLI_RELEASE_REPOSITORY && entry.channel === channel,
+  );
+  if (cached !== undefined) {
+    const version = newestCliReleaseVersion(cached.releases, channel);
     if (version !== undefined) return version;
+  }
+
+  const listed: Array<(typeof ReleaseIndex.Type)[number]> = [];
+  for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
+    const body = yield* Effect.gen(function* () {
+      const response = yield* httpClient
+        .execute(
+          HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
+            HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) => new CliReleaseIndexError({ failure: "network", channel, cause }),
+          ),
+        );
+      const text = yield* response.text.pipe(
+        Effect.mapError(
+          (cause) =>
+            new CliReleaseIndexError({
+              failure: "network",
+              channel,
+              status: response.status,
+              cause,
+            }),
+        ),
+      );
+      if (response.status < 200 || response.status >= 300) {
+        return yield* new CliReleaseIndexError({
+          failure: "http",
+          channel,
+          status: response.status,
+          secondaryRateLimit:
+            response.status === 403 &&
+            (response.headers["retry-after"] !== undefined ||
+              /secondary rate limit|abuse detection/i.test(text)),
+        });
+      }
+      return text;
+    }).pipe(
+      Effect.timeoutOrElse({
+        duration: RELEASE_INDEX_TIMEOUT,
+        orElse: () => Effect.fail(new CliReleaseIndexError({ failure: "timeout", channel })),
+      }),
+      Effect.retry({
+        times: 2,
+        schedule: Schedule.exponential("1 second"),
+        while: (error) =>
+          error.failure === "network" ||
+          error.failure === "timeout" ||
+          (error.failure === "http" &&
+            (error.status === 429 ||
+              (error.status !== undefined && error.status >= 500) ||
+              error.secondaryRateLimit === true)),
+      }),
+    );
+    const releases = yield* decodeReleaseIndex(body).pipe(
+      Effect.mapError((cause) => new CliReleaseIndexError({ failure: "invalid", channel, cause })),
+    );
+    listed.push(...releases);
+    const version = newestCliReleaseVersion(releases, channel);
+    if (version !== undefined) {
+      const cachedAt = yield* Clock.currentTimeMillis;
+      // Cache publication is atomic and best effort; an unwritable cache must not block an update.
+      yield* Effect.gen(function* () {
+        yield* fs.makeDirectory(cacheDirectory, { recursive: true });
+        const staging = yield* fs.makeTempDirectoryScoped({
+          directory: cacheDirectory,
+          prefix: ".release-index-",
+        });
+        const temporary = path.join(staging, "release-index.json");
+        const encoded = yield* encodeReleaseIndexCache([
+          ...fresh.filter(
+            (entry) => entry.repository !== CLI_RELEASE_REPOSITORY || entry.channel !== channel,
+          ),
+          { repository: CLI_RELEASE_REPOSITORY, channel, cachedAt, releases: listed },
+        ]);
+        yield* fs.writeFileString(temporary, encoded);
+        yield* fs.rename(temporary, cachePath);
+      }).pipe(Effect.scoped, Effect.ignore);
+      return version;
+    }
     if (releases.length === 0) break;
   }
-  return yield* new CliUpdateError({ reason: `No published ${channel} release was found.` });
+  return yield* new CliReleaseIndexError({ failure: "unpublished", channel });
 });
 
 /** Whether a launcher target lives inside `<baseDir>/runtime/goat/versions`. */
@@ -353,7 +471,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   progress.status("Checking for updates...");
   const targetVersion = yield* (
     input.requestedVersion === undefined
-      ? resolveNewestVersion(channel)
+      ? resolveNewestVersion({ channel, baseDir: input.baseDir })
       : Effect.succeed(input.requestedVersion)
   ).pipe(Effect.ensuring(Effect.sync(progress.finish)));
   const targetChannel = cliReleaseChannelOf(targetVersion);

@@ -1,12 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import { TestClock } from "effect/testing";
+import { FetchHttpClient } from "effect/http";
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import { repointLauncher, resolveLauncherPath } from "./update.ts";
+import { repointLauncher, resolveLauncherPath, resolveNewestVersion } from "./update.ts";
 
 it.layer(NodeServices.layer)("t3 update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
@@ -100,5 +110,272 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+  );
+});
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const stableRelease = "1.2.3";
+const nightlyRelease = "1.2.4-nightly.20261012.1";
+const releases = [{ tag_name: `v${nightlyRelease}` }, { tag_name: `v${stableRelease}` }];
+
+function releaseIndexHarness(
+  reply: (attempt: number, url: string) => Response | Promise<Response>,
+) {
+  const requests: string[] = [];
+  const started = Deferred.makeUnsafe<void>();
+  const fetch = vi.fn<typeof globalThis.fetch>((input) => {
+    const url = String(input);
+    requests.push(url);
+    Deferred.doneUnsafe(started, Effect.void);
+    return Promise.resolve(reply(requests.length, url));
+  });
+  const layer = FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
+  );
+  return { fetch, requests, layer, started };
+}
+
+it.layer(NodeServices.layer)("goat release index", (it) => {
+  it.effect.each([500, 502, 503, 403, 429, "network"] as const)(
+    "retries transient %s twice with exponential backoff",
+    (failure) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+        const h = releaseIndexHarness((attempt) => {
+          if (attempt === 3) return Response.json(releases);
+          if (failure === "network") return Promise.reject(new Error("offline"));
+          return Response.json(
+            {
+              message:
+                failure === 403 ? "You have exceeded a secondary rate limit." : "unavailable",
+            },
+            { status: failure },
+          );
+        });
+        const fiber = yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(
+          Effect.provide(h.layer),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(h.started);
+        yield* TestClock.adjust(0);
+        assert.equal(h.requests.length, 1);
+        yield* TestClock.adjust(Duration.millis(999));
+        assert.equal(h.requests.length, 1);
+        yield* TestClock.adjust(Duration.millis(1));
+        assert.equal(h.requests.length, 2);
+        yield* TestClock.adjust(Duration.seconds(2));
+        assert.equal(yield* Fiber.join(fiber), nightlyRelease);
+        assert.equal(h.requests.length, 3);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("retains the HTTP status after exhausting retries and suggests an exact version", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => Response.json({}, { status: 503 }));
+      const fiber = yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(
+        Effect.provide(h.layer),
+        Effect.result,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(h.started);
+      yield* TestClock.adjust(Duration.seconds(3));
+      const result = yield* Fiber.join(fiber);
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.equal(result.failure.status, 503);
+        assert.include(result.failure.message, "HTTP 503");
+        assert.include(result.failure.message, "T3CODE_VERSION");
+      }
+      assert.equal(h.requests.length, 3);
+      assert.isFalse(yield* fs.exists(`${baseDir}/cache/release-index.json`));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([403, 404, 401])("does not retry permanent HTTP %s", (status) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => Response.json({ message: "Forbidden" }, { status }));
+      const result = yield* resolveNewestVersion({ baseDir, channel: "stable" }).pipe(
+        Effect.provide(h.layer),
+        Effect.result,
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.equal(result.failure.status, status);
+      assert.equal(h.requests.length, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("retries a 403 carrying Retry-After", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness((attempt) =>
+        attempt === 1
+          ? Response.json({}, { status: 403, headers: { "Retry-After": "1" } })
+          : Response.json(releases),
+      );
+      const fiber = yield* resolveNewestVersion({ baseDir, channel: "stable" }).pipe(
+        Effect.provide(h.layer),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(h.started);
+      yield* TestClock.adjust(Duration.seconds(1));
+      assert.equal(yield* Fiber.join(fiber), stableRelease);
+      assert.equal(h.requests.length, 2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("caches separately by repository and channel and expires at ten minutes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      yield* fs.makeDirectory(`${baseDir}/cache`);
+      const cachedAt = yield* Clock.currentTimeMillis;
+      yield* fs.writeFileString(
+        `${baseDir}/cache/release-index.json`,
+        encodeJson([
+          {
+            repository: "upstream/repository",
+            channel: "nightly",
+            cachedAt,
+            releases: [{ tag_name: "v9.0.0-nightly.20261012.1" }],
+          },
+        ]),
+      );
+      const h = releaseIndexHarness(() => Response.json(releases));
+      const lookup = (channel: "nightly" | "stable") =>
+        resolveNewestVersion({ baseDir, channel }).pipe(Effect.provide(h.layer));
+      assert.equal(yield* lookup("nightly"), nightlyRelease);
+      assert.equal(h.requests.length, 1);
+      assert.equal(yield* lookup("stable"), stableRelease);
+      assert.equal(h.requests.length, 2);
+      yield* TestClock.adjust(Duration.millis(10 * 60 * 1000 - 1));
+      assert.equal(yield* lookup("nightly"), nightlyRelease);
+      assert.equal(yield* lookup("stable"), stableRelease);
+      assert.equal(h.requests.length, 2);
+      yield* TestClock.adjust(Duration.millis(1));
+      assert.equal(yield* lookup("nightly"), nightlyRelease);
+      assert.equal(h.requests.length, 3);
+      const cache = yield* fs
+        .readFileString(`${baseDir}/cache/release-index.json`)
+        .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))));
+      assert.isArray(cache);
+      assert.include(encodeJson(cache), CLI_RELEASE_REPOSITORY);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("walks pages without losing retries and caches the collected index", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness((attempt, url) =>
+        new URL(url).searchParams.get("page") === "1"
+          ? Response.json([{ tag_name: `v${nightlyRelease}` }])
+          : attempt === 2
+            ? Response.json({}, { status: 502 })
+            : Response.json([{ tag_name: `v${stableRelease}` }]),
+      );
+      const fiber = yield* resolveNewestVersion({ baseDir, channel: "stable" }).pipe(
+        Effect.provide(h.layer),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(h.started);
+      yield* TestClock.adjust(Duration.seconds(1));
+      assert.equal(yield* Fiber.join(fiber), stableRelease);
+      assert.deepEqual(
+        h.requests.map((url) => new URL(url).searchParams.get("page")),
+        ["1", "2", "2"],
+      );
+      assert.equal(
+        yield* resolveNewestVersion({ baseDir, channel: "stable" }).pipe(Effect.provide(h.layer)),
+        stableRelease,
+      );
+      assert.equal(h.requests.length, 3);
+      assert.include(
+        yield* fs.readFileString(`${baseDir}/cache/release-index.json`),
+        nightlyRelease,
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("bounds pagination at ten pages", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => Response.json([{ tag_name: `v${nightlyRelease}` }]));
+      const result = yield* resolveNewestVersion({ baseDir, channel: "stable" }).pipe(
+        Effect.provide(h.layer),
+        Effect.result,
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.equal(result.failure.failure, "unpublished");
+      assert.equal(h.requests.length, 10);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("ignores a corrupt cache and a cache that cannot be written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => Response.json(releases));
+      yield* fs.makeDirectory(`${baseDir}/cache`);
+      yield* fs.writeFileString(`${baseDir}/cache/release-index.json`, "broken JSON");
+      assert.equal(
+        yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(Effect.provide(h.layer)),
+        nightlyRelease,
+      );
+      yield* fs.remove(`${baseDir}/cache`, { recursive: true });
+      yield* fs.writeFileString(`${baseDir}/cache`, "not a directory");
+      assert.equal(
+        yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(Effect.provide(h.layer)),
+        nightlyRelease,
+      );
+      assert.equal(h.requests.length, 2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects an invalid index without retrying or caching it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => Response.json({ unexpected: true }));
+      const result = yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(
+        Effect.provide(h.layer),
+        Effect.result,
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.equal(result.failure.failure, "invalid");
+      assert.equal(h.requests.length, 1);
+      assert.isFalse(yield* fs.exists(`${baseDir}/cache/release-index.json`));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the thirty-second deadline on each retry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-index-" });
+      const h = releaseIndexHarness(() => new Promise<Response>(() => {}));
+      const fiber = yield* resolveNewestVersion({ baseDir, channel: "nightly" }).pipe(
+        Effect.provide(h.layer),
+        Effect.result,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(h.started);
+      yield* TestClock.adjust(Duration.seconds(29));
+      assert.equal(h.requests.length, 1);
+      yield* TestClock.adjust(Duration.seconds(2));
+      assert.equal(h.requests.length, 2);
+      yield* TestClock.adjust(Duration.seconds(32));
+      assert.equal(h.requests.length, 3);
+      yield* TestClock.adjust(Duration.seconds(30));
+      const result = yield* Fiber.join(fiber);
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.equal(result.failure.failure, "timeout");
+      assert.equal(h.requests.length, 3);
+    }).pipe(Effect.scoped),
   );
 });

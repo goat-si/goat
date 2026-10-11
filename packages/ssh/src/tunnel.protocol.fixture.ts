@@ -1,3 +1,5 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { assert } from "@effect/vitest";
 import * as NetService from "@t3tools/shared/Net";
 import * as Crypto from "effect/Crypto";
@@ -284,7 +286,10 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     `${stage}/goat`,
     protocolExecutable(
       ARCHIVE.archiveVersion,
-      input.candidateSignals ?? { ssh: 1, orchestration: 2 },
+      input.candidateSignals ?? {
+        ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+        orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+      },
       state,
     ),
   );
