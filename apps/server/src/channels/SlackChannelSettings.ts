@@ -25,12 +25,15 @@ export class SlackChannelSettings extends Context.Service<
       ReadonlyArray<SlackChannelSettingsSnapshot>,
       SlackChannelSettingsError
     >;
+    /** `clearCredentials: true` closes the connection and deletes both tokens. */
     readonly configure: (
       input: SlackChannelConfigureInput,
     ) => Effect.Effect<SlackChannelSettingsSnapshot, SlackChannelSettingsError>;
+    /** Closes the connection and sets `enabled: false`. Stored tokens stay. */
     readonly disconnect: (
       input: SlackChannelDisconnectInput,
     ) => Effect.Effect<void, SlackChannelSettingsError>;
+    /** Emits the current status of every connection once, then only changes. */
     readonly streamStatus: () => Stream.Stream<SlackChannelStatusEvent, SlackChannelSettingsError>;
   }
 >()("t3/channels/SlackChannelSettings") {}

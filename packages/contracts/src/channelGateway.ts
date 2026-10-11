@@ -7,6 +7,7 @@ import {
   ChannelActorRef,
   ChannelBindingId,
   ChannelConversationId,
+  ChannelDeliveryErrorCode,
   ChannelDeliveryId,
   ChannelInputId,
   ChannelKind,
@@ -50,6 +51,10 @@ export type ChannelInboundMessage = typeof ChannelInboundMessage.Type;
 export const ChannelIngestInput = ChannelInboundMessage;
 export type ChannelIngestInput = ChannelInboundMessage;
 
+/**
+ * `rejected` is a result, not an error: input from an unlinked account comes back rejected,
+ * with a link notice already committed for delivery to its reply address.
+ */
 export const ChannelIngestState = Schema.Literals([
   "accepted",
   "processing",
@@ -153,11 +158,17 @@ export const ChannelIdentityLinkCreateResult = Schema.Struct({
 });
 export type ChannelIdentityLinkCreateResult = typeof ChannelIdentityLinkCreateResult.Type;
 
-/** Sent by a transport when an external user replies with a link code; never stored as a message. */
+/**
+ * Sent by a transport when an external user replies with a link code; never stored as a message.
+ * The gateway commits a success or failure notice to `replyAddress`, deduplicated by
+ * `idempotencyKey`, before it returns.
+ */
 export const ChannelIdentityLinkConsumeInput = Schema.Struct({
   connectionId: TrimmedNonEmptyString,
   externalActorId: TrimmedNonEmptyString,
   code: TrimmedNonEmptyString,
+  idempotencyKey: TrimmedNonEmptyString,
+  replyAddress: ChannelReplyAddress,
 });
 export type ChannelIdentityLinkConsumeInput = typeof ChannelIdentityLinkConsumeInput.Type;
 
@@ -166,6 +177,26 @@ export const ChannelIdentityLinkConsumeResult = Schema.Struct({
   linkedAt: IsoDateTime,
 });
 export type ChannelIdentityLinkConsumeResult = typeof ChannelIdentityLinkConsumeResult.Type;
+
+export const ChannelNoticeKind = Schema.Literals(["link_help", "link_invalid"]);
+export type ChannelNoticeKind = typeof ChannelNoticeKind.Type;
+
+/** A fixed notice a transport asks for, such as help for a `link` command without a code. */
+export const ChannelNoticeInput = Schema.Struct({
+  connectionId: TrimmedNonEmptyString,
+  idempotencyKey: TrimmedNonEmptyString,
+  replyAddress: ChannelReplyAddress,
+  actor: ChannelActorRef,
+  notice: ChannelNoticeKind,
+});
+export type ChannelNoticeInput = typeof ChannelNoticeInput.Type;
+
+/** The notice is committed for delivery; `duplicate` means this key was already handled. */
+export const ChannelNoticeReceipt = Schema.Struct({
+  deliveryId: ChannelDeliveryId,
+  duplicate: Schema.Boolean,
+});
+export type ChannelNoticeReceipt = typeof ChannelNoticeReceipt.Type;
 
 /** Removes a link. Tasks keep the requester snapshot they were created with. */
 export const ChannelIdentityUnlinkInput = Schema.Struct({
@@ -204,6 +235,12 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
     reason: ChannelGatewayErrorReason,
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
+    /**
+     * For `delivery_failed`: `not_sent` when the channel certainly did not get the message,
+     * `unknown` when it may have (a timeout). The outbox records unknown as ambiguous.
+     */
+    deliveryOutcome: Schema.optionalKey(Schema.Literals(["not_sent", "unknown"])),
+    deliveryErrorCode: Schema.optionalKey(ChannelDeliveryErrorCode),
   },
 ) {
   override get message(): string {

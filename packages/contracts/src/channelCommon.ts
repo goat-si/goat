@@ -110,3 +110,20 @@ export const ChannelMessageMeta = Schema.Struct({
   readAt: Schema.optional(IsoDateTime),
 });
 export type ChannelMessageMeta = typeof ChannelMessageMeta.Type;
+
+/**
+ * Why a transport could not deliver. Rate limits come with a retry delay. Timeouts and network
+ * errors leave the outcome unknown. `not_in_channel`, `channel_not_found`, `invalid_auth`,
+ * and `token_revoked` do not get better on retry.
+ */
+export const ChannelDeliveryErrorCode = Schema.Literals([
+  "rate_limited",
+  "not_in_channel",
+  "channel_not_found",
+  "invalid_auth",
+  "token_revoked",
+  "timeout",
+  "network",
+  "unknown",
+]);
+export type ChannelDeliveryErrorCode = typeof ChannelDeliveryErrorCode.Type;

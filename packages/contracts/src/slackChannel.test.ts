@@ -22,8 +22,18 @@ describe("Slack channel settings", () => {
       appToken: "xapp-should-not-survive",
       allowedChannelIds: ["C1"],
       status: "connected",
+      lastDeliveryError: {
+        code: "not_in_channel",
+        at: "2026-10-12T00:00:00.000Z",
+        channelId: "C9",
+      },
     });
     expect(settings).not.toHaveProperty("appToken");
+    expect(settings.lastDeliveryError).toEqual({
+      code: "not_in_channel",
+      at: "2026-10-12T00:00:00.000Z",
+      channelId: "C9",
+    });
     expect(encodeSettings(settings)).not.toHaveProperty("appToken");
   });
 

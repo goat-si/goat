@@ -3,10 +3,12 @@ import * as Schema from "effect/Schema";
 
 import {
   ChannelGatewayError,
+  ChannelIdentityLinkConsumeInput,
   ChannelIngestInput,
   ChannelIngestResult,
   ChannelInputSnapshot,
   ChannelListTasksInput,
+  ChannelNoticeInput,
 } from "./index.ts";
 
 const json = <S extends Schema.Codec<unknown, unknown>>(schema: S) => Schema.toCodecJson(schema);
@@ -71,5 +73,64 @@ describe("channel ingest", () => {
       _tag: "ChannelGatewayError",
       reason: "idempotency_conflict",
     });
+  });
+
+  it("tells a transport whether a failed delivery may have arrived", () => {
+    const encode = Schema.encodeSync(json(ChannelGatewayError));
+    expect(
+      encode(
+        new ChannelGatewayError({
+          reason: "delivery_failed",
+          deliveryOutcome: "not_sent",
+          deliveryErrorCode: "rate_limited",
+          retryAfterSeconds: 30,
+        }),
+      ),
+    ).toEqual({
+      _tag: "ChannelGatewayError",
+      reason: "delivery_failed",
+      deliveryOutcome: "not_sent",
+      deliveryErrorCode: "rate_limited",
+      retryAfterSeconds: 30,
+    });
+    expect(() =>
+      Schema.decodeUnknownSync(json(ChannelGatewayError))({
+        _tag: "ChannelGatewayError",
+        reason: "delivery_failed",
+        deliveryErrorCode: "slack_said_no",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("identity link notices", () => {
+  const replyAddress = {
+    kind: "slack",
+    connectionId: "slack-1",
+    teamId: "T1",
+    channelId: "D1",
+    rootTs: "1760000000.000300",
+  };
+
+  it("needs a reply address and idempotency key to answer a link code", () => {
+    const decode = Schema.decodeUnknownSync(ChannelIdentityLinkConsumeInput);
+    const input = { connectionId: "slack-1", externalActorId: "U123", code: "483920" };
+    expect(() => decode(input)).toThrow();
+    expect(decode({ ...input, idempotencyKey: "T1:Ev9", replyAddress })).toMatchObject({
+      replyAddress: { rootTs: "1760000000.000300" },
+    });
+  });
+
+  it("accepts only the fixed notices", () => {
+    const decode = Schema.decodeUnknownSync(ChannelNoticeInput);
+    const input = {
+      connectionId: "slack-1",
+      idempotencyKey: "T1:Ev10",
+      replyAddress,
+      actor: { externalActorId: "U123" },
+      notice: "link_help",
+    };
+    expect(decode(input)).toEqual(input);
+    expect(() => decode({ ...input, notice: "free_text" })).toThrow();
   });
 });

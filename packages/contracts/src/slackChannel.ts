@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ChannelDeliveryErrorCode } from "./channelCommon.ts";
 import { ModelSelection } from "./modelSelection.ts";
 
 /**
@@ -33,6 +34,14 @@ export const SlackChannelDefaultTarget = Schema.Struct({
 });
 export type SlackChannelDefaultTarget = typeof SlackChannelDefaultTarget.Type;
 
+/** The most recent failed delivery, without secrets or the raw Slack response. */
+export const SlackChannelDeliveryError = Schema.Struct({
+  code: ChannelDeliveryErrorCode,
+  at: IsoDateTime,
+  channelId: Schema.optional(TrimmedNonEmptyString),
+});
+export type SlackChannelDeliveryError = typeof SlackChannelDeliveryError.Type;
+
 export const SlackChannelSettings = Schema.Struct({
   connectionId: SlackChannelConnectionId,
   enabled: Schema.Boolean,
@@ -45,12 +54,14 @@ export const SlackChannelSettings = Schema.Struct({
   status: SlackChannelConnectionStatus,
   /** Redacted; never contains a token. */
   lastError: Schema.optional(Schema.String),
+  lastDeliveryError: Schema.optional(SlackChannelDeliveryError),
 });
 export type SlackChannelSettings = typeof SlackChannelSettings.Type;
 
 /**
- * Omitted tokens keep the stored ones. Removing them takes `clearCredentials` or disconnect.
- * Without `connectionId` the server creates a connection with an id it generates.
+ * Omitted tokens keep the stored ones. `clearCredentials: true` disconnects and deletes both
+ * tokens; `disconnect` keeps them. Without `connectionId` the server creates a connection
+ * with an id it generates.
  */
 export const SlackChannelConfigureInput = Schema.Struct({
   connectionId: Schema.optional(SlackChannelConnectionId),
@@ -78,6 +89,7 @@ export const SlackChannelStatusEvent = Schema.Struct({
   connectionId: SlackChannelConnectionId,
   status: SlackChannelConnectionStatus,
   lastError: Schema.optional(Schema.String),
+  lastDeliveryError: Schema.optional(SlackChannelDeliveryError),
 });
 export type SlackChannelStatusEvent = typeof SlackChannelStatusEvent.Type;
 
