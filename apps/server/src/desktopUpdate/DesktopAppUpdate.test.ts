@@ -15,6 +15,10 @@ import * as DesktopAppUpdate from "./DesktopAppUpdate.ts";
 
 function makeState(overrides: Partial<DesktopUpdateState> = {}): DesktopUpdateState {
   return {
+    installPolicy: "restart-when-idle",
+    pendingRestartReason: null,
+    pendingUpdate: null,
+    recoveryStatus: null,
     enabled: true,
     status: "idle",
     channel: "latest",

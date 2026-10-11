@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { SnapShotSource } from "./chatAttachment.ts";
@@ -314,16 +315,24 @@ export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
 });
 
 export const DesktopUpdateStateSchema = Schema.Struct({
-  installPolicy: DesktopUpdateInstallPolicySchema,
-  pendingRestartReason: Schema.NullOr(Schema.Literals(["busy", "unknown", "paused"])),
+  // These four fields arrived with automatic updates; defaults keep reports from
+  // older desktops and servers decodable during a version transition.
+  installPolicy: DesktopUpdateInstallPolicySchema.pipe(
+    Schema.withDecodingDefault(Effect.succeed("restart-when-idle" as const)),
+  ),
+  pendingRestartReason: Schema.NullOr(Schema.Literals(["busy", "unknown", "paused"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   pendingUpdate: Schema.NullOr(
     Schema.Struct({
       version: Schema.String,
       channel: DesktopUpdateChannelSchema,
       downloadedAt: Schema.String,
     }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  recoveryStatus: Schema.NullOr(Schema.Literals(["restoring", "needs-network"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  recoveryStatus: Schema.NullOr(Schema.Literals(["restoring", "needs-network"])),
   enabled: Schema.Boolean,
   status: DesktopUpdateStatusSchema,
   channel: DesktopUpdateChannelSchema,

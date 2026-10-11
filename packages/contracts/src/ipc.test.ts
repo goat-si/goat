@@ -1,7 +1,9 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DesktopEnvironmentBootstrapSchema } from "./ipc.ts";
+import { DesktopEnvironmentBootstrapSchema, DesktopUpdateStateSchema } from "./ipc.ts";
+
+const decodeDesktopUpdateState = Schema.decodeUnknownSync(DesktopUpdateStateSchema);
 
 describe("DesktopEnvironmentBootstrapSchema", () => {
   const decode = Schema.decodeUnknownSync(DesktopEnvironmentBootstrapSchema);
@@ -34,5 +36,32 @@ describe("DesktopEnvironmentBootstrapSchema", () => {
         wsBaseUrl: null,
       }).runningDistro,
     ).toBeNull();
+  });
+});
+
+describe("DesktopUpdateStateSchema", () => {
+  it("decodes update state from a desktop that predates automatic updates", () => {
+    const legacy = {
+      enabled: true,
+      status: "idle",
+      channel: "nightly",
+      currentVersion: "0.0.45-nightly.20261011.3",
+      hostArch: "arm64",
+      appArch: "arm64",
+      runningUnderArm64Translation: false,
+      availableVersion: null,
+      downloadedVersion: null,
+      releaseNotes: [],
+      downloadPercent: null,
+      checkedAt: null,
+      message: null,
+      errorContext: null,
+      canRetry: false,
+      omittedReleaseCount: 0,
+    };
+    const state = decodeDesktopUpdateState(legacy);
+    expect(state.installPolicy).toBe("restart-when-idle");
+    expect(state.pendingUpdate).toBeNull();
+    expect(state.recoveryStatus).toBeNull();
   });
 });
