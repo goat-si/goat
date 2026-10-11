@@ -99,6 +99,7 @@ export const verifyReleaseDirectory = Effect.fn("verifyReleaseDirectory")(functi
   const versions = [...new Set(inputs.map((input) => releaseAssetVersion(input.name)))];
   const problems: string[] = [];
   const checks = ["payload-hashes"];
+  if (options.mode === "mac" && options.requireSigning) checks.push("require-signing");
   const key = options.key ?? keys[0] ?? "unknown";
   const version = options.version ?? versions[0] ?? "unknown";
   if (

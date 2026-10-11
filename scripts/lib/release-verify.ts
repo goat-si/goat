@@ -152,29 +152,44 @@ export function isMachO(bytes: Uint8Array): boolean {
   return count >= 1 && count <= 20;
 }
 
-// Dependency notices reproduce upstream authors' examples. Only build-path checks
-// are exempted; source maps, original sources and private repository URLs still fail.
-const dependencyNotice =
-  /(?:^|\/)node_modules\/.*\/(?:LICENSE|LICENCE|NOTICE|COPYING)(?:[.-][^/]*)?$/i;
+// D-10 keeps GOAT's own sources private. Third-party code (node_modules, the Electron
+// framework) legitimately ships its own TypeScript, source maps and its CI's paths, so
+// source checks and generic path patterns apply to GOAT code only. Paths of this build
+// machine (its home, workspace and checkout) fail anywhere they appear.
+const thirdParty = /(?:^|\/)node_modules\/|\/Contents\/Frameworks\//;
 const buildPath =
-  /\/Users\/[^/\s]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
-export function exposureProblems(name: string, content = ""): string[] {
+  /\/Users\/[A-Za-z0-9._-]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
+
+/** Absolute paths that identify the machine running the build. */
+export function localBuildRoots(env: Readonly<Record<string, string | undefined>>, cwd: string) {
+  const roots = [env.HOME, env.GITHUB_WORKSPACE, env.RUNNER_WORKSPACE, env.RUNNER_TEMP, cwd]
+    .map((root) => root?.replace(/[\\/]+$/, ""))
+    .filter((root): root is string => root !== undefined && root.length >= 6);
+  return [...new Set(roots)];
+}
+const defaultBuildRoots = localBuildRoots(process.env, process.cwd());
+
+export function exposureProblems(
+  name: string,
+  content = "",
+  roots: readonly string[] = defaultBuildRoots,
+): string[] {
   const normalized = name.replace(/\\/g, "/");
   const problems: string[] = [];
-  if (/\.map$/i.test(normalized)) problems.push(`${name}: source map`);
-  if (
-    /\.(?:ts|tsx|mts|cts)$/i.test(normalized) &&
-    !(/(?:^|\/)node_modules\//.test(normalized) && /\.d\.ts$/i.test(normalized))
-  )
-    problems.push(`${name}: original source`);
+  const ours = !thirdParty.test(normalized);
+  if (ours && /\.map$/i.test(normalized)) problems.push(`${name}: source map`);
+  if (ours && /\.(?:ts|tsx|mts|cts)$/i.test(normalized)) problems.push(`${name}: original source`);
   if (/(?:^|\/)\.git(?:\/|$)/.test(normalized)) problems.push(`${name}: git metadata`);
-  if (/sourceMappingURL\s*=\s*data:/i.test(content)) problems.push(`${name}: inline source map`);
-  if (/["']sourcesContent["']/.test(content)) problems.push(`${name}: embedded sourcesContent`);
-  if (/github\.com\/goat-si\/goat(?!(?:-releases|_))/.test(content))
+  if (ours && /sourceMappingURL\s*=\s*data:/i.test(content))
+    problems.push(`${name}: inline source map`);
+  if (ours && /["']sourcesContent["']/.test(content))
+    problems.push(`${name}: embedded sourcesContent`);
+  if (/(?:github\.com[/:]|repos\/)goat-si\/goat(?!(?:-releases|_))/i.test(content))
     problems.push(`${name}: private repository URL`);
   // V8/Node's diagnostic code embeds this documented Windows example literally.
   const pathContent = content.replace(/C:\\(?:\\)?a\\(?:\\)?b\\(?:\\)?c(?=["'`\s)]|$)/g, "");
-  if (!dependencyNotice.test(normalized) && (buildPath.test(pathContent) || buildPath.test(name)))
+  const machinePath = roots.some((root) => pathContent.includes(`${root}/`) || name.includes(root));
+  if (machinePath || (ours && (buildPath.test(pathContent) || buildPath.test(name))))
     problems.push(`${name}: absolute build path`);
   buildPath.lastIndex = 0;
   return problems;
@@ -274,7 +289,7 @@ export const scanReleasePayload = Effect.fn("scanReleasePayload")(function* (
       if (
         !label &&
         !entry.relative.includes(path.sep) &&
-        (isDistributable(entry.relative) || /\.(?:yml|blockmap)$/.test(entry.relative))
+        (isDistributable(entry.relative) || /\.(?:yml|yaml|blockmap)$/.test(entry.relative))
       )
         continue;
       problems.push(...exposureProblems(name));
@@ -398,10 +413,12 @@ export function requiredReleaseAssets(version: string): string[] {
     "LICENSE-T3CODE.txt",
   ];
   for (const arch of ["arm64", "x64"]) {
-    for (const ext of ["dmg", "zip", "exe", "AppImage", "deb"])
-      names.push(`GOAT-${version}-${arch}.${ext}`);
+    for (const ext of ["dmg", "zip", "exe"]) names.push(`GOAT-${version}-${arch}.${ext}`);
     for (const ext of ["zip", "exe"]) names.push(`GOAT-${version}-${arch}.${ext}.blockmap`);
   }
+  // electron-builder names Linux x64 packages by distro convention.
+  names.push(`GOAT-${version}-arm64.AppImage`, `GOAT-${version}-arm64.deb`);
+  names.push(`GOAT-${version}-x86_64.AppImage`, `GOAT-${version}-amd64.deb`);
   for (const key of ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64", "win32-arm64"]) {
     names.push(`goat-${version}-${key}.${key.startsWith("win32") ? "zip" : "tar.gz"}`);
   }
@@ -423,14 +440,21 @@ export function releaseAssetKey(name: string): string | undefined {
   const cli = /^goat-.+-(darwin|linux|win32)-(arm64|x64)\.(tar\.gz|zip)$/.exec(name);
   if (cli)
     return `cli-${cli[1] === "darwin" ? "mac" : cli[1] === "win32" ? "win" : "linux"}-${cli[2]}`;
-  const desktop = /^GOAT-.+-(arm64|x64)\.(dmg|zip|exe|AppImage|deb)$/.exec(name);
-  if (desktop)
-    return `desktop-${["dmg", "zip"].includes(desktop[2]!) ? "mac" : desktop[2] === "exe" ? "win" : "linux"}-${desktop[1]}`;
+  const desktop = /^GOAT-.+-(arm64|x64|x86_64|amd64)\.(dmg|zip|exe|AppImage|deb)$/.exec(name);
+  if (desktop) {
+    const arch = desktop[1] === "arm64" ? "arm64" : "x64";
+    const platform = ["dmg", "zip"].includes(desktop[2]!)
+      ? "mac"
+      : desktop[2] === "exe"
+        ? "win"
+        : "linux";
+    return `desktop-${platform}-${arch}`;
+  }
   return undefined;
 }
 export function releaseAssetVersion(name: string): string | undefined {
   return (/^goat-(.+)-(?:darwin|linux|win32)-(?:arm64|x64)\.(?:tar\.gz|zip)$/.exec(name) ??
-    /^GOAT-(.+)-(?:arm64|x64)\.(?:dmg|zip|exe|AppImage|deb)$/.exec(name))?.[1];
+    /^GOAT-(.+)-(?:arm64|x64|x86_64|amd64)\.(?:dmg|zip|exe|AppImage|deb)$/.exec(name))?.[1];
 }
 export function checkReleaseAssetSet(
   names: readonly string[],
@@ -494,6 +518,10 @@ export function checkReleaseReports(
       report.problems.length ||
       report.inputs.length === 0 ||
       !["payload", "mac"].includes(report.mode) ||
+      // A mac report only counts when it was produced with --require-signing.
+      (report.mode === "mac" &&
+        (!report.checks.includes("require-signing") ||
+          report.checks.some((check) => check.includes("unsigned/unverified")))) ||
       (report.mode === "mac" &&
         !report.key.startsWith("desktop-mac-") &&
         report.key !== "cli-mac-arm64")

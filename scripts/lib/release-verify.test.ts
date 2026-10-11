@@ -17,6 +17,7 @@ import {
   isMachO,
   readReleaseAsset,
   releaseAssetKey,
+  releaseAssetVersion,
   releaseInputs,
   decodeReleaseReport,
   ReleaseVerificationError,
@@ -77,7 +78,7 @@ const report = (
   version,
   inputs: assets.map(({ name, sha256 }) => ({ name, sha256 })),
   ok: true,
-  checks: ["exposure-scan"],
+  checks: mode === "mac" ? ["require-signing", "exposure-scan"] : ["exposure-scan"],
   problems: [],
 });
 const neverRun: ReleaseCommandRunner = (program) =>
@@ -108,7 +109,7 @@ describe("release payload helpers", () => {
     expect(isMachO(bytes("text"))).toBe(false);
     expect(isMachO(new Uint8Array(3))).toBe(false);
   });
-  it("rejects every exposure pattern and keeps narrow dependency exceptions", () => {
+  it("rejects every exposure pattern in GOAT code and this machine's paths everywhere", () => {
     for (const name of [
       "client/main.map",
       "src/a.ts",
@@ -138,11 +139,23 @@ describe("release payload helpers", () => {
         "github.com/goat-si/goat-releases github.com/goat-si/goat_native",
       ),
     ).toEqual([]);
-    expect(exposureProblems("node_modules/pkg/LICENSE", "/Users/author/example/")).toEqual([]);
-    expect(exposureProblems("node_modules/pkg/LICENSE", "sourceMappingURL=data:bad")).not.toEqual(
-      [],
-    );
-    expect(exposureProblems("node_modules/pkg/main.js", "/Users/author/example/")).not.toEqual([]);
+    // Third-party code ships its own sources, maps and CI paths; D-10 covers GOAT's.
+    for (const [name, content] of [
+      ["app.asar!/node_modules/zod/src/index.ts", ""],
+      ["app.asar!/node_modules/pkg/main.js.map", ""],
+      ["node_modules/pkg/LICENSE", "sourceMappingURL=data:bad"],
+      ["node_modules/pkg/addon.node", "/Users/runner/work/pkg/build/"],
+      ["GOAT.app/Contents/Frameworks/Electron Framework", "sourceMappingURL=data:x"],
+    ] as const)
+      expect(exposureProblems(name, content, [])).toEqual([]);
+    // Placeholders and prefix lists in GOAT code are not paths.
+    expect(exposureProblems("main.js", "`/Users/<user>/.claude`", [])).toEqual([]);
+    expect(exposureProblems("main.js", "[`/Users/`,`/home/`,`/tmp/`]", [])).toEqual([]);
+    // This build machine's own paths fail in any file, including dependencies.
+    const roots = ["/Users/builder/actions-runner/_work/goat/goat"];
+    expect(
+      exposureProblems("node_modules/pkg/addon.node", `${roots[0]}/node_modules/x`, roots),
+    ).toEqual(["node_modules/pkg/addon.node: absolute build path"]);
     expect(exposureProblems("main.js", "'C:\\a\\b\\c'")).toEqual([]);
     expect(exposureProblems("main.js", "C:\\a\\b\\c\\build")).not.toEqual([]);
   });
@@ -175,8 +188,16 @@ describe("release payload helpers", () => {
       ),
     ).toHaveLength(2);
     expect(
-      checkReleaseAssetSet([...names, `GOAT-${version}-x64.AppImage.blockmap`], version),
+      checkReleaseAssetSet([...names, `GOAT-${version}-x86_64.AppImage.blockmap`], version),
     ).toEqual([]);
+  });
+  it("keys Linux x64 packages by electron-builder's distro arch names", () => {
+    expect(releaseAssetKey(`GOAT-${version}-x86_64.AppImage`)).toBe("desktop-linux-x64");
+    expect(releaseAssetKey(`GOAT-${version}-amd64.deb`)).toBe("desktop-linux-x64");
+    expect(releaseAssetKey(`GOAT-${version}-arm64.deb`)).toBe("desktop-linux-arm64");
+    expect(releaseAssetKey(`GOAT-${version}-x64.dmg`)).toBe("desktop-mac-x64");
+    expect(releaseAssetKey(`goat-${version}-win32-arm64.zip`)).toBe("cli-win-arm64");
+    expect(releaseAssetVersion(`GOAT-${version}-amd64.deb`)).toBe(version);
   });
   it("checks manifest versions, local URLs, digests and sizes", () => {
     const zip = asset(`GOAT-${version}-arm64.zip`);
@@ -229,6 +250,9 @@ describe("release payload helpers", () => {
       [{ ...builder, ok: false }, mac],
       [{ ...builder, transforms: [...builder.transforms, ...builder.transforms] }, mac],
       [{ ...builder, inputs: builder.inputs.slice(0, 1) }, mac],
+      // A mac report made without --require-signing, or one listing unsigned files.
+      [builder, { ...mac, checks: ["exposure-scan"] }],
+      [builder, { ...mac, checks: [...mac.checks, "unsigned/unverified: codesign x"] }],
     ])
       expect(checkReleaseReports(broken, [zip, dmg], version).length).toBeGreaterThan(0);
     expect(
@@ -568,7 +592,7 @@ it.effect(
         const final = yield* releaseInputs(dir);
         for (const [name, selected] of [
           ["nightly.yml", final.filter((entry) => entry.name.endsWith(".exe"))],
-          ["nightly-linux.yml", final.filter((entry) => entry.name.endsWith("-x64.AppImage"))],
+          ["nightly-linux.yml", final.filter((entry) => entry.name.endsWith("-x86_64.AppImage"))],
           [
             "nightly-linux-arm64.yml",
             final.filter((entry) => entry.name.endsWith("-arm64.AppImage")),

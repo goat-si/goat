@@ -214,7 +214,8 @@ export const makeGitHubReleasesClient = Effect.fn("makeGitHubReleasesClient")(fu
     deleteRelease: (id: number) =>
       request(`${base}/releases/${id}`, { method: "DELETE" }).pipe(Effect.asVoid),
     deleteTag: (tag: string) =>
-      request(`${base}/git/refs/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }).pipe(
+      // A tag that is already gone is the goal; do not fail a run after publishing.
+      request(`${base}/git/refs/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }, true).pipe(
         Effect.asVoid,
       ),
     uploadAsset: (id: number, name: string, bytes: Uint8Array) =>

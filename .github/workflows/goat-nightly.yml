@@ -281,7 +281,7 @@ jobs:
         run: |
           mkdir -p reports
           node scripts/verify-release-artifacts.ts payload --dir release-cli --version "$VERSION" \
-            --key "cli-${{ matrix.key }}" --report "reports/verify-cli-${{ matrix.key }}.json"
+            --key "cli-${{ matrix.platform }}-${{ matrix.arch }}" --report "reports/verify-cli-${{ matrix.key }}.json"
 
       - name: Upload CLI archive
         uses: actions/upload-artifact@v4
@@ -378,7 +378,7 @@ jobs:
       - name: Verify signatures and payload
         run: |
           node scripts/verify-release-artifacts.ts mac --dir release --version "$VERSION" \
-            --team U9ATA49N28 --require-signing --key "mac-${{ matrix.arch }}" \
+            --team U9ATA49N28 --require-signing --key "desktop-mac-${{ matrix.arch }}" \
             --report "reports/verify-mac-${{ matrix.arch }}.json"
 
       - name: Collect release assets

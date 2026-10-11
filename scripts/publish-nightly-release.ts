@@ -179,6 +179,8 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
   if (!(yield* allMatch(draft.id))) {
     return yield* new NightlyPublishError({ message: "Draft assets differ after reconciliation." });
   }
+  // A superseded run must not touch goat-releases main either.
+  if (superseded(yield* client.listReleases())) return "superseded" as const;
   for (const file of REPOSITORY_RELEASE_FILES) {
     const bytes = yield* fs.readFile(path.join(dir, file));
     if ((yield* hashBytes(bytes)) !== local.find((asset) => asset.name === file)!.sha256) {

@@ -26,6 +26,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 keychain="$HOME/Library/Keychains/login.keychain-db"
+# The runner LaunchAgent keeps the PATH it was configured with; rustup's default
+# location is added so cargo is found either way.
+if [ -d "$HOME/.cargo/bin" ]; then PATH="$HOME/.cargo/bin:$PATH"; fi
 failures=0
 pass() { printf '  ok    %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n        %s\n' "$1" "$2"; failures=$((failures + 1)); }
@@ -136,5 +139,8 @@ if [ "$ci" = true ]; then
     echo "APPLE_KEYCHAIN=$keychain"
     echo "T3CODE_CLI_MAC_SIGN_IDENTITY=$identity_name"
   } >> "$GITHUB_ENV"
+  if [ -d "$HOME/.cargo/bin" ] && [ -n "${GITHUB_PATH:-}" ]; then
+    echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+  fi
 fi
 echo "preflight: ready"
