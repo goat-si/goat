@@ -706,6 +706,7 @@ function shippedResolveStep(): Record<string, unknown> {
   return step;
 }
 
+const preparedStep = "steps.resolve.outputs.skip == 'false'";
 type NightlyJobs = Record<string, Record<string, unknown>>;
 function nightlyJobs(): NightlyJobs {
   return {
@@ -718,8 +719,8 @@ function nightlyJobs(): NightlyJobs {
       },
       steps: [
         shippedResolveStep(),
-        checkout("${{ steps.resolve.outputs.sha }}"),
-        { run: "echo prepare" },
+        { ...checkout("${{ steps.resolve.outputs.sha }}"), if: preparedStep },
+        { run: "echo prepare", if: preparedStep },
       ],
     },
     build_mac: {
@@ -996,6 +997,16 @@ describe("goat pre-push nightly workflow guard", () => {
       "a partial expression wrapper after the gate",
       withJob("build_mac", { if: `${downstreamGateText} && (${"${{"} always() }})` }),
       "jobs.build_mac.if must start with the prepare gate",
+    ],
+    [
+      "a prepare checkout that runs after the resolver failed",
+      withJob("prepare", {
+        steps: [
+          shippedResolveStep(),
+          { ...checkout("${{ steps.resolve.outputs.sha }}"), if: "always()" },
+        ],
+      }),
+      "jobs.prepare outputs sha and skip must come from its pinned resolve step",
     ],
     [
       "the token action outside publish",

@@ -303,7 +303,17 @@ function validateNightlyWorkflow(source, yaml) {
         !isPinnedResolve(job.steps[0]) ||
         Object.hasOwn(job, "env") ||
         Object.hasOwn(job, "defaults") ||
-        Object.hasOwn(job, "continue-on-error")
+        Object.hasOwn(job, "continue-on-error") ||
+        // Later steps run only when the resolver succeeded and chose to build; its
+        // skip output exists only after it verified the commit.
+        job.steps
+          .slice(1)
+          .some(
+            (step) =>
+              !isMapping(step) ||
+              normalizeExpression(step.if) !== "steps.resolve.outputs.skip == 'false'" ||
+              Object.hasOwn(step, "continue-on-error"),
+          )
       ) {
         fail("jobs.prepare outputs sha and skip must come from its pinned resolve step");
       }
