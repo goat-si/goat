@@ -271,6 +271,51 @@ describe("AntigravityAdapterV2 client file system", () => {
       ).pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(linkedDirWrite), "a write under an escaping directory link");
       assert.isFalse(yield* fileSystem.exists(path.join(outside, "new.txt")));
+      // Missing directories below that link still resolve through it.
+      const linkedNewDirWrite = yield* writeTextFile(
+        {
+          sessionId: "mock-session-1",
+          path: path.join(workspace, "linked-dir", "fresh", "new.txt"),
+          content: "planted",
+        },
+        context("fs/write_text_file"),
+      ).pipe(Effect.exit);
+      assert.isTrue(
+        Exit.isFailure(linkedNewDirWrite),
+        "a write into a new directory under an escaping directory link",
+      );
+      assert.isFalse(yield* fileSystem.exists(path.join(outside, "fresh")));
+      // A dangling directory link is refused even with missing segments below it.
+      yield* fileSystem.symlink(
+        path.join(outside, "missing-dir"),
+        path.join(workspace, "dangling-dir"),
+      );
+      const danglingDirWrite = yield* writeTextFile(
+        {
+          sessionId: "mock-session-1",
+          path: path.join(workspace, "dangling-dir", "nested", "new.txt"),
+          content: "planted",
+        },
+        context("fs/write_text_file"),
+      ).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(danglingDirWrite), "a write under a dangling directory link");
+      assert.isFalse(yield* fileSystem.exists(path.join(outside, "missing-dir")));
+      // A path that reaches the workspace through a symlink, like macOS
+      // `/var` -> `/private/var`, may create new directories inside it.
+      const workspaceAlias = path.join(outside, "workspace-alias");
+      yield* fileSystem.symlink(workspace, workspaceAlias);
+      yield* writeTextFile(
+        {
+          sessionId: "mock-session-1",
+          path: path.join(workspaceAlias, "aliased", "deep", "file.ts"),
+          content: "aliased",
+        },
+        context("fs/write_text_file"),
+      );
+      assert.equal(
+        yield* fileSystem.readFileString(path.join(workspace, "aliased", "deep", "file.ts")),
+        "aliased",
+      );
       // A symlink that stays inside the workspace keeps working.
       const insideLink = path.join(workspace, "inside-link.ts");
       yield* fileSystem.symlink(insidePath, insideLink);
