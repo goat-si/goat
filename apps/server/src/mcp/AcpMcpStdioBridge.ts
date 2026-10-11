@@ -118,9 +118,11 @@ function openAcpMcpSession(options: {
     const send = (message: unknown): Effect.Effect<ReadonlyArray<unknown>, AcpMcpBridgeError> =>
       Effect.gen(function* () {
         const response = yield* Effect.tryPromise({
-          try: () =>
+          // Interrupting the request (a caller's timeout) aborts the HTTP call.
+          try: (signal) =>
             fetchImplementation(options.endpoint, {
               method: "POST",
+              signal,
               headers: {
                 "content-type": "application/json",
                 accept: "application/json, text/event-stream",

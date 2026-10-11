@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -21,6 +22,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -297,4 +299,70 @@ it.effect("a finished task keeps its result, and later disposal keeps the promot
       promotedTask.completionDelivery,
     );
   }).pipe(Effect.provide(layerTest)),
+);
+
+// Same harness with a continuation queue the test can read: a promotion that ends a
+// running task must actually offer the parent its wake.
+const layerWithContinuations = layerTest.pipe(
+  Layer.provideMerge(ProviderContinuationRequests.layer),
+);
+
+it.effect("promotion offers the former parent a wake for the task it ended", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+    const { parentThreadId, childThreadId } = yield* delegatedTree("promote-wake");
+    const parentRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.at(-1)!;
+    const providerThreadId = ProviderThreadId.make("provider-thread:promote-wake");
+    const driver = ProviderDriverKind.make("codex");
+    const now = yield* DateTime.now;
+    // The parent's turn ran on a provider thread and has ended, so the async task's
+    // result can only reach it through a wake.
+    yield* projections.apply({
+      id: EventId.make("event:promote-wake:provider-thread"),
+      type: "provider-thread.updated",
+      threadId: parentThreadId,
+      driver,
+      providerInstanceId: instanceId,
+      occurredAt: now,
+      payload: {
+        id: providerThreadId,
+        driver,
+        providerInstanceId: instanceId,
+        providerSessionId: null,
+        appThreadId: parentThreadId,
+        ownerNodeId: parentRun.rootNodeId!,
+        nativeThreadRef: { driver, nativeId: "native:promote-wake", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    yield* projections.apply({
+      id: EventId.make("event:promote-wake:parent-run-completed"),
+      type: "run.updated",
+      threadId: parentThreadId,
+      runId: parentRun.id,
+      occurredAt: now,
+      payload: { ...parentRun, providerThreadId, status: "completed", completedAt: now },
+    });
+
+    yield* promote(childThreadId, "promote-wake");
+
+    const task = yield* taskOf(parentThreadId, childThreadId);
+    const run = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.find(
+      (candidate) => candidate.id === parentRun.id,
+    )!;
+    assert.include(run.delegatedCompletion?.delivery?.taskIds ?? [], task.id);
+    const wake = yield* requests.take;
+    assert.equal(wake.threadId, parentThreadId);
+    assert.equal(wake.providerThreadId, providerThreadId);
+    assert.equal(wake.delegatedCompletion?.parentRunId, parentRun.id);
+  }).pipe(Effect.provide(layerWithContinuations)),
 );

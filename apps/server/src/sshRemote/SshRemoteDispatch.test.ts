@@ -7,6 +7,8 @@ import * as SshTunnel from "@t3tools/ssh/tunnel";
 
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient } from "effect/http";
 import { buildRemoteT3RunnerScript } from "@t3tools/ssh/tunnel";
@@ -704,6 +706,8 @@ describe("SSH dispatch launch lineage", () => {
   const launchAgainst = (remote: {
     readonly declaresLaunchedBy: boolean;
     readonly listFails?: boolean;
+    /** The listing never answers until the caller gives up and aborts it. */
+    readonly onListStalled?: () => void;
   }) =>
     Effect.gen(function* () {
       const host = "lineage-host";
@@ -730,6 +734,12 @@ describe("SSH dispatch launch lineage", () => {
             return new Response(null, { status: 202 });
           case "tools/list":
             if (remote.listFails === true) return new Response(null, { status: 500 });
+            if (remote.onListStalled !== undefined) {
+              remote.onListStalled();
+              return new Promise<Response>((_resolve, reject) =>
+                init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+              );
+            }
             return Response.json({
               jsonrpc: "2.0",
               id: request.id,
@@ -846,6 +856,24 @@ describe("SSH dispatch launch lineage", () => {
         expect(launches).toHaveLength(1);
         expect(launches[0]).not.toHaveProperty("launchedBy");
       }
+    }),
+  );
+
+  it.effect("launches once without the launcher when the remote never answers the listing", () =>
+    Effect.gen(function* () {
+      let listStalled!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        listStalled = resolve;
+      });
+      const launch = yield* Effect.forkChild(
+        launchAgainst({ declaresLaunchedBy: true, onListStalled: () => listStalled() }),
+      );
+      yield* Effect.promise(() => stalled);
+      yield* TestClock.adjust(SshRemoteDispatch.LAUNCH_LINEAGE_PROBE_TIMEOUT);
+      const { result, launches } = yield* Fiber.join(launch);
+      expect(result.threadId).toBe("new-thread");
+      expect(launches).toHaveLength(1);
+      expect(launches[0]).not.toHaveProperty("launchedBy");
     }),
   );
 });

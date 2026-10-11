@@ -95,6 +95,12 @@ export type SshLaunchWorkspace =
       readonly branch?: string | undefined;
     };
 
+/**
+ * How long a launch waits to learn whether the remote accepts launchedBy. The probe is
+ * optional, so a remote that does not answer in time gets the launch without lineage.
+ */
+export const LAUNCH_LINEAGE_PROBE_TIMEOUT = "5 seconds";
+
 export interface SshLaunchInput {
   readonly host: string;
   readonly cwd: string;
@@ -463,7 +469,7 @@ const make = Effect.gen(function* () {
         listAcpMcpTools({
           endpoint: new URL("mcp", remote.httpBaseUrl).toString(),
           authorization: `Bearer ${remote.token}`,
-        }),
+        }).pipe(Effect.timeout(LAUNCH_LINEAGE_PROBE_TIMEOUT)),
       );
       if (listed._tag === "Failure") return false;
       const accepts = listed.success.some(
