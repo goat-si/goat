@@ -94,12 +94,14 @@ export const SlackChannelSettingsErrorReason = Schema.Literals(
 );
 export type SlackChannelSettingsErrorReason = typeof SlackChannelSettingsErrorReason.Type;
 
-/** Safe to show: never contains a token or a raw Slack response. */
+/**
+ * Safe to show: never contains a token or a raw Slack response. Like the gateway error it has
+ * no `cause`, which would be encoded onto the wire; the server logs causes instead.
+ */
 export class SlackChannelSettingsError extends Schema.TaggedError<SlackChannelSettingsError>()(
   "SlackChannelSettingsError",
   {
     reason: SlackChannelSettingsErrorReason,
-    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {

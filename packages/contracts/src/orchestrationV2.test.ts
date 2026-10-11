@@ -1626,5 +1626,12 @@ describe("GOAT bot channel metadata", () => {
       user,
     ) as Record<string, unknown>;
     expect(decodeOrchestrationV2TurnItemJson(withoutChannel)).not.toHaveProperty("channel");
+    // Metadata with a kind from a newer server drops; the message itself still decodes.
+    const newerKind = decodeOrchestrationV2TurnItemJson({
+      ...withoutChannel,
+      channel: { conversationId: "conv-1", originKind: "goat", kind: "typing" },
+    });
+    expect(newerKind).toMatchObject({ type: "user_message", text: "Re-verify the Opus 5.5 call" });
+    expect(newerKind.type === "user_message" ? newerKind.channel : "wrong type").toBeUndefined();
   });
 });

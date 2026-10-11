@@ -33,4 +33,10 @@ describe("channel addresses", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects a message kind outside the contract", () => {
+    expect(() =>
+      decodeMeta({ conversationId: "conv-1", originKind: "goat", kind: "typing" }),
+    ).toThrow();
+  });
 });

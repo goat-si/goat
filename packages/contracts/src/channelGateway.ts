@@ -195,7 +195,8 @@ export type ChannelGatewayErrorReason = typeof ChannelGatewayErrorReason.Type;
 
 /**
  * A channel operation failed. The message is safe to show users and agents: it never contains
- * channel message text, tokens, or link codes.
+ * channel message text, tokens, or link codes. There is no `cause` field because a cause would
+ * be encoded onto the wire; the server logs it before mapping to this error.
  */
 export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>()(
   "ChannelGatewayError",
@@ -203,7 +204,6 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
     reason: ChannelGatewayErrorReason,
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
-    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {

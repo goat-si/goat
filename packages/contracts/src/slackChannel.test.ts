@@ -1,11 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { SlackChannelConfigureInput, SlackChannelSettings } from "./index.ts";
+import {
+  SlackChannelConfigureInput,
+  SlackChannelSettings,
+  SlackChannelSettingsError,
+} from "./index.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(SlackChannelSettings);
 const encodeSettings = Schema.encodeSync(SlackChannelSettings);
 const decode = Schema.decodeUnknownSync(SlackChannelConfigureInput);
+const encodeError = Schema.encodeSync(Schema.toCodecJson(SlackChannelSettingsError));
 
 describe("Slack channel settings", () => {
   it("reports whether tokens are stored without carrying them", () => {
@@ -30,5 +35,14 @@ describe("Slack channel settings", () => {
       botToken: "xoxb-new",
     });
     expect(() => decode({ enabled: true, appToken: "  " })).toThrow();
+  });
+
+  it("encodes errors without anything a token could hide in", () => {
+    const error = new SlackChannelSettingsError({ reason: "invalid_token" });
+    expect(encodeError(error)).toEqual({
+      _tag: "SlackChannelSettingsError",
+      reason: "invalid_token",
+    });
+    expect(error.message).toBe("Slack rejected the token.");
   });
 });
