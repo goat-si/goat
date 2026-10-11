@@ -24,9 +24,9 @@ describe("branding", () => {
       value: {
         desktopBridge: {
           getAppBranding: () => ({
-            baseName: "goat",
+            baseName: "GOAT",
             stageLabel: "Nightly",
-            displayName: "goat (Nightly)",
+            displayName: "GOAT (Nightly)",
           }),
         },
       },
@@ -34,9 +34,9 @@ describe("branding", () => {
 
     const branding = await import("./branding");
 
-    expect(branding.APP_BASE_NAME).toBe("goat");
+    expect(branding.APP_BASE_NAME).toBe("GOAT");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("goat (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("GOAT (Nightly)");
   });
 
   it("normalizes hosted app channel metadata", async () => {
@@ -47,7 +47,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("nightly");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
-    expect(branding.APP_DISPLAY_NAME).toBe("goat (Nightly)");
+    expect(branding.APP_DISPLAY_NAME).toBe("GOAT (Nightly)");
   });
 
   it("does not label the latest hosted app channel", async () => {
@@ -58,7 +58,7 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
     expect(branding.APP_STAGE_LABEL).toBe("Latest");
-    expect(branding.APP_DISPLAY_NAME).toBe("goat");
+    expect(branding.APP_DISPLAY_NAME).toBe("GOAT");
   });
 
   it("ignores unknown hosted app channels", async () => {
@@ -84,33 +84,33 @@ describe("branding logic", () => {
   it("updates the display name for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "goat",
-        fallbackDisplayName: "goat (Alpha)",
+        baseName: "GOAT",
+        fallbackDisplayName: "GOAT (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616.12",
       }),
-    ).toBe("goat (Nightly)");
+    ).toBe("GOAT (Nightly)");
   });
 
   it("keeps the fallback display name for stable primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "goat",
-        fallbackDisplayName: "goat (Alpha)",
+        baseName: "GOAT",
+        fallbackDisplayName: "GOAT (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.27",
       }),
-    ).toBe("goat (Alpha)");
+    ).toBe("GOAT (Alpha)");
   });
 
   it("keeps the fallback display name for malformed nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "goat",
-        fallbackDisplayName: "goat (Alpha)",
+        baseName: "GOAT",
+        fallbackDisplayName: "GOAT (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
-    ).toBe("goat (Alpha)");
+    ).toBe("GOAT (Alpha)");
   });
 });

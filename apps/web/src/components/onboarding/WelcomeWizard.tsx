@@ -232,11 +232,11 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title="Set up goat"
+          title="Set up GOAT"
           identity={
-            <div className="flex items-center gap-2" role="img" aria-label="goat">
+            <div className="flex items-center gap-2" role="img" aria-label="GOAT">
               <T3Wordmark className="size-6 shrink-0" aria-hidden />
-              <span className="text-2xl font-medium tracking-tight">goat</span>
+              <span className="text-2xl font-medium tracking-tight">GOAT</span>
             </div>
           }
         >
@@ -426,7 +426,7 @@ function ConnectionStep({
       ) : null}
       <div className="mt-6 flex flex-col-reverse gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <p className="min-w-0 text-xs leading-relaxed text-muted-foreground">
-          goat collects anonymous usage data to help us improve it. To read more about how your data
+          GOAT collects anonymous usage data to help us improve it. To read more about how your data
           is used and how to opt out, see our{" "}
           <a
             className="underline underline-offset-2 hover:text-foreground"
@@ -524,7 +524,7 @@ function ConnectAccountOption({
             </p>
             <CommandBlock command="npx t3 connect" className="mt-3" />
             <p className="mt-3 text-xs text-muted-foreground">
-              Keep goat running. Select the computers you want to set up above.
+              Keep GOAT running. Select the computers you want to set up above.
             </p>
           </div>
         </CollapsiblePanel>
@@ -638,7 +638,7 @@ function PairingForm({
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start goat first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
+              Start GOAT first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
           </CollapsiblePanel>
