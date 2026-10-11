@@ -1,25 +1,18 @@
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import {
-  AuthSettingsWriteScope,
   type EnvironmentId,
   type ProjectScript,
-  type T3ProjectFileScript,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
-import { ChevronDownIcon, DownloadIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { serverEnvironment } from "~/state/server";
-import { readEnvironmentScope } from "~/state/session";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -33,12 +26,9 @@ import { Button } from "./ui/button";
 import { Group, GroupSeparator } from "./ui/group";
 import {
   Menu,
-  MenuGroup,
-  MenuGroupLabel,
   MenuItem,
   MenuItemLabel,
   MenuPopup,
-  MenuSeparator,
   MenuShortcut,
   MenuTrigger,
   MenuSub,
@@ -57,16 +47,12 @@ import {
 
 export type { NewProjectScriptInput, ProjectScriptActionResult };
 
-const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
-
 interface ProjectScriptsControlProps {
   displayMode?: "toolbar" | "panel";
   presentation?: "toolbar" | "menu";
   onRequestMenuClose?: () => void;
   environmentId: EnvironmentId;
   scripts: ReadonlyArray<ProjectScript>;
-  /** Scripts declared in the project's checked-in t3.json, offered for import. */
-  fileScripts?: ReadonlyArray<T3ProjectFileScript>;
   preferredScriptId?: string | null;
   onRunScript?: ((script: ProjectScript) => void) | undefined;
   onAddScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
@@ -83,7 +69,6 @@ export default function ProjectScriptsControl({
   onRequestMenuClose,
   environmentId,
   scripts,
-  fileScripts = NO_FILE_SCRIPTS,
   preferredScriptId = null,
   onRunScript,
   onAddScript,
@@ -113,18 +98,6 @@ export default function ProjectScriptsControl({
     }
     return primaryProjectScript(scripts);
   }, [preferredScriptId, scripts]);
-  const importableScripts = useMemo(
-    () =>
-      fileScripts.filter(
-        (fileScript) =>
-          !scripts.some(
-            (script) =>
-              script.command === fileScript.command ||
-              script.name.toLowerCase() === fileScript.name.toLowerCase(),
-          ),
-      ),
-    [fileScripts, scripts],
-  );
 
   const openAddDialog = () => {
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
@@ -140,53 +113,6 @@ export default function ProjectScriptsControl({
     (scriptId: string | null, input: NewProjectScriptInput) =>
       scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input),
     [onAddScript, onUpdateScript],
-  );
-
-  const importFileScript = async (fileScript: T3ProjectFileScript) => {
-    const payload: NewProjectScriptInput = {
-      name: fileScript.name,
-      command: fileScript.command,
-      icon: fileScript.icon ?? "play",
-      runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
-      waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
-      runOnSettle: fileScript.runOnSettle ?? false,
-      ...(readEnvironmentScope(environmentId, AuthSettingsWriteScope) ? { keybinding: null } : {}),
-      previewUrl: fileScript.previewUrl ?? null,
-      autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
-    };
-    const result = await onAddScript(payload);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      // Surface the failure through the regular add dialog, prefilled so the
-      // user can adjust and retry.
-      const error = squashAtomCommandFailure(result);
-      setEditorRequest({
-        scriptId: null,
-        initial: payload,
-        error: error instanceof Error ? error.message : "Failed to import action.",
-      });
-    }
-  };
-
-  const importMenuItems = importableScripts.length > 0 && (
-    <>
-      {scripts.length > 0 && <MenuSeparator />}
-      <MenuGroup>
-        <MenuGroupLabel>From t3.json</MenuGroupLabel>
-        {importableScripts.map((fileScript) => (
-          <MenuItem
-            density={presentation === "menu" ? "touch" : "default"}
-            key={`${fileScript.name} ${fileScript.command}`}
-            onClick={() => void importFileScript(fileScript)}
-          >
-            <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4" />
-            <MenuItemLabel>{fileScript.name}</MenuItemLabel>
-            <MenuShortcut>
-              <DownloadIcon className="size-3.5" aria-label="Import" />
-            </MenuShortcut>
-          </MenuItem>
-        ))}
-      </MenuGroup>
-    </>
   );
 
   const scriptItems = (
@@ -242,7 +168,6 @@ export default function ProjectScriptsControl({
           </MenuItem>
         );
       })}
-      {importMenuItems}
       <MenuItem density={presentation === "menu" ? "touch" : "default"} onClick={openAddDialog}>
         <PlusIcon className="size-4" />
         <MenuItemLabel>{isPanel ? "Add project script" : "Add action"}</MenuItemLabel>
@@ -267,7 +192,7 @@ export default function ProjectScriptsControl({
               </MenuShortcut>
             </MenuItem>
           )}
-          {scripts.length > 0 || importableScripts.length > 0 ? (
+          {scripts.length > 0 ? (
             <MenuSub
               open={actionsMenuOpen.scripts}
               onOpenChange={(open) =>
@@ -370,9 +295,9 @@ export default function ProjectScriptsControl({
             </MenuPopup>
           </Menu>
         </ActionGroup>
-      ) : scripts.length > 0 || importableScripts.length > 0 ? (
-        // No one-click action (only a settle action, or only t3.json imports),
-        // so the saved actions stay reachable through this menu.
+      ) : scripts.length > 0 ? (
+        // No one-click action (only a settle action), so the saved actions
+        // stay reachable through this menu.
         isPanel ? (
           <div
             role="group"

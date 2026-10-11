@@ -247,7 +247,7 @@ const RECOVERY_KINDS: ReadonlyArray<ProjectionStore.ProjectionRecoveryKind> = [
 ];
 
 /** Tables the prune empties. The copy skips their rows. */
-export const CLEARED_TABLES: ReadonlyArray<string> = [
+const CLEARED_TABLES: ReadonlyArray<string> = [
   // Pending work the dev server would otherwise pick up and run.
   "scheduled_tasks",
   "orchestration_v2_effect_outbox",

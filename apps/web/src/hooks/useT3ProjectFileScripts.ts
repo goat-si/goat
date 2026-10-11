@@ -51,15 +51,3 @@ export function useT3ProjectFileState(
     return { status: "valid", file, scripts: file.scripts ?? NO_SCRIPTS } as const;
   }, [contents, isPending]);
 }
-
-/**
- * Scripts declared in the project's checked-in `t3.json`, offered in the
- * scripts menu for import. Missing, truncated, or invalid files resolve to
- * an empty list.
- */
-export function useT3ProjectFileScripts(
-  environmentId: EnvironmentId,
-  cwd: string | null,
-): ReadonlyArray<T3ProjectFileScript> {
-  return useT3ProjectFileState(environmentId, cwd).scripts;
-}

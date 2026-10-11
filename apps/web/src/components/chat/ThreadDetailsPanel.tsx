@@ -7,7 +7,6 @@ import type {
 } from "@t3tools/contracts";
 
 import type { DraftId } from "../../composerDraftStore";
-import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import GitActionsControl from "../GitActionsControl";
@@ -63,10 +62,6 @@ export interface ThreadDetailsPanelProps extends Pick<
 }
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
-  const fileScripts = useT3ProjectFileScripts(
-    props.environmentId,
-    props.activeProjectScripts ? props.gitCwd : null,
-  );
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
     environmentId: props.environmentId,
@@ -133,7 +128,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   environmentId={props.environmentId}
                   displayMode="panel"
                   scripts={props.activeProjectScripts}
-                  fileScripts={fileScripts}
                   preferredScriptId={props.preferredScriptId}
                   onRunScript={props.onRunProjectScript}
                   onAddScript={props.onAddProjectScript}
