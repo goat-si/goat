@@ -35,6 +35,7 @@ import {
   resolveWebAssetBrandForChannel,
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
+import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
   findInlinedExternalPackages,
@@ -181,6 +182,7 @@ interface BuildCliInput {
   readonly arch: Option.Option<typeof BuildArch.Type>;
   readonly buildVersion: Option.Option<string>;
   readonly outputDir: Option.Option<string>;
+  readonly payloadReport?: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
@@ -969,6 +971,7 @@ interface ResolvedBuildOptions {
   readonly arch: typeof BuildArch.Type;
   readonly version: string | undefined;
   readonly outputDir: string;
+  readonly payloadReport: string | undefined;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
@@ -1734,6 +1737,7 @@ const BuildEnvConfig = Config.all({
   arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
   version: Config.String("T3CODE_DESKTOP_VERSION").pipe(Config.option),
   outputDir: Config.String("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
+  payloadReport: Config.String("T3CODE_DESKTOP_PAYLOAD_REPORT").pipe(Config.option),
   skipBuild: Config.Boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
   keepStage: Config.Boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.Boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
@@ -1876,6 +1880,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     arch,
     version,
     outputDir,
+    payloadReport:
+      Option.getOrUndefined(input.payloadReport ?? Option.none()) ??
+      Option.getOrUndefined(env.payloadReport),
     skipBuild,
     keepStage,
     signed,
@@ -4407,6 +4414,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  if (options.payloadReport !== undefined) {
+    const problems = yield* scanReleasePayload(stageDistDir);
+    yield* writePayloadReport(
+      stageDistDir,
+      options.payloadReport,
+      `desktop-${options.platform}-${options.arch}`,
+      appVersion,
+      problems,
+    );
+  }
+
   const stageEntries = yield* fs.readDirectory(stageDistDir);
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
@@ -4484,6 +4502,10 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   mockUpdateServerPort: Flag.Int("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Mock update server port (env: T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.optional,
+  ),
+  payloadReport: Flag.String("payload-report").pipe(
+    Flag.withDescription("Payload verification report (env: T3CODE_DESKTOP_PAYLOAD_REPORT)."),
     Flag.optional,
   ),
   sshRuntimeArchiveDir: Flag.String("ssh-runtime-archive-dir").pipe(
