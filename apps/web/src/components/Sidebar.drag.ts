@@ -99,6 +99,8 @@ export function createSidebarCollisionDetection(
  * A zero scaleY marks rows/markers to hide while retaining their measured nodes. */
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
+  /** Parent rows whose measured height includes delegated children. */
+  nestedKeys?: ReadonlySet<string>;
   /** Suspend the reorder preview while the thread is dragged out as context. */
   enabled?: boolean;
   settledOrder: readonly string[];
@@ -144,9 +146,11 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active" || item.section === "working")
-        cardHeight ??= rects[index]?.height;
-      else slimHeight ??= rects[index]?.height;
+      if (!input.nestedKeys?.has(item.key)) {
+        if (item.section === "pinned" || item.section === "active" || item.section === "working")
+          cardHeight ??= rects[index]?.height;
+        else slimHeight ??= rects[index]?.height;
+      }
       if (item.key !== active.key) groups[item.section].push(item);
     }
     // Cards are 4.875rem + 0.25rem padding; slim rows/placeholders are h-9.
@@ -218,7 +222,9 @@ export function createSidebarSortingStrategy(input: {
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight
           : moved
-            ? fallback
+            ? input.nestedKeys?.has(active.key)
+              ? (rect?.height ?? fallback)
+              : fallback
             : (rect?.height ?? fallback);
     });
     const firstShelf = items.findIndex(isShelfHeader);

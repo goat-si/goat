@@ -1,4 +1,5 @@
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
@@ -565,6 +566,155 @@ export function buildMultiSelectThreadContextMenuItems(input: {
 
 export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return thread.lineage.relationshipToParent === "subagent";
+}
+
+export const SIDEBAR_CHILD_RUNNING_LIMIT = 3;
+export const SIDEBAR_CHILD_FINISHED_INITIAL_COUNT = 6;
+export const SIDEBAR_CHILD_FINISHED_PAGE_COUNT = 12;
+
+type SidebarChildInput = Pick<
+  SidebarThreadSummary,
+  | "environmentId"
+  | "id"
+  | "lineage"
+  | "archivedAt"
+  | "deletedAt"
+  | "source"
+  | "latestRun"
+  | "runtime"
+  | "updatedAt"
+  | "createdAt"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "pendingBackgroundTasks"
+>;
+
+/** T3-owned delegate_task children, nested beneath their visible parent. */
+export function isSidebarDelegatedChildThread(thread: SidebarChildInput): boolean {
+  return (
+    isSidebarSubagentThread(thread) &&
+    thread.lineage.parentThreadId !== null &&
+    thread.source.creationSource === "mcp" &&
+    thread.archivedAt === null &&
+    thread.deletedAt === null
+  );
+}
+
+export type SidebarDelegatedChildState = "attention" | "working" | "queued" | "finished";
+
+export function sidebarDelegatedChildState(
+  thread: Pick<
+    SidebarChildInput,
+    "hasPendingApprovals" | "hasPendingUserInput" | "runtime" | "pendingBackgroundTasks"
+  >,
+): SidebarDelegatedChildState {
+  if (thread.hasPendingApprovals || thread.hasPendingUserInput) return "attention";
+  const status = thread.runtime?.status;
+  if (
+    status === "preparing" ||
+    status === "starting" ||
+    status === "running" ||
+    status === "waiting" ||
+    (status === "idle" && thread.pendingBackgroundTasks.length > 0)
+  )
+    return "working";
+  return status === "queued" ? "queued" : "finished";
+}
+
+/** Stop interrupts active work; queued-only and background children have no active turn. */
+export function canStopSidebarDelegatedChild(thread: SidebarChildInput): boolean {
+  const state = sidebarDelegatedChildState(thread);
+  return (
+    thread.runtime?.activeRunId != null &&
+    (state === "attention" || (state === "working" && thread.runtime.status !== "idle"))
+  );
+}
+
+export interface SidebarDelegatedChildren<T> {
+  readonly active: ReadonlyArray<T>;
+  readonly finished: ReadonlyArray<T>;
+}
+
+/** Index once per shell collection, retaining unchanged parent entries for memoized rows. */
+export function buildSidebarDelegatedChildIndex<T extends SidebarChildInput>(
+  threads: ReadonlyArray<T>,
+  previous?: ReadonlyMap<string, SidebarDelegatedChildren<T>>,
+): ReadonlyMap<string, SidebarDelegatedChildren<T>> {
+  const groups = new Map<string, { active: T[]; finished: T[] }>();
+  for (const thread of threads) {
+    if (!isSidebarDelegatedChildThread(thread) || thread.lineage.parentThreadId === null) continue;
+    const key = scopedThreadKey(
+      scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId),
+    );
+    const group = groups.get(key) ?? { active: [], finished: [] };
+    group[sidebarDelegatedChildState(thread) === "finished" ? "finished" : "active"].push(thread);
+    groups.set(key, group);
+  }
+  const index = new Map<string, SidebarDelegatedChildren<T>>();
+  const sameElements = (left: ReadonlyArray<T>, right: ReadonlyArray<T>) =>
+    left.length === right.length && left.every((thread, position) => thread === right[position]);
+  for (const [key, group] of groups) {
+    group.active.sort(
+      (left, right) =>
+        Number(sidebarDelegatedChildState(right) === "attention") -
+          Number(sidebarDelegatedChildState(left) === "attention") ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+    group.finished.sort(
+      (left, right) =>
+        (right.latestRun?.completedAt ?? right.updatedAt).localeCompare(
+          left.latestRun?.completedAt ?? left.updatedAt,
+        ) || left.id.localeCompare(right.id),
+    );
+    const old = previous?.get(key);
+    index.set(
+      key,
+      old && sameElements(old.active, group.active) && sameElements(old.finished, group.finished)
+        ? old
+        : group,
+    );
+  }
+  return index;
+}
+
+export function resolveSidebarDelegatedChildWindow<T extends SidebarChildInput>(input: {
+  readonly children: SidebarDelegatedChildren<T>;
+  readonly runningExpanded: boolean;
+  readonly finishedExpanded: boolean;
+  readonly finishedVisibleCount: number;
+  readonly showFinished: boolean;
+  readonly openThreadKey: string | null;
+}) {
+  const attention = input.children.active.filter(
+    (thread) => sidebarDelegatedChildState(thread) === "attention",
+  );
+  const running = input.children.active.filter(
+    (thread) => sidebarDelegatedChildState(thread) !== "attention",
+  );
+  const activeRows = [
+    ...attention,
+    ...(input.runningExpanded ? running : running.slice(0, SIDEBAR_CHILD_RUNNING_LIMIT)),
+  ];
+  const finishedCount = input.showFinished ? input.children.finished.length : 0;
+  const finishedRows =
+    input.showFinished && input.finishedExpanded
+      ? input.children.finished.slice(0, input.finishedVisibleCount)
+      : [];
+  const isOpen = (thread: T) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === input.openThreadKey;
+  const pinnedOpenRow =
+    input.openThreadKey !== null && !activeRows.some(isOpen) && !finishedRows.some(isOpen)
+      ? (input.children.active.find(isOpen) ?? input.children.finished.find(isOpen) ?? null)
+      : null;
+  return {
+    activeRows,
+    hiddenActiveCount: running.length - (activeRows.length - attention.length),
+    finishedCount,
+    finishedRows,
+    hiddenFinishedCount: finishedCount - finishedRows.length,
+    pinnedOpenRow,
+  };
 }
 
 export function filterSidebarV2VisibleThreads<

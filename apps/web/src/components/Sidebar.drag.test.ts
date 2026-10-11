@@ -68,6 +68,90 @@ function preview(
   );
 }
 
+describe("delegated children sorting heights", () => {
+  function nestedLayout(
+    items: readonly SidebarListItem[],
+    active: string,
+    over: string,
+    key: string,
+  ) {
+    const args = layout(items, active, over);
+    const nestedIndex = items.findIndex((item) => item.kind === "thread" && item.key === key);
+    const nested = args.rects[nestedIndex]!;
+    nested.height += 84;
+    nested.bottom += 84;
+    for (const rect of args.rects.slice(nestedIndex + 1)) {
+      rect.top += 84;
+      rect.bottom += 84;
+    }
+    return args;
+  }
+
+  it("skips the first nested card when inferring the height of a slim row moved into cards", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("nested", "active"),
+      thread("peer", "active"),
+      settledHeader,
+      thread("source", "settled"),
+      thread("tail", "settled"),
+    ];
+    const args = nestedLayout(items, "source", "peer", "nested");
+    const strategy = createSidebarSortingStrategy({
+      items,
+      nestedKeys: new Set(["nested"]),
+      settledOrder: ["tail"],
+      settledExpanded: true,
+    });
+    expect(strategy({ ...args, index: 3 })).toEqual({ ...stationary, y: 83 });
+    expect(strategy({ ...args, index: 6 })).toEqual({ ...stationary, y: 46 });
+  });
+
+  it("skips the first nested slim row when inferring the height of a card moved into settled", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("source", "active"),
+      thread("card", "active"),
+      settledHeader,
+      thread("nested", "settled"),
+      thread("tail", "settled"),
+    ];
+    const args = nestedLayout(items, "source", "nested", "nested");
+    const strategy = createSidebarSortingStrategy({
+      items,
+      nestedKeys: new Set(["nested"]),
+      settledOrder: ["source", "nested", "tail"],
+      settledExpanded: true,
+    });
+    expect(strategy({ ...args, index: 6 })).toEqual({ ...stationary, y: -46 });
+  });
+
+  it.each(["active", "settled"] as const)(
+    "reserves the measured height when a nested %s row moves",
+    (section) => {
+      const rows = [thread("nested", section), thread("peer", section)];
+      const items =
+        section === "active"
+          ? [pinnedHeader, divider, ...rows, settledHeader, marker("settled-placeholder")]
+          : [pinnedHeader, divider, thread("card", "active"), settledHeader, ...rows];
+      const args = nestedLayout(items, "nested", "peer", "nested");
+      const strategy = createSidebarSortingStrategy({
+        items,
+        nestedKeys: new Set(["nested"]),
+        settledOrder: section === "settled" ? ["peer", "nested"] : [],
+        settledExpanded: true,
+      });
+      const peerIndex = items.findIndex((item) => item.kind === "thread" && item.key === "peer");
+      expect(strategy({ ...args, index: peerIndex })).toEqual({
+        ...stationary,
+        y: -(section === "active" ? 167 : 121),
+      });
+    },
+  );
+});
+
 describe("sidebar collision detection", () => {
   function collisionArgs(blockedAboveSource = false) {
     const rows = [thread("source", "active"), thread("blocked", "active")];

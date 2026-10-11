@@ -7,6 +7,11 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
+  buildSidebarDelegatedChildIndex,
+  canStopSidebarDelegatedChild,
+  isSidebarDelegatedChildThread,
+  resolveSidebarDelegatedChildWindow,
+  sidebarDelegatedChildState,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -62,7 +67,16 @@ import {
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+  type OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -73,6 +87,368 @@ import {
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../test-fixtures";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+function delegatedChild(
+  id: string,
+  overrides: Partial<OrchestrationV2ThreadShell> = {},
+  environmentId = localEnvironmentId,
+) {
+  return presentThreadShell(environmentId, {
+    ...makeThreadFixture().source,
+    id: ThreadId.make(id),
+    creationSource: "mcp",
+    lineage: {
+      rootThreadId: ThreadId.make("parent"),
+      parentThreadId: ThreadId.make("parent"),
+      relationshipToParent: "subagent",
+    },
+    latestRunId: RunId.make(`run-${id}`),
+    status: "completed",
+    createdAt: DateTime.makeUnsafe("2026-10-12T01:00:00Z"),
+    updatedAt: DateTime.makeUnsafe("2026-10-12T02:00:00Z"),
+    ...overrides,
+  });
+}
+
+const delegatedChildKey = (thread: ReturnType<typeof delegatedChild>) =>
+  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+const delegatedParentKey = scopedThreadKey(
+  scopeThreadRef(localEnvironmentId, ThreadId.make("parent")),
+);
+
+describe("sidebar delegated children", () => {
+  it("indexes only live MCP subagent children and scopes parent ids by environment", () => {
+    const local = delegatedChild("local");
+    const remote = delegatedChild("remote", {}, EnvironmentId.make("remote"));
+    const excluded = [
+      delegatedChild("provider", { creationSource: "provider" }),
+      delegatedChild("web", { creationSource: "web" }),
+      delegatedChild("archived", { archivedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z") }),
+      delegatedChild("deleted", { deletedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z") }),
+      delegatedChild("root", {
+        lineage: {
+          rootThreadId: ThreadId.make("root"),
+          parentThreadId: null,
+          relationshipToParent: "subagent",
+        },
+      }),
+      delegatedChild("fork", {
+        lineage: {
+          rootThreadId: ThreadId.make("parent"),
+          parentThreadId: ThreadId.make("parent"),
+          relationshipToParent: "fork",
+        },
+      }),
+    ];
+    expect(excluded.map(isSidebarDelegatedChildThread)).toEqual(excluded.map(() => false));
+    const index = buildSidebarDelegatedChildIndex([local, ...excluded, remote]);
+    expect(index.size).toBe(2);
+    expect(index.get(delegatedParentKey)?.finished).toEqual([local]);
+    expect(
+      index.get(scopedThreadKey(scopeThreadRef(remote.environmentId, ThreadId.make("parent"))))
+        ?.finished,
+    ).toEqual([remote]);
+  });
+
+  it("puts attention first, merges working and queued oldest first, and orders finished by completion", () => {
+    const newer = delegatedChild("newer", {
+      status: "running",
+      createdAt: DateTime.makeUnsafe("2026-10-12T01:03:00Z"),
+    });
+    const older = delegatedChild("older", {
+      status: "queued",
+      createdAt: DateTime.makeUnsafe("2026-10-12T01:01:00Z"),
+    });
+    const attention = delegatedChild("attention", {
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("input"),
+        kind: "user_input",
+        createdAt: DateTime.makeUnsafe("2026-10-12T01:04:00Z"),
+      },
+    });
+    const finishedOld = delegatedChild("finished-old", {
+      latestRunCompletedAt: DateTime.makeUnsafe("2026-10-12T01:02:00Z"),
+      updatedAt: DateTime.makeUnsafe("2026-10-12T04:00:00Z"),
+    });
+    const finishedNew = delegatedChild("finished-new");
+    const entry = buildSidebarDelegatedChildIndex([
+      newer,
+      finishedOld,
+      older,
+      finishedNew,
+      attention,
+    ]).get(delegatedParentKey)!;
+    expect(entry.active).toEqual([attention, older, newer]);
+    expect(entry.finished).toEqual([finishedNew, finishedOld]);
+  });
+
+  it("reuses per-parent entries only when their ordered element identities are unchanged", () => {
+    const first = delegatedChild("first", { status: "running" });
+    const other = delegatedChild("other", {
+      lineage: {
+        rootThreadId: ThreadId.make("other-parent"),
+        parentThreadId: ThreadId.make("other-parent"),
+        relationshipToParent: "subagent",
+      },
+    });
+    const index = buildSidebarDelegatedChildIndex([first, other]);
+    const changedOther = { ...other, title: "Changed" };
+    const next = buildSidebarDelegatedChildIndex([changedOther, first], index);
+    expect(next.get(delegatedParentKey)).toBe(index.get(delegatedParentKey));
+    expect(
+      next.get(scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("other-parent")))),
+    ).not.toBe(
+      index.get(scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("other-parent")))),
+    );
+    const replaced = buildSidebarDelegatedChildIndex([{ ...first }, changedOther], next);
+    expect(replaced.get(delegatedParentKey)).not.toBe(next.get(delegatedParentKey));
+    expect(buildSidebarDelegatedChildIndex([], replaced).size).toBe(0);
+  });
+
+  it("classifies queued-only shells separately from older active work with a newer queued run", () => {
+    const queued = delegatedChild("queued", {
+      status: "queued",
+      activityRunStatus: null,
+      activeRunId: null,
+    });
+    const active = delegatedChild("active", {
+      status: "queued",
+      activityRunStatus: "running",
+      activeRunId: RunId.make("older-run"),
+    });
+    expect(queued.runtime?.status).toBe("queued");
+    expect(sidebarDelegatedChildState(queued)).toBe("queued");
+    expect(canStopSidebarDelegatedChild(queued)).toBe(false);
+    expect(active.runtime?.status).toBe("running");
+    expect(sidebarDelegatedChildState(active)).toBe("working");
+    expect(canStopSidebarDelegatedChild(active)).toBe(true);
+  });
+
+  it.each(["preparing", "starting", "running", "waiting"] as const)(
+    "classifies %s from runtime directly",
+    (status) => {
+      const thread = delegatedChild(status, { status, activeRunId: RunId.make("active") });
+      expect(sidebarDelegatedChildState(thread)).toBe("working");
+      expect(canStopSidebarDelegatedChild(thread)).toBe(true);
+      expect(
+        canStopSidebarDelegatedChild(delegatedChild(status, { status, activeRunId: null })),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["command", "user_input"] as const)(
+    "shows %s attention before runtime status",
+    (kind) => {
+      const thread = delegatedChild(kind, {
+        status: "waiting",
+        activeRunId: RunId.make("active"),
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make(kind),
+          kind,
+          createdAt: DateTime.makeUnsafe("2026-10-12T01:00:00Z"),
+        },
+      });
+      expect(sidebarDelegatedChildState(thread)).toBe("attention");
+      expect(canStopSidebarDelegatedChild(thread)).toBe(true);
+    },
+  );
+
+  it("keeps idle background work active without offering Stop and treats terminal or missing runtime as finished", () => {
+    const background = delegatedChild("background", {
+      status: "completed",
+      activeRunId: null,
+      pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+    });
+    expect(background.runtime?.status).toBe("idle");
+    expect(sidebarDelegatedChildState(background)).toBe("working");
+    expect(canStopSidebarDelegatedChild(background)).toBe(false);
+    expect(
+      canStopSidebarDelegatedChild(
+        delegatedChild("background-with-stale-run", {
+          status: "completed",
+          activeRunId: RunId.make("stale-run"),
+          pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor" }],
+        }),
+      ),
+    ).toBe(false);
+    for (const status of [
+      "idle",
+      "completed",
+      "interrupted",
+      "failed",
+      "cancelled",
+      "rolled_back",
+    ] as const) {
+      expect(sidebarDelegatedChildState(delegatedChild(status, { status }))).toBe("finished");
+    }
+    expect(sidebarDelegatedChildState(delegatedChild("empty", { latestRunId: null }))).toBe(
+      "finished",
+    );
+  });
+});
+
+describe("sidebar delegated child window", () => {
+  const attention = Array.from({ length: 4 }, (_, index) =>
+    delegatedChild(`attention-${index}`, {
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make(`input-${index}`),
+        kind: "user_input",
+        createdAt: DateTime.makeUnsafe("2026-10-12T01:00:00Z"),
+      },
+    }),
+  );
+  const running = Array.from({ length: 5 }, (_, index) =>
+    delegatedChild(`running-${index}`, { status: index % 2 === 0 ? "running" : "queued" }),
+  );
+  const finished = Array.from({ length: 21 }, (_, index) => delegatedChild(`finished-${index}`));
+  const children = { active: [...attention, ...running], finished };
+  const defaults = {
+    children,
+    runningExpanded: false,
+    finishedExpanded: false,
+    finishedVisibleCount: 6,
+    showFinished: true,
+    openThreadKey: null,
+  };
+
+  it("shows all attention plus three working/queued rows and expands the rest", () => {
+    expect(resolveSidebarDelegatedChildWindow(defaults)).toMatchObject({
+      activeRows: [...attention, ...running.slice(0, 3)],
+      hiddenActiveCount: 2,
+      finishedCount: 21,
+      finishedRows: [],
+      pinnedOpenRow: null,
+    });
+    expect(
+      resolveSidebarDelegatedChildWindow({ ...defaults, runningExpanded: true }),
+    ).toMatchObject({ activeRows: children.active, hiddenActiveCount: 0 });
+  });
+
+  it("keeps finished collapsed by default, then shows six and twelve more", () => {
+    expect(
+      resolveSidebarDelegatedChildWindow({ ...defaults, finishedExpanded: true }),
+    ).toMatchObject({ finishedRows: finished.slice(0, 6), hiddenFinishedCount: 15 });
+    expect(
+      resolveSidebarDelegatedChildWindow({
+        ...defaults,
+        finishedExpanded: true,
+        finishedVisibleCount: 18,
+      }),
+    ).toMatchObject({ finishedRows: finished.slice(0, 18), hiddenFinishedCount: 3 });
+    expect(
+      resolveSidebarDelegatedChildWindow({
+        ...defaults,
+        finishedExpanded: true,
+        finishedVisibleCount: 30,
+      }).hiddenFinishedCount,
+    ).toBe(0);
+  });
+
+  it("hides finished controls for settled/snoozed parents even when expanded", () => {
+    expect(
+      resolveSidebarDelegatedChildWindow({
+        ...defaults,
+        finishedExpanded: true,
+        showFinished: false,
+      }),
+    ).toMatchObject({
+      activeRows: [...attention, ...running.slice(0, 3)],
+      finishedCount: 0,
+      finishedRows: [],
+      hiddenFinishedCount: 0,
+    });
+  });
+
+  it.each([
+    {
+      row: running[4]!,
+      runningExpanded: false,
+      finishedExpanded: false,
+      showFinished: true,
+      pinned: true,
+    },
+    {
+      row: running[4]!,
+      runningExpanded: true,
+      finishedExpanded: false,
+      showFinished: true,
+      pinned: false,
+    },
+    {
+      row: attention[3]!,
+      runningExpanded: false,
+      finishedExpanded: false,
+      showFinished: true,
+      pinned: false,
+    },
+    {
+      row: finished[0]!,
+      runningExpanded: false,
+      finishedExpanded: false,
+      showFinished: true,
+      pinned: true,
+    },
+    {
+      row: finished[0]!,
+      runningExpanded: false,
+      finishedExpanded: true,
+      showFinished: true,
+      pinned: false,
+    },
+    {
+      row: finished[20]!,
+      runningExpanded: false,
+      finishedExpanded: true,
+      showFinished: true,
+      pinned: true,
+    },
+    {
+      row: finished[0]!,
+      runningExpanded: false,
+      finishedExpanded: true,
+      showFinished: false,
+      pinned: true,
+    },
+  ])("shows the open $row.id once with pinned=$pinned", ({ row, pinned, ...state }) => {
+    const window = resolveSidebarDelegatedChildWindow({
+      ...defaults,
+      ...state,
+      openThreadKey: delegatedChildKey(row),
+    });
+    expect(window.pinnedOpenRow).toBe(pinned ? row : null);
+    expect(
+      [
+        ...window.activeRows,
+        ...window.finishedRows,
+        ...(window.pinnedOpenRow ? [window.pinnedOpenRow] : []),
+      ].filter((child) => child === row),
+    ).toHaveLength(1);
+  });
+
+  it("does not pin a different environment's matching id or an unrelated open thread", () => {
+    expect(
+      resolveSidebarDelegatedChildWindow({
+        ...defaults,
+        openThreadKey: scopedThreadKey(
+          scopeThreadRef(EnvironmentId.make("remote"), finished[0]!.id),
+        ),
+      }).pinnedOpenRow,
+    ).toBeNull();
+    expect(
+      resolveSidebarDelegatedChildWindow({ ...defaults, openThreadKey: delegatedParentKey })
+        .pinnedOpenRow,
+    ).toBeNull();
+    expect(
+      resolveSidebarDelegatedChildWindow({ ...defaults, children: { active: [], finished: [] } }),
+    ).toMatchObject({
+      activeRows: [],
+      finishedRows: [],
+      finishedCount: 0,
+      hiddenActiveCount: 0,
+      pinnedOpenRow: null,
+    });
+  });
+});
 
 describe("resolveSidebarRowAccessibility", () => {
   it.each([
