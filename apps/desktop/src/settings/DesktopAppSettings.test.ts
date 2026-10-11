@@ -1,4 +1,7 @@
-import { DesktopUpdateInstallPolicySchema, DesktopUpdateStateSchema } from "@t3tools/contracts";
+import {
+  DesktopUpdateInstallPolicySchema,
+  DesktopUpdatePendingRecordSchema,
+} from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -30,7 +33,7 @@ const DesktopSettingsPatch = Schema.Struct({
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateInstallPolicy: Schema.optionalKey(DesktopUpdateInstallPolicySchema),
-  pendingUpdate: Schema.optionalKey(DesktopUpdateStateSchema.fields.pendingUpdate),
+  pendingUpdate: Schema.optionalKey(DesktopUpdatePendingRecordSchema),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
