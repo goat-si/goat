@@ -5,18 +5,25 @@
  * drafts are merged entry by entry so neither side's are lost.
  */
 
+import {
+  LEGACY_DESKTOP_PROMPT_STASH_KEY,
+  LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY,
+  LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY,
+  LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY,
+} from "@goat/contracts/legacyT3Names";
+
 interface MergeStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
 
-const PROMPT_STASH_KEY = "t3code:prompt-stash:v2";
-const COMPOSER_DRAFTS_KEY = "t3code:composer-drafts:v1";
+const PROMPT_STASH_KEY = LEGACY_DESKTOP_PROMPT_STASH_KEY;
+const COMPOSER_DRAFTS_KEY = LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY;
 const NOT_IMPORTED_KEYS = new Set([
   // Identifies one running install to the server; two apps must not share it.
-  "t3.backgroundActivity.clientId",
+  LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY,
   // Resumes a permission setup V1 left mid-flow; V2 would redirect to it on boot.
-  "t3code:snap-shot-setup-resume:v1",
+  LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY,
 ]);
 /** Matches MAX_STASH_ENTRIES in apps/web/src/promptStashStore.ts. */
 const MAX_STASH_ENTRIES = 20;

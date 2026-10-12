@@ -237,3 +237,9 @@ export const goatStorageKey = (key: string): string => {
   if (key.startsWith("t3code.")) return `goat.${key.slice(7)}`;
   return key;
 };
+
+/** V1 desktop profile keys: merge existing data without sharing a running-install identity. */
+export const LEGACY_DESKTOP_PROMPT_STASH_KEY = "t3code:prompt-stash:v2";
+export const LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY = "t3code:composer-drafts:v1";
+export const LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY = "t3.backgroundActivity.clientId";
+export const LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY = "t3code:snap-shot-setup-resume:v1";
