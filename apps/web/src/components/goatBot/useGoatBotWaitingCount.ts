@@ -61,8 +61,13 @@ export async function readGoatBotWaiting(input: {
   return { count: taskIds.size, bot: null };
 }
 
-function rememberBot(bot: ChannelBotRef) {
+/**
+ * Records the bot a status read named, unless the stored ref changed while the read was in
+ * flight: an ensure that answered meanwhile (a replacement bot, say) is newer than this read.
+ */
+export function rememberGoatBotFromStatus(bot: ChannelBotRef, seenAtRequest: ChannelBotRef | null) {
   const known = useGlobalAgentStore.getState().botRef;
+  if (known !== seenAtRequest) return;
   if (
     known?.environmentId !== bot.environmentId ||
     known.threadId !== bot.threadId ||
@@ -106,6 +111,7 @@ export function useGoatBotWaitingCount() {
         pending = true;
         void (async () => {
           try {
+            const seenAtRequest = useGlobalAgentStore.getState().botRef;
             const result = await readGoatBotWaiting({
               port,
               environmentId,
@@ -113,7 +119,7 @@ export function useGoatBotWaitingCount() {
               alive: () => alive,
             });
             if (result === null || !alive) return;
-            if (result.bot !== null) rememberBot(result.bot);
+            if (result.bot !== null) rememberGoatBotFromStatus(result.bot, seenAtRequest);
             useCounts.setState((state) => ({
               counts: new Map(state.counts).set(environmentId, result.count),
             }));

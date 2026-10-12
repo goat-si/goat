@@ -47,14 +47,27 @@ export function resolveGoatBotHomeSelection(
   botRef: GoatBotRef | null,
 ) {
   const targets = environments.flatMap((entry) => (entry.homeTarget ? [entry.homeTarget] : []));
-  const supported = targets.some((target) => target.supportsHome);
   const resolution = resolveGoatBotHome({ targets });
+  const primary = environments.find((entry) => entry.primary);
   const candidateId = pickGoatBotHomeCandidate({
     targets,
     knownBotEnvironmentId: botRef?.environmentId ?? null,
-    primaryEnvironmentId: environments.find((entry) => entry.primary)?.environmentId ?? null,
+    primaryEnvironmentId: primary?.environmentId ?? null,
   });
+  // A primary that runs the bot but predates home claims keeps it while nothing is claimed;
+  // a newer remote must not take the bot over, nor leave it unavailable.
+  const legacyPrimary =
+    resolution.state !== "claimed" &&
+    candidateId === null &&
+    primary?.supportsChannelLedger === true &&
+    primary.homeTarget?.supportsHome !== true;
+  const supported = !legacyPrimary && targets.some((target) => target.supportsHome);
   return { targets, supported, resolution, candidateId };
+}
+
+/** A machine whose server config has not arrived yet may still turn out to support the bot. */
+export function goatBotSupportUnknown(environment: GoatBotEnvironmentInput | null): boolean {
+  return environment?.homeTarget !== undefined && !environment.homeTarget.settingsLoaded;
 }
 
 /**
@@ -142,8 +155,14 @@ export function resolveGoatBotAvailability(input: {
     }
   }
   const environment = pickGoatBotEnvironment(input.environments, input.botRef);
-  if (environment === null || !environment.supportsChannelLedger) return { kind: "unsupported" };
+  if (environment === null) return { kind: "unsupported" };
   const { environmentId } = environment;
+  if (!environment.supportsChannelLedger) {
+    if (!goatBotSupportUnknown(environment)) return { kind: "unsupported" };
+    return environment.connected
+      ? { kind: "connecting", environmentId }
+      : { kind: "offline", environmentId };
+  }
   if (!environment.connected) return { kind: "offline", environmentId };
   switch (input.ensure.state) {
     case "legacy_active":
