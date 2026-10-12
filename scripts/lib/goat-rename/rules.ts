@@ -60,6 +60,8 @@ const IDENTIFIERS: ReadonlyArray<readonly [from: string, to: string]> = [
   ["T3ServerConfig", "GoatServerConfig"],
   ["resolveWorktreeT3Home", "resolveWorktreeHome"],
   ["DEFAULT_T3_HOME", "DEFAULT_GOAT_HOME"],
+  ["PI_T3_MCP_EXTENSION", "PI_GOAT_MCP_EXTENSION"],
+  ["pi-t3-mcp-extension", "pi-goat-mcp-extension"],
   ["hasT3Extension", "hasGoatExtension"],
   ["isT3ManagedWorktree", "isGoatManagedWorktree"],
   ["t3SqliteStateCommand", "goatSqliteStateCommand"],
@@ -173,6 +175,23 @@ export const TEXT_RULES: readonly TextRule[] = [
     category: "env",
     find: /\bGOAT_DEV_REMOTE_T3_SERVER_ENTRY_PATH\b/g,
     replace: "GOAT_DEV_REMOTE_SERVER_ENTRY_PATH",
+  },
+  {
+    // Wildcard mentions such as `T3CODE_BITBUCKET_*` in messages and comments.
+    id: "env-wildcards",
+    category: "env",
+    find: /\b(VITE_)?T3(?:CODE|_CODE)?_([A-Z0-9_]*_)\*/g,
+    replace: "$1GOAT_$2*",
+    scope: outsideSshRunner,
+  },
+  {
+    // Client storage keys; reads fall back to the legacy key (plan D10). Not `t3code://`.
+    id: "storage-keys",
+    category: "env",
+    find: /(?<=["'`])t3code:(?=[a-z])/g,
+    replace: "goat:",
+    scope: (path) =>
+      path.startsWith("apps/web/src/") || path.startsWith("packages/client-runtime/src/"),
   },
   {
     // In-process sentinels and debug globals such as __T3CODE_ENV_PATH_START__ and __T3_DEBUG__.

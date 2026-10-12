@@ -73,3 +73,17 @@ describe("fixtures", () => {
     expect(rename(kept)).toBe(kept);
   });
 });
+
+describe("later env and storage rules", () => {
+  it("renames env wildcards and web storage keys only", () => {
+    const web = (source: string) => applyTextRules("apps/web/src/x.ts", source, TEXT_RULES).text;
+    expect(web("set the T3CODE_BITBUCKET_* variables")).toBe("set the GOAT_BITBUCKET_* variables");
+    expect(web('const KEY = "t3code:prompt-link-opener";')).toBe(
+      'const KEY = "goat:prompt-link-opener";',
+    );
+    const kept = 'const origin = "t3code://app";';
+    expect(web(kept)).toBe(kept);
+    const mobile = '"t3code:",';
+    expect(applyTextRules("apps/mobile/src/pairing.ts", mobile, TEXT_RULES).text).toBe(mobile);
+  });
+});
