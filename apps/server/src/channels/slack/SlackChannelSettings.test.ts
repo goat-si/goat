@@ -1287,3 +1287,91 @@ describe("Slack revocation recovery", () => {
     }),
   );
 });
+
+describe("Slack bot tombstone recovery", () => {
+  it.effect(
+    "reapplies bot deletion after a crash between tombstone persistence and secret cleanup",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = yield* tempBaseDir;
+        const sdk = makeFakeSlackSdk();
+        const overrides: { current: SecretStoreOverrides } = { current: {} };
+        yield* withServer(
+          baseDir,
+          sdk,
+          (settings) =>
+            Effect.gen(function* () {
+              yield* createConnected(settings);
+              overrides.current = {
+                remove: () =>
+                  Effect.fail(
+                    new ServerSecretStore.SecretStorePersistError({
+                      resource: "secret",
+                      cause: "crash before deletion",
+                    }),
+                  ),
+              };
+              const event = revoke(sdk, "tokens_revoked");
+              yield* receiveOnlyBarrier(sdk);
+              assert.equal(event.ackCount(), 0);
+              const [current] = yield* settings.get();
+              assert.equal(current?.hasBotToken, true);
+              assert((yield* fileState(baseDir)).settings?.includes('"revoked":"bot_revoked"'));
+            }),
+          overrides,
+        );
+        const restarted = makeFakeSlackSdk();
+        const fixtures = { gateway: makeFakeGateway(), registry: makeFakeTransportRegistry() };
+        yield* withServer(
+          baseDir,
+          restarted,
+          (settings) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => restarted.waitForCall("start:0"));
+              yield* receiveOnlyBarrier(restarted);
+              const [current] = yield* settings.get();
+              assert(current !== undefined);
+              assert.equal(current.hasAppToken, true);
+              assert.equal(current.hasBotToken, false);
+              assert.equal(current.lastError, "token_revoked");
+              yield* assertBlockedDelivery(fixtures.registry, current.connectionId);
+              assert.equal(restarted.calls.filter((call) => call === "authTest").length, 0);
+              assert.equal(fixtures.gateway.calls.length, 0);
+            }),
+          undefined,
+          undefined,
+          fixtures,
+        );
+      }),
+  );
+
+  it.effect(
+    "clearCredentials removes a persisted revocation tombstone and both saved timestamps",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = yield* tempBaseDir;
+        const sdk = makeFakeSlackSdk();
+        yield* withServer(baseDir, sdk, (settings) =>
+          Effect.gen(function* () {
+            const created = yield* createConnected(settings);
+            yield* Effect.promise(() => revoke(sdk, "tokens_revoked").acked);
+            const before = (yield* fileState(baseDir)).settings ?? "";
+            assert(before.includes('"revoked":"bot_revoked"'));
+            assert(before.includes("appTokenSavedAt"));
+            assert(before.includes("botTokenSavedAt"));
+            const cleared = yield* settings.configure({
+              connectionId: created.connectionId,
+              enabled: false,
+              clearCredentials: true,
+            });
+            assert.equal(cleared.status, "disabled");
+            assert.equal(cleared.hasAppToken, false);
+            assert.equal(cleared.hasBotToken, false);
+            const after = (yield* fileState(baseDir)).settings ?? "";
+            assert(!after.includes('"revoked"'));
+            assert(!after.includes("SavedAt"));
+          }),
+        );
+      }),
+  );
+});
