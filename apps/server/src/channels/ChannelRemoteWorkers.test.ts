@@ -1051,30 +1051,31 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect(
-    "asks instead of letting the other machine pick when the default project is gone",
-    () => {
-      const { machine, harness } = defaultsHarness({
-        projectId: ProjectId.make("project:deleted"),
-      });
-      return Effect.gen(function* () {
-        yield* setupBot;
-        yield* linkSlackUser();
-        const gateway = yield* ChannelGateway.ChannelGateway;
-        yield* gateway.ingest(slackInput("do@mac-studio: build it", "d4"), slackContext);
-        const asked = yield* until("asked", (task) => task.status === "waiting_input");
-        assert.include(asked.openQuestions[0]?.text ?? "", "no longer exists");
-        // The other machine has exactly one project; it still was not chosen for them.
-        assert.strictEqual(machine.launches.length, 0);
-        yield* gateway.ingest(
-          slackInput("answer: goat-si/goat", "d5", "1760000000.000100"),
-          slackContext,
-        );
-        yield* until("running", (task) => task.status === "running");
-        assert.strictEqual(machine.launches.length, 1);
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
+  it.effect("asks until the requester names a project when the default one is gone", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d4"), slackContext);
+      const asked = yield* until("asked", (task) => task.status === "waiting_input");
+      assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      // The other machine has exactly one project; it still was not chosen for them.
+      assert.strictEqual(machine.launches.length, 0);
+      // An answer that names none of its projects is asked again, not filled in.
+      yield* gateway.ingest(slackInput("answer: missing-repo", "d5"), slackContext);
+      yield* until(
+        "asked again",
+        (task) =>
+          task.status === "waiting_input" &&
+          task.openQuestions[0]?.questionId !== asked.openQuestions[0]?.questionId,
+      );
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "d6"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("keeps the remote project's model without a Slack default", () => {
     const { machine, harness } = defaultsHarness({});

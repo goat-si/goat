@@ -318,22 +318,10 @@ const make = Effect.gen(function* () {
       // The project named with the work, else the Slack connection's default, finds its
       // counterpart on the other machine.
       const named = shells.find((shell) => shell.id === (task.projectId ?? defaults?.projectId));
-      // A default project that is gone must not let the other machine pick one on its own; once
-      // the requester answered, the remote side chooses from that answer.
-      if (
-        task.projectId === undefined &&
-        defaults?.projectId !== undefined &&
-        named === undefined &&
-        (yield* ledger.latestAnswer(task.taskId)) === undefined
-      ) {
-        return {
-          type: "question" as const,
-          text:
-            "The default project for work from Slack no longer exists. Which project on " +
-            task.host +
-            " should I use?",
-        };
-      }
+      // A default project that is gone must not let the other machine's only project stand in
+      // for it: the remote side asks until the requester names one.
+      const defaultProjectGone =
+        task.projectId === undefined && defaults?.projectId !== undefined && named === undefined;
       const identities = yield* Effect.serviceOption(
         RepositoryIdentityResolver.RepositoryIdentityResolver,
       );
@@ -345,7 +333,8 @@ const make = Effect.gen(function* () {
         yield* serverSettings.getSettings.pipe(Effect.orDie),
         named?.id ?? null,
       ).settings;
-      const local = {
+      return {
+        ...(defaultProjectGone ? { requireNamedProject: true } : {}),
         modelSelection:
           named?.defaultModelSelection ??
           settings.defaultModelSelection ??
@@ -360,7 +349,6 @@ const make = Effect.gen(function* () {
         ...(named === undefined ? {} : { title: named.title }),
         ...(identity === null ? {} : { canonicalKey: identity.canonicalKey }),
       };
-      return { type: "hints" as const, local };
     });
 
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
@@ -395,9 +383,7 @@ const make = Effect.gen(function* () {
       }
       if (stored.task.status !== "received") return;
       if (stored.task.host !== undefined) {
-        const hints = yield* remoteHints(stored);
-        if (hints.type === "question") return yield* askRequester(stored, hints.text, owner);
-        return yield* remoteWorkers.dispatch(taskId, owner, hints.local);
+        return yield* remoteWorkers.dispatch(taskId, owner, yield* remoteHints(stored));
       }
       const resolved = yield* resolveTarget(stored);
       if (resolved.type === "question") return yield* askRequester(stored, resolved.text, owner);

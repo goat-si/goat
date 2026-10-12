@@ -222,6 +222,11 @@ export class ChannelRemoteWorkers extends Context.Service<
         readonly modelSelection: ModelSelection;
         /** A model the requester's channel asks for; wins over the remote project's default. */
         readonly preferredModelSelection?: ModelSelection | undefined;
+        /**
+         * A project was meant (the channel's default) but is gone here, so the remote's only
+         * project must not stand in for it; the requester names one instead.
+         */
+        readonly requireNamedProject?: boolean | undefined;
         readonly runtimeMode: RuntimeMode;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
@@ -244,6 +249,11 @@ export class ChannelRemoteWorkers extends Context.Service<
         readonly modelSelection: ModelSelection;
         /** A model the requester's channel asks for; wins over the remote project's default. */
         readonly preferredModelSelection?: ModelSelection | undefined;
+        /**
+         * A project was meant (the channel's default) but is gone here, so the remote's only
+         * project must not stand in for it; the requester names one instead.
+         */
+        readonly requireNamedProject?: boolean | undefined;
         readonly runtimeMode: RuntimeMode;
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
@@ -389,6 +399,7 @@ const make = Effect.gen(function* () {
       readonly localTitle?: string;
       readonly canonicalKey?: string;
       readonly answer?: string;
+      readonly requireNamed?: boolean;
     },
   ) => {
     const byId = projects.find((project) => project.id === hint.projectId);
@@ -410,7 +421,7 @@ const make = Effect.gen(function* () {
       const same = projects.filter((project) => project.title.toLowerCase() === title);
       if (same.length === 1) return same[0];
     }
-    return projects.length === 1 ? projects[0] : undefined;
+    return projects.length === 1 && hint.requireNamed !== true ? projects[0] : undefined;
   };
 
   const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local) =>
@@ -447,6 +458,7 @@ const make = Effect.gen(function* () {
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
         ...(answer === undefined ? {} : { answer }),
+        ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
       });
       if (chosen === undefined) {
         return {
