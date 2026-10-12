@@ -41,7 +41,7 @@ On an SSH host, the launch scripts in `packages/ssh/src/tunnel.ts` set
 not the local CLI default. Host _lists_ still come from the user's OpenSSH files under `~/.ssh`,
 which [`ssh.md`](ssh.md) covers.
 
-A linked git worktree gets its own directory. `resolveWorktreeT3Home` in
+A linked git worktree gets its own directory. `resolveWorktreeHome` in
 `packages/shared/src/devHome.ts` returns `<worktree>/.t3` so a worktree dev server does not open
 the installed app's `~/.t3`. An explicit `T3CODE_HOME` still wins, and it counts as an explicit
 base directory, which selects `userdata` rather than `dev`.

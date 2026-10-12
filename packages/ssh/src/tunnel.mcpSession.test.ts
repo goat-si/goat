@@ -85,7 +85,7 @@ JSON
       [
         "--input-type=module",
         "-e",
-        `import * as t from ${JSON.stringify(url)}; process.stdout.write(t.buildRemoteT3RunnerScript({archiveVersion:${JSON.stringify(archiveVersion)}}));`,
+        `import * as t from ${JSON.stringify(url)}; process.stdout.write(t.buildRemoteGoatRunnerScript({archiveVersion:${JSON.stringify(archiveVersion)}}));`,
       ],
       { encoding: "utf8" },
     );

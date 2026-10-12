@@ -8,7 +8,7 @@ The exports that the rest of this map depends on:
 | Export                            | File                                                                | Role                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `@goat/shared/serverSettings`     | `packages/shared/src/serverSettings.ts`                             | Patch and merge helpers for `ServerSettings`, including `goatBotHome` monotonic merge |
-| `@goat/shared/devHome`            | `packages/shared/src/devHome.ts`                                    | `resolveWorktreeT3Home` and `resolveGitWorktreePath`                                  |
+| `@goat/shared/devHome`            | `packages/shared/src/devHome.ts`                                    | `resolveWorktreeHome` and `resolveGitWorktreePath`                                    |
 | `@goat/shared/mobileAppIdentity`  | `packages/shared/src/mobileAppIdentity.ts`                          | `MOBILE_APP_IDENTITY` for the GOAT mobile variants                                    |
 | `@goat/shared/sshRuntimeProtocol` | `packages/shared/src/sshRuntimeProtocol.ts`                         | `SSH_RUNTIME_PROTOCOL_VERSION`, consumed by `packages/ssh`                            |
 | `@goat/shared/cliRelease`         | `packages/shared/src/cliRelease.ts`                                 | Runtime archive names and download URLs for SSH host installs                         |

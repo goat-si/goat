@@ -5,7 +5,7 @@ import {
   ProjectId,
   ThreadId,
   type ServerSettings,
-  type T3ProjectFile,
+  type GoatProjectFile,
 } from "@goat/contracts";
 import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import {
@@ -15,8 +15,8 @@ import {
 } from "../composerDraftStore";
 
 const testState = vi.hoisted(() => {
-  let completeProjectFileRead: (value: T3ProjectFile | null) => void = () => undefined;
-  let projectFileRead = Promise.resolve<T3ProjectFile | null>(null);
+  let completeProjectFileRead: (value: GoatProjectFile | null) => void = () => undefined;
+  let projectFileRead = Promise.resolve<GoatProjectFile | null>(null);
   const router = {
     state: { location: { href: "/" }, matches: [{ params: {} as Record<string, string> }] },
     navigate: vi.fn(async (request: { params: { draftId: string } }) => {
@@ -32,7 +32,7 @@ const testState = vi.hoisted(() => {
     get projectFileRead() {
       return projectFileRead;
     },
-    completeProjectFileRead: (value: T3ProjectFile | null) => completeProjectFileRead(value),
+    completeProjectFileRead: (value: GoatProjectFile | null) => completeProjectFileRead(value),
     defer() {
       projectFileRead = new Promise((resolve) => {
         completeProjectFileRead = resolve;
@@ -72,8 +72,8 @@ vi.mock("react", async (importOriginal) => ({
   useMemo: <T>(factory: () => T) => factory(),
 }));
 vi.mock("../components/Sidebar.logic", () => ({ orderItemsByPreferredIds: () => [] }));
-vi.mock("../lib/t3ProjectFileDefaults", () => ({
-  readT3ProjectFile: () => testState.projectFileRead,
+vi.mock("../lib/goatProjectFileDefaults", () => ({
+  readGoatProjectFile: () => testState.projectFileRead,
 }));
 vi.mock("../lib/utils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/utils")>()),
@@ -260,7 +260,7 @@ it.each(["project", "environment", "file"] as const)(
     testState.settings.defaultThreadEnvMode = source === "environment" ? "worktree" : null;
     testState.projectDefault = source === "project" ? "worktree" : null;
     const pending = useNewThreadHandler()(projectRef);
-    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as T3ProjectFile);
+    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
     await pending;
     expectReset(draftId, "worktree", true);
   },
@@ -299,7 +299,7 @@ describe.each(["stored", "active", "fallback"] as const)("async reuse guards for
     const pending = useNewThreadHandler()(projectRef);
     store().setDraftThreadContext(draftId, selection);
     const selectedDraft = store().getDraftSession(draftId);
-    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as T3ProjectFile);
+    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
     const result = await pending;
     expect(store().getDraftSession(draftId)).toEqual(selectedDraft);
     expect(result).toBeNull();
@@ -312,7 +312,7 @@ describe.each(["stored", "active", "fallback"] as const)("async reuse guards for
     const pending = useNewThreadHandler()(projectRef);
     // BranchToolbarBranchSelector fills an empty base branch on its own once refs load.
     store().setDraftThreadContext(draftId, { branch: "main" });
-    testState.completeProjectFileRead({} as T3ProjectFile);
+    testState.completeProjectFileRead({} as GoatProjectFile);
     await pending;
     expect(store().getDraftSession(draftId)).toMatchObject({
       envMode: "local",

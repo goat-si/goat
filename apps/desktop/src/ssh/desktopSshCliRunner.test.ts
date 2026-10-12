@@ -17,7 +17,7 @@ const environment = (input: {
   appVersion: input.appVersion,
   isPackaged: input.isPackaged,
   isDevelopment: input.isDevelopment,
-  devRemoteT3ServerEntryPath: Option.fromNullishOr(input.devRemoteEntry),
+  devRemoteGoatServerEntryPath: Option.fromNullishOr(input.devRemoteEntry),
 });
 
 describe("resolveDesktopSshCliRunner", () => {

@@ -88,7 +88,7 @@ const mcpRules = (name: string) => [
 ];
 const FULL_ACCESS = [{ action: "*", resource: "*", effect: "allow" }];
 /** Full access for the thread named `name`. */
-const t3Rules = (name: string) => [...FULL_ACCESS, ...mcpRules(name)];
+const goatRules = (name: string) => [...FULL_ACCESS, ...mcpRules(name)];
 /** Paths the build and plan agents allow for themselves, as 2.0.18 lists them. */
 const BUILD_PATHS = [
   {
@@ -229,7 +229,7 @@ const catalogModel = (id: string, name: string) => ({
 const createdSession = (
   directory: string,
   name: string,
-  permissions: ReadonlyArray<unknown> = t3Rules(name),
+  permissions: ReadonlyArray<unknown> = goatRules(name),
   // Only a mode that narrows Full access reads the agents' own path rules.
   narrows = false,
 ): ReadonlyArray<ProviderReplayEntry> => [
@@ -357,7 +357,7 @@ describe("OpenCode 2 through the orchestrator", () => {
             ...answeredPrompt("FIRST"),
             // The next turn resumes the session at its new selection.
             out("session.get", { sessionID: SESSION }),
-            reply("session.get", sessionInfo(cwd, t3Rules(name), name)),
+            reply("session.get", sessionInfo(cwd, goatRules(name), name)),
             out("session.switchModel", {
               sessionID: SESSION,
               model: { providerID: "opencode", id: "mimo-v2.6-flash-free" },
@@ -410,7 +410,7 @@ describe("OpenCode 2 through the orchestrator", () => {
           ...answeredPrompt("FIRST"),
           ...directoryModels(after),
           out("session.get", { sessionID: SESSION }),
-          reply("session.get", sessionInfo(before, t3Rules(name), name)),
+          reply("session.get", sessionInfo(before, goatRules(name), name)),
           // The worktree change detached the thread, so its session is loaded afresh.
           ...noOpenRequests,
           out("session.move", { sessionID: SESSION, directory: after }),
@@ -469,7 +469,7 @@ describe("OpenCode 2 through the orchestrator", () => {
             ),
           ),
           ...noOpenRequests,
-          out("session.update", { sessionID: SESSION, permissions: t3Rules(name) }),
+          out("session.update", { sessionID: SESSION, permissions: goatRules(name) }),
           reply("session.update", null),
           out("session.move", { sessionID: SESSION, directory: after }),
           reply("session.move", null),
@@ -544,7 +544,7 @@ describe("OpenCode 2 through the orchestrator", () => {
           ...answeredPrompt("FIRST"),
           // A mode change detaches nothing: the same session is resumed with the new rules.
           out("session.get", { sessionID: SESSION }),
-          reply("session.get", sessionInfo(cwd, t3Rules(name), name)),
+          reply("session.get", sessionInfo(cwd, goatRules(name), name)),
           out("agent.list", "<any>"),
           reply("agent.list", agentList(cwd)),
           out("session.update", { sessionID: SESSION, permissions: autoEditRules(name) }),
@@ -553,7 +553,7 @@ describe("OpenCode 2 through the orchestrator", () => {
           // Back to Full access: the narrowing rules go.
           out("session.get", { sessionID: SESSION }),
           reply("session.get", sessionInfo(cwd, autoEditRules(name), name)),
-          out("session.update", { sessionID: SESSION, permissions: t3Rules(name) }),
+          out("session.update", { sessionID: SESSION, permissions: goatRules(name) }),
           reply("session.update", null),
           ...answeredPrompt("THIRD"),
         ],
@@ -591,7 +591,7 @@ describe("OpenCode 2 through the orchestrator", () => {
           ...answeredPrompt("PLANNED"),
           out("session.get", { sessionID: SESSION }),
           reply("session.get", sessionInfo(cwd, planRules(name), name)),
-          out("session.update", { sessionID: SESSION, permissions: t3Rules(name) }),
+          out("session.update", { sessionID: SESSION, permissions: goatRules(name) }),
           reply("session.update", null),
           out("session.switchAgent", { sessionID: SESSION, agent: "build" }),
           reply("session.switchAgent", null),

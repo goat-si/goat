@@ -246,7 +246,7 @@ function createMcpClient(endpoint: string, token: string) {
   };
 }
 
-export default async function t3McpExtension(pi: ExtensionAPI) {
+export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Keep skill chips in the request. Pi expands only one leading /skill:
   // command, so use its own frontmatter loader for every selected chip here.
   pi.on("input", async (event, ctx) => {

@@ -53,10 +53,10 @@ import {
 } from "@goat/contracts";
 import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
 import {
-  resolveT3McpToolDefinition,
-  resolveT3McpToolPresentation,
-  type T3McpToolPresentation,
-} from "@goat/shared/t3McpToolPresentation";
+  resolveGoatMcpToolDefinition,
+  resolveGoatMcpToolPresentation,
+  type GoatMcpToolPresentation,
+} from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput } from "@goat/shared/toolOutput";
 import { htmlRenderReferencesEqual, type HtmlRenderReference } from "@goat/shared/htmlRender";
 import { mcpAppReferencesEqual, type McpAppReference } from "@goat/shared/mcpApp";
@@ -180,7 +180,7 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
 export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload">) {
   const item = entry.structuredPayload;
   if (item?.type !== "dynamic_tool") return null;
-  if (resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
+  if (resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
   const input = item.input;
   const threadId =
     input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
@@ -673,8 +673,8 @@ function workGroupId(timelineEntryId: string): string {
   return `work-group:${timelineEntryId}`;
 }
 
-export type TimelineToolPresentation = T3McpToolPresentation;
-export const resolveTimelineToolPresentation = resolveT3McpToolPresentation;
+export type TimelineToolPresentation = GoatMcpToolPresentation;
+export const resolveTimelineToolPresentation = resolveGoatMcpToolPresentation;
 
 function expandedWorkGroupRow(
   groupId: string,
@@ -1313,7 +1313,7 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
       item?.type !== "dynamic_tool" ||
       item.runId === null ||
       (item.status !== "running" && item.status !== "completed") ||
-      resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "delegate"
     )
       return true;
     const output = compactDynamicToolOutput(item.output);

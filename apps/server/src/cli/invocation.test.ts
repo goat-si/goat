@@ -115,7 +115,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
     );
 
   /** A directory holding an executable `t3`, to stand in for one on PATH. */
-  const pathWithT3 = Effect.gen(function* () {
+  const pathWithGoat = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const bin = yield* fs.makeTempDirectoryScoped();
@@ -138,7 +138,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         yield* rootCommand({
           node: "/home/theo/.local/node/bin/node",
           entry: "/home/theo/.local/lib/node_modules/t3/dist/bin.mjs",
-          path: yield* pathWithT3,
+          path: yield* pathWithGoat,
         }),
       ).toBe('sudo env "PATH=$PATH" goat browser setup');
     }).pipe(Effect.scoped),
@@ -160,7 +160,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       // The desktop app's shim, quoted for the shell and run as root as is.
       expect(yield* rootCommand(desktop)).toBe(`sudo '${shim}' browser setup`);
       // A `t3` the person put on PATH still wins.
-      expect(yield* rootCommand({ ...desktop, path: yield* pathWithT3 })).toBe(
+      expect(yield* rootCommand({ ...desktop, path: yield* pathWithGoat })).toBe(
         'sudo env "PATH=$PATH" goat browser setup',
       );
       // A standalone binary names itself.

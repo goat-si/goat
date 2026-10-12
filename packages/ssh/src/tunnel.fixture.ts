@@ -186,7 +186,7 @@ type NativeScripts = {
 // One native Node process renders every request; Vite reformats Function.toString().
 export const nativeScriptsBatch = Effect.fn("test.nativeScriptsBatch")(function* (
   requests: ReadonlyArray<{
-    input: SshTunnel.RemoteT3RunnerOptions;
+    input: SshTunnel.RemoteGoatRunnerOptions;
     selection?: SshTunnel.PreparedRemoteRuntime | undefined;
   }>,
 ) {
@@ -194,7 +194,7 @@ export const nativeScriptsBatch = Effect.fn("test.nativeScriptsBatch")(function*
   const moduleUrl = new URL("./tunnel.ts", import.meta.url).href;
   const script = `import * as t from ${JSON.stringify(moduleUrl)};
 const requests = ${JSON.stringify(requests)};
-console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.buildRemoteT3RunnerScript(input), launch: t.buildRemoteLaunchScript(input, selection), pairing: t.buildRemotePairingScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, input, selection), mcp: t.buildRemoteMcpSessionScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, { label: "fixture", ttl: "1h", runtimeModeCeiling: null }, input, selection), probe: t.buildRemoteRuntimeProbeScript(input.archiveVersion ?? "", ${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, true), upload: input.nodeScriptPath ? null : t.buildRemoteT3UploadInstallerScript(input, "A".repeat(64)) }))));`;
+console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.buildRemoteGoatRunnerScript(input), launch: t.buildRemoteLaunchScript(input, selection), pairing: t.buildRemotePairingScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, input, selection), mcp: t.buildRemoteMcpSessionScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, { label: "fixture", ttl: "1h", runtimeModeCeiling: null }, input, selection), probe: t.buildRemoteRuntimeProbeScript(input.archiveVersion ?? "", ${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, true), upload: input.nodeScriptPath ? null : t.buildRemoteGoatUploadInstallerScript(input, "A".repeat(64)) }))));`;
   const child = yield* spawner.spawn(
     ChildProcess.make(process.execPath, ["--input-type=module", "-e", script]),
   );
@@ -216,7 +216,7 @@ console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.b
 });
 
 export const nativeScripts = (
-  input: SshTunnel.RemoteT3RunnerOptions,
+  input: SshTunnel.RemoteGoatRunnerOptions,
   selection?: SshTunnel.PreparedRemoteRuntime,
 ) => nativeScriptsBatch([{ input, selection }]).pipe(Effect.map((all) => all[0]!));
 

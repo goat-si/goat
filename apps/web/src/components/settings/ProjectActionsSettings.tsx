@@ -4,7 +4,7 @@ import { EnvironmentId } from "@goat/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
-import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
+import { useGoatProjectFileState } from "../../hooks/useGoatProjectFileScripts";
 import { useEnvironments } from "../../state/environments";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
@@ -76,7 +76,7 @@ export function ProjectActionsSettings() {
   // Read the project's t3.json from the representative checkout so a broken
   // file is flagged below.
   const representativeMember = target?.projectId ? memberById.get(target.projectId) : undefined;
-  const t3File = useT3ProjectFileState(
+  const goatFile = useGoatProjectFileState(
     representativeMember?.environmentId ?? EnvironmentId.make("none"),
     representativeMember?.workspaceRoot ?? null,
   );
@@ -115,7 +115,7 @@ export function ProjectActionsSettings() {
           onEdit={(script) => setRequest(editorRequestForScript(script, keybindings))}
         />
       )}
-      {t3File.status === "invalid" ? (
+      {goatFile.status === "invalid" ? (
         <SettingsRow
           title="t3.json is invalid"
           description="A t3.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."

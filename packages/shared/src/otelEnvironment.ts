@@ -380,9 +380,9 @@ export const resolveSignalEndpoint = (
   if (otel.disabled) {
     return undefined;
   }
-  const t3Url = blankAsUnset(t3.url);
-  if (t3Url !== undefined) {
-    return { url: t3Url, export: t3.export };
+  const goatUrl = blankAsUnset(t3.url);
+  if (goatUrl !== undefined) {
+    return { url: goatUrl, export: t3.export };
   }
   return OtelSignal.$match(otel[signal], {
     Export: ({ url, protocol, headers }): SignalEndpoint => ({

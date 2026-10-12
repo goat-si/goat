@@ -38,7 +38,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpClient } from "effect/http";
-import { buildRemoteT3RunnerScript } from "@goat/ssh/tunnel";
+import { buildRemoteGoatRunnerScript } from "@goat/ssh/tunnel";
 
 import * as ServerConfig from "../config.ts";
 import { hostFailure } from "../mcp/hostFailure.ts";
@@ -378,7 +378,7 @@ describe("SSH dispatch release mirror", () => {
           }),
         ),
       );
-      const script = buildRemoteT3RunnerScript(runner);
+      const script = buildRemoteGoatRunnerScript(runner);
       expect(script).toContain("T3_RELEASE_BASE_URL='https://mirror.example/goat'");
       expect(script).not.toContain("github.com/goat-si/goat-releases/releases/download");
       expect(runner.archiveDirectory).toBe("/fixture/home/runtime/archives");
@@ -400,7 +400,7 @@ describe("SSH dispatch release mirror", () => {
           ),
         );
         expect("releaseBaseUrl" in runner).toBe(false);
-        expect(buildRemoteT3RunnerScript(runner)).toContain(
+        expect(buildRemoteGoatRunnerScript(runner)).toContain(
           "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
         );
         // The library's blank-mirror behavior test separately proves gh acquisition,

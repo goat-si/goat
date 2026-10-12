@@ -167,9 +167,9 @@
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"
     },
-    "./t3ProjectFile": {
-      "types": "./src/t3ProjectFile.ts",
-      "import": "./src/t3ProjectFile.ts"
+    "./goatProjectFile": {
+      "types": "./src/goatProjectFile.ts",
+      "import": "./src/goatProjectFile.ts"
     },
     "./orchestrationTiming": {
       "types": "./src/orchestrationTiming.ts",
@@ -395,9 +395,9 @@
       "types": "./src/orchestrationV2Timeline.ts",
       "import": "./src/orchestrationV2Timeline.ts"
     },
-    "./t3McpToolPresentation": {
-      "types": "./src/t3McpToolPresentation.ts",
-      "import": "./src/t3McpToolPresentation.ts"
+    "./goatMcpToolPresentation": {
+      "types": "./src/goatMcpToolPresentation.ts",
+      "import": "./src/goatMcpToolPresentation.ts"
     },
     "./Array": {
       "types": "./src/Array.ts",

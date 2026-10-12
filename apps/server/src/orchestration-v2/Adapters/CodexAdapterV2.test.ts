@@ -473,19 +473,19 @@ describe("CodexAdapterV2 runtime policy", () => {
         "mcp_app_todos_list_todos_item-1": { kind: "untrusted", value: "Filtered to overdue" },
       });
       // Alongside T3's own context, both are kept.
-      const withT3 = yield* CodexAdapterV2.buildCodexTurnStartParams({
+      const withGoat = yield* CodexAdapterV2.buildCodexTurnStartParams({
         nativeThreadId: "native-app-context",
         codexInput: [{ type: "text", text: "what's on my list?" }],
         runtimePolicy: policy,
         modelSelection,
-        hasT3Mcp: true,
+        hasGoatMcp: true,
         appContext,
       });
-      assert.deepEqual(withT3.additionalContext?.["mcp_app_todos_list_todos_item-1"], {
+      assert.deepEqual(withGoat.additionalContext?.["mcp_app_todos_list_todos_item-1"], {
         kind: "untrusted",
         value: "Filtered to overdue",
       });
-      assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
+      assert.isDefined(withGoat.additionalContext?.["t3_code_runtime"]);
     }),
   );
 
@@ -503,7 +503,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: true,
+        hasGoatMcp: true,
       });
 
       assert.equal(params.collaborationMode?.mode, "default");
@@ -532,7 +532,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: false,
+        hasGoatMcp: false,
       });
 
       assert.isUndefined(params.collaborationMode);
@@ -553,7 +553,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: true,
+        hasGoatMcp: true,
       });
 
       assert.equal(params.collaborationMode?.mode, "plan");
@@ -579,7 +579,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: false,
+        hasGoatMcp: false,
       });
 
       assert.equal(params.collaborationMode?.mode, "plan");
@@ -2745,7 +2745,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           codexInput: [{ type: "text", text: "work" }],
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
-          hasT3Mcp: true,
+          hasGoatMcp: true,
         });
         assert.include(
           params.additionalContext?.t3_code_orchestration?.value ?? "",

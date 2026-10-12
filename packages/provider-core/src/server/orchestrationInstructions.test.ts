@@ -2,9 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
-  t3AcpPromptWithInstructions,
-  t3OrchestrationPromptForFirstRun,
-  t3OrchestrationSystemPrompt,
+  goatAcpPromptWithInstructions,
+  goatOrchestrationPromptForFirstRun,
+  goatOrchestrationSystemPrompt,
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
@@ -36,33 +36,33 @@ describe("T3 orchestration provider instructions", () => {
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
     const prompt = "Inspect the repository.";
-    const injected = t3OrchestrationPromptForFirstRun({
+    const injected = goatOrchestrationPromptForFirstRun({
       prompt,
       runOrdinal: 1,
-      hasT3Mcp: true,
+      hasGoatMcp: true,
     });
 
     assert.include(injected, "<t3_code_orchestration_instructions>");
     assert.include(injected, `<user_request>\n${prompt}\n</user_request>`);
     assert.equal(
-      t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 2, hasT3Mcp: true }),
+      goatOrchestrationPromptForFirstRun({ prompt, runOrdinal: 2, hasGoatMcp: true }),
       prompt,
     );
     assert.equal(
-      t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasT3Mcp: false }),
+      goatOrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasGoatMcp: false }),
       prompt,
     );
   });
 
   it("only exposes the system prompt when the T3 MCP server is attached", () => {
-    assert.equal(t3OrchestrationSystemPrompt(false), undefined);
-    assert.equal(t3OrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+    assert.equal(goatOrchestrationSystemPrompt(false), undefined);
+    assert.equal(goatOrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
   });
 
   it("gives ACP sessions provider-neutral mode, browser, and orchestration guidance", () => {
-    const injected = t3AcpPromptWithInstructions({
+    const injected = goatAcpPromptWithInstructions({
       prompt: "Inspect the repository.",
-      state: { interactionMode: "default", hasT3Mcp: true },
+      state: { interactionMode: "default", hasGoatMcp: true },
     });
 
     assert.include(injected, "GOAT interaction mode: Default");
@@ -73,23 +73,23 @@ describe("T3 orchestration provider instructions", () => {
 
   it("reinjects ACP guidance only when mode or tool availability changes", () => {
     const prompt = "Continue.";
-    const defaultState = { interactionMode: "default", hasT3Mcp: true } as const;
+    const defaultState = { interactionMode: "default", hasGoatMcp: true } as const;
 
     assert.equal(
-      t3AcpPromptWithInstructions({ prompt, state: defaultState, previousState: defaultState }),
+      goatAcpPromptWithInstructions({ prompt, state: defaultState, previousState: defaultState }),
       prompt,
     );
     assert.include(
-      t3AcpPromptWithInstructions({
+      goatAcpPromptWithInstructions({
         prompt,
         state: { ...defaultState, interactionMode: "plan" },
         previousState: defaultState,
       }),
       "GOAT interaction mode: Plan",
     );
-    const withoutMcp = t3AcpPromptWithInstructions({
+    const withoutMcp = goatAcpPromptWithInstructions({
       prompt,
-      state: { interactionMode: "default", hasT3Mcp: false },
+      state: { interactionMode: "default", hasGoatMcp: false },
     });
     assert.include(withoutMcp, "GOAT interaction mode: Default");
     assert.notInclude(withoutMcp, "GOAT collaborative browser");

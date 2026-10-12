@@ -9,7 +9,7 @@ import { resolveThreadRouteTarget } from "../../threadRoutes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
-import { T3Wordmark } from "../T3Wordmark";
+import { GoatWordmark } from "../GoatWordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -223,7 +223,7 @@ function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
     // Center the visible capitals, without the font's ascender/descender space.
     // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
     <span className="inline-flex min-w-0 items-center gap-1.5 text-sm">
-      <T3Wordmark aria-hidden className="size-4 shrink-0" />
+      <GoatWordmark aria-hidden className="size-4 shrink-0" />
       <span
         className={cn(
           // oxlint-disable-next-line shadcn/no-arbitrary-values -- Brand letter spacing follows the approved wordmark.

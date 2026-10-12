@@ -1,6 +1,6 @@
-import type { T3McpToolSummaryAction } from "@goat/shared/t3McpToolPresentation";
+import type { GoatMcpToolSummaryAction } from "@goat/shared/goatMcpToolPresentation";
 
-export interface T3ToolSummaryCall {
+export interface GoatToolSummaryCall {
   readonly input: unknown;
   readonly output: unknown;
   readonly outcome: "completed" | "failed" | "unfinished";
@@ -65,7 +65,7 @@ function readInput(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** MCP errors can be returned as data even when the provider completed the tool call. */
-export function t3ToolResultIndicatesFailure(output: unknown): boolean {
+export function goatToolResultIndicatesFailure(output: unknown): boolean {
   return readResult(output).failed;
 }
 
@@ -81,9 +81,9 @@ function quantity(count: number, noun: string, plural = `${noun}s`): string {
 }
 
 /** Counts successful effects separately from failed or unfinished tool calls. */
-export function summarizeT3ToolCalls(
-  action: T3McpToolSummaryAction,
-  calls: ReadonlyArray<T3ToolSummaryCall>,
+export function summarizeGoatToolCalls(
+  action: GoatMcpToolSummaryAction,
+  calls: ReadonlyArray<GoatToolSummaryCall>,
 ): { label: string; failedCount: number } {
   const results = calls.map((call) => {
     const result = readResult(call.output);

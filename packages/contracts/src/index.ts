@@ -50,7 +50,7 @@ export * from "./threadPullRequest.ts";
 export * from "./threadResult.ts";
 export * from "./threadSearch.ts";
 export * from "./threadTitle.ts";
-export * from "./t3ProjectFile.ts";
+export * from "./goatProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";
 export * from "./filesystem.ts";

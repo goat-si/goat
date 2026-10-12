@@ -1,5 +1,5 @@
-import { T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@goat/contracts";
-import { parseT3ProjectFile } from "@goat/shared/t3ProjectFile";
+import { T3_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
+import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -23,7 +23,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
     useMemo(
       () =>
         Atom.make((get) => {
-          const files = new Map<string, T3ProjectFile | null>();
+          const files = new Map<string, GoatProjectFile | null>();
           for (const member of members) {
             const result = get(
               getProjectFileQueryAtom(
@@ -44,7 +44,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
               )?.data ?? Option.getOrNull(AsyncResult.value(result));
             files.set(
               member.physicalProjectKey,
-              data === null || data.truncated ? null : parseT3ProjectFile(data.contents),
+              data === null || data.truncated ? null : parseGoatProjectFile(data.contents),
             );
           }
           return files;

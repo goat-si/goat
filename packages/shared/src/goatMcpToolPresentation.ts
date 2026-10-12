@@ -1,11 +1,11 @@
-export type T3McpToolLogo = "t3-code";
+export type GoatMcpToolLogo = "t3-code";
 
-export interface T3McpToolPresentation {
+export interface GoatMcpToolPresentation {
   readonly displayName: string;
-  readonly logo: T3McpToolLogo;
+  readonly logo: GoatMcpToolLogo;
 }
 
-export type T3McpToolSummaryAction =
+export type GoatMcpToolSummaryAction =
   | "capabilities"
   | "delegate"
   | "task-status"
@@ -80,26 +80,26 @@ export type T3McpToolSummaryAction =
   | "channel-task-read"
   | "channel-task-report";
 
-export interface T3McpToolDefinition {
+export interface GoatMcpToolDefinition {
   readonly displayName: string;
   readonly labels: readonly [action: string, running: string, completed: string, detail: string];
   readonly icon: "t3-code" | "browser" | "device" | "pull-request";
-  readonly summaryAction: T3McpToolSummaryAction;
+  readonly summaryAction: GoatMcpToolSummaryAction;
 }
 
 function tool(
-  labels: T3McpToolDefinition["labels"],
-  summaryAction: T3McpToolSummaryAction,
-  icon: T3McpToolDefinition["icon"] = "t3-code",
+  labels: GoatMcpToolDefinition["labels"],
+  summaryAction: GoatMcpToolSummaryAction,
+  icon: GoatMcpToolDefinition["icon"] = "t3-code",
   displayName = `${labels[0]} ${labels[3]}`,
-): T3McpToolDefinition {
+): GoatMcpToolDefinition {
   return { displayName, labels, icon, summaryAction };
 }
 
 const T3_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
 
 // Cards, activity rows, summaries, and provider identity recovery share this inventory.
-const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
+const T3_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",
@@ -463,7 +463,7 @@ export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(T3_MCP_LEGACY_TOOL_ALIASES),
 ]);
 
-function normalizeT3McpToolLabel(value: string): string {
+function normalizeGoatMcpToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
@@ -474,8 +474,8 @@ function normalizeT3McpToolLabel(value: string): string {
  * agents. The prefix match is deliberately loose because the display-name
  * inventory is the real gate; unknown tools stay on the generic renderer.
  */
-function resolveT3McpToolName(value: string): string | null {
-  const label = normalizeT3McpToolLabel(value);
+function resolveGoatMcpToolName(value: string): string | null {
+  const label = normalizeGoatMcpToolLabel(value);
   // Bare goat_* ids are tools themselves, before goat_ is read as a namespace.
   if (T3_MCP_TOOL_NAMES.has(label)) return label;
   const mcpMatch = /^mcp__(?<server>.+?)__(?<tool>.+)$/i.exec(label);
@@ -512,30 +512,30 @@ function resolveT3McpToolName(value: string): string | null {
 }
 
 /** The bare T3 tool name (`html_render`) for any provider's spelling of it. */
-export function resolveT3McpToolId(toolName: string | null | undefined): string | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
+export function resolveGoatMcpToolId(toolName: string | null | undefined): string | null {
+  const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
   return name !== null && T3_MCP_TOOL_NAMES.has(name) ? name : null;
 }
 
-export function resolveT3McpToolDefinition(
+export function resolveGoatMcpToolDefinition(
   toolName: string | null | undefined,
-): T3McpToolDefinition | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
+): GoatMcpToolDefinition | null {
+  const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
   const canonicalName = name === null ? null : (T3_MCP_LEGACY_TOOL_ALIASES[name] ?? name);
   return canonicalName !== null && Object.hasOwn(T3_MCP_TOOLS, canonicalName)
     ? T3_MCP_TOOLS[canonicalName]!
     : null;
 }
 
-export function resolveT3McpToolPresentation(
+export function resolveGoatMcpToolPresentation(
   toolName: string | null | undefined,
-): T3McpToolPresentation | null {
-  const definition = resolveT3McpToolDefinition(toolName);
+): GoatMcpToolPresentation | null {
+  const definition = resolveGoatMcpToolDefinition(toolName);
   return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
 }
 
-export function resolveT3McpToolSummaryAction(
+export function resolveGoatMcpToolSummaryAction(
   toolName: string | null | undefined,
-): T3McpToolSummaryAction | null {
-  return resolveT3McpToolDefinition(toolName)?.summaryAction ?? null;
+): GoatMcpToolSummaryAction | null {
+  return resolveGoatMcpToolDefinition(toolName)?.summaryAction ?? null;
 }

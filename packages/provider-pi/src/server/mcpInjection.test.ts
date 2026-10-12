@@ -13,7 +13,7 @@ import {
 } from "./mcpExtensionSource.ts";
 import {
   buildPiRpcLaunch,
-  materializePiT3McpExtension,
+  materializePiGoatMcpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
 
@@ -85,7 +85,7 @@ describe("pi T3 MCP injection", () => {
       "--extension",
       "/tmp/cache/pi-t3-mcp-extension.ts",
     ]);
-    assert.isFalse(permissionOnly.hasT3Mcp);
+    assert.isFalse(permissionOnly.hasGoatMcp);
     assert.isUndefined(permissionOnly.env[T3_MCP_URL_ENV]);
     assert.isUndefined(permissionOnly.env[T3_MCP_BEARER_ENV]);
     assert.equal(permissionOnly.env[T3_PI_RUNTIME_MODE_ENV], "auto-accept-edits");
@@ -134,7 +134,7 @@ describe("pi T3 MCP injection", () => {
       "--no-extensions",
       "--no-tools",
     ]);
-    assert.isFalse(launch.hasT3Mcp);
+    assert.isFalse(launch.hasGoatMcp);
     assert.deepInclude(resolvePiLaunchArgs("--mode text"), {
       ok: false,
       message: "Pi launch argument '--mode' is controlled by GOAT and cannot be overridden.",
@@ -159,10 +159,10 @@ describe("pi T3 MCP injection", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const cacheDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-extensions-" });
-      const mcpDest = yield* materializePiT3McpExtension(cacheDir);
+      const mcpDest = yield* materializePiGoatMcpExtension(cacheDir);
       assert.isTrue(mcpDest.endsWith(PI_T3_MCP_EXTENSION_FILENAME));
       const mcpSource = yield* fs.readFileString(mcpDest);
-      assert.include(mcpSource, "export default async function t3McpExtension");
+      assert.include(mcpSource, "export default async function goatMcpExtension");
       assert.include(mcpSource, "before_agent_start");
       assert.include(mcpSource, 'pi.on("tool_call"');
       assert.include(mcpSource, "Allow ${event.toolName}?");

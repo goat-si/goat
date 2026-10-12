@@ -77,7 +77,7 @@ import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
-import { t3OrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
+import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
@@ -473,7 +473,7 @@ const rule = (action: string, effect: Rule["effect"]): Rule => ({ action, resour
  * thread id that does not fit, or whose sanitization is lossy, is replaced by
  * a digest of the original id so shortening the prefix cannot merge names.
  */
-export const t3McpServerName = Effect.fn("t3McpServerName")(function* (threadId: string) {
+export const goatMcpServerName = Effect.fn("goatMcpServerName")(function* (threadId: string) {
   const sanitized = threadId.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
   const name = `goat-${sanitized}`;
   // Keep the readable-id ceiling the t3-code- prefix had (56), so a shorter
@@ -860,7 +860,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   const crypto = yield* Crypto.Crypto;
   const driver = OPENCODE_PROVIDER;
   const mcpServerNameFor = (threadId: string) =>
-    t3McpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
+    goatMcpServerName(threadId).pipe(Effect.provideService(Crypto.Crypto, crypto));
 
   /**
    * Lends the instance's server to a session until its scope closes. A spawned
@@ -3419,7 +3419,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
-        t3OrchestrationSystemPrompt(state.mcp !== undefined),
+        goatOrchestrationSystemPrompt(state.mcp !== undefined),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");

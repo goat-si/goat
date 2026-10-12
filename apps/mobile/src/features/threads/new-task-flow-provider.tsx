@@ -25,7 +25,7 @@ import {
 } from "@goat/contracts";
 import { sanitizeNewRefName } from "@goat/shared/git";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
-import { parseT3ProjectFile } from "@goat/shared/t3ProjectFile";
+import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
@@ -505,7 +505,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const { canReadFiles } = fileAccess;
   const fileAccessPending =
     selectedProject !== null && selectedProject.workspaceRoot !== "" && fileAccess.isPending;
-  const t3ProjectFileQuery = useEnvironmentQuery(
+  const goatProjectFileQuery = useEnvironmentQuery(
     canReadFiles && selectedProject !== null && selectedProject.workspaceRoot !== ""
       ? projectEnvironment.readFile({
           environmentId: selectedProject.environmentId,
@@ -513,13 +513,13 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         })
       : null,
   );
-  const t3ProjectFileData = t3ProjectFileQuery.data as ProjectReadFileResult | null;
-  const t3ProjectFile = useMemo(
+  const goatProjectFileData = goatProjectFileQuery.data as ProjectReadFileResult | null;
+  const goatProjectFile = useMemo(
     () =>
-      t3ProjectFileData === null || t3ProjectFileData.truncated
+      goatProjectFileData === null || goatProjectFileData.truncated
         ? null
-        : parseT3ProjectFile(t3ProjectFileData.contents),
-    [t3ProjectFileData],
+        : parseGoatProjectFile(goatProjectFileData.contents),
+    [goatProjectFileData],
   );
   // Environment settings with the project's overrides and its t3.json
   // applied; the aggregate's own legacy fields still count until the server
@@ -530,9 +530,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         selectedEnvironmentServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
         selectedProject?.id ?? null,
         selectedProject,
-        t3ProjectFile,
+        goatProjectFile,
       ),
-    [selectedEnvironmentServerConfig?.settings, selectedProject, t3ProjectFile],
+    [selectedEnvironmentServerConfig?.settings, selectedProject, goatProjectFile],
   );
   // A thread without a project runs in a plain folder, so worktree mode
   // would leave it unsendable: it is always local and offers no choice.
@@ -559,7 +559,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const defaultWorkspaceModeSettled =
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
     projectSettings.sources.defaultThreadEnvMode !== "environment" ||
-    (!t3ProjectFileQuery.isPending && !fileAccessPending);
+    (!goatProjectFileQuery.isPending && !fileAccessPending);
   const workspaceMode = canChooseWorkspace
     ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
     : "local";

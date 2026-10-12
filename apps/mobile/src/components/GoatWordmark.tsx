@@ -5,11 +5,11 @@ import { withUniwind } from "uniwind";
 const ThemedPath = withUniwind(Path);
 
 /**
- * The GOAT mark, matching the web T3Wordmark SVG and
+ * The GOAT mark, matching the web GoatWordmark SVG and
  * assets/prod/app-icon.icon/Assets/text.svg. Kept under its upstream name to
  * limit churn. Width derives from the viewBox aspect ratio.
  */
-export function T3Wordmark(props: {
+export function GoatWordmark(props: {
   readonly height: number;
   readonly color?: ColorValue;
   readonly colorClassName?: string;

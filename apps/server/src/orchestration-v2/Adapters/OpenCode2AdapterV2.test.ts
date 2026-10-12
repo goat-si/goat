@@ -46,7 +46,7 @@ import * as ProviderContinuationRequests from "@goat/provider-core/server/Provid
 import {
   OPENCODE_2_STILL_STOPPING,
   OPENCODE_PROVIDER,
-  t3McpServerName,
+  goatMcpServerName,
 } from "@goat/provider-opencode/testing";
 import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import { makeProviderReplayGate, type ProviderReplayGate } from "@goat/provider-testing/replayGate";
@@ -87,13 +87,13 @@ const mcpRules = [
   { action: "goat-*", resource: "*", effect: "deny" },
   { action: "goat-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
 ];
-const t3Rules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
+const goatRules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 /** The thread's title, which the recorded session already carries. */
 const TITLE = "Prime check";
 const sessionInfo = (overrides: Record<string, unknown> = {}) => ({
   id: SESSION,
   title: TITLE,
-  permissions: t3Rules,
+  permissions: goatRules,
   projectID: "global",
   model: { id: "big-pickle", providerID: "opencode", variant: "default" },
   cost: 0,
@@ -459,7 +459,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.create", {
           location: { directory: WORK },
           model: { providerID: "opencode", id: "big-pickle" },
-          permissions: t3Rules,
+          permissions: goatRules,
           title: "Check whether 391 is prime",
         }),
         replyData("session.create", sessionInfo({ title: "Check whether 391 is prime" })),
@@ -2123,7 +2123,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         [
           ...backgroundLaunch(CHILD),
           event("session.execution.succeeded", { sessionID: SESSION }),
-          out("session.update", { sessionID: CHILD, permissions: t3Rules }),
+          out("session.update", { sessionID: CHILD, permissions: goatRules }),
           reply("session.update", null),
           out("session.prompt", { sessionID: SESSION, text: "<any>" }),
           reply("session.prompt", {
@@ -2304,7 +2304,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           }),
         ),
         ...noOpenRequests,
-        out("session.update", { sessionID: SESSION, permissions: t3Rules }),
+        out("session.update", { sessionID: SESSION, permissions: goatRules }),
         reply("session.update", null),
       ]);
       yield* runtime.resumeThread({
@@ -3416,7 +3416,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         const server = "goat-c26f2f1fb6fbbcc2";
         const { runtime, thread } = yield* resumed([
           // Registered for the session's directory under the thread's own name;
-          // the session's rules allow only this name's tools (see `t3Rules`).
+          // the session's rules allow only this name's tools (see `goatRules`).
           out("mcp.add", {
             server,
             "location[directory]": WORK,
@@ -3514,21 +3514,21 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         "thread:delegated-task:command%3Amcp%3A48bef2bf-6d0e-4f7a-9c3b-2e5d8a1f7c40%3Adelegate-task%3Around1",
         "thread:delegated-task:command%3Amcp%3A48bef2bf-6d0e-4f7a-9c3b-2e5d8a1f7c40%3Adelegate-task%3Around2",
       ];
-      const names = yield* Effect.forEach(ids, t3McpServerName);
+      const names = yield* Effect.forEach(ids, goatMcpServerName);
       for (const name of names) assert.match(name, /^goat-[A-Za-z0-9_-]{1,56}$/);
       assert.equal(new Set(names).size, ids.length);
-      assert.deepEqual(yield* Effect.forEach(ids, t3McpServerName), names);
+      assert.deepEqual(yield* Effect.forEach(ids, goatMcpServerName), names);
       // A digested name is the one the synchronous node:crypto version produced.
       assert.equal(names[0], "goat-63abb5df2b188bdd");
       // Lossy sanitization hashes the original id even when its name fits.
-      assert.equal(yield* t3McpServerName(threadId), "goat-c26f2f1fb6fbbcc2");
+      assert.equal(yield* goatMcpServerName(threadId), "goat-c26f2f1fb6fbbcc2");
       // Lossless ids keep the baseline readable-id ceiling of 56 characters.
       assert.equal(
-        yield* t3McpServerName("thread_opencode2-adapter"),
+        yield* goatMcpServerName("thread_opencode2-adapter"),
         "goat-thread_opencode2-adapter",
       );
-      assert.equal(yield* t3McpServerName("x".repeat(56)), `goat-${"x".repeat(56)}`);
-      assert.match(yield* t3McpServerName("x".repeat(57)), /^goat-[a-f0-9]{16}$/);
+      assert.equal(yield* goatMcpServerName("x".repeat(56)), `goat-${"x".repeat(56)}`);
+      assert.match(yield* goatMcpServerName("x".repeat(57)), /^goat-[a-f0-9]{16}$/);
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
@@ -3538,8 +3538,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       Effect.gen(function* () {
         const owner = ThreadId.make(`thread_${"x".repeat(49)}`);
         const child = ThreadId.make(`${owner}_b`);
-        const ownerServer = yield* t3McpServerName(owner);
-        const childServer = yield* t3McpServerName(child);
+        const ownerServer = yield* goatMcpServerName(owner);
+        const childServer = yield* goatMcpServerName(child);
         assert.equal(owner.length, 56);
         assert.equal(child.length, 58);
         assert.equal(ownerServer, `goat-${owner}`);
@@ -3601,7 +3601,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           ThreadId.make(`thread:${"x".repeat(49)}a:b`),
           ThreadId.make(`thread:${"x".repeat(49)}a_b`),
         ];
-        const names = yield* Effect.forEach(ids, t3McpServerName);
+        const names = yield* Effect.forEach(ids, goatMcpServerName);
         // Both raw ids have length 59 and collapse to the same readable goat name.
         assert.deepEqual(names, ["goat-a8a5047e3b3ef95f", "goat-84c3953c7ac1e4ef"]);
         const registered = yield* Effect.forEach(ids, (child, index) =>
@@ -3785,7 +3785,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.create", {
           location: { directory: custom },
           model: { providerID: "opencode", id: "big-pickle" },
-          permissions: t3Rules,
+          permissions: goatRules,
         }),
         replyData("session.create", sessionInfo({ location: { directory: custom } })),
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),

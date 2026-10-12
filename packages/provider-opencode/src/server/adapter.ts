@@ -63,7 +63,7 @@ import {
   summarizeNativeProtocolPayload,
 } from "@goat/provider-core/server/nativeProtocolLogging";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
-import { t3OrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
+import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -969,9 +969,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         });
 
         const mcpSession = yield* mcpSessions.read(input.threadId);
-        const hasT3Mcp = mcpSession !== undefined && !connection.external;
-        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
-        if (hasT3Mcp) {
+        const hasGoatMcp = mcpSession !== undefined && !connection.external;
+        const orchestrationSystemPrompt = goatOrchestrationSystemPrompt(hasGoatMcp);
+        if (hasGoatMcp) {
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "goat",

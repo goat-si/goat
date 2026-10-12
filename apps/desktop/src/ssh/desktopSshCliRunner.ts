@@ -1,5 +1,5 @@
 import * as Option from "effect/Option";
-import type { RemoteT3RunnerOptions } from "@goat/ssh/tunnel";
+import type { RemoteGoatRunnerOptions } from "@goat/ssh/tunnel";
 
 import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
@@ -14,15 +14,15 @@ import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 export const resolveDesktopSshCliRunner = (
   environment: Pick<
     DesktopEnvironment.DesktopEnvironment["Service"],
-    "appVersion" | "isPackaged" | "isDevelopment" | "devRemoteT3ServerEntryPath"
+    "appVersion" | "isPackaged" | "isDevelopment" | "devRemoteGoatServerEntryPath"
   >,
   archiveOptions: Pick<
-    RemoteT3RunnerOptions,
+    RemoteGoatRunnerOptions,
     "archiveDirectory" | "bundledArchiveDirectory" | "releaseBaseUrl"
   >,
   serverPackage: { readonly version: string; readonly engines: { readonly node: string } },
-): RemoteT3RunnerOptions => {
-  const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteT3ServerEntryPath);
+): RemoteGoatRunnerOptions => {
+  const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteGoatServerEntryPath);
   if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
     return {
       nodeScriptPath: devRemoteEntryPath,

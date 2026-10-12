@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
-import { resolveGitWorktreePath, resolveWorktreeT3Home } from "@goat/shared/devHome";
+import { resolveGitWorktreePath, resolveWorktreeHome } from "@goat/shared/devHome";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
@@ -67,7 +67,7 @@ export function isProxiableBindHost(host: string): boolean {
   );
 }
 
-export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
+export const DEFAULT_GOAT_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(NodeOS.homedir(), ".t3"),
 );
 
@@ -275,7 +275,7 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
       return path.resolve(configured);
     }
 
-    return yield* DEFAULT_T3_HOME;
+    return yield* DEFAULT_GOAT_HOME;
   });
 }
 
@@ -667,7 +667,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // A dev server started inside a worktree defaults to that worktree's own
     // (gitignored) `.t3` — see @goat/shared/devHome for why this must
     // outrank an ambient T3CODE_HOME. `--home-dir` still wins.
-    const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcess.WorkingDirectory);
+    const worktreeHome = yield* resolveWorktreeHome(yield* HostProcess.WorkingDirectory);
     // Trim before choosing: `--home-dir ""` is not a selection, and treating it
     // as one would skip the worktree default and land on the shared home —
     // exactly the outcome this precedence exists to prevent.
@@ -693,7 +693,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       serverOffset !== offset || webOffset !== offset
         ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
         : "";
-    const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_T3_HOME);
+    const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_GOAT_HOME);
 
     yield* Effect.logInfo(
       `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,

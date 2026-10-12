@@ -2,13 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   T3_MCP_TOOL_NAMES,
-  resolveT3McpToolDefinition,
-  resolveT3McpToolId,
-  resolveT3McpToolPresentation,
-  resolveT3McpToolSummaryAction,
-} from "./t3McpToolPresentation.ts";
+  resolveGoatMcpToolDefinition,
+  resolveGoatMcpToolId,
+  resolveGoatMcpToolPresentation,
+  resolveGoatMcpToolSummaryAction,
+} from "./goatMcpToolPresentation.ts";
 
-describe("resolveT3McpToolPresentation", () => {
+describe("resolveGoatMcpToolPresentation", () => {
   it.each([
     ["t3_attachment_discard", "goat_attachment_discard"],
     ["t3_attachment_prepare_upload", "goat_attachment_prepare_upload"],
@@ -53,31 +53,33 @@ describe("resolveT3McpToolPresentation", () => {
     ["t3_worktree_list", "goat_worktree_list"],
     ["t3_worktree_status", "goat_worktree_status"],
   ] as const)("renders persisted %s with the same semantics as %s", (legacy, current) => {
-    expect(resolveT3McpToolPresentation(current)).not.toBeNull();
-    expect(resolveT3McpToolDefinition(legacy)).toEqual(resolveT3McpToolDefinition(current));
-    expect(resolveT3McpToolSummaryAction(legacy)).toEqual(resolveT3McpToolSummaryAction(current));
+    expect(resolveGoatMcpToolPresentation(current)).not.toBeNull();
+    expect(resolveGoatMcpToolDefinition(legacy)).toEqual(resolveGoatMcpToolDefinition(current));
+    expect(resolveGoatMcpToolSummaryAction(legacy)).toEqual(
+      resolveGoatMcpToolSummaryAction(current),
+    );
     for (const prefix of ["", "mcp__t3-code__", "t3_code.", "t3-code-thread_with_ids_"]) {
-      expect(resolveT3McpToolPresentation(`${prefix}${legacy} completed`)).toEqual(
-        resolveT3McpToolPresentation(`${prefix}${current} completed`),
+      expect(resolveGoatMcpToolPresentation(`${prefix}${legacy} completed`)).toEqual(
+        resolveGoatMcpToolPresentation(`${prefix}${current} completed`),
       );
       // Identity recovery must retain the provider's original spelling.
-      expect(resolveT3McpToolId(`${prefix}${legacy}`)).toBe(legacy);
-      expect(resolveT3McpToolId(`${prefix}${current}`)).toBe(current);
+      expect(resolveGoatMcpToolId(`${prefix}${legacy}`)).toBe(legacy);
+      expect(resolveGoatMcpToolId(`${prefix}${current}`)).toBe(current);
     }
-    expect(resolveT3McpToolPresentation(`mcp__another-server__${legacy}`)).toBeNull();
-    expect(resolveT3McpToolPresentation(`mcp__another-server__${current}`)).toBeNull();
+    expect(resolveGoatMcpToolPresentation(`mcp__another-server__${legacy}`)).toBeNull();
+    expect(resolveGoatMcpToolPresentation(`mcp__another-server__${current}`)).toBeNull();
   });
 
   it("does not infer an alias for an unknown prefixed tool", () => {
     for (const name of ["t3_unknown_tool", "goat_unknown_tool", "t3-code.goat_thread_start"]) {
-      expect(resolveT3McpToolPresentation(name)).toBeNull();
-      expect(resolveT3McpToolId(name)).toBeNull();
+      expect(resolveGoatMcpToolPresentation(name)).toBeNull();
+      expect(resolveGoatMcpToolId(name)).toBeNull();
     }
   });
 
   it("recognizes every T3 tool across provider prefixes and completion suffixes", () => {
     for (const tool of T3_MCP_TOOL_NAMES) {
-      const presentation = resolveT3McpToolPresentation(tool);
+      const presentation = resolveGoatMcpToolPresentation(tool);
       for (const prefix of [
         "mcp__goat__",
         "goat.",
@@ -96,58 +98,58 @@ describe("resolveT3McpToolPresentation", () => {
         "T3 Code ",
         "t3-code · ",
       ]) {
-        expect(resolveT3McpToolPresentation(`${prefix}${tool} completed`), tool).toEqual(
+        expect(resolveGoatMcpToolPresentation(`${prefix}${tool} completed`), tool).toEqual(
           presentation,
         );
       }
-      expect(resolveT3McpToolPresentation(`mcp__another-server__${tool}`), tool).toBeNull();
+      expect(resolveGoatMcpToolPresentation(`mcp__another-server__${tool}`), tool).toBeNull();
     }
   });
   it("pretty prints Claude and Cursor T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("mcp__t3-code__goat_thread_read")).toEqual({
+    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_thread_read")).toEqual({
       displayName: "Read a GOAT thread",
       logo: "t3-code",
     });
   });
 
   it("pretty prints Codex T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("t3-code.create_threads")).toEqual({
+    expect(resolveGoatMcpToolPresentation("t3-code.create_threads")).toEqual({
       displayName: "Create GOAT threads",
       logo: "t3-code",
     });
   });
 
   it("pretty prints thread metadata updates", () => {
-    expect(resolveT3McpToolPresentation("mcp__t3-code__goat_thread_update")).toEqual({
+    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_thread_update")).toEqual({
       displayName: "Update GOAT thread metadata",
       logo: "t3-code",
     });
   });
 
   it("pretty prints bare T3 MCP toolkit names", () => {
-    expect(resolveT3McpToolPresentation("list_scheduled_tasks")).toEqual({
+    expect(resolveGoatMcpToolPresentation("list_scheduled_tasks")).toEqual({
       displayName: "List scheduled tasks",
       logo: "t3-code",
     });
   });
 
   it("pretty prints worktree T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("mcp__t3-code__goat_worktree_handoff")).toEqual({
+    expect(resolveGoatMcpToolPresentation("mcp__t3-code__goat_worktree_handoff")).toEqual({
       displayName: "Hand off thread to a git worktree",
       logo: "t3-code",
     });
-    expect(resolveT3McpToolPresentation("t3-code.goat_worktree_status")).toEqual({
+    expect(resolveGoatMcpToolPresentation("t3-code.goat_worktree_status")).toEqual({
       displayName: "Get thread worktree status",
       logo: "t3-code",
     });
   });
 
   it("pretty prints preview T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("T3-code.preview_open")).toEqual({
+    expect(resolveGoatMcpToolPresentation("T3-code.preview_open")).toEqual({
       displayName: "Open a page in the preview browser",
       logo: "t3-code",
     });
-    expect(resolveT3McpToolPresentation("mcp__t3-code__preview_status")).toEqual({
+    expect(resolveGoatMcpToolPresentation("mcp__t3-code__preview_status")).toEqual({
       displayName: "Get preview browser status",
       logo: "t3-code",
     });
@@ -162,43 +164,45 @@ describe("resolveT3McpToolPresentation", () => {
       "T3 Code delegate_task",
       "t3-code__delegate_task",
     ]) {
-      expect(resolveT3McpToolPresentation(name)?.displayName).toBe("Delegate a child task");
+      expect(resolveGoatMcpToolPresentation(name)?.displayName).toBe("Delegate a child task");
     }
   });
 
   it("renders goat names while leaving unknown and foreign tools generic", () => {
-    expect(resolveT3McpToolPresentation("goat-thread_child_1_delegate_task")?.displayName).toBe(
+    expect(resolveGoatMcpToolPresentation("goat-thread_child_1_delegate_task")?.displayName).toBe(
       "Delegate a child task",
     );
-    expect(resolveT3McpToolPresentation("goat-thread_child_1_not_a_tool")).toBeNull();
-    expect(resolveT3McpToolPresentation("mcp__weather__delegate_task")).toBeNull();
-    expect(resolveT3McpToolPresentation("mcp__goat__not_a_tool")).toBeNull();
+    expect(resolveGoatMcpToolPresentation("goat-thread_child_1_not_a_tool")).toBeNull();
+    expect(resolveGoatMcpToolPresentation("mcp__weather__delegate_task")).toBeNull();
+    expect(resolveGoatMcpToolPresentation("mcp__goat__not_a_tool")).toBeNull();
   });
 
   it("matches OpenCode 2's per-thread server names, whose thread ids hold underscores", () => {
     expect(
-      resolveT3McpToolPresentation("t3-code-thread_opencode2-adapter_delegate_task")?.displayName,
+      resolveGoatMcpToolPresentation("t3-code-thread_opencode2-adapter_delegate_task")?.displayName,
     ).toBe("Delegate a child task");
-    expect(resolveT3McpToolPresentation("t3-code-thread_opencode2-adapter_not_a_tool")).toBeNull();
+    expect(
+      resolveGoatMcpToolPresentation("t3-code-thread_opencode2-adapter_not_a_tool"),
+    ).toBeNull();
   });
 
   it("keeps unknown MCP tools on the generic renderer path", () => {
-    expect(resolveT3McpToolPresentation("mcp__github__search_issues")).toBeNull();
-    expect(resolveT3McpToolPresentation("t3-code.not_a_real_tool")).toBeNull();
+    expect(resolveGoatMcpToolPresentation("mcp__github__search_issues")).toBeNull();
+    expect(resolveGoatMcpToolPresentation("t3-code.not_a_real_tool")).toBeNull();
   });
 });
 
 it("keeps answer lifecycle labels and permits resolved question reads", () => {
   for (const tool of ["goat_pending_request_respond", "t3_pending_request_respond"]) {
-    expect(resolveT3McpToolDefinition(tool)?.labels).toEqual([
+    expect(resolveGoatMcpToolDefinition(tool)?.labels).toEqual([
       "Answer",
       "Answering",
       "Answered",
       "pending questions",
     ]);
-    expect(resolveT3McpToolDefinition(tool)?.summaryAction).toBe("question-respond");
+    expect(resolveGoatMcpToolDefinition(tool)?.summaryAction).toBe("question-respond");
   }
-  expect(resolveT3McpToolDefinition("goat_pending_request_read")?.labels).toEqual([
+  expect(resolveGoatMcpToolDefinition("goat_pending_request_read")?.labels).toEqual([
     "Read",
     "Reading",
     "Read",

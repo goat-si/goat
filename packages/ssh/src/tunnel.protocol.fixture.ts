@@ -403,7 +403,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   const run = (
     entry: "launch" | "pairing" | "mcp",
     secondary = false,
-    options: SshTunnel.RemoteT3RunnerOptions = {},
+    options: SshTunnel.RemoteGoatRunnerOptions = {},
     prepared?: SshTunnel.PreparedRemoteRuntime,
   ) => {
     const inputRunner = { ...runner, ...options, keepExistingRunner: secondary };

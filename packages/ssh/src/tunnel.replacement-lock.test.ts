@@ -401,7 +401,7 @@ case "$3" in */replacement.lock)
         yield* f.fs.writeFileString(`${directory}/.install-complete`, newer);
         yield* f.fs.writeFileString(
           `${f.state}/run-t3.sh`,
-          SshTunnel.buildRemoteT3RunnerScript({ archiveVersion: newer }),
+          SshTunnel.buildRemoteGoatRunnerScript({ archiveVersion: newer }),
         );
         yield* Effect.sync(() => process.kill(f.pid, "SIGTERM"));
         const child = yield* f.realSpawner.spawn(

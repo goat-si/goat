@@ -83,7 +83,7 @@ import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { T3Wordmark } from "../T3Wordmark";
+import { GoatWordmark } from "../GoatWordmark";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CommandBlock } from "../CommandBlock";
@@ -235,7 +235,7 @@ export function WelcomeWizard({
           title="Set up GOAT"
           identity={
             <div className="flex items-center gap-2" role="img" aria-label="GOAT">
-              <T3Wordmark className="size-6 shrink-0" aria-hidden />
+              <GoatWordmark className="size-6 shrink-0" aria-hidden />
               <span className="text-2xl font-medium tracking-tight">GOAT</span>
             </div>
           }

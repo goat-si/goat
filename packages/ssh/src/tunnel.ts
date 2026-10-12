@@ -84,7 +84,7 @@ const REMOTE_ARCHIVE_LOCK_WAIT_SECONDS = 360;
 const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 
-export interface RemoteT3RunnerOptions {
+export interface RemoteGoatRunnerOptions {
   /**
    * Dev mode: run `node <path>` on the remote instead of a release archive.
    * The only mode that needs Node on the remote.
@@ -118,7 +118,7 @@ export interface RemoteT3RunnerOptions {
 }
 
 export interface PreparedRemoteRuntime {
-  readonly runner: RemoteT3RunnerOptions;
+  readonly runner: RemoteGoatRunnerOptions;
   readonly version: string | null;
   readonly requestedVersion: string | null;
   readonly source: "requested" | "retained" | "live";
@@ -130,7 +130,7 @@ export interface PreparedRemoteRuntime {
   readonly expectedLiveVersion?: string;
   readonly expectedLiveRunnerSha256?: string;
 }
-const requestedRuntime = (runner: RemoteT3RunnerOptions | undefined): PreparedRemoteRuntime => ({
+const requestedRuntime = (runner: RemoteGoatRunnerOptions | undefined): PreparedRemoteRuntime => ({
   runner: { ...runner },
   version: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
   requestedVersion: isNodeScriptRunner(runner) ? null : runner?.archiveVersion?.trim() || null,
@@ -193,7 +193,7 @@ runner_sha256() {
 `;
 
 export interface SshEnvironmentManagerOptions {
-  readonly resolveCliRunner?: Effect.Effect<RemoteT3RunnerOptions>;
+  readonly resolveCliRunner?: Effect.Effect<RemoteGoatRunnerOptions>;
   /**
    * Close only the local forward when a tunnel ends. A second client of a
    * host (the server's own SSH dispatch) shares the remote server with the
@@ -242,11 +242,11 @@ function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   };
 }
 
-function isNodeScriptRunner(runner: RemoteT3RunnerOptions | undefined): boolean {
+function isNodeScriptRunner(runner: RemoteGoatRunnerOptions | undefined): boolean {
   return Boolean(runner?.nodeScriptPath?.trim());
 }
 
-function sshRunnerLogFields(runner: RemoteT3RunnerOptions | undefined) {
+function sshRunnerLogFields(runner: RemoteGoatRunnerOptions | undefined) {
   if (runner?.nodeScriptPath?.trim()) {
     return { runner: "node-script", nodeScriptPath: runner.nodeScriptPath.trim() };
   }
@@ -1590,7 +1590,7 @@ export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerEr
   }
 }
 
-export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string {
+export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
   const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
   const archiveVersion = input?.archiveVersion?.trim() || "";
   if (nodeScriptPath === "" && archiveVersion === "") {
@@ -1617,7 +1617,7 @@ export function buildRemoteT3RunnerScript(input?: RemoteT3RunnerOptions): string
   );
 }
 
-export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string {
+export function buildRemoteNodeEnvScript(input?: RemoteGoatRunnerOptions): string {
   return stripTrailingNewlines(
     applyScriptPlaceholders(REMOTE_NODE_ENV_SCRIPT, {
       T3_NODE_ENGINE_RANGE: shellSingleQuote(input?.nodeEngineRange?.trim() || ""),
@@ -1627,7 +1627,7 @@ export function buildRemoteNodeEnvScript(input?: RemoteT3RunnerOptions): string 
 }
 
 function buildRemoteRunnerSetupScript(
-  input: RemoteT3RunnerOptions | undefined,
+  input: RemoteGoatRunnerOptions | undefined,
   selection: PreparedRemoteRuntime,
   verifyOwnedBeforePublication = false,
 ): string {
@@ -1664,7 +1664,7 @@ function buildRemoteRunnerSetupScript(
       : "",
     T3_RETAINED_RUNNER_SHA256: shellSingleQuote(selection.retainedRunnerSha256 ?? ""),
     T3_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
-    T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteT3RunnerScript(input)),
+    T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
     T3_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
       T3_SSH_PROTOCOL: String(SSH_RUNTIME_PROTOCOL_VERSION),
       T3_ORCHESTRATION_PROTOCOL: String(ORCHESTRATION_PROTOCOL_VERSION),
@@ -1677,7 +1677,7 @@ function buildRemoteRunnerSetupScript(
 }
 
 export function buildRemoteLaunchScript(
-  input?: RemoteT3RunnerOptions,
+  input?: RemoteGoatRunnerOptions,
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
@@ -1700,7 +1700,7 @@ export function buildRemoteLaunchScript(
 export function buildRemoteMcpSessionScript(
   stateKey: string,
   options: RemoteMcpClientSessionOptions,
-  input?: RemoteT3RunnerOptions,
+  input?: RemoteGoatRunnerOptions,
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_MCP_SESSION_SCRIPT, {
@@ -1734,7 +1734,7 @@ export const decodeRemoteMcpSessionOutput = Effect.fn("ssh/tunnel.decodeRemoteMc
 
 export function buildRemotePairingScript(
   stateKey: string,
-  input?: RemoteT3RunnerOptions,
+  input?: RemoteGoatRunnerOptions,
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
@@ -1746,8 +1746,8 @@ export function buildRemotePairingScript(
   });
 }
 
-export function buildRemoteT3UploadInstallerScript(
-  input: RemoteT3RunnerOptions,
+export function buildRemoteGoatUploadInstallerScript(
+  input: RemoteGoatRunnerOptions,
   sha256: string,
 ): string {
   if (
@@ -1760,7 +1760,7 @@ export function buildRemoteT3UploadInstallerScript(
       stdout: "",
     });
   }
-  const script = buildRemoteT3RunnerScript(input);
+  const script = buildRemoteGoatRunnerScript(input);
   const startAnchor = '  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS"';
   const endAnchor = "  if command -v sha256sum >/dev/null 2>&1; then";
   const start = script.indexOf(startAnchor);
@@ -1782,8 +1782,8 @@ export function buildRemoteT3UploadInstallerScript(
   );
 }
 
-export function buildRemoteUploadScript(input: RemoteT3RunnerOptions, sha256: string): string {
-  const installer = buildRemoteT3UploadInstallerScript(input, sha256);
+export function buildRemoteUploadScript(input: RemoteGoatRunnerOptions, sha256: string): string {
+  const installer = buildRemoteGoatUploadInstallerScript(input, sha256);
   return `set -eu
 umask 077
 mkdir -p "$HOME/.goat/runtime/goat/versions"
@@ -1949,7 +1949,7 @@ const runtimePreparationError = (cause: unknown) =>
 export const prepareRemoteRuntime = (
   target: DesktopSshEnvironmentTarget,
   authOptions: SshAuth.SshAuthOptions,
-  runner?: RemoteT3RunnerOptions,
+  runner?: RemoteGoatRunnerOptions,
   stateKey?: string,
   owningLaunch = false,
 ) =>
@@ -1966,7 +1966,7 @@ export const prepareRemoteRuntime = (
       "t3.runtime.version": version,
     });
     yield* Effect.try({
-      try: () => buildRemoteT3RunnerScript(runner),
+      try: () => buildRemoteGoatRunnerScript(runner),
       catch: runtimePreparationError,
     });
     const result = yield* runSshCommand(target, {
@@ -2192,7 +2192,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
   function* (
     target: DesktopSshEnvironmentTarget,
     input?: SshAuth.SshAuthOptions,
-    runner?: RemoteT3RunnerOptions,
+    runner?: RemoteGoatRunnerOptions,
   ): Effect.fn.Return<
     | {
         readonly status: "ready";
@@ -2294,7 +2294,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
 export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingToken")(function* (
   target: DesktopSshEnvironmentTarget,
   input?: SshAuth.SshAuthOptions,
-  runner?: RemoteT3RunnerOptions,
+  runner?: RemoteGoatRunnerOptions,
   prepared?: PreparedRemoteRuntime,
 ): Effect.fn.Return<
   {
@@ -2368,7 +2368,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
     target: DesktopSshEnvironmentTarget,
     sessionOptions: RemoteMcpClientSessionOptions,
     input?: SshAuth.SshAuthOptions,
-    runner?: RemoteT3RunnerOptions,
+    runner?: RemoteGoatRunnerOptions,
     prepared?: PreparedRemoteRuntime,
   ): Effect.fn.Return<
     RemoteMcpClientSession,
@@ -2810,7 +2810,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     string,
     {
       target: DesktopSshEnvironmentTarget;
-      requestedRunner: RemoteT3RunnerOptions;
+      requestedRunner: RemoteGoatRunnerOptions;
       pending: SshRuntimePendingReplacement;
       generation: number;
       nextAttemptAt: number;
@@ -3009,7 +3009,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     readonly key: string;
     readonly resolvedTarget: DesktopSshEnvironmentTarget;
     readonly keyOnly?: boolean;
-    readonly runner?: RemoteT3RunnerOptions;
+    readonly runner?: RemoteGoatRunnerOptions;
     readonly previous?: SshTunnelEntry;
     readonly previousLocalPort?: number;
     readonly background?: boolean;
@@ -3254,7 +3254,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const ensureTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry")(function* (
     key: string,
     resolvedTarget: DesktopSshEnvironmentTarget,
-    runner?: RemoteT3RunnerOptions,
+    runner?: RemoteGoatRunnerOptions,
     background: boolean = false,
     keyOnly: boolean = false,
   ): Effect.fn.Return<

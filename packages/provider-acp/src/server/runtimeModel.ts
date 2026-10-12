@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
-import { T3_MCP_TOOL_NAMES } from "@goat/shared/t3McpToolPresentation";
+import { T3_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,

@@ -1,6 +1,6 @@
 import { cn } from "~/lib/utils";
 
-import { T3Wordmark } from "../T3Wordmark";
+import { GoatWordmark } from "../GoatWordmark";
 
 const CIRCLE = { sm: "size-5", md: "size-7", lg: "size-12" } as const;
 const MARK = { sm: "size-3", md: "size-4", lg: "size-7" } as const;
@@ -22,7 +22,7 @@ export function GoatBotAvatar({
         className,
       )}
     >
-      <T3Wordmark className={MARK[size]} />
+      <GoatWordmark className={MARK[size]} />
     </span>
   );
 }

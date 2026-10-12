@@ -13,7 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeNet from "node:net";
 
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
-import { buildRemoteStopScript, buildRemoteT3RunnerScript } from "./tunnel.ts";
+import { buildRemoteStopScript, buildRemoteGoatRunnerScript } from "./tunnel.ts";
 
 // An absolute default also works in the runner fixture's deliberately minimal PATH.
 const remoteShell = process.env.T3_SSH_TEST_SHELL ?? "/bin/sh";
@@ -71,7 +71,9 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
                 },
                 detached: false,
                 stdin: Stream.make(
-                  new TextEncoder().encode(buildRemoteT3RunnerScript({ nodeScriptPath: cliPath })),
+                  new TextEncoder().encode(
+                    buildRemoteGoatRunnerScript({ nodeScriptPath: cliPath }),
+                  ),
                 ),
               }),
             );

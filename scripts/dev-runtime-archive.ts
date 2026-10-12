@@ -9,7 +9,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { resolveWorktreeT3Home } from "@goat/shared/devHome";
+import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   cliArchiveFileName,
@@ -17,7 +17,7 @@ import {
   cliArchiveTarCommand,
 } from "@goat/shared/cliRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { DEFAULT_T3_HOME } from "./dev-runner.ts";
+import { DEFAULT_GOAT_HOME } from "./dev-runner.ts";
 import { validateSshRuntimeArchives } from "./build-desktop-artifact.ts";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -36,13 +36,13 @@ export const resolveRuntimeArchiveHome = (input: {
 }) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
-    const worktreeHome = yield* resolveWorktreeT3Home(input.cwd);
+    const worktreeHome = yield* resolveWorktreeHome(input.cwd);
     return path.resolve(
       input.cwd,
       (input.homeDir?.trim() || undefined) ??
         worktreeHome ??
         (input.ambientHome?.trim() || undefined) ??
-        (yield* DEFAULT_T3_HOME),
+        (yield* DEFAULT_GOAT_HOME),
     );
   });
 

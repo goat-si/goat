@@ -8,7 +8,7 @@ import {
   type ProjectScopedServerSettingKey,
   type ProjectSettingsOverrides,
   ServerSettings,
-  type T3ProjectFile,
+  type GoatProjectFile,
   type ServerSettingsPatch,
 } from "@goat/contracts";
 import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
@@ -90,7 +90,7 @@ export function resolveScopedSettingsTargets(
   connectedEnvironments: readonly ScopedSettingsEnvironment[],
   // Each member's decoded t3.json, keyed by physical project key, once read.
   // A member absent here has no file tier yet; null is a missing or invalid file.
-  projectFiles?: ReadonlyMap<string, T3ProjectFile | null>,
+  projectFiles?: ReadonlyMap<string, GoatProjectFile | null>,
 ): readonly ScopedSettingsTarget[] {
   const byId = new Map(
     connectedEnvironments.map((environment) => [environment.environmentId, environment]),

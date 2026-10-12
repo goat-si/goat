@@ -15,7 +15,7 @@ import {
   ExecutionEnvironmentDescriptor,
   PortSchema,
 } from "@goat/contracts";
-import { resolveWorktreeT3Home } from "@goat/shared/devHome";
+import { resolveWorktreeHome } from "@goat/shared/devHome";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import {
@@ -246,7 +246,7 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
     // Same precedence as dev-runner: inside a linked worktree its own `.t3`
     // outranks the shared home, so `goat pair` in a worktree pairs with the dev
     // server under test rather than the daily-driver install.
-    const worktreeHome = yield* resolveWorktreeT3Home(process.cwd());
+    const worktreeHome = yield* resolveWorktreeHome(process.cwd());
     if (worktreeHome !== undefined) {
       bases.push(worktreeHome);
     }

@@ -1373,7 +1373,7 @@ export const resolveSshCliRunner = (baseDir: string) =>
       ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
       ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
       keepExistingRunner: true,
-    } satisfies SshTunnel.RemoteT3RunnerOptions;
+    } satisfies SshTunnel.RemoteGoatRunnerOptions;
   });
 
 const layerManager = Layer.unwrap(

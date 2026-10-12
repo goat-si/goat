@@ -1,7 +1,7 @@
 import type { SVGProps } from "react";
 
 /** goat mark (traced from the generated logo). Kept under its upstream name to limit churn. */
-export function T3Wordmark(props: SVGProps<SVGSVGElement>) {
+export function GoatWordmark(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...props} viewBox="92 92 1070 1070" xmlns="http://www.w3.org/2000/svg">
       <g

@@ -33,7 +33,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { compactTraceAttributes } from "@goat/shared/observability";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand } from "@goat/shared/shell";
-import { parseT3ProjectFile } from "@goat/shared/t3ProjectFile";
+import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -3478,7 +3478,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ? null
             : yield* fileSystem.readFileString(path.join(worktreePath, T3_PROJECT_FILE_NAME)).pipe(
                 Effect.flatMap((contents) => {
-                  const file = parseT3ProjectFile(contents);
+                  const file = parseGoatProjectFile(contents);
                   return file === null
                     ? Effect.logWarning("t3.json is invalid; initializing submodules recursively", {
                         worktreePath,

@@ -156,7 +156,7 @@ const assertCleanStaging = Effect.fn("test.cleanStaging")(function* (
   for (const directory of state.staging) assert.isFalse(yield* state.fs.exists(directory));
 });
 
-function invoke(entry: "launch" | "pairing" | "mcp", runner: SshTunnel.RemoteT3RunnerOptions) {
+function invoke(entry: "launch" | "pairing" | "mcp", runner: SshTunnel.RemoteGoatRunnerOptions) {
   return entry === "launch"
     ? SshTunnel.launchOrReuseRemoteServer(target, {}, runner).pipe(Effect.asVoid)
     : entry === "pairing"

@@ -53,7 +53,7 @@ import {
   rewriteCursorSkillMentions,
 } from "./skills.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
-import { t3OrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
+import { goatOrchestrationPromptForFirstRun } from "@goat/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -2130,7 +2130,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 .map((skill) => skill.name),
             );
           }
-          const userText = t3OrchestrationPromptForFirstRun({
+          const userText = goatOrchestrationPromptForFirstRun({
             prompt: providerMessageTextWithAttachmentPaths({
               text:
                 cursorSkillNames === undefined
@@ -2140,7 +2140,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               resolveAttachmentPath: host.resolveAttachmentPath,
             }),
             runOrdinal: turnInput.runOrdinal,
-            hasT3Mcp: mcpServers !== undefined,
+            hasGoatMcp: mcpServers !== undefined,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
