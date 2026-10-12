@@ -53,4 +53,3 @@ Independent review by gpt-6.1-sol of the rebase resolutions, the inserted commit
 
 - Binary license terms for goat-releases before the first publication (goat-releases intentionally has no LICENSE; only upstream MIT notice and third-party notices ship).
 - All 060 tasks: keychain identity, `goat-notary` profile, Rust, preflight, runner registration, GitHub App + secrets, protected tags, runner-boundary acceptance on the free plan, activation on main, first publication, bootstrap.
-

@@ -65,4 +65,3 @@ Conclusion: `070_finish.md` plans the rebase onto dev `8bb1bf0b6`, the fold of `
 Did not improve / died: the first plan treated merge `a3173a84a` as pure conflict resolution; its remerge diff also carries guard tightening and key-only threading, so the rebase inserts that content as its own commit. The idea that assemble produces merged manifests died: `merge-update-manifests.ts` merges, assemble only validates.
 
 Next: wp1 (rebase).
-
