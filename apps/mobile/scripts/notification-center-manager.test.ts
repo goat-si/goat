@@ -24,9 +24,11 @@ describe.skipIf(NodeOS.platform() !== "darwin")(
         "utf8",
       );
       const manager = NodePath.join(directory, "NotificationCenterManager.swift");
+      // ExpoModulesCore re-exports Synchronization, which provides the registry's Mutex.
       NodeFS.writeFileSync(
         manager,
-        source.replace(/^import (ExpoModulesCore|UserNotifications)\n/gm, ""),
+        "import Synchronization\n" +
+          source.replace(/^import (ExpoModulesCore|UserNotifications)\n/gm, ""),
       );
       NodeChildProcess.execFileSync(
         "swiftc",
