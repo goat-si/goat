@@ -3850,7 +3850,7 @@ describe("orchestrator MCP toolkit", () => {
       ),
   );
 
-  it.live("reports running and queued child follow-ups from a Codex replay transcript", () =>
+  it.live("steers a child follow-up into its running turn from a Codex replay transcript", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace("delegated-task-status");
@@ -4066,20 +4066,6 @@ describe("orchestrator MCP toolkit", () => {
               ),
             );
 
-          const queuedFollowupCall = yield* invoke("goat_thread_send", {
-            threadId: delegated.childThreadId,
-            message: queuedFollowupPrompt,
-            mode: "queue",
-            clientRequestId: "delegated-child-replay-queued-1",
-          });
-          const queuedFollowup = yield* decodeThreadSendResult(
-            queuedFollowupCall.structuredContent,
-          ).pipe(Effect.orDie);
-          expect(queuedFollowup).toMatchObject({
-            status: "queued",
-            delivery: "queued",
-          });
-
           const pendingProjection = yield* orchestrator.getThreadProjection(
             delegated.childThreadId,
           );
@@ -4089,21 +4075,15 @@ describe("orchestrator MCP toolkit", () => {
             (task) =>
               task.childThreadId === delegated.childThreadId && task.id !== delegated.taskId,
           );
-          expect(followupTasks).toHaveLength(2);
+          expect(followupTasks).toHaveLength(1);
           expect(followupTasks.every((task) => task.result === null)).toBe(true);
-          expect(followupTasks.map((task) => task.id)).toEqual([
-            runningFollowup.taskId,
-            queuedFollowup.taskId,
-          ]);
+          expect(followupTasks.map((task) => task.id)).toEqual([runningFollowup.taskId]);
           expect(
             pendingProjection.runs.find((run) => run.id === delegated.childRunId)?.status,
           ).toBe("completed");
           expect(
             pendingProjection.runs.find((run) => run.id === runningFollowup.runId)?.status,
           ).toBe("running");
-          expect(
-            pendingProjection.runs.find((run) => run.id === queuedFollowup.runId)?.status,
-          ).toBe("queued");
           expect(
             (yield* orchestrator.getThreadProjection(parentThreadId)).runs.some(
               (run) => run.status === "running",
@@ -4129,19 +4109,21 @@ describe("orchestrator MCP toolkit", () => {
           });
 
           const finalSequence = yield* orchestrator.getThreadEventSequence(delegated.childThreadId);
-          const interruptCall = yield* invoke("goat_thread_interrupt", {
+          const steeredFollowupCall = yield* invoke("goat_thread_send", {
             threadId: delegated.childThreadId,
-            runId: runningFollowup.runId,
-            reason: "Allow the queued replay follow-up to run.",
-            clientRequestId: "interrupt-delegated-child-replay-1",
+            message: queuedFollowupPrompt,
+            mode: "queue",
+            clientRequestId: "delegated-child-replay-queued-1",
           });
-          const interrupt = yield* decodeThreadInterruptResult(
-            interruptCall.structuredContent,
+          const steeredFollowup = yield* decodeThreadSendResult(
+            steeredFollowupCall.structuredContent,
           ).pipe(Effect.orDie);
-          expect(interrupt).toMatchObject({
+          expect(steeredFollowup).toMatchObject({
+            delivery: "steered",
             runId: runningFollowup.runId,
-            status: "interrupt_requested",
+            taskId: runningFollowup.taskId,
           });
+
           yield* orchestrator
             .streamStoredEventsFrom({
               threadId: delegated.childThreadId,
@@ -4151,13 +4133,13 @@ describe("orchestrator MCP toolkit", () => {
               Stream.filter(
                 (stored) =>
                   stored.event.type === "run.updated" &&
-                  stored.event.payload.id === queuedFollowup.runId &&
+                  stored.event.payload.id === runningFollowup.runId &&
                   stored.event.payload.status === "completed",
               ),
               Stream.runHead,
               Effect.flatMap(
                 Option.match({
-                  onNone: () => Effect.die("Queued follow-up did not complete."),
+                  onNone: () => Effect.die("Steered follow-up did not complete."),
                   onSome: () => Effect.void,
                 }),
               ),
@@ -4165,11 +4147,12 @@ describe("orchestrator MCP toolkit", () => {
 
           const finalProjection = yield* orchestrator.getThreadProjection(delegated.childThreadId);
           expect(finalProjection.runs.find((run) => run.id === runningFollowup.runId)?.status).toBe(
-            "interrupted",
-          );
-          expect(finalProjection.runs.find((run) => run.id === queuedFollowup.runId)?.status).toBe(
             "completed",
           );
+          expect(finalProjection.runs.map((run) => run.id)).toEqual([
+            delegated.childRunId,
+            runningFollowup.runId,
+          ]);
           yield* orchestrator
             .streamStoredEventsFrom({
               threadId: parentThreadId,
@@ -4179,7 +4162,7 @@ describe("orchestrator MCP toolkit", () => {
               Stream.filter(
                 (stored) =>
                   stored.event.type === "subagent.updated" &&
-                  stored.event.payload.id === followupTasks[1]!.id &&
+                  stored.event.payload.id === followupTasks[0]!.id &&
                   stored.event.payload.status === "completed",
               ),
               Stream.runHead,
@@ -4192,10 +4175,13 @@ describe("orchestrator MCP toolkit", () => {
             );
           const finishedParent = yield* orchestrator.getThreadProjection(parentThreadId);
           expect(
-            finishedParent.subagents.find((task) => task.id === followupTasks[0]!.id)?.status,
-          ).toBe("interrupted");
+            finishedParent.subagents.filter(
+              (task) =>
+                task.childThreadId === delegated.childThreadId && task.id !== delegated.taskId,
+            ),
+          ).toHaveLength(1);
           expect(
-            finishedParent.subagents.find((task) => task.id === followupTasks[1]!.id),
+            finishedParent.subagents.find((task) => task.id === followupTasks[0]!.id),
           ).toMatchObject({
             status: "completed",
             result: queuedFollowupResult,
@@ -4206,9 +4192,9 @@ describe("orchestrator MCP toolkit", () => {
                 transfer.type === "subagent_result" &&
                 transfer.sourceThreadId === delegated.childThreadId,
             ),
-          ).toHaveLength(3);
+          ).toHaveLength(2);
           expect(
-            finishedParent.subagents.find((task) => task.id === followupTasks[1]!.id)
+            finishedParent.subagents.find((task) => task.id === followupTasks[0]!.id)
               ?.completionDelivery?.state,
           ).toBe("claimed");
           const finalStatusCall = yield* invoke("task_status", {
@@ -4223,7 +4209,7 @@ describe("orchestrator MCP toolkit", () => {
             summary: delegatedResult,
             resultContextTransferId: delegated.resultContextTransferId,
             hasPendingChildRuns: false,
-            latestTerminalRunId: queuedFollowup.runId,
+            latestTerminalRunId: runningFollowup.runId,
             latestTerminalStatus: "completed",
             latestTerminalSummary: queuedFollowupResult,
           });
@@ -4235,7 +4221,7 @@ describe("orchestrator MCP toolkit", () => {
           expect(read.isError).not.toBe(true);
           const afterRead = yield* orchestrator.getThreadProjection(parentThreadId);
           expect(
-            afterRead.subagents.find((task) => task.id === queuedFollowup.taskId)
+            afterRead.subagents.find((task) => task.id === runningFollowup.taskId)
               ?.completionDelivery?.state,
           ).toBe("acknowledged");
         }).pipe(Effect.provide(layerTest));

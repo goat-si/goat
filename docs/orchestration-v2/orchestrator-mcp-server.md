@@ -438,12 +438,26 @@ detail also exposes an in-flight title regeneration.
 
 Sends a message to any ordinary or delegated thread in the environment:
 
-- `auto` starts an idle thread, steers a fully active turn, or queues behind a
-  turn that is not yet steerable;
-- `queue` creates a separate follow-up run after active work;
-- `steer` requires a steerable active provider turn; and
+- A message from an agent in another GOAT thread is delivered like steering in
+  every mode except `restart`: it joins a running turn, waits for a starting
+  turn and joins it as soon as the provider turn runs, or starts an idle thread.
+  The wait inside the call is bounded (`STEER_READY_WAIT_MS`, below a client's
+  tool-call timeout); past it the message is queued durably and the server still
+  promotes it into the turn once it can steer. That promotion lives in the
+  running server: after a restart the queued message runs as the next turn. A
+  parent's follow-up to its own delegated child is not promoted either, because
+  its queued run already owns a follow-up task; it runs after the child's turn.
+  A provider that steers by interrupt-and-restart restarts the turn with the
+  message, as its own steer does. A provider that can do neither, a turn in
+  post-turn settlement, and `/compact`, `/logout` or `/goal` take it as the next
+  turn. A turn the user stopped first fails the send.
+- For a thread sending to itself and for clients outside GOAT threads, `auto`
+  behaves as above, `queue` creates a separate follow-up run after active work,
+  and `steer` requires a steerable active provider turn.
 - `restart` requires an active provider turn and uses the orchestrator's
   interrupt-and-restart path.
+- A send relayed to another host from a GOAT thread forwards `queue` and
+  `steer` as `auto`, because the destination sees an outside client.
 
 The target runtime and interaction modes may not be broader than the caller's.
 Stable command and message IDs are derived from `clientRequestId` for

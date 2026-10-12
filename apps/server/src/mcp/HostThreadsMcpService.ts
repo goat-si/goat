@@ -485,7 +485,12 @@ const make = Effect.gen(function* () {
             {
               host: input.host,
               tool: "goat_thread_send",
-              arguments: withoutHost(input),
+              // The remote sees an outside client; a thread's queue or steer still means "like
+              // steering" there, which its auto now does.
+              arguments:
+                scope.thread !== undefined && (input.mode === "queue" || input.mode === "steer")
+                  ? { ...withoutHost(input), mode: "auto" }
+                  : withoutHost(input),
               writes: true,
             },
             decodeSend,

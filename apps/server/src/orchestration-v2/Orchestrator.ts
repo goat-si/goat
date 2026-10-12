@@ -472,6 +472,14 @@ function isGoalCommand(message: {
   return message.attachments.length === 0 && /^\/goal(?:\s|$)/u.test(message.text.trim());
 }
 
+/** A command the provider must run as its own turn: never steered in, never steered into. */
+export function isSeparateTurnCommand(message: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+}): boolean {
+  return isNativeMaintenanceCommand(message) || isGoalCommand(message);
+}
+
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
 function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
@@ -3904,6 +3912,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Target run ${targetRun.id} is ${targetRun.status} and cannot be steered.`,
         });
       }
+      // A message from another thread's agent never joins a turn the user stopped.
+      if (
+        input.createdBy === "agent" &&
+        input.creationSource === "mcp" &&
+        input.delegatedCompletion === undefined &&
+        (yield* stopReachedRun(input.command, input.command.threadId, targetRun.id))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: input.command.commandId,
+          commandType: input.command.type,
+          cause: `Target run ${targetRun.id} was stopped and cannot be steered.`,
+        });
+      }
       const providerThread = input.projection.providerThreads.find(
         (candidate) => candidate.id === targetRun.providerThreadId,
       );
@@ -4086,12 +4107,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (steeringPolicy === "active_steering") {
         // The steer's selection becomes the saved next-turn choice, even when it
         // matches the running run again. A delegated completion carries the
-        // run's selection, not a user choice, so it never replaces the saved one.
+        // run's selection, not a user choice, so it never replaces the saved one;
+        // neither does another agent's message.
         // The saved choice may name another instance, so it moves with the steer.
         const instanceChanged =
           input.projection.thread.providerInstanceId !== input.modelSelection.instanceId;
         if (
           input.delegatedCompletion === undefined &&
+          input.createdBy !== "agent" &&
           (instanceChanged ||
             !modelSelectionsEqual(input.projection.thread.modelSelection, input.modelSelection))
         ) {
@@ -4915,7 +4938,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           effects,
           projection,
           modelSelection:
-            delegatedCompletion === undefined
+            // A delegated completion or another agent's message joins the turn on that turn's
+            // own selection; only the user changes the selection by steering.
+            delegatedCompletion === undefined &&
+            (command.createdBy !== "agent" ||
+              command.modelSelection !== undefined ||
+              dispatchMode.type !== "steer_active")
               ? modelSelection
               : (projection.runs.find((run) => run.id === dispatchMode.targetRunId)
                   ?.modelSelection ?? modelSelection),
@@ -8181,6 +8209,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "Automatic completion deliveries cannot be promoted to Steer.",
         });
       }
+      // Another agent's message waits behind a queue the user held with Stop.
+      if (queuedMessage.createdBy === "agent" && queuedRun.queueHeld === true) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Queued run ${queuedRun.id} is held.`,
+        });
+      }
 
       const now = yield* DateTime.now;
       const emitEvent = emit(events, command);
@@ -8230,7 +8266,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         events,
         effects,
         projection,
-        modelSelection: projection.thread.modelSelection,
+        modelSelection:
+          queuedMessage.createdBy === "agent"
+            ? (projection.runs.find((run) => run.id === command.targetRunId)?.modelSelection ??
+              projection.thread.modelSelection)
+            : projection.thread.modelSelection,
         targetRunId: command.targetRunId,
         messageId: queuedMessage.id,
         text: queuedMessage.text,
