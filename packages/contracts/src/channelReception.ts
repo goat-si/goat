@@ -62,6 +62,8 @@ export const ChannelReceptionInput = Schema.Struct({
   tail: Schema.Array(ChannelReceptionTailMessage),
   tasks: Schema.Array(ChannelReceptionTaskSummary),
   allowedTargets: Schema.Array(ChannelReceptionTargetOption),
+  /** Other machines (SSH aliases) the requester may send work to. */
+  allowedHosts: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
@@ -76,6 +78,8 @@ export const ChannelReceptionAction = Schema.Union([
     title: TrimmedNonEmptyString,
     instruction: TrimmedNonEmptyString,
     projectId: Schema.optional(ProjectId),
+    /** One of `allowedHosts`, when the person asked for another machine. */
+    host: Schema.optional(TrimmedNonEmptyString),
     requestedTarget: Schema.optional(ChannelDispatchTarget),
   }),
   Schema.Struct({

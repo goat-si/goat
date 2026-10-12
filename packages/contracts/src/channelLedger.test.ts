@@ -10,6 +10,7 @@ import {
 } from "./index.ts";
 
 const decodeTaskEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+const decodeTask = Schema.decodeUnknownSync(ChannelTask);
 
 const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: unknown) => {
   const json = Schema.toCodecJson(schema);
@@ -59,6 +60,38 @@ describe("channel tasks", () => {
       originAddress: task.originAddress,
       requester: { externalActorId: "U123" },
     });
+  });
+
+  it("keeps tasks without a remote worker as they were and round-trips a remote one", () => {
+    const local = roundTrip(ChannelTask, task);
+    expect(local.host).toBeUndefined();
+    expect(local.worker?.host).toBeUndefined();
+    const target = {
+      environmentId: "env-remote",
+      projectId: "remote-project",
+      modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      workspaceStrategy: { type: "worktree" },
+    };
+    expect(roundTrip(ChannelTask, { ...task, target }).target?.remote).toBeUndefined();
+    const remote = roundTrip(ChannelTask, {
+      ...task,
+      host: "mac-studio",
+      target: { ...target, remote: { host: "mac-studio", cwd: "/Users/jun/developer/goat" } },
+      worker: { ...task.worker, environmentId: "env-remote", host: "mac-studio" },
+    });
+    expect(remote).toMatchObject({
+      host: "mac-studio",
+      target: { remote: { host: "mac-studio", cwd: "/Users/jun/developer/goat" } },
+      worker: { host: "mac-studio" },
+    });
+    expect(() =>
+      decodeTask({
+        ...task,
+        target: { ...target, remote: { host: "mac-studio" } },
+      }),
+    ).toThrow();
   });
 
   it("treats only completed, failed, and cancelled as terminal", () => {
@@ -118,6 +151,11 @@ describe("timeline records", () => {
       openQuestionCount: 0,
     };
     expect(roundTrip(ChannelTaskChip, chip)).toEqual(chip);
+    const remoteChip = {
+      ...chip,
+      worker: { environmentId: "env-remote", threadId: "worker-thread", host: "mac-studio" },
+    };
+    expect(roundTrip(ChannelTaskChip, remoteChip)).toEqual(remoteChip);
     expect(
       roundTrip(ChannelTimelineRecord, {
         recordKey: "task-chip:task-1",

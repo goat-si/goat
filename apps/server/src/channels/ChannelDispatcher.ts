@@ -39,6 +39,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { answerForwardIdsFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
@@ -90,6 +91,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
 
   const askRequester = (
     stored: ChannelLedger.ChannelStoredTask,
@@ -252,12 +254,46 @@ const make = Effect.gen(function* () {
       );
     });
 
+  /**
+   * What a task on another machine falls back to from this one: the named project's model and
+   * runtime mode, and its title and folder to find the same project there.
+   */
+  const remoteHints = (stored: ChannelLedger.ChannelStoredTask) =>
+    Effect.gen(function* () {
+      const task = stored.task;
+      const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
+      const named = shells.find((shell) => shell.id === task.projectId);
+      const settings = resolveProjectSettings(
+        yield* serverSettings.getSettings.pipe(Effect.orDie),
+        named?.id ?? null,
+      ).settings;
+      return {
+        modelSelection:
+          named?.defaultModelSelection ??
+          settings.defaultModelSelection ??
+          settings.textGenerationModelSelection,
+        runtimeMode: lowerRuntimeMode(
+          task.requester.runtimeModeCeiling,
+          settings.defaultRuntimeMode,
+        ),
+        ...(named === undefined ? {} : { title: named.title, workspaceRoot: named.workspaceRoot }),
+      };
+    });
+
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
       if (stored === undefined) return;
-      if (stored.task.status === "dispatching") return yield* launch(stored, owner);
+      if (stored.task.status === "dispatching") {
+        if (stored.task.target?.remote !== undefined) {
+          return yield* remoteWorkers.launch(taskId, owner);
+        }
+        return yield* launch(stored, owner);
+      }
       if (stored.task.status !== "received") return;
+      if (stored.task.host !== undefined) {
+        return yield* remoteWorkers.dispatch(taskId, owner, yield* remoteHints(stored));
+      }
       const resolved = yield* resolveTarget(stored);
       if (resolved.type === "question") return yield* askRequester(stored, resolved.text, owner);
       const claimedAt = DateTime.formatIso(yield* DateTime.now);
@@ -284,6 +320,7 @@ const make = Effect.gen(function* () {
       const event = pending.event;
       const stored = yield* ledger.getTask(event.taskId);
       const worker = stored?.task.worker;
+      if (worker?.host !== undefined) return yield* remoteWorkers.forward(pending, owner);
       const projectId = stored?.task.target?.projectId;
       if (
         event.type !== "task.question.answered" ||

@@ -84,6 +84,22 @@ export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
 });
 
 /**
+ * The report binding of one task generation on another machine. The remote stores it before it
+ * creates the thread and refuses a second binding with the same id, so relaunching a generation
+ * can never start a second remote thread.
+ */
+export const remoteCorrelationFor = (taskId: ChannelTaskId, generation: number) =>
+  stableId("channel-remote", [taskId, String(generation)]);
+
+/** The remote worktree branch for one task generation. */
+export const remoteBranchFor = (taskId: ChannelTaskId, generation: number) =>
+  "goat/channel-" + digest([taskId]).slice(0, 8).toLowerCase() + "-g" + generation;
+
+/** The ledger event that imports one remote report; a re-imported report finds it. */
+export const remoteReportEventIdFor = (correlationId: string, sequence: number) =>
+  stableId("channel-remote-report", [correlationId, String(sequence)]) as ChannelTaskEventId;
+
+/**
  * Timeline ids stay fixed per record in one bot thread; command ids also carry what changed. A
  * record replayed into a replacement bot gets its own ids there.
  */

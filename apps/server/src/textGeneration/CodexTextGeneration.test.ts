@@ -773,6 +773,7 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
     title: "Re-verify the call",
     instruction: "Run the Opus 5.5 call again and report latency.",
     projectId: "project-1",
+    host: "",
     taskId: "",
     questionId: "",
     answer: "",

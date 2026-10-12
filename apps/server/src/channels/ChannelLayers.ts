@@ -16,6 +16,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -43,7 +44,11 @@ const layerWorkers = Layer.mergeAll(
   ChannelDispatcher.layer,
   ChannelWorkerReports.layer,
   ChannelDeliveryWorker.layer,
-).pipe(Layer.provideMerge(layerGateway));
+).pipe(
+  // Workers on other machines; needs SshRemoteDispatch from the server.
+  Layer.provideMerge(ChannelRemoteWorkers.layer),
+  Layer.provideMerge(layerGateway),
+);
 
 /** Every channel service, without background loops (tests drive passes with `drain`). */
 export const layerServices = ChannelRuntime.layer.pipe(

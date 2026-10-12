@@ -521,6 +521,7 @@ it.layer(layerClaudeTextGenerationTest)("channel reception", (it) => {
             title: "",
             instruction: "",
             projectId: "",
+            host: "",
             taskId: "",
             questionId: "",
             answer: "",

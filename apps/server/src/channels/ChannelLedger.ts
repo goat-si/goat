@@ -217,6 +217,8 @@ export class ChannelLedger extends Context.Service<
       readonly write: ChannelTaskEventWrite;
       readonly deliveries: ReadonlyArray<ChannelOutboxInsert>;
       readonly cursor?: number | undefined;
+      /** Changes the task's remote worker state in the same transaction. */
+      readonly remoteWorker?: RemoteWorkerStateUpdate | undefined;
     }) => Effect.Effect<number, ChannelLedgerError>;
     /** Marks why a finished run is not reported yet; the owner scan re-checks held tasks. */
     readonly setCompletionHold: (input: {
@@ -275,6 +277,22 @@ export class ChannelLedger extends Context.Service<
       readonly staleBefore: string;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly getWorkerCursor: () => Effect.Effect<number | undefined, ChannelLedgerError>;
+    /** Whether `owner` still holds the worker ownership row. */
+    readonly isOwner: (owner: string) => Effect.Effect<boolean, ChannelLedgerError>;
+    /** The task's remote worker state as stored JSON, if the task ever ran on another machine. */
+    readonly getRemoteWorker: (
+      taskId: ChannelTaskId,
+    ) => Effect.Effect<string | undefined, ChannelLedgerError>;
+    /** The newest answer recorded on a task, which the dispatcher reads when it asked first. */
+    readonly latestAnswer: (
+      taskId: ChannelTaskId,
+    ) => Effect.Effect<string | undefined, ChannelLedgerError>;
+    /** Reads, changes, and writes one remote worker state in one fenced transaction. */
+    readonly updateRemoteWorker: (input: {
+      readonly owner: string;
+      readonly update: RemoteWorkerStateUpdate;
+      readonly now: string;
+    }) => Effect.Effect<string | undefined, ChannelLedgerError>;
     readonly setWorkerCursor: (input: {
       readonly owner: string;
       readonly cursor: number;
@@ -372,6 +390,17 @@ const encodeAddress = Schema.encodeSync(Schema.fromJsonString(ChannelReplyAddres
 const WORKER_KEY = "worker";
 const CURSOR_KEY = "worker-cursor";
 const botKey = (ownerId: string) => "bot:" + ownerId;
+/** Remote worker rows never carry an owner token, so the ownership fence cannot match them. */
+const remoteWorkerKey = (taskId: ChannelTaskId) => "remote-worker:" + taskId;
+
+/**
+ * One change to a remote worker state row. `update` gets the stored JSON (or undefined) and
+ * returns the JSON to store; returning the same string leaves the row as it was.
+ */
+export interface RemoteWorkerStateUpdate {
+  readonly taskId: ChannelTaskId;
+  readonly update: (current: string | undefined) => string;
+}
 
 interface InboxRow {
   readonly input_id: string;
@@ -589,6 +618,25 @@ const make = Effect.gen(function* () {
     ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
       updated_at = excluded.updated_at
   `;
+
+  const patchRemoteWorker = (change: RemoteWorkerStateUpdate, now: string) =>
+    Effect.gen(function* () {
+      const key = remoteWorkerKey(change.taskId);
+      const rows = yield* sql<{ readonly value_json: string }>`
+        SELECT value_json FROM channel_runtime_state WHERE key = ${key}
+      `;
+      const current = rows[0]?.value_json;
+      const next = change.update(current);
+      if (next !== current) {
+        yield* sql`
+          INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          VALUES (${key}, ${next}, ${now})
+          ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
+            updated_at = excluded.updated_at
+        `;
+      }
+      return next;
+    });
 
   const acceptInput: ChannelLedger["Service"]["acceptInput"] = (input) =>
     sql
@@ -848,6 +896,9 @@ const make = Effect.gen(function* () {
             if (input.cursor !== undefined) {
               yield* upsertCursor(input.cursor, input.write.event.occurredAt);
             }
+            if (input.remoteWorker !== undefined) {
+              yield* patchRemoteWorker(input.remoteWorker, input.write.event.occurredAt);
+            }
             return sequence;
           }),
         )
@@ -1056,6 +1107,43 @@ const make = Effect.gen(function* () {
         ),
         Effect.mapError(toLedgerError("getWorkerCursor")),
       ),
+
+    isOwner: (owner) =>
+      sql<{ readonly key: string }>`
+        SELECT key FROM channel_runtime_state WHERE key = ${WORKER_KEY} AND owner_token = ${owner}
+      `.pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError(toLedgerError("isOwner")),
+      ),
+
+    getRemoteWorker: (taskId) =>
+      sql<{ readonly value_json: string }>`
+        SELECT value_json FROM channel_runtime_state WHERE key = ${remoteWorkerKey(taskId)}
+      `.pipe(
+        Effect.map((rows) => rows[0]?.value_json),
+        Effect.mapError(toLedgerError("getRemoteWorker")),
+      ),
+
+    latestAnswer: (taskId) =>
+      sql<{ readonly event_json: string }>`
+        SELECT event_json FROM channel_task_events
+        WHERE task_id = ${taskId} AND type = 'task.question.answered'
+        ORDER BY sequence DESC LIMIT 1
+      `.pipe(
+        Effect.map((rows) => {
+          if (rows[0] === undefined) return undefined;
+          const event = decodeEvent(rows[0].event_json);
+          return event.type === "task.question.answered" ? event.payload.answer : undefined;
+        }),
+        Effect.mapError(toLedgerError("latestAnswer")),
+      ),
+
+    updateRemoteWorker: (input) =>
+      sql
+        .withTransaction(
+          fence(input.owner).pipe(Effect.andThen(patchRemoteWorker(input.update, input.now))),
+        )
+        .pipe(Effect.mapError(toLedgerError("updateRemoteWorker"))),
 
     setWorkerCursor: (input) =>
       sql

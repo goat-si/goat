@@ -37,6 +37,7 @@ import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import { lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { answerForwardIdsFor, deliveryIdFor, taskEventIdFor, taskIdFor } from "./channelIds.ts";
@@ -116,6 +117,7 @@ const make = Effect.gen(function* () {
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
 
   const allowedTargets = Effect.gen(function* () {
     const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
@@ -179,6 +181,7 @@ const make = Effect.gen(function* () {
 
       const tasks = yield* ledger.listConversationTasks(conversationId);
       const targets = yield* allowedTargets;
+      const hosts = yield* remoteWorkers.knownHosts;
       const decision: ChannelReceptionResult | undefined =
         message.intent === "answer" &&
         message.taskId !== undefined &&
@@ -234,6 +237,7 @@ const make = Effect.gen(function* () {
                     })),
                   })),
                   allowedTargets: targets,
+                  ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
                   requester,
                 });
               }),
@@ -295,6 +299,8 @@ const make = Effect.gen(function* () {
             version: 1,
             generation: 1,
             ...(action.projectId === undefined ? {} : { projectId: action.projectId }),
+            // The dispatcher checks the host again before anything runs there.
+            ...(action.host === undefined ? {} : { host: action.host }),
             openQuestions: [],
             createdAt: now,
             updatedAt: now,
@@ -381,9 +387,29 @@ const make = Effect.gen(function* () {
               ...(hasWorker
                 ? { forward: true, pendingAnswerMessageId: answerForwardIdsFor(eventId).messageId }
                 : {}),
-              ...(matched === undefined
+              // A dispatcher question picks the project and may pick the machine: a known
+              // host, or this one.
+              ...(hasWorker
                 ? {}
-                : { amend: (next: ChannelTask) => ({ ...next, projectId: matched.projectId }) }),
+                : {
+                    amend: (next: ChannelTask) => {
+                      const machine = ChannelRemoteWorkers.meansThisMachine(action.answer)
+                        ? null
+                        : hosts
+                            .filter((host) => answerText.includes(host.toLowerCase()))
+                            .toSorted((left, right) => right.length - left.length)[0];
+                      const { host: _host, ...rest } = next;
+                      const placed =
+                        machine === null
+                          ? rest
+                          : machine === undefined
+                            ? next
+                            : { ...rest, host: machine };
+                      return matched === undefined
+                        ? placed
+                        : { ...placed, projectId: matched.projectId };
+                    },
+                  }),
             },
           );
           if (prepared.ok) {

@@ -86,7 +86,21 @@ export const ChannelWorkspaceStrategy = Schema.Union([
 ]);
 export type ChannelWorkspaceStrategy = typeof ChannelWorkspaceStrategy.Type;
 
-/** Where and how the central dispatcher runs a task, after checking the requester's ceiling. */
+/**
+ * Another machine that runs the worker, reached over SSH from this environment. `host` is an
+ * SSH alias this machine knows; `cwd` is the remote project's folder. The remote GOAT owns the
+ * worker thread, and the worker reports back through its origin report binding.
+ */
+export const ChannelRemoteTarget = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  cwd: TrimmedNonEmptyString,
+});
+export type ChannelRemoteTarget = typeof ChannelRemoteTarget.Type;
+
+/**
+ * Where and how the central dispatcher runs a task, after checking the requester's ceiling.
+ * With `remote`, `environmentId` and `projectId` name the remote environment and project.
+ */
 export const ChannelDispatchTarget = Schema.Struct({
   environmentId: EnvironmentId,
   projectId: ProjectId,
@@ -94,12 +108,15 @@ export const ChannelDispatchTarget = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: ChannelWorkspaceStrategy,
+  remote: Schema.optional(ChannelRemoteTarget),
 });
 export type ChannelDispatchTarget = typeof ChannelDispatchTarget.Type;
 
+/** `host` is set when the worker runs on another machine: open it through that connection. */
 export const ChannelWorkerRef = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  host: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelWorkerRef = typeof ChannelWorkerRef.Type;
 
@@ -109,6 +126,8 @@ export const ChannelWorkerAssignment = Schema.Struct({
   threadId: ThreadId,
   runId: Schema.optional(RunId),
   generation: PositiveInt,
+  /** The SSH alias of the machine running the worker; absent for this machine. */
+  host: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelWorkerAssignment = typeof ChannelWorkerAssignment.Type;
 
@@ -144,6 +163,8 @@ export const ChannelTask = Schema.Struct({
   version: PositiveInt,
   generation: PositiveInt,
   projectId: Schema.optional(ProjectId),
+  /** The machine the requester asked for, as an SSH alias; the dispatcher checks it. */
+  host: Schema.optional(TrimmedNonEmptyString),
   target: Schema.optional(ChannelDispatchTarget),
   worker: Schema.optional(ChannelWorkerAssignment),
   resultSummary: Schema.optional(Schema.String),

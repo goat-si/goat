@@ -62,7 +62,13 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
   updatedAt: task.updatedAt,
   ...(task.worker === undefined
     ? {}
-    : { worker: { environmentId: task.worker.environmentId, threadId: task.worker.threadId } }),
+    : {
+        worker: {
+          environmentId: task.worker.environmentId,
+          threadId: task.worker.threadId,
+          ...(task.worker.host === undefined ? {} : { host: task.worker.host }),
+        },
+      }),
   ...(task.resultSummary === undefined ? {} : { summary: task.resultSummary }),
   openQuestionCount: task.openQuestions.length,
 });
@@ -107,6 +113,8 @@ export interface TransitionOptions {
   readonly eventId?: ChannelTaskEventId;
   /** Changes to the next snapshot the state machine does not make itself. */
   readonly amend?: (next: ChannelTask) => ChannelTask;
+  /** A remote worker state change committed with the event. */
+  readonly remoteWorker?: ChannelLedger.RemoteWorkerStateUpdate;
 }
 
 export const prepareTransition = (
@@ -166,6 +174,7 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
     owner: options.owner,
     write: prepared.write,
     deliveries: prepared.deliveries,
+    ...(options.remoteWorker === undefined ? {} : { remoteWorker: options.remoteWorker }),
   });
   return prepared.next;
 });

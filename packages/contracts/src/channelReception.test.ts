@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { ChannelReceptionAction, ChannelReceptionResult } from "./index.ts";
+import { ChannelReceptionAction, ChannelReceptionInput, ChannelReceptionResult } from "./index.ts";
 
 const decode = Schema.decodeUnknownSync(ChannelReceptionResult);
 const decodeAction = Schema.decodeUnknownSync(ChannelReceptionAction);
@@ -30,5 +30,38 @@ describe("reception results", () => {
         taskId: "task-1",
       }),
     ).toThrow();
+  });
+
+  it("reads a requested host on new work, and inputs with or without host choices", () => {
+    expect(
+      decodeAction({
+        type: "create_task",
+        title: "Build",
+        instruction: "Build it.",
+        host: "mac-studio",
+      }),
+    ).toMatchObject({ host: "mac-studio" });
+    const input = {
+      mode: "input",
+      conversationId: "conv-1",
+      originKind: "goat",
+      inputText: "Build it on mac-studio",
+      tail: [],
+      tasks: [],
+      allowedTargets: [{ projectId: "project-1", label: "goat" }],
+      requester: {
+        ownerId: "owner",
+        principalId: "owner",
+        displayName: "Jun",
+        originKind: "goat",
+        runtimeModeCeiling: "full-access",
+        grantedScopes: ["orchestration:operate"],
+      },
+    };
+    const decodeInput = Schema.decodeUnknownSync(ChannelReceptionInput);
+    expect(decodeInput(input).allowedHosts).toBeUndefined();
+    expect(decodeInput({ ...input, allowedHosts: ["mac-studio"] }).allowedHosts).toEqual([
+      "mac-studio",
+    ]);
   });
 });

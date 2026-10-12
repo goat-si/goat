@@ -82,7 +82,8 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const task = stored.task;
       const worker = task.worker;
-      if (worker === undefined) return false;
+      // Workers on another machine report through ChannelRemoteWorkers.
+      if (worker === undefined || worker.host !== undefined) return false;
       const records = yield* threads
         .getThreadRecords(worker.threadId, ["runs", "providerThreads"])
         .pipe(Effect.option);

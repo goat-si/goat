@@ -54,6 +54,7 @@ import * as TerminalManager from "../../terminal/Manager.ts";
 import * as ProviderRegistryMock from "../../provider/testUtils/providerRegistryMock.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
 import * as ChannelGateway from "../ChannelGateway.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
@@ -181,6 +182,11 @@ export type ChannelServicesLayer = Layer.Layer<
   Layer.Services<typeof ChannelLayers.layerServices>
 >;
 
+/** A machine whose SSH config lists no hosts: every task stays on this machine. */
+export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+  listHosts: () => Effect.succeed([]),
+});
+
 export function makeHarness(
   options: {
     readonly projects?: number;
@@ -190,6 +196,8 @@ export function makeHarness(
     readonly fakeSlackTransport?: boolean;
     /** Exercise durable launch receipts instead of the scripted worker launch. */
     readonly realWorkerLaunch?: boolean;
+    /** Other machines over SSH; defaults to a machine that knows no SSH hosts. */
+    readonly sshRemote?: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch>;
   } = {},
 ) {
   const world = new WorkerWorld();
@@ -368,7 +376,14 @@ export function makeHarness(
 
   const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
     Layer.provide(
-      Layer.mergeAll(layerThreads, layerLaunch, layerExternal, layerDatabase, IdAllocator.layer),
+      Layer.mergeAll(
+        layerThreads,
+        layerLaunch,
+        layerExternal,
+        layerDatabase,
+        IdAllocator.layer,
+        options.sshRemote ?? layerNoSshHosts,
+      ),
     ),
   );
 

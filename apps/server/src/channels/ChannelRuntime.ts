@@ -30,6 +30,7 @@ import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 
@@ -59,6 +60,7 @@ const make = Effect.gen(function* () {
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+  const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
@@ -115,6 +117,8 @@ const make = Effect.gen(function* () {
       started += 1;
     }
     started += yield* reports.reconcile(owner);
+    // Observers of workers on other machines run on their own fibers; this only starts missing ones.
+    started += yield* remoteWorkers.ensure(owner);
     started += yield* delivery.deliverDue(owner);
     return started;
   });

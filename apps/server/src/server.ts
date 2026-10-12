@@ -592,7 +592,14 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
 ).pipe(
   // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
   // Same EventSink layer reference as orchestration, so memoization shares one instance.
-  Layer.provideMerge(ChannelLayers.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink))),
+  // Remote channel workers reach other machines through the same SshRemoteDispatch layer
+  // reference the MCP tools use, so both share one tunnel manager and session cache.
+  Layer.provideMerge(
+    ChannelLayers.layer.pipe(
+      Layer.provide(RuntimeLayer.layerEventSink),
+      Layer.provide(SshRemoteDispatch.layer),
+    ),
+  ),
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),

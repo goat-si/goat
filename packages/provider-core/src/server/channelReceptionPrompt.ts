@@ -19,6 +19,7 @@ export const ChannelReceptionModelOutput = Schema.Struct({
   title: Schema.String,
   instruction: Schema.String,
   projectId: Schema.String,
+  host: Schema.String,
   taskId: Schema.String,
   questionId: Schema.String,
   answer: Schema.String,
@@ -42,6 +43,7 @@ export function toChannelReceptionResult(
           title: output.title,
           instruction: output.instruction,
           ...(output.projectId.trim() === "" ? {} : { projectId: output.projectId }),
+          ...(output.host.trim() === "" ? {} : { host: output.host.trim() }),
         },
       });
     case "status":
@@ -93,6 +95,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
   const projects = input.allowedTargets
     .map((target) => "- project " + target.projectId + ": " + target.label)
     .join("\n");
+  const hosts = (input.allowedHosts ?? []).map((host) => "- " + host).join("\n");
   const subject =
     input.mode === "input"
       ? "New message from " +
@@ -111,16 +114,19 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "Never say work is finished unless the update says it is.",
     "",
     "Choose exactly one action:",
-    "- create_task: the person asks for new work. Fill title (short) and instruction (complete, self-contained). Set projectId only to one listed below.",
+    "- create_task: the person asks for new work. Fill title (short) and instruction (complete, self-contained). Set projectId only to one listed below. Set host only when the person asks for the work to run on one of the other machines listed below.",
     "- status: the person asks about existing work. Set taskId when one task is meant.",
     "- answer_question: the message answers one listed open question. Fill taskId, questionId, answer.",
     "- clarify: you cannot tell what is wanted or which task is meant. Fill question.",
     "- report_only: anything else, and always for task updates.",
     "",
-    "Return a JSON object with every key: replyText, action, title, instruction, projectId, taskId, questionId, answer, question. Use an empty string for keys the action does not use.",
+    "Return a JSON object with every key: replyText, action, title, instruction, projectId, host, taskId, questionId, answer, question. Use an empty string for keys the action does not use.",
     "",
     "Projects work can go to:",
     projects === "" ? "(none listed)" : projects,
+    "",
+    "Other machines work can run on (host):",
+    hosts === "" ? "(none)" : hosts,
     "",
     "Work in this conversation:",
     tasks === "" ? "(none)" : tasks,
