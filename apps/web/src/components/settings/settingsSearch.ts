@@ -952,6 +952,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["add pair backend host code ssh config agent tunnel saved goat connect"],
   },
   {
+    id: "remote-launches",
+    title: "Remote launches",
+    to: "/settings/connections",
+    searchTerms: ["ssh dispatch launched threads other machines hosts cross-host import open"],
+  },
+  {
     id: "load-balancing",
     title: "Load balancing",
     to: "/settings/connections",

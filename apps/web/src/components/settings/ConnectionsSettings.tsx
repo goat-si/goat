@@ -174,6 +174,7 @@ import {
   refreshDesktopNetworkAccessState,
 } from "~/state/desktopNetworkAccess";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
+import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
 import {
   type EnvironmentPresentation,
@@ -4168,6 +4169,7 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
+      <RemoteLaunchesSettings />
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
       <GitHubRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
