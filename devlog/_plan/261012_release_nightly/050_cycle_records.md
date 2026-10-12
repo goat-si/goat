@@ -57,3 +57,12 @@ Conclusion: the Mac runner kit (`preflight.sh`, `install-runner.sh`, `docs/opera
 Did not improve: nothing ran on a real runner, App or notary service; the guard remains advisory on the free plan.
 
 Final review (gpt-6.1-sol, six rounds on the main agent's own code, chiefly the workflow guard): r1 FAIL (bracketed/whole-context secrets) → r2 FAIL (whitespace before secrets) → after the dev merge, r1' FAIL (aliased publish job, unbound prepare output) → r2' FAIL (quoted "}}", expression keys, forged resolver) → r3 FAIL (inherited default shell) → r4 FAIL (partial expression wrapper, skippable resolver) → r5 FAIL (prepare checkout after a failed resolver) → r6 NEAR-PASS: no confirmed bypass of rules 1–7. Accepted residual: any string containing an expression and the word "secrets" is refused outside publish (conservative false positive; precise expression parsing kept producing bypasses). The resolve step is pinned by hash, so editing it needs a matching pin update in `.vite-hooks/goat-workflow-guard.mjs`.
+
+## Continuation wp0 (finish roadmap) — D
+
+Conclusion: `070_finish.md` plans the rebase onto dev `8bb1bf0b6`, the fold of `goat/ssh-runtime-supply`'s only unmerged commit (`a77b19874`), the three local proofs and the PR. Audit gpt-6.1-sol r1 FAIL → r2 NEAR-PASS.
+
+Did not improve / died: the first plan treated merge `a3173a84a` as pure conflict resolution; its remerge diff also carries guard tightening and key-only threading, so the rebase inserts that content as its own commit. The idea that assemble produces merged manifests died: `merge-update-manifests.ts` merges, assemble only validates.
+
+Next: wp1 (rebase).
+
