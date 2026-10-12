@@ -193,21 +193,23 @@ export const makeGitHubReleasesClient = Effect.fn("makeGitHubReleasesClient")(fu
       request(`${base}/releases/${id}`).pipe(
         Effect.flatMap((response) => readJson(response, GitHubRelease)),
       ),
-    createDraft: (version: string, name: string, body: string) =>
+    // Nightlies are prereleases that are never "latest"; a stable release becomes
+    // the repository's latest, which is what stable desktop feeds read.
+    createDraft: (version: string, name: string, body: string, prerelease: boolean) =>
       jsonRequest(`${base}/releases`, "POST", {
         tag_name: `v${version}`,
         target_commitish: "main",
         draft: true,
-        prerelease: true,
-        make_latest: "false",
+        prerelease,
+        make_latest: prerelease ? "false" : "true",
         name,
         body,
       }).pipe(Effect.flatMap((response) => readJson(response, GitHubRelease))),
-    publishDraft: (id: number) =>
+    publishDraft: (id: number, prerelease: boolean) =>
       jsonRequest(`${base}/releases/${id}`, "PATCH", {
         draft: false,
-        prerelease: true,
-        make_latest: "false",
+        prerelease,
+        make_latest: prerelease ? "false" : "true",
       }).pipe(Effect.asVoid),
     deleteAsset: (id: number) =>
       request(`${base}/releases/assets/${id}`, { method: "DELETE" }).pipe(Effect.asVoid),

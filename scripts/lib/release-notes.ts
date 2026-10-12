@@ -5,7 +5,7 @@ function platformOfFile(name: string) {
   if (/^goat-.*-(darwin|win32|linux)-(arm64|x64)\.(zip|tar\.gz)$/.test(name)) return "cli";
   // Desktop ZIPs are macOS-only; CLI archives are classified above.
   if (/mac|darwin|\.(dmg|zip)(?:\.blockmap)?$/i.test(name)) return "mac";
-  if (/win|\.exe(?:\.blockmap)?$|^nightly\.yml$/i.test(name)) return "win";
+  if (/win|\.exe(?:\.blockmap)?$|^(?:nightly|latest)\.yml$/i.test(name)) return "win";
   if (/linux|\.(AppImage|deb)(?:\.blockmap)?$/i.test(name)) return "linux";
   return "other";
 }

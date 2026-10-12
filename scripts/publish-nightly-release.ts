@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
 import {
   gitBlobSha,
   hashBytes,
@@ -33,6 +34,15 @@ export const REPOSITORY_RELEASE_FILES = [
   "THIRD_PARTY_NOTICES.md",
 ] as const;
 export type PublishOutcome = "published" | "superseded" | "already-published";
+
+/** Nightly versions publish as prereleases; plain x.y.z versions publish as the stable release. */
+export function releaseChannelOfVersion(version: string): "nightly" | "stable" | undefined {
+  if (nightlyVersionOfTag(`v${version}`) === version) return "nightly";
+  if (/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
+    return cliReleaseChannelOf(version) === "stable" ? "stable" : undefined;
+  }
+  return undefined;
+}
 
 /** SHA256SUMS is the local asset inventory; verify it before any mutation. */
 export const readLocalReleaseAssets = Effect.fn("readLocalReleaseAssets")(function* (dir: string) {
@@ -101,9 +111,13 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
   readonly dryRun?: boolean;
 }) {
   const { client, dir, version, name, dryRun = false } = input;
-  if (nightlyVersionOfTag(`v${version}`) !== version) {
-    return yield* new NightlyPublishError({ message: "--version must be a nightly semver." });
+  const channel = releaseChannelOfVersion(version);
+  if (channel === undefined) {
+    return yield* new NightlyPublishError({
+      message: "--version must be a nightly semver or a plain x.y.z stable version.",
+    });
   }
+  const prerelease = channel === "nightly";
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const local = yield* readLocalReleaseAssets(dir);
@@ -127,7 +141,10 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
     }
     return "already-published" as const;
   }
+  // Only a newer nightly supersedes a nightly; a stable release is cut by hand
+  // and is never superseded by the nightly train.
   const superseded = (rows: typeof releases) =>
+    prerelease &&
     publishedNightlies(rows).some(
       (release) => compareSemverVersions(release.tag_name, version) > 0,
     );
@@ -138,7 +155,7 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
     if (draft) yield* client.listAssets(draft.id);
     for (const file of REPOSITORY_RELEASE_FILES) yield* client.getContents(file);
     yield* Console.log(
-      `Would ${draft ? "reconcile" : "create"} draft v${version}, verify ${local.length} assets, sync repository files, recheck supersession, and publish.\n${renderReleaseNotes(
+      `Would ${draft ? "reconcile" : "create"} ${channel} draft v${version}, verify ${local.length} assets, sync repository files, recheck supersession, and publish.\n${renderReleaseNotes(
         version,
         date,
         local.map((asset) => asset.name),
@@ -154,6 +171,7 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
       date,
       local.map((asset) => asset.name),
     ),
+    prerelease,
   );
   if (!draft.draft)
     return yield* new NightlyPublishError({
@@ -194,11 +212,11 @@ export const publishNightlyRelease = Effect.fn("publishNightlyRelease")(function
     }
   }
   if (superseded(yield* client.listReleases())) return "superseded" as const;
-  yield* client.publishDraft(draft.id);
+  yield* client.publishDraft(draft.id, prerelease);
   const published = yield* client.getRelease(draft.id);
-  if (published.draft || !published.prerelease) {
+  if (published.draft || published.prerelease !== prerelease) {
     return yield* new NightlyPublishError({
-      message: "Published release must be a non-draft prerelease.",
+      message: `Published release must be a non-draft ${prerelease ? "prerelease" : "stable release"}.`,
     });
   }
   return "published" as const;

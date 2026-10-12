@@ -15,6 +15,7 @@ import { publishNightlyRelease, writePublishOutcome } from "./publish-nightly-re
 
 const version = "0.1.0-nightly.20261012.2";
 const newer = "0.1.0-nightly.20261012.10";
+const stable = "0.1.0";
 const dir = "/fake/release";
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers });
@@ -22,7 +23,7 @@ const release = (id = 1, tagVersion = version, draft = true): GitHubRelease => (
   id,
   tag_name: `v${tagVersion}`,
   draft,
-  prerelease: true,
+  prerelease: tagVersion.includes("-"),
   published_at: draft ? null : "2026-10-12T00:00:00Z",
 });
 
@@ -38,9 +39,13 @@ const fixture = (
     corruptUpload?: boolean;
     badPublication?: boolean;
     synced?: boolean;
+    version?: string;
+    newer?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
+    const target = options.version ?? version;
+    const newerTag = options.newer ?? newer;
     const files = new Map<string, Uint8Array>([
       ["install.sh", new TextEncoder().encode("#!/bin/sh\necho GOAT\n")],
       ["install.ps1", new TextEncoder().encode("Write-Host GOAT\n")],
@@ -69,28 +74,28 @@ const fixture = (
       assets.push({ id: 99, name: "unexpected.zip", size: 3, digest: `sha256:${"f".repeat(64)}` });
     } else if (!options.published && !options.draft) assets.splice(0);
     const releases: GitHubRelease[] = options.published
-      ? [release(1, version, false)]
+      ? [release(1, target, false)]
       : options.draft
-        ? [release()]
+        ? [release(1, target)]
         : [];
     if (options.superseded === "before" && !options.paginate)
-      releases.push(release(2, newer, false));
+      releases.push(release(2, newerTag, false));
     const calls: { method: string; path: string; host: string; body: unknown }[] = [];
     const contents = new Map<string, string>();
     if (options.synced)
       for (const [name, bytes] of files) contents.set(name, yield* gitBlobSha(bytes));
     let releaseLists = 0;
     const fetch: typeof globalThis.fetch = async (url, init = {}) => {
-      const target = new URL(String(url));
+      const requestUrl = new URL(String(url));
       const method = init.method ?? "GET";
       const body = typeof init.body === "string" ? JSON.parse(init.body) : init.body;
-      calls.push({ method, path: target.pathname, host: target.hostname, body });
-      const endpoint = target.pathname.replace(/^\/repos\/owner\/releases/, "");
+      calls.push({ method, path: requestUrl.pathname, host: requestUrl.hostname, body });
+      const endpoint = requestUrl.pathname.replace(/^\/repos\/owner\/releases/, "");
       if (endpoint === "/releases" && method === "GET") {
-        if (target.searchParams.get("page") === "2") return json([release(2, newer, false)]);
+        if (requestUrl.searchParams.get("page") === "2") return json([release(2, newerTag, false)]);
         releaseLists++;
         if (options.superseded === "after" && releaseLists === 2)
-          releases.push(release(2, newer, false));
+          releases.push(release(2, newerTag, false));
         return options.paginate
           ? json(releases, 200, {
               link: '<https://api.github.com/repos/owner/releases/releases?per_page=100&page=2>; rel="next"',
@@ -98,7 +103,7 @@ const fixture = (
           : json(releases);
       }
       if (endpoint === "/releases" && method === "POST") {
-        const draft = release();
+        const draft = release(1, target);
         releases.push(draft);
         return json(draft, 201);
       }
@@ -108,7 +113,7 @@ const fixture = (
         const id = nextId++;
         const asset = {
           id,
-          name: target.searchParams.get("name")!,
+          name: requestUrl.searchParams.get("name")!,
           size: bytes.byteLength,
           digest: `sha256:${options.corruptUpload ? "0".repeat(64) : Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
         };
@@ -135,12 +140,12 @@ const fixture = (
       }
       if (endpoint === "/releases/1" && method === "PATCH") {
         const index = releases.findIndex((row) => row.id === 1);
-        releases[index] = { ...release(1, version, options.badPublication ?? false) };
+        releases[index] = { ...release(1, target, options.badPublication ?? false) };
         return json(releases[index]);
       }
       if (endpoint === "/releases/1" && method === "GET")
         return json(releases.find((row) => row.id === 1));
-      throw new Error(`Unhandled fake request: ${method} ${target.href}`);
+      throw new Error(`Unhandled fake request: ${method} ${requestUrl.href}`);
     };
     const client = yield* makeGitHubReleasesClient("owner/releases", { fetch }).pipe(
       Effect.provide(
@@ -154,7 +159,7 @@ const fixture = (
       readFile: (file) => Effect.succeed(files.get(file.slice(dir.length + 1))!),
     });
     const run = (dryRun = false) =>
-      publishNightlyRelease({ client, dir, version, name: "GOAT Nightly", dryRun }).pipe(
+      publishNightlyRelease({ client, dir, version: target, name: "GOAT Nightly", dryRun }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provide(NodeServices.layer),
       );
@@ -229,6 +234,41 @@ describe("publish nightly release", () => {
         const state = yield* fixture({ superseded: "before", paginate });
         expect(yield* state.run()).toBe("superseded");
         expect(mutations(state.calls)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("stable publishes the latest release and ignores newer nightlies", () =>
+    Effect.gen(function* () {
+      const state = yield* fixture({
+        version: stable,
+        newer: "0.2.0-nightly.20261013.1",
+        superseded: "before",
+      });
+      expect(yield* state.run()).toBe("published");
+      const create = state.calls.find(
+        (call) => call.path.endsWith("/releases") && call.method === "POST",
+      )!;
+      expect(create.body).toMatchObject({
+        tag_name: `v${stable}`,
+        prerelease: false,
+        make_latest: "true",
+      });
+      expect(state.calls.find((call) => call.method === "PATCH")!.body).toEqual({
+        draft: false,
+        prerelease: false,
+        make_latest: "true",
+      });
+    }),
+  );
+
+  it.effect("refuses versions outside the nightly and stable channels", () =>
+    Effect.gen(function* () {
+      for (const rejected of ["0.1.0-preview.20261012.1", "0.1.0-rc.1"]) {
+        const state = yield* fixture({ version: rejected });
+        const exit = yield* Effect.exit(state.run());
+        expect(exit._tag).toBe("Failure");
+        expect(state.calls).toEqual([]);
       }
     }),
   );
