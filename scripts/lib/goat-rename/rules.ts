@@ -195,10 +195,11 @@ export const TEXT_RULES: readonly TextRule[] = [
   },
   {
     // Dotted client ids such as "t3.backgroundActivity.clientId" or Symbol.for("t3.mobile...").
-    // Not "t3.json", which names the project file source.
+    // Not "t3.json" (the project file source), the t3.chat website, or the persisted
+    // pull request list keys, whose legacy prefix the storage fallback does not map.
     id: "client-dotted-ids",
     category: "env",
-    find: /(?<=["'`])t3\.(?!json\b)(?=[a-zA-Z])/g,
+    find: /(?<=["'`])t3\.(?!json\b|chat\b|pullRequests\.)(?=[a-zA-Z])/g,
     replace: "goat.",
     scope: (path) =>
       path.startsWith("apps/web/src/") ||

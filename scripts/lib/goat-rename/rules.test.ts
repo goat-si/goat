@@ -95,5 +95,7 @@ describe("client dotted ids", () => {
       'const KEY = "goat.backgroundActivity.clientId";',
     );
     expect(web('source === "t3.json"')).toBe('source === "t3.json"');
+    const kept = 'fixture("t3.chat"); key("t3.pullRequests.preferences");';
+    expect(web(kept)).toBe(kept);
   });
 });
