@@ -342,6 +342,9 @@ export function summarizeT3ToolCalls(
     case "environment-update":
       label = phrase("Updated", "update", `environment preferences ${times}`);
       break;
+    case "host-status":
+      label = phrase("Read", "read", `host status ${times}`);
+      break;
     case "ssh-host-list":
       label = phrase("Listed", "list", `SSH hosts ${times}`);
       break;

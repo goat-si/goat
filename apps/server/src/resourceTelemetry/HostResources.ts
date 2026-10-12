@@ -1,6 +1,6 @@
 // Effect FileSystem has no statfs. Disk free space comes from libuv.
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import type { HostCapacitySnapshot } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -61,7 +61,7 @@ const make = Effect.fn("makeHostResources")(function* () {
           platform,
           home,
           loadavg: NodeOS.loadavg(),
-          statfs: (path) => NodeFS.statfs(path, { bigint: true }),
+          statfs: (path) => NodeFSP.statfs(path, { bigint: true }),
         }),
       ],
       { concurrency: "unbounded" },
