@@ -24,7 +24,9 @@ it.effect("adds the channel ledger to a database at schema 63 and keeps existing
     yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
       (provider_thread_id, provider, status, updated_at, payload_json)
       VALUES ('existing', 'codex', 'idle', '2026-10-12', '{}')`;
-    assert.deepStrictEqual(yield* runMigrations(), [[64, "ChannelLedger"]]);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 64 }), [
+      [64, "ChannelLedger"],
+    ]);
     const tables = yield* sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'channel_%' ORDER BY name`;
     assert.deepStrictEqual(
@@ -34,7 +36,7 @@ it.effect("adds the channel ledger to a database at schema 63 and keeps existing
     const kept = yield* sql<{ provider_thread_id: string }>`
       SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads`;
     assert.deepStrictEqual(kept, [{ provider_thread_id: "existing" }]);
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 64 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 

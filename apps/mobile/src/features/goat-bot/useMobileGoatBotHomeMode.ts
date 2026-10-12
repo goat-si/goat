@@ -8,9 +8,10 @@ import {
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-import { useEnvironments } from "../../state/environments";
+import { resolveGoatBotHomeSelection } from "@t3tools/client-runtime/goatBot";
+import { useMobileGoatBotEnvironments } from "./useMobileGoatBotEnvironments";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { effectiveHomeMode, mobileGoatBotKnown, mobileGoatBotDetailOpen } from "./goatBotHomeMode";
 
@@ -28,15 +29,12 @@ const snapshot = () => advertised;
 export function useMobileGoatBotHomeMode() {
   const result = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const { environments: presentations } = useEnvironments();
+  const environments = useMobileGoatBotEnvironments();
   const advertisedEnvironments = useSyncExternalStore(subscribe, snapshot, snapshot);
   useEffect(() => {
     const next = new Set(advertised);
-    for (const environment of presentations) {
-      if (
-        environment.serverConfig?.environment.capabilities.channelLedger === true &&
-        !advertised.has(environment.environmentId)
-      ) {
+    for (const environment of environments) {
+      if (environment.supportsChannelLedger && !advertised.has(environment.environmentId)) {
         next.add(environment.environmentId);
       }
     }
@@ -44,27 +42,17 @@ export function useMobileGoatBotHomeMode() {
       advertised = next;
       for (const listener of listeners) listener();
     }
-  }, [presentations]);
-  const environments = useMemo(
-    () =>
-      presentations.map((environment) => ({
-        environmentId: environment.environmentId,
-        label: environment.label,
-        connected: environment.connection.phase === "connected",
-        connecting:
-          environment.connection.phase === "connecting" ||
-          environment.connection.phase === "reconnecting",
-        supportsChannelLedger:
-          environment.serverConfig === null
-            ? advertisedEnvironments.has(environment.environmentId)
-            : environment.serverConfig.environment.capabilities.channelLedger === true,
-      })),
-    [presentations, advertisedEnvironments],
-  );
+  }, [environments]);
   const loaded = AsyncResult.isSuccess(result);
   const preferences = loaded ? result.value : null;
   const botRef = preferences?.goatBotRef ?? null;
-  const known = mobileGoatBotKnown(environments, botRef) || advertisedEnvironments.size > 0;
+  const home = resolveGoatBotHomeSelection(environments, botRef);
+  const known =
+    mobileGoatBotKnown(
+      environments,
+      botRef,
+      home.resolution.state === "claimed" ? home.resolution.claim : null,
+    ) || advertisedEnvironments.size > 0;
   const mode = effectiveHomeMode(preferences?.homeMode, known);
   const setMode = useCallback(
     (homeMode: "thread" | "bot") => {
@@ -72,7 +60,7 @@ export function useMobileGoatBotHomeMode() {
     },
     [loaded, savePreferences],
   );
-  return { mode, known, loaded, botRef, environments, setMode };
+  return { mode, known, loaded, botRef, environments, home, setMode };
 }
 
 /** Both the compact header and the persistent sidebar return to empty detail. */

@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import type { EnvironmentPresentation } from "~/state/environments";
-import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
+import { isDesktopLocalConnectionTarget, isWslConnectionTarget } from "~/connection/desktopLocal";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 
 export function formatDesktopSshTarget(target: DesktopSshEnvironmentTarget): string {
@@ -42,7 +42,8 @@ export function environmentTransportLabel(
       : `via ${connectionRouteLabel(active)}`;
   }
   if (environment.relayManaged) return "T3 Connect";
-  if (isDesktopLocalConnectionTarget(entry.target)) return "WSL";
+  if (isDesktopLocalConnectionTarget(entry.target))
+    return isWslConnectionTarget(entry.target) ? "WSL" : "Local device";
   if (
     entry.target._tag === "SshConnectionTarget" &&
     Option.isSome(entry.profile) &&

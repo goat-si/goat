@@ -81,6 +81,11 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 
 export const AuthOrchestrationReadScope = "orchestration:read" as const;
 export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
+/**
+ * Lets an `mcp-client` session with `orchestration:operate` accept or decline
+ * provider approvals over MCP. No default grant includes it.
+ */
+export const AuthOrchestrationApproveScope = "orchestration:approve" as const;
 export const AuthSettingsWriteScope = "settings:write" as const;
 export const AuthProvidersManageScope = "providers:manage" as const;
 export const AuthEnvironmentMaintainScope = "environment:maintain" as const;
@@ -100,6 +105,7 @@ export const AuthRelayWriteScope = "relay:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
+  AuthOrchestrationApproveScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
   AuthEnvironmentMaintainScope,
@@ -152,6 +158,7 @@ const authScopeResponseFields = {
 // Only clients talking to an old server use these parent checks. Servers never
 // expand stored grants, and an explicitly empty permissions array grants nothing.
 const legacyParents: Partial<Record<AuthEnvironmentScope, AuthEnvironmentScope>> = {
+  [AuthOrchestrationApproveScope]: AuthOrchestrationOperateScope,
   [AuthFilesystemReadScope]: AuthOrchestrationReadScope,
   [AuthDiagnosticsReadScope]: AuthOrchestrationReadScope,
   [AuthSettingsWriteScope]: AuthOrchestrationOperateScope,

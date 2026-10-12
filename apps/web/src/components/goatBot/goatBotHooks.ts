@@ -12,7 +12,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import {
   environmentSupportsChannelLedger,
   type GoatBotEnvironmentInput,
-} from "./goatBotAvailability";
+} from "@t3tools/client-runtime/goatBot";
 
 /** Every machine as GOAT Bot sees it: connected, offering channels, primary. */
 export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput> {
@@ -26,6 +26,7 @@ export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput>
         supportsChannelLedger: environmentSupportsChannelLedger(
           entry.serverConfig?.environment.capabilities,
         ),
+        supportsBotStatus: entry.serverConfig?.environment.capabilities.goatBotStatus === true,
         primary: entry.environmentId === primaryEnvironmentId,
         label: resolveEnvironmentOptionLabel({
           isPrimary: entry.environmentId === primaryEnvironmentId,

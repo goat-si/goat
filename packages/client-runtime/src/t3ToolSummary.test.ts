@@ -248,4 +248,13 @@ describe("summarizeT3ToolCalls", () => {
       ]).label,
     ).toBe("Requested deletion of 1 scheduled task");
   });
+
+  it("names a host status read the same way the tool card does", () => {
+    expect(summarizeT3ToolCalls("host-status", [completed({})]).label).toBe(
+      "Read host status 1 time",
+    );
+    expect(
+      summarizeT3ToolCalls("host-status", [{ input: {}, output: {}, outcome: "failed" }]).label,
+    ).toBe("Tried to read host status 1 time");
+  });
 });

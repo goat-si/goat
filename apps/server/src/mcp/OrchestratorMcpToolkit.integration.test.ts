@@ -78,6 +78,8 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -699,6 +701,9 @@ describe("orchestrator MCP toolkit", () => {
             McpHttpServer.layerOrchestratorToolkit,
             McpHttpServer.layerThreadToolkit,
           ).pipe(
+            Layer.provide(
+              ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+            ),
             Layer.provide(
               Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
                 connectedHosts: Effect.succeed([]),
@@ -3879,6 +3884,9 @@ describe("orchestrator MCP toolkit", () => {
           }),
         ]);
         const layerTest = McpHttpServer.layerOrchestratorToolkit.pipe(
+          Layer.provide(
+            ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+          ),
           Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
           Layer.provide(
             Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
@@ -4365,6 +4373,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         McpHttpServer.layerOrchestratorToolkit,
         McpHttpServer.layerThreadToolkit,
       ).pipe(
+        Layer.provide(ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(orchestration),
         Layer.provide(registry),
@@ -4562,6 +4571,7 @@ it.effect("goat_thread_wait host result retains pendingRequestIds through MCP re
   Effect.gen(function* () {
     const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
     const layer = McpHttpServer.layerOrchestratorToolkit.pipe(
+      Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
       Layer.provide(NodeServices.layer),

@@ -1,3 +1,4 @@
+import type { GoatBotEnvironmentInput } from "@t3tools/client-runtime/goatBot";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -6,7 +7,6 @@ import {
   mobileGoatBotDetailOpen,
   mobileGoatBotWorkspaceVisible,
   pickMobileGoatBotEnvironment,
-  type MobileGoatBotEnvironment,
 } from "./goatBotHomeMode";
 
 const botRef = {
@@ -16,14 +16,14 @@ const botRef = {
 };
 function environment(
   id: string,
-  patch: Partial<MobileGoatBotEnvironment> = {},
-): MobileGoatBotEnvironment {
+  patch: Partial<GoatBotEnvironmentInput> = {},
+): GoatBotEnvironmentInput {
   return {
     environmentId: EnvironmentId.make(id),
     label: id,
     connected: true,
     supportsChannelLedger: true,
-    connecting: false,
+    primary: false,
     ...patch,
   };
 }
@@ -48,6 +48,15 @@ describe("mobile GOAT Bot home mode", () => {
       false,
     );
   });
+  it("keeps the switch visible for a claim whose machine is absent", () => {
+    expect(
+      mobileGoatBotKnown([], null, {
+        environmentId: EnvironmentId.make("gone"),
+        claimedAt: 1,
+        claimId: "claim",
+      }),
+    ).toBe(true);
+  });
   it("picks connected supported environments by label with a deterministic tie break", () => {
     const a = environment("a", { label: "Same" });
     const b = environment("b", { label: "Same" });
@@ -60,7 +69,7 @@ describe("mobile GOAT Bot home mode", () => {
   });
   it("never migrates an offline or reconnecting cached bot to another environment", () => {
     for (const connecting of [false, true]) {
-      const cached = environment("cached", { connected: false, connecting });
+      const cached = { ...environment("cached", { connected: false }), connecting };
       expect(pickMobileGoatBotEnvironment([environment("other"), cached], botRef)).toBe(cached);
     }
   });
@@ -79,6 +88,10 @@ describe("mobile GOAT Bot home mode", () => {
         null,
       ),
     ).toBeNull();
+    const connected = environment("b");
+    expect(
+      pickMobileGoatBotEnvironment([environment("a", { connected: false }), connected], null),
+    ).toBe(connected);
   });
 });
 

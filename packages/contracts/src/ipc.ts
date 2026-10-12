@@ -413,6 +413,10 @@ export interface DesktopEnvironmentBootstrap {
   httpBaseUrl: string | null;
   wsBaseUrl: string | null;
   bootstrapToken?: string;
+  // A bearer the renderer uses as is, for a backend the desktop did not launch
+  // and so cannot hand a reusable bootstrap token (the host's headless server).
+  accessToken?: string;
+  accessTokenExpiresAt?: string;
 }
 
 export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
@@ -422,6 +426,8 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   httpBaseUrl: Schema.NullOr(Schema.String),
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
+  accessToken: Schema.optionalKey(Schema.String),
+  accessTokenExpiresAt: Schema.optionalKey(Schema.String),
 });
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({

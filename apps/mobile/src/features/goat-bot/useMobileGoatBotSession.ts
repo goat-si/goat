@@ -3,6 +3,10 @@ import {
   buildGoatBotTimeline,
   createGoatBotSendQueue,
   goatBotItemReaders,
+  goatBotHomeReadBack,
+  pickGoatBotEnvironment,
+  resolveGoatBotAvailability,
+  canSendToGoatBot,
   goatBotReplyingSince,
   initialGoatBotEnsure,
   retryGoatBotEnsure,
@@ -10,6 +14,7 @@ import {
   startGoatBotEnsure,
   syncGoatBotEnsure,
   type GoatBotEnsureMachine,
+  type GoatBotAvailability,
   type GoatBotPendingInput,
 } from "@t3tools/client-runtime/goatBot";
 import { goatBotIngestInput } from "@t3tools/client-runtime/state/channels";
@@ -34,29 +39,25 @@ import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
+import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
 import {
   settleMobileGoatBotEnsure,
+  goatBotSessionKey,
+  mobileGoatBotWaitingForHome,
+  type MobileGoatBotNotHome,
   type MobileGoatBotEnsureDestination,
 } from "./mobileGoatBotEnsure";
 
 interface Session {
   readonly machine: GoatBotEnsureMachine;
+  readonly notHome: MobileGoatBotNotHome | null;
   readonly bot: ChannelBotRef | null;
   readonly connected: boolean;
   readonly canOperate: boolean;
   readonly queue: ReturnType<typeof createGoatBotSendQueue>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
 }
-type Availability =
-  | "connecting"
-  | "offline"
-  | "unsupported"
-  | "permission"
-  | "legacy_active"
-  | "error"
-  | "ready";
 
 const sessions = new Map<EnvironmentId, Session>();
 const listeners = new Set<() => void>();
@@ -115,6 +116,7 @@ function newSession(environmentId: EnvironmentId): Session {
   });
   return {
     machine: initialGoatBotEnsure,
+    notHome: null,
     bot: null,
     connected: false,
     canOperate: false,
@@ -126,7 +128,9 @@ function newSession(environmentId: EnvironmentId): Session {
 /** A stable snapshot and a single ensure/send queue per destination environment. */
 export function useMobileGoatBotSession(visible: boolean) {
   const home = useMobileGoatBotHomeMode();
-  const environment = pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const environment = home.home.supported
+    ? pickGoatBotEnvironment(home.environments, home.botRef)
+    : pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
@@ -144,19 +148,35 @@ export function useMobileGoatBotSession(visible: boolean) {
       : channelEnvironment.ingest.permissionAtom(environmentId),
   );
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  // oxlint-disable react/preserve-manual-memoization -- External-store reads are mutable; useSyncExternalStore needs a stable reader.
   const getSnapshot = useCallback(
     () => (environmentId === null ? undefined : sessions.get(environmentId)),
     [environmentId],
   );
+  // oxlint-enable react/preserve-manual-memoization
   const session = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const connected = environment?.connected === true;
   const capable = environment?.supportsChannelLedger === true;
+  const selection = home.home;
+  const homeKey = !selection.supported
+    ? "legacy"
+    : selection.resolution.state === "claimed"
+      ? `${selection.resolution.claim.environmentId}:${selection.resolution.claim.claimedAt}:${selection.resolution.claim.claimId}`
+      : selection.resolution.state;
+  const settingsSnapshot = environment?.settingsSnapshot ?? null;
+  const homeReady = home.loaded && (!selection.supported || goatBotHomeReadBack(selection));
   const connectionKey =
-    connected && capable && generation !== null ? `${environmentId}:${generation}:channel` : null;
-  const canOperate = canEnsure && canIngest;
-  const selectedDestination = useRef<MobileGoatBotEnsureDestination | null>(null);
+    connected && capable ? goatBotSessionKey({ environmentId, generation, homeKey }) : null;
+  const canOperate =
+    canEnsure &&
+    canIngest &&
+    homeReady &&
+    !mobileGoatBotWaitingForHome(session?.notHome ?? null, homeKey, settingsSnapshot);
+  const selectedDestination = useRef<
+    (MobileGoatBotEnsureDestination & { readonly homeKey: string }) | null
+  >(null);
   useLayoutEffect(() => {
-    selectedDestination.current = { environmentId, connectionKey };
+    selectedDestination.current = { environmentId, connectionKey, homeKey };
     return () => {
       selectedDestination.current = null;
       if (environmentId === null) return;
@@ -170,22 +190,31 @@ export function useMobileGoatBotSession(visible: boolean) {
         });
       }
     };
-  }, [environmentId, connectionKey]);
+  }, [environmentId, connectionKey, homeKey]);
 
   useEffect(() => {
     if (environmentId === null) return;
     const previous = sessions.get(environmentId) ?? session ?? newSession(environmentId);
-    const machine = syncGoatBotEnsure(previous.machine, connectionKey);
+    const waiting = mobileGoatBotWaitingForHome(previous.notHome, homeKey, settingsSnapshot);
+    const notHome = waiting ? previous.notHome : null;
+    const machine = syncGoatBotEnsure(
+      previous.notHome !== null && !waiting
+        ? retryGoatBotEnsure(previous.machine)
+        : previous.machine,
+      connectionKey,
+    );
     let current = previous;
     if (
       !sessions.has(environmentId) ||
       machine !== previous.machine ||
+      notHome !== previous.notHome ||
       previous.connected !== connected ||
       previous.canOperate !== canOperate
     ) {
       current = {
         ...previous,
         machine,
+        notHome,
         connected,
         canOperate,
         bot: machine === previous.machine ? previous.bot : null,
@@ -195,6 +224,8 @@ export function useMobileGoatBotSession(visible: boolean) {
     if (
       !visible ||
       !home.loaded ||
+      !homeReady ||
+      waiting ||
       connectionKey === null ||
       !canEnsure ||
       current.machine.ensure.state !== "idle"
@@ -205,15 +236,22 @@ export function useMobileGoatBotSession(visible: boolean) {
     const settle = (
       result: Parameters<typeof settleGoatBotEnsure>[2],
       bot: ChannelBotRef | null = null,
+      notHome = false,
     ) => {
       const latest = sessions.get(environmentId);
       if (!latest) return;
       const liveConnection = appAtomRegistry.get(environmentCatalog.stateAtom(environmentId));
-      const liveConnectionKey =
-        AsyncResult.isSuccess(liveConnection) && liveConnection.value.phase === "connected"
-          ? `${environmentId}:${liveConnection.value.generation}:channel`
-          : null;
       const selected = selectedDestination.current;
+      const liveConnectionKey =
+        AsyncResult.isSuccess(liveConnection) &&
+        liveConnection.value.phase === "connected" &&
+        selected
+          ? goatBotSessionKey({
+              environmentId,
+              generation: liveConnection.value.generation,
+              homeKey: selected.homeKey,
+            })
+          : null;
       const settled = settleMobileGoatBotEnsure(
         latest.machine,
         request.token,
@@ -225,7 +263,13 @@ export function useMobileGoatBotSession(visible: boolean) {
         },
       );
       if (settled === latest.machine) return;
-      update(environmentId, { ...latest, machine: settled, bot });
+      update(environmentId, {
+        ...latest,
+        machine: notHome ? retryGoatBotEnsure(latest.machine) : settled,
+        notHome: notHome ? { homeKey, settingsSnapshot } : null,
+        bot,
+        canOperate: notHome ? false : latest.canOperate,
+      });
       if (bot) savePreferences({ goatBotRef: bot });
     };
     void (async () => {
@@ -237,11 +281,9 @@ export function useMobileGoatBotSession(visible: boolean) {
         if (result._tag === "Failure") throw squashAtomCommandFailure(result);
         settle({ kind: "confirmed", bot: result.value }, result.value);
       } catch (error) {
-        const legacy =
-          typeof error === "object" &&
-          error !== null &&
-          "reason" in error &&
-          error.reason === "legacy_active";
+        const reason =
+          typeof error === "object" && error !== null && "reason" in error ? error.reason : null;
+        const legacy = reason === "legacy_active";
         settle(
           legacy
             ? { kind: "legacy_active" }
@@ -249,6 +291,8 @@ export function useMobileGoatBotSession(visible: boolean) {
                 kind: "failed",
                 message: error instanceof Error ? error.message : "Couldn't reach GOAT Bot",
               },
+          null,
+          reason === "not_home",
         );
       }
     })();
@@ -259,6 +303,9 @@ export function useMobileGoatBotSession(visible: boolean) {
     canOperate,
     canEnsure,
     home.loaded,
+    homeReady,
+    homeKey,
+    settingsSnapshot,
     visible,
     savePreferences,
     session,
@@ -324,27 +371,22 @@ export function useMobileGoatBotSession(visible: boolean) {
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     [visibleTurnItems],
   );
-  const ready = connected && capable && connectionKey !== null && confirmedBot !== null;
-  const canSend = visible && ready && canOperate;
-  const connecting =
-    environment?.connecting === true ||
-    (home.botRef === null &&
-      home.environments.some((entry) => entry.supportsChannelLedger && entry.connecting));
-  const availability: Availability = connecting
-    ? "connecting"
-    : !connected
-      ? "offline"
-      : !capable
-        ? "unsupported"
-        : !canEnsure || !canIngest
-          ? "permission"
-          : ensure.state === "legacy_active"
-            ? "legacy_active"
-            : ensure.state === "failed"
-              ? "error"
-              : ready
-                ? "ready"
-                : "connecting";
+  const resolved: GoatBotAvailability =
+    !selection.supported && environment === null && home.botRef !== null
+      ? { kind: "offline", environmentId: home.botRef.environmentId }
+      : resolveGoatBotAvailability({
+          environments: selection.supported ? home.environments : environment ? [environment] : [],
+          botRef: home.botRef,
+          ensure,
+        });
+  const availability: GoatBotAvailability["kind"] | "permission" =
+    resolved.kind === "ready" || resolved.kind === "connecting"
+      ? connected && capable && (!canEnsure || !canIngest)
+        ? "permission"
+        : resolved.kind
+      : resolved.kind;
+  const canSend =
+    visible && homeReady && canSendToGoatBot(resolved, canOperate) && confirmedBot !== null;
   const onSend = useCallback(
     (text: string) => {
       if (!canSend || !confirmedBot || !text.trim()) return false;
@@ -362,18 +404,20 @@ export function useMobileGoatBotSession(visible: boolean) {
   const onRetryAvailability = useCallback(() => {
     if (environmentId === null) return;
     const current = sessions.get(environmentId);
+    if (mobileGoatBotWaitingForHome(current?.notHome ?? null, homeKey, settingsSnapshot)) return;
     if (current)
       update(environmentId, {
         ...current,
         bot: null,
         machine: retryGoatBotEnsure(current.machine),
       });
-  }, [environmentId]);
+  }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
     replyingSince,
     canSend,
     availability,
+    homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
     error: ensure.state === "failed" ? ensure.message : null,
     onSend,
     onRetryInput,

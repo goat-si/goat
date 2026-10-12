@@ -285,14 +285,17 @@ describe("pickGoatBotHomeCandidate", () => {
     },
   );
 
-  it("uses stable input order after ineligible or missing preferences", () => {
+  it("never picks a remote by itself while the primary cannot run the bot", () => {
     expect(
       pickGoatBotHomeCandidate({
         targets: [target(c), target(b, { supportsBot: false }), target(a)],
         knownBotEnvironmentId: b,
         primaryEnvironmentId: b,
       }),
-    ).toBe(c);
+    ).toBeNull();
+  });
+
+  it("uses stable input order on a client with no primary", () => {
     expect(
       pickGoatBotHomeCandidate({
         targets: [target(c), target(a)],
