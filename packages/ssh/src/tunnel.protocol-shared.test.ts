@@ -82,6 +82,44 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
+    it.live(
+      "a server recorded under an old per-client directory is attached, never signalled",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: "1.2.2",
+            ...current,
+          });
+          // Releases before the shared directory hashed the dialled target into the path.
+          const legacy = `${f.home}/.goat/ssh-launch/711bc738002d72fd`;
+          yield* f.fs.rename(f.state, legacy);
+          const legacyBefore: Record<string, string> = {};
+          for (const name of yield* f.fs.readDirectory(legacy))
+            legacyBefore[name] = yield* f.fs.readFileString(`${legacy}/${name}`);
+          const result = yield* SshTunnel.launchOrReuseRemoteServer(
+            secondClient,
+            {},
+            f.runner,
+          ).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+            Effect.result,
+          );
+          if (Result.isFailure(result)) throw result.failure;
+          assert.equal(result.success.status, "ready");
+          if (result.success.status !== "ready") return;
+          assert.equal(result.success.remotePort, f.port);
+          assert.equal(result.success.remoteServerKind, "external");
+          const legacyAfter: Record<string, string> = {};
+          for (const name of yield* f.fs.readDirectory(legacy))
+            legacyAfter[name] = yield* f.fs.readFileString(`${legacy}/${name}`);
+          assert.deepEqual(legacyAfter, legacyBefore);
+          yield* Effect.sync(() => process.kill(f.pid, 0));
+          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live("a compatible runtime from another release train is attached, never replaced", () =>
       Effect.gen(function* () {
         // SemVer sorts "dev" below "preview", which used to read as an older runtime.
