@@ -3056,7 +3056,15 @@ export const OrchestrationV2Command = Schema.Union([
       }),
       Schema.Struct({ type: Schema.Literal("steer_active"), targetRunId: RunId }),
       Schema.Struct({ type: Schema.Literal("restart_active"), targetRunId: RunId }),
-      Schema.Struct({ type: Schema.Literal("queue_after_active") }),
+      Schema.Struct({
+        type: Schema.Literal("queue_after_active"),
+        /**
+         * The run this message waited for. The queue is refused when that run
+         * stopped blocking or Stop reached it, so the message never starts a turn
+         * after a Stop.
+         */
+        behindRunId: Schema.optional(RunId),
+      }),
       Schema.Struct({ type: Schema.Literal("start_immediately") }),
     ]),
   }),

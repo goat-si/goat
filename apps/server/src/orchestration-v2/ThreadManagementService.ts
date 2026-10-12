@@ -1139,28 +1139,37 @@ const make = Effect.gen(function* () {
       }
       if (decision.type === "stopped")
         return yield* new ThreadManagementTargetStoppedError({ threadId: input.threadId });
-      if (decision.type === "wait") {
-        // The turn is still starting after the wait a tool call can afford. Queue the message
-        // durably and keep following the turn so it still joins it once it can.
-        const waitingFor = decision.run.id;
-        const queuedSequence = yield* sequence();
-        const queued = yield* dispatchAndRead(input, commandId, { type: "queue_after_active" });
-        if (queued.run.status === "queued") {
-          yield* promoteWhenSteerable(input, queued.run.id, queuedSequence, waitingFor).pipe(
-            Effect.ignoreCause({ log: true }),
-            Effect.forkIn(layerScope),
-          );
-        }
-        return queued;
-      }
-      const targetedRunId = decision.type === "steer" ? decision.run.id : observedRunId;
-      const delivered = dispatchAndRead(
-        input,
-        commandId,
-        decision.type === "steer"
-          ? { type: "steer_active", targetRunId: decision.run.id }
-          : { type: "start_immediately" },
-      );
+      // The turn is still starting after the wait a tool call can afford. Queue the message
+      // durably behind that turn and keep following it so it still joins once it can. The
+      // orchestrator refuses the queue if the turn stopped meanwhile, and the message is
+      // decided again below.
+      const queueBehind = (waitingFor: RunId) =>
+        Effect.gen(function* () {
+          const queuedSequence = yield* sequence();
+          const queued = yield* dispatchAndRead(input, commandId, {
+            type: "queue_after_active",
+            behindRunId: waitingFor,
+          });
+          if (queued.run.status === "queued") {
+            yield* promoteWhenSteerable(input, queued.run.id, queuedSequence, waitingFor).pipe(
+              Effect.ignoreCause({ log: true }),
+              Effect.forkIn(layerScope),
+            );
+          }
+          return queued;
+        });
+      const targetedRunId =
+        decision.type === "steer" || decision.type === "wait" ? decision.run.id : observedRunId;
+      const delivered =
+        decision.type === "wait"
+          ? queueBehind(decision.run.id)
+          : dispatchAndRead(
+              input,
+              commandId,
+              decision.type === "steer"
+                ? { type: "steer_active", targetRunId: decision.run.id }
+                : { type: "start_immediately" },
+            );
       if (redelivery) return yield* delivered;
       const redeliver = () =>
         Effect.gen(function* () {

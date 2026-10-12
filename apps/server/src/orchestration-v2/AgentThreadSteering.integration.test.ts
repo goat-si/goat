@@ -508,6 +508,61 @@ it.effect("a stop before the turn runs fails the waiting send", () =>
   ),
 );
 
+it.effect("a waiting message does not queue behind a turn Stop reached", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { cwd, started, layer } = yield* harness("stopped-before-queue", {
+        supportsActiveSteering: true,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* startTarget(cwd, started);
+        const queueBehindStart = (id: string) =>
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("queue-behind:" + id),
+            threadId,
+            messageId: MessageId.make("message:queue-behind:" + id),
+            senderThreadId,
+            text: "update from the sender thread",
+            attachments: [],
+            dispatchMode: { type: "queue_after_active", behindRunId: started[0]!.runId },
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+
+        // While the turn is still starting, the message queues behind it.
+        yield* queueBehindStart("before-stop");
+        let projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          projection.messages.find((message) => message.id === "message:queue-behind:before-stop")
+            ?.runId,
+          projection.runs.find((run) => run.status === "queued")?.id,
+        );
+
+        // A Stop that lands between the send's last look and its queue dispatch
+        // refuses the queue, so the message cannot start a turn after the Stop.
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make("stop"),
+          threadId,
+          runId: started[0]!.runId,
+          holdQueue: true,
+        });
+        const error = yield* queueBehindStart("after-stop").pipe(Effect.flip);
+        assert.equal(error._tag, "OrchestratorDispatchError");
+        yield* worker.drain();
+        projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.isUndefined(
+          projection.messages.find((message) => message.id === "message:queue-behind:after-stop"),
+        );
+        assert.equal(started.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
 it.effect("a message queued behind a slow start still joins the turn", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -4799,6 +4799,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.dispatchMode,
         command.deliveryIntent,
       );
+      // A message that waited for a starting run queues behind it only while
+      // that run still blocks and Stop has not reached it. Otherwise the sender
+      // decides again, so a Stop in between never lets it start a new turn.
+      if (
+        command.dispatchMode.type === "queue_after_active" &&
+        command.dispatchMode.behindRunId !== undefined
+      ) {
+        const behindRunId = command.dispatchMode.behindRunId;
+        const behind = projection.runs.find((run) => run.id === behindRunId);
+        if (
+          behind === undefined ||
+          !isBlockingRun(behind) ||
+          (yield* stopReachedRun(command, command.threadId, behindRunId))
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Run ${behindRunId} this message waited for no longer blocks the thread.`,
+          });
+        }
+      }
       if (dispatchMode.type === "steer_active") {
         const targetRunId = dispatchMode.targetRunId;
         const target = projection.runs.find((run) => run.id === targetRunId);
