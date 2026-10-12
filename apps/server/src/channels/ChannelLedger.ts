@@ -283,20 +283,11 @@ export class ChannelLedger extends Context.Service<
     readonly getRemoteWorker: (
       taskId: ChannelTaskId,
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;
-    /** The project a requester chose on another machine, kept across later answers. */
-    readonly getRemoteChoice: (
+    /** A task's recorded answers, newest first, which the dispatcher reads when it asked. */
+    readonly recentAnswers: (
       taskId: ChannelTaskId,
-    ) => Effect.Effect<string | undefined, ChannelLedgerError>;
-    readonly setRemoteChoice: (input: {
-      readonly owner: string;
-      readonly taskId: ChannelTaskId;
-      readonly valueJson: string;
-      readonly now: string;
-    }) => Effect.Effect<void, ChannelLedgerError>;
-    /** The newest answer recorded on a task, which the dispatcher reads when it asked first. */
-    readonly latestAnswer: (
-      taskId: ChannelTaskId,
-    ) => Effect.Effect<string | undefined, ChannelLedgerError>;
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<string>, ChannelLedgerError>;
     /** Reads, changes, and writes one remote worker state in one fenced transaction. */
     readonly updateRemoteWorker: (input: {
       readonly owner: string;
@@ -402,7 +393,6 @@ const CURSOR_KEY = "worker-cursor";
 const botKey = (ownerId: string) => "bot:" + ownerId;
 /** Remote worker rows never carry an owner token, so the ownership fence cannot match them. */
 const remoteWorkerKey = (taskId: ChannelTaskId) => "remote-worker:" + taskId;
-const remoteChoiceKey = (taskId: ChannelTaskId) => "remote-choice:" + taskId;
 
 /**
  * One change to a remote worker state row. `update` gets the stored JSON (or undefined) and
@@ -1127,30 +1117,6 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("isOwner")),
       ),
 
-    getRemoteChoice: (taskId) =>
-      sql<{ readonly value_json: string }>`
-        SELECT value_json FROM channel_runtime_state WHERE key = ${remoteChoiceKey(taskId)}
-      `.pipe(
-        Effect.map((rows) => rows[0]?.value_json),
-        Effect.mapError(toLedgerError("getRemoteChoice")),
-      ),
-
-    setRemoteChoice: (input) =>
-      sql
-        .withTransaction(
-          fence(input.owner).pipe(
-            Effect.andThen(
-              sql`
-                INSERT INTO channel_runtime_state (key, value_json, updated_at)
-                VALUES (${remoteChoiceKey(input.taskId)}, ${input.valueJson}, ${input.now})
-                ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
-                  updated_at = excluded.updated_at
-              `,
-            ),
-          ),
-        )
-        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("setRemoteChoice"))),
-
     getRemoteWorker: (taskId) =>
       sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state WHERE key = ${remoteWorkerKey(taskId)}
@@ -1159,18 +1125,19 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("getRemoteWorker")),
       ),
 
-    latestAnswer: (taskId) =>
+    recentAnswers: (taskId, limit) =>
       sql<{ readonly event_json: string }>`
         SELECT event_json FROM channel_task_events
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
-        ORDER BY sequence DESC LIMIT 1
+        ORDER BY sequence DESC LIMIT ${limit}
       `.pipe(
-        Effect.map((rows) => {
-          if (rows[0] === undefined) return undefined;
-          const event = decodeEvent(rows[0].event_json);
-          return event.type === "task.question.answered" ? event.payload.answer : undefined;
-        }),
-        Effect.mapError(toLedgerError("latestAnswer")),
+        Effect.map((rows) =>
+          rows.flatMap((row) => {
+            const event = decodeEvent(row.event_json);
+            return event.type === "task.question.answered" ? [event.payload.answer] : [];
+          }),
+        ),
+        Effect.mapError(toLedgerError("recentAnswers")),
       ),
 
     updateRemoteWorker: (input) =>

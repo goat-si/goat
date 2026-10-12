@@ -35,15 +35,15 @@ can cut a socket mid-close; that only changes which of those two happens.
 A Slack connection's default target fills only what the task left open. The project named with the
 work wins over the default project, which wins over the only project; the default model wins over
 the project's (and, on another machine, the remote project's). A default project that no longer
-exists becomes a question, never a different project. On another machine the remote's only
-project stands in only when no project was asked for; a project named here, or a default that is
-gone, must match one of its projects, or the requester is asked again. A default model this machine does not offer is skipped with a warning and the
-project's model is used: Slack settings have no control to change the model, so a question would
-leave the requester stuck. The model that is used must still be one the provider lists, or the
-requester is asked to pick a project model. On another machine, a project the requester chose is
-kept for that generation in the ledger (`remote-choice:<taskId>`), so an answer to a later
-question, such as "try again" after the machine was unreachable, does not reopen the choice.
-Defaults pick where and with what model; the requester's ceiling still bounds everything else.
+exists becomes a question, never a different project. A default model this machine does not offer
+is skipped with a warning and the project's model is used, because Slack settings have no control
+to change the model; the model finally used must still be one the provider lists, or the requester
+is asked. Defaults pick where and with what model; the requester's ceiling still bounds the rest.
+
+On another machine the remote's only project stands in only when no project was asked for: a
+project named here, or a default that is gone, must match one of its projects. The newest answer
+that names one of its projects decides, so an answer to a later question ("try again" after the
+machine was unreachable) keeps the project chosen before it, and naming another replaces it.
 
 ## Who runs the workers
 

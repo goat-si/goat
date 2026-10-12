@@ -1107,6 +1107,43 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("lets a newer project answer replace an older one across failed lookups", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    machine.projects = [
+      ...machine.projects,
+      {
+        id: "remote-project:other",
+        title: "goat-si/other",
+        workspaceRoot: "/Users/jun/developer/goat-si/other",
+        repositoryIdentity: { canonicalKey: "github.com/goat-si/other" },
+        defaultModelSelection: null,
+      },
+    ];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "r1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      const askedAfter = (version: number) =>
+        until("asked again", (task) => task.status === "waiting_input" && task.version > version);
+      // The first project is chosen, but the machine fails before the launch.
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "r2"), slackContext);
+      const second = yield* askedAfter(first.version);
+      // A different project is named while the machine cannot even list projects.
+      machine.down = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/other", "r3"), slackContext);
+      yield* askedAfter(second.version);
+      machine.down = false;
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: try again", "r4"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/other");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {
