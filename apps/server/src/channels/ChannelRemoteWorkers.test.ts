@@ -1566,4 +1566,48 @@ describe("models the other machine offers", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("asks for the project again after a model question that names none", () => {
+    const { machine, harness } = remoteHarness();
+    machine.projects = [
+      ...machine.projects,
+      {
+        id: "remote-project:other",
+        title: "other",
+        workspaceRoot: "/Users/jun/developer/other",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+      } as never,
+    ];
+    machine.offeredModels = [{ instance: "codex", model: "something-else" }];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: two projects", "mm6"), rpcContext);
+      yield* until("which project", (task) => task.status === "waiting_input");
+      yield* gateway.ingest(goatInput("answer: goat-si/goat", "mm7"), rpcContext);
+      const asked = yield* until(
+        "model question",
+        (task) =>
+          task.status === "waiting_input" &&
+          task.openQuestions[0]?.text ===
+            REMOTE_COPY.defaultModelMissing(machine.host, "goat-si/goat"),
+      );
+      assert.isDefined(asked);
+      machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+      // Only the newest answer counts (#66 tracks remembering the choice), so it asks again.
+      yield* gateway.ingest(goatInput("answer: try again", "mm8"), rpcContext);
+      yield* until(
+        "which project again",
+        (task) =>
+          task.status === "waiting_input" &&
+          task.openQuestions[0]?.text ===
+            REMOTE_COPY.whichProject(machine.host, ["goat-si/goat", "other"]),
+      );
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(goatInput("answer: goat-si/goat", "mm9"), rpcContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
+    }).pipe(Effect.provide(harness.layer));
+  });
 });
