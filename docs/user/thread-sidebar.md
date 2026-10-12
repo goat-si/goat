@@ -126,11 +126,14 @@ Pinned and settled threads can appear in Priority; when they no longer need atte
 return to their previous section.
 
 A thread you read stays in Priority while you keep Activity open, so rows do not move while you
-work through them. Switch away from Activity and back to move read threads out. Settling or
-unsettling a thread moves it right away.
+work through them. Switch away from Activity and back to move read threads out. Settling a thread
+clears an unacknowledged wake and moves the row right away. Unsettling moves it right away too.
+An archived thread stays in the list while a delegated task still needs an approval or an answer,
+and the parent row shows that request.
 
-Choose **Mark all as read** from Priority's menu to acknowledge unread completions on connections
-you can change. Work in progress and pending requests stay in Priority.
+Choose **Mark all as read** from Priority's menu to acknowledge unread completions and
+unacknowledged wakes on connections you can change. Those rows leave Priority. Work in progress
+and pending requests stay. The activity bell shows the same count as Priority.
 
 ### Fold working threads on mobile
 

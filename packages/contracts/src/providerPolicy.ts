@@ -91,7 +91,12 @@ export const UserInputRespondedBy = Schema.Union([
     title: Schema.NullOr(Schema.String),
     reason: UserInputResponseReason,
   }),
-  Schema.Struct({ type: Schema.Literal("client"), reason: UserInputResponseReason }),
+  Schema.Struct({
+    type: Schema.Literal("client"),
+    /** The MCP client session's label, when the server knew it. */
+    label: Schema.optional(TrimmedNonEmptyString),
+    reason: UserInputResponseReason,
+  }),
 ]);
 export type UserInputRespondedBy = typeof UserInputRespondedBy.Type;
 
@@ -115,7 +120,7 @@ export function describeUserInputResponder(input: {
     case "agent":
       return `orchestrator "${responder.title ?? responder.threadId}"${responder.environmentId === null ? "" : " on another machine"}`;
     case "client":
-      return "an MCP client";
+      return responder.label === undefined ? "an MCP client" : `MCP client "${responder.label}"`;
     default:
       return "another responder";
   }

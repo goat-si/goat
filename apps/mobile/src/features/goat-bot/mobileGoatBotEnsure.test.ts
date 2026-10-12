@@ -8,12 +8,18 @@ import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   settleMobileGoatBotEnsure,
+  goatBotSessionKey,
+  mobileGoatBotWaitingForHome,
   type MobileGoatBotEnsureDestination,
 } from "./mobileGoatBotEnsure";
 
 const destination = (id: string, generation = 1): MobileGoatBotEnsureDestination => ({
   environmentId: EnvironmentId.make(id),
-  connectionKey: `${id}:${generation}:channel`,
+  connectionKey: goatBotSessionKey({
+    environmentId: EnvironmentId.make(id),
+    generation,
+    homeKey: "legacy",
+  }),
 });
 const bot = (id: string) => ({
   environmentId: EnvironmentId.make(id),
@@ -121,5 +127,65 @@ describe("mobile GOAT Bot ensure destination", () => {
         target,
       ),
     ).toBe(request.machine);
+  });
+});
+
+describe("mobile home session evidence", () => {
+  it("includes home claim and connection generation in the same key", () => {
+    expect(
+      goatBotSessionKey({
+        environmentId: EnvironmentId.make("A"),
+        generation: 2,
+        homeKey: "A:10:claim",
+      }),
+    ).toBe("A:2:channel:A:10:claim");
+    expect(
+      goatBotSessionKey({
+        environmentId: EnvironmentId.make("A"),
+        generation: null,
+        homeKey: "legacy",
+      }),
+    ).toBeNull();
+  });
+  it("rejects every late result when the home winner changes during a request", () => {
+    const requestDestination = {
+      environmentId: EnvironmentId.make("A"),
+      connectionKey: goatBotSessionKey({
+        environmentId: EnvironmentId.make("A"),
+        generation: 1,
+        homeKey: "A:10:old",
+      }),
+    };
+    const request = startGoatBotEnsure(
+      syncGoatBotEnsure(initialGoatBotEnsure, requestDestination.connectionKey),
+    );
+    const live = {
+      ...requestDestination,
+      connectionKey: goatBotSessionKey({
+        environmentId: requestDestination.environmentId,
+        generation: 1,
+        homeKey: "A:11:new",
+      }),
+    };
+    for (const result of [
+      { kind: "confirmed" as const, bot: bot("A") },
+      { kind: "failed" as const, message: "not_home" },
+    ]) {
+      expect(
+        settleMobileGoatBotEnsure(request.machine, request.token, result, requestDestination, live),
+      ).toBe(request.machine);
+    }
+  });
+  it("keeps not_home blocked across manual retry until home or snapshot changes", () => {
+    const settingsSnapshot = {};
+    const refusal = { homeKey: "A:10:claim", settingsSnapshot };
+    const machine = retryGoatBotEnsure(
+      syncGoatBotEnsure(initialGoatBotEnsure, destination("A").connectionKey),
+    );
+    expect(machine.ensure.state).toBe("idle");
+    expect(mobileGoatBotWaitingForHome(refusal, "A:10:claim", settingsSnapshot)).toBe(true);
+    expect(mobileGoatBotWaitingForHome(refusal, "B:11:claim", settingsSnapshot)).toBe(false);
+    expect(mobileGoatBotWaitingForHome(refusal, "A:10:claim", {})).toBe(false);
+    expect(mobileGoatBotWaitingForHome(null, "A:10:claim", settingsSnapshot)).toBe(false);
   });
 });

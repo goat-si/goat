@@ -27,12 +27,14 @@ export interface McpThreadCaller {
   readonly providerInstanceId: ProviderInstanceId;
 }
 
-/** An agent T3 Code did not launch, signed in through MCP OAuth. */
+/** An agent T3 Code did not launch, signed in through MCP OAuth or an issued client token. */
 export interface McpClientCaller {
   readonly sessionId: string;
   readonly label: string;
   /** Read only, or the most the threads it starts or changes may run with. */
   readonly access: AuthMcpClientAccess;
+  /** May accept or decline provider approvals (`orchestration:approve`). */
+  readonly approvals?: boolean;
 }
 
 /**

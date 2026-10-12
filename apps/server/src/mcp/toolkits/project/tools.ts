@@ -22,6 +22,7 @@ import {
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -152,6 +153,12 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
       }),
     ),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+    standingInstructions: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Default true: GOAT puts this environment's standing instructions (the project's own when it has them; see goat_environment_read) in front of message, in a block the user sees collapsed. Pass false to send message exactly as written.",
+      }),
+    ),
     notifyOnCompletion: Schema.optional(
       Schema.Boolean.annotate({
         description:
@@ -179,6 +186,8 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     status: Schema.NullOr(OrchestrationV2RunStatus),
     /** Whether the calling thread will be told when the new thread finishes. */
     watching: Schema.Boolean,
+    /** Version of the standing instructions put in front of message; null when none were. */
+    standingInstructionsVersion: Schema.NullOr(Schema.String),
     report: Schema.optional(
       Schema.Struct({ correlationId: RemoteReportBindingInput.fields.correlationId }),
     ),
@@ -192,6 +201,7 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     ServerConfig.ServerConfig,
     LaunchWatchService.LaunchWatchService,
     RemoteReportService.RemoteReportService,
+    ServerSettings.ServerSettingsService,
   ],
 })
   .annotate(Tool.Destructive, true)

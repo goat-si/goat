@@ -97,10 +97,11 @@ JSON
     keepExistingRunner = true,
     runtimeModeCeiling: string | null = options.runtimeModeCeiling,
     retainedSha = NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(runner)).digest("hex"),
+    approvals = false,
   ) => {
     const script = buildRemoteMcpSessionScript(
       stateKey,
-      { ...options, runtimeModeCeiling },
+      { ...options, runtimeModeCeiling, ...(approvals ? { approvals: true } : {}) },
       {
         archiveVersion,
         keepExistingRunner,
@@ -187,6 +188,20 @@ JSON
       expect(NodeFS.readFileSync(runner, "utf8")).toBe(originalRunner);
       // A second invocation would be logged separately even if it succeeded.
       expect(() => receivedArgs(2)).toThrow();
+    }),
+  );
+
+  it.effect("asks the remote CLI for orchestration:approve when approvals are requested", () =>
+    Effect.gen(function* () {
+      installFakeRunner(false);
+      yield* runSession(true, null, undefined, true);
+      const ttlAt = expectedArgs.indexOf("--ttl");
+      expect(receivedArgs(1)).toEqual([
+        ...baseArgs().slice(0, ttlAt),
+        "--scope",
+        "orchestration:approve",
+        ...baseArgs().slice(ttlAt),
+      ]);
     }),
   );
 

@@ -3,12 +3,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { prependStandingInstructions } from "@t3tools/shared/standingInstructions";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
@@ -194,6 +197,23 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             message:
               "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
           });
+        const startsRun = input.message !== undefined || attachments.length > 0;
+        // The executing environment's policy, so a launch forwarded over SSH
+        // gets the instructions of the machine it runs on.
+        const standing =
+          startsRun && input.standingInstructions !== false
+            ? prependStandingInstructions(
+                yield* ServerSettings.ServerSettingsService.pipe(
+                  Effect.flatMap((settings) => settings.getSettings),
+                  Effect.map(
+                    (settings) =>
+                      resolveProjectSettings(settings, projectId).settings.standingInstructions,
+                  ),
+                  Effect.mapError(unavailable),
+                ),
+                input.message ?? "",
+              )
+            : { text: input.message ?? "", block: null };
         const launch = ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -203,13 +223,13 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runtimeMode,
           interactionMode,
           workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
-          ...(input.message === undefined && attachments.length === 0
+          ...(!startsRun
             ? {}
             : {
                 initialMessage: {
                   messageId,
                   ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  text: input.message ?? "",
+                  text: standing.text,
                   attachments,
                 },
               }),
@@ -305,6 +325,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           runId: run?.id ?? null,
           status: run?.status ?? null,
           watching,
+          standingInstructionsVersion: standing.block?.version ?? null,
           ...(report === undefined ? {} : { report: { correlationId: report.correlationId } }),
         };
       }),

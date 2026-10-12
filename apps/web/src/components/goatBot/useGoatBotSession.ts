@@ -26,11 +26,12 @@ import { randomUUID } from "~/lib/utils";
 import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
 import {
   goatBotHomeReadBack,
+  goatBotSupportUnknown,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "./goatBotAvailability";
+} from "@t3tools/client-runtime/goatBot";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 
@@ -153,7 +154,10 @@ export function goatBotEnabled(
   port: GoatBotChannelPort | null,
   environment: GoatBotEnvironmentInput | null,
 ): boolean {
-  return port !== null && environment?.supportsChannelLedger === true;
+  return (
+    port !== null &&
+    (environment?.supportsChannelLedger === true || goatBotSupportUnknown(environment))
+  );
 }
 
 export function useGoatBotEnabled() {
@@ -252,6 +256,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     if (
       !homeReady ||
       !enabled ||
+      !current.capability ||
       !bootstrapped ||
       !current.connected ||
       !port ||

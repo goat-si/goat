@@ -47,6 +47,7 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
+import * as ThreadResultService from "../../threadResults/ThreadResultService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "../LaunchWatchService.ts";
 import { newLaunchWatch } from "../launchWatch.ts";
@@ -92,6 +93,7 @@ const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 
 // Registration asks for every service the thread tools declare; these cases call none that use them.
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
+  Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
   Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
   Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
@@ -185,6 +187,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_thread_merge_back",
     "goat_thread_organize",
     "goat_thread_read",
+    "goat_thread_report_result",
     "goat_thread_search",
     "goat_thread_send",
     "goat_thread_send_attachments",
@@ -205,7 +208,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_list",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(97);
+  expect(names.size).toBe(98);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -723,6 +726,7 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
   }).pipe(
     Effect.provide(
       McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
@@ -768,6 +772,7 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
   }).pipe(
     Effect.provide(
       McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
@@ -841,6 +846,7 @@ it.effect("a caller cannot interrupt a thread that runs above its own modes", ()
   }).pipe(
     Effect.provide(
       McpHttpServer.layerOrchestratorToolkit.pipe(
+        Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
@@ -1346,6 +1352,7 @@ it.effect("pending toolkit host routing preserves target authority", () =>
     const localTargets: Array<ThreadId> = [];
     const remoteId = ThreadId.make("remote-thread");
     const dependencies = McpHttpServer.layerThreadToolkit.pipe(
+      Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
       Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
       Layer.provideMerge(McpServer.McpServer.layer),

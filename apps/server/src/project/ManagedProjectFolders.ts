@@ -4,6 +4,7 @@
  *
  * - `<baseDir>/scratch`: the Scratch project ("No project"), with a folder of
  *   its own for each thread;
+ * - `<baseDir>/goat-bot`: the GOAT bot's project, only where Scratch is off;
  * - `<baseDir>/projects/<slug>`: projects started from just a name, each a new
  *   Git repository with a README, an icon, and a first commit.
  *
@@ -98,6 +99,16 @@ export class ManagedProjectFolders extends Context.Service<
     readonly scratchRoot: Effect.Effect<Option.Option<string>>;
     /** Finds or creates the Scratch project and (re)creates its folder. */
     readonly ensureScratchProject: Effect.Effect<{ readonly projectId: ProjectId }, ScratchError>;
+    /**
+     * The project that holds the GOAT bot thread: Scratch where it is offered,
+     * otherwise a bot-only project under the data dir. The bot never runs a
+     * provider turn or checkpoints, so a data dir inside a Git work tree,
+     * which turns Scratch off, does not stop it.
+     */
+    readonly ensureBotProject: Effect.Effect<
+      { readonly projectId: ProjectId },
+      ScratchFolderError | ScratchProjectError
+    >;
     /**
      * Claims a fresh folder for a new thread in the Scratch project, named from
      * the date, its first message, and its id. None for every other project.
@@ -279,26 +290,29 @@ const make = Effect.gen(function* () {
       .makeDirectory(folder, { recursive: true })
       .pipe(Effect.mapError((cause) => new ScratchFolderError({ folder, cause })));
 
-  const ensureScratchProject: ManagedProjectFolders["Service"]["ensureScratchProject"] = Effect.gen(
-    function* () {
-      const workspaceRoot = yield* scratchRoot.pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(new ScratchUnavailableError()),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
-      // Re-made on every call, so a deleted Scratch folder still runs threads.
+  /**
+   * Finds or creates the project rooted at `workspaceRoot` and (re)creates its
+   * folder. The icon is set once at create, so a user's own choice is never
+   * overwritten.
+   */
+  const ensureManagedProject = (input: {
+    readonly workspaceRoot: string;
+    readonly kind: string;
+    readonly title: string;
+    readonly icon: string;
+  }) =>
+    Effect.gen(function* () {
+      const { workspaceRoot } = input;
+      // Re-made on every call, so a deleted folder still runs threads.
       yield* makeScratchFolder(workspaceRoot);
       const id = yield* crypto.randomUUIDv4.pipe(
         Effect.mapError((cause) => new ScratchProjectError({ workspaceRoot, cause })),
       );
       const bootstrapped = yield* projects
         .bootstrap({
-          commandId: CommandId.make(`scratch-project:${id}`),
+          commandId: CommandId.make(`${input.kind}-project:${id}`),
           projectId: ProjectId.make(id),
-          title: "No project",
+          title: input.title,
           workspaceRoot,
         })
         .pipe(
@@ -314,18 +328,47 @@ const make = Effect.gen(function* () {
           Effect.mapError((cause) => new ScratchProjectError({ workspaceRoot, cause })),
         );
       if (bootstrapped.created) {
-        // A dashed chat bubble in neutral gray marks Scratch. Set once at
-        // create, so a user's own icon choice is never overwritten.
         yield* projects
           .update({
-            commandId: CommandId.make(`scratch-project-icon:${id}`),
+            commandId: CommandId.make(`${input.kind}-project-icon:${id}`),
             projectId: bootstrapped.project.id,
-            projectIcon: { kind: "lucide", name: "message-square-dashed", color: "gray" },
+            projectIcon: { kind: "lucide", name: input.icon, color: "gray" },
           })
           .pipe(Effect.mapError((cause) => new ScratchProjectError({ workspaceRoot, cause })));
       }
       return { projectId: bootstrapped.project.id };
+    });
+
+  // A dashed chat bubble in neutral gray marks Scratch.
+  const ensureScratchAt = (workspaceRoot: string) =>
+    ensureManagedProject({
+      workspaceRoot,
+      kind: "scratch",
+      title: "No project",
+      icon: "message-square-dashed",
+    });
+
+  const ensureScratchProject: ManagedProjectFolders["Service"]["ensureScratchProject"] = Effect.gen(
+    function* () {
+      const root = yield* scratchRoot;
+      if (Option.isNone(root)) return yield* new ScratchUnavailableError();
+      return yield* ensureScratchAt(root.value);
     },
+  );
+
+  const ensureBotProject: ManagedProjectFolders["Service"]["ensureBotProject"] = scratchRoot.pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: ensureScratchAt,
+        onNone: () =>
+          ensureManagedProject({
+            workspaceRoot: path.resolve(config.baseDir, "goat-bot"),
+            kind: "goat-bot",
+            title: "GOAT bot",
+            icon: "bot",
+          }),
+      }),
+    ),
   );
 
   const isScratchProject = (projectId: ProjectId, root: string) =>
@@ -501,6 +544,7 @@ const make = Effect.gen(function* () {
   return ManagedProjectFolders.of({
     scratchRoot,
     ensureScratchProject,
+    ensureBotProject,
     folderForThread,
     namedProjectsRoot,
     createNamedProject,

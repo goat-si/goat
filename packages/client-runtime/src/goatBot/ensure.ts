@@ -1,4 +1,4 @@
-import type { GoatBotEnsureState, GoatBotRef } from "./types.ts";
+import type { GoatBotEnsureState, GoatBotRef } from "./availability.ts";
 
 /**
  * Asking the server for its GOAT Bot, kept honest across reconnects. Every

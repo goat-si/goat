@@ -36,6 +36,7 @@ import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import * as RemoteReportHandlers from "./toolkits/remoteReport/handlers.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
+import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import { ChannelToolkit } from "./toolkits/channel/tools.ts";
 import * as ChannelHandlers from "./toolkits/channel/handlers.ts";
@@ -1010,6 +1011,8 @@ export const layer = Layer.mergeAll(
   // One report service for the launch binding and the report tools, so a
   // report wakes the origin's waiting collector.
   Layer.provide(RemoteReportService.layer),
+  // Run results for the report tool and the thread read and wait tools.
+  Layer.provide(ThreadResultService.layer),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provideMerge(layerMcpTransport),
 );

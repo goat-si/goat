@@ -17,10 +17,13 @@ starts a provider turn there. Replies come from a one-shot, tool-free text gener
 work. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
 An owner has one bot, in the Scratch project, and one bot conversation keyed by the owner rather
-than the thread. If the bot thread is deleted, the next `ensureBot` starts a replacement and
-records it in its place. The conversation, its open questions, and outstanding work carry over;
-deliveries addressed to the old thread go to the current bot, and timeline ids include the thread
-so a replayed record lands in the replacement without colliding with the old one.
+than the thread. Where Scratch is off because the data directory is inside a Git work tree, the bot
+gets a project of its own under the data directory instead: the bot never runs a provider or
+checkpoints, so the repository around it does not matter. If the bot thread is deleted, the next
+`ensureBot` starts a replacement and records it in its place. The conversation, its open
+questions, and outstanding work carry over; deliveries addressed to the old thread go to the
+current bot, and timeline ids include the thread so a replayed record lands in the replacement
+without colliding with the old one.
 
 ## One home per cluster
 
