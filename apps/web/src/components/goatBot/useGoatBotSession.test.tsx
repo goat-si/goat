@@ -17,7 +17,7 @@ import {
   type OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { act, useState, type ReactNode } from "react";
+import { act, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -51,12 +51,33 @@ const state = vi.hoisted(() => ({
     _tag: "Success",
   })),
 }));
+// The mocked hooks below stand in for store subscriptions. Like the real ones, they re-render
+// their component when the test changes `state`, even under the React Compiler's memoized JSX.
+const tickListeners = new Set<() => void>();
+let tickVersion = 0;
+function useTick() {
+  return useSyncExternalStore(
+    (listener) => {
+      tickListeners.add(listener);
+      return () => tickListeners.delete(listener);
+    },
+    () => tickVersion,
+  );
+}
+function bumpTick() {
+  tickVersion += 1;
+  for (const listener of tickListeners) listener();
+}
 vi.mock("./goatBotHooks", () => ({
-  useGoatBotEnvironments: () => state.environments,
+  useGoatBotEnvironments: () => {
+    useTick();
+    return state.environments;
+  },
   useLegacyGlobalAgentRoute: () => null,
 }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) => {
+    useTick();
     state.shellReads(ref);
     // Like shellReducer/threadShellAtom: archive and delete both drop the active shell.
     return ref === null ||
@@ -72,12 +93,18 @@ vi.mock("~/state/entities", () => ({
         };
   },
   resolveThreadDetailRef: (ref: unknown) => ref,
-  useThreadVisibleTurnItems: () => items,
-  useEnvironmentShellsBootstrapped: (environmentId: EnvironmentId) =>
-    state.bootstrapByEnvironment[environmentId] ?? state.bootstrapped,
+  useThreadVisibleTurnItems: () => {
+    useTick();
+    return items;
+  },
+  useEnvironmentShellsBootstrapped: (environmentId: EnvironmentId) => {
+    useTick();
+    return state.bootstrapByEnvironment[environmentId] ?? state.bootstrapped;
+  },
 }));
 vi.mock("~/lib/archivedThreadsState", () => ({
   useArchivedThreadSnapshots: (environmentIds: ReadonlyArray<EnvironmentId>) => {
+    useTick();
     state.archiveReads(environmentIds);
     return {
       snapshots: state.archiveMissingSnapshot
@@ -98,8 +125,12 @@ vi.mock("~/state/use-orchestration-command", () => ({
   useOrchestrationCommand: () => state.unarchive,
 }));
 vi.mock("~/state/environments", () => ({
-  useConnectedEnvironmentIds: () =>
-    state.environments.filter((entry) => entry.connected).map((entry) => entry.environmentId),
+  useConnectedEnvironmentIds: () => {
+    useTick();
+    return state.environments
+      .filter((entry) => entry.connected)
+      .map((entry) => entry.environmentId);
+  },
 }));
 vi.mock("~/hooks/useMediaQuery", () => ({ useIsMobile: () => false }));
 vi.mock("~/hooks/useSettings", () => ({
@@ -266,6 +297,7 @@ function Count() {
   return <output>{count === undefined ? "unknown" : count}</output>;
 }
 async function render(count = false, sidebar = false, thread = false) {
+  bumpTick();
   await act(() =>
     root.render(
       <GoatBotChannelContext.Provider value={provided}>
@@ -359,7 +391,10 @@ beforeEach(() => {
     }),
     ingest: vi.fn(async (_env, input) => receipt(input.idempotencyKey)),
     listTasks: vi.fn(async () => ({ tasks: [] })),
-    useCanSend: () => permission,
+    useCanSend: () => {
+      useTick();
+      return permission;
+    },
   };
   provided = port;
   container = document.createElement("div");
@@ -846,8 +881,14 @@ it("bounds automatic legacy retries when the server stays active despite a stopp
   expect(textarea().disabled).toBe(true);
 });
 
-it("learns botRef from the sidebar without visiting the bot route and shares ensure with the thread", async () => {
+it("leaves the bot alone until it is opened, then ensures once from the bot screens", async () => {
   await render(false, true);
+  await render(false, true);
+  expect(port.ensureBot).not.toHaveBeenCalled();
+  expect(useGlobalAgentStore.getState().botRef).toBeNull();
+  expect(container.querySelector('a[href="/bot"]')).not.toBeNull();
+  dual = true;
+  await render();
   expect(port.ensureBot).toHaveBeenCalledTimes(1);
   expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
   await render(false, false, true);
@@ -869,24 +910,6 @@ it("adds no sidebar group or menu with a null port, then renders the enabled row
   expect(container.querySelectorAll("[data-sidebar=group]")).toHaveLength(1);
   expect(container.querySelectorAll("[data-sidebar=menu]")).toHaveLength(1);
   expect(container.querySelector('a[href="/bot"]')).not.toBeNull();
-});
-
-it("remounts the sidebar permission hook when the port is installed and removed", async () => {
-  provided = null;
-  await render(false, true);
-  port = {
-    ...port,
-    useCanSend: () => {
-      const [allowed] = useState(true);
-      return allowed;
-    },
-  };
-  provided = port;
-  await render(false, true);
-  expect(port.ensureBot).toHaveBeenCalledTimes(1);
-  provided = null;
-  await render(false, true);
-  expect(container.querySelector("[data-sidebar=menu]")).toBeNull();
 });
 
 it("treats a rejected ingest as a final failed message with a reason and no retry", async () => {

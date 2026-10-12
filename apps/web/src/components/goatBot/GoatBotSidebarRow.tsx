@@ -13,7 +13,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { GoatBotAvatar } from "./GoatBotAvatar";
-import { useGoatBotEnabled, useGoatBotSession } from "./useGoatBotSession";
+import { useGoatBotEnabled } from "./useGoatBotSession";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { Badge } from "../ui/badge";
@@ -25,9 +25,11 @@ export function GoatBotSidebarRow() {
   return enabled ? <GoatBotSidebarObserver key={port ? "port" : "none"} /> : null;
 }
 
+/**
+ * Reads only. The bot is created or adopted (including a stopped global agent) when the user
+ * first opens it, so a client that never opens GOAT Bot never makes a bot thread.
+ */
 function GoatBotSidebarObserver() {
-  // Learn the bot's identity even when its route has never been opened.
-  useGoatBotSession();
   const count = useGoatBotWaitingCount();
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });

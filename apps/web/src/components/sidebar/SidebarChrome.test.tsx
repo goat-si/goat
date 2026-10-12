@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, type ComponentProps } from "react";
+import { act, useSyncExternalStore, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -12,8 +12,21 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 
 const botState = vi.hoisted(() => ({ count: undefined as number | undefined }));
+// Stands in for the shared count subscription, so a new count re-renders even memoized JSX.
+const countListeners = new Set<() => void>();
+function setCount(count: number | undefined) {
+  botState.count = count;
+  for (const listener of countListeners) listener();
+}
 vi.mock("../goatBot/useGoatBotWaitingCount", () => ({
-  useGoatBotWaitingCount: () => botState.count,
+  useGoatBotWaitingCount: () =>
+    useSyncExternalStore(
+      (listener) => {
+        countListeners.add(listener);
+        return () => countListeners.delete(listener);
+      },
+      () => botState.count,
+    ),
 }));
 
 import { SidebarBrandWidthProbe, SidebarCollapsedBrand } from "./SidebarChrome";
@@ -82,7 +95,7 @@ it("keeps the waiting badge in both brand width probes as the count changes", as
     ),
   );
   expect(container.textContent?.trim()).toBe("GOATGOAT");
-  botState.count = 101;
+  await act(() => setCount(101));
   await act(() =>
     root?.render(
       <>
@@ -92,7 +105,7 @@ it("keeps the waiting badge in both brand width probes as the count changes", as
     ),
   );
   expect(container.textContent?.trim()).toBe("GOAT101GOAT101");
-  botState.count = undefined;
+  await act(() => setCount(undefined));
   await act(() =>
     root?.render(
       <>
