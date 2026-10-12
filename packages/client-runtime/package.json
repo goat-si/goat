@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./storage-migration": {
+      "types": "./src/storageMigration.ts",
+      "default": "./src/storageMigration.ts"
+    },
     "./goat-project-file": {
       "types": "./src/goatProjectFile.ts",
       "default": "./src/goatProjectFile.ts"

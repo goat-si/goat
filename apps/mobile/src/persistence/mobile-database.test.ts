@@ -5,6 +5,8 @@ import { vi } from "vite-plus/test";
 
 const openDatabaseAsync = vi.hoisted(() => vi.fn());
 
+vi.mock("./mobile-database-migration", () => ({ openMigratedMobileDatabase: openDatabaseAsync }));
+
 vi.mock("expo-sqlite", () => ({ openDatabaseAsync }));
 
 import * as MobileDatabase from "./mobile-database";

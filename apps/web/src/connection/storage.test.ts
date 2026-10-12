@@ -9,6 +9,15 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, vi } from "vite-plus/test";
 
+vi.mock("../lib/indexedDbMigration", () => ({
+  createMigratingDatabaseOpener: (name: string) => () =>
+    new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name);
+      request.addEventListener("success", () => resolve(request.result));
+      request.addEventListener("error", () => reject(request.error));
+    }),
+}));
+
 import * as ConnectionStorage from "./storage";
 
 const emptyCatalog = {
@@ -343,7 +352,13 @@ describe("browser GitHub routing permissions", () => {
       expect(yield* first.get(entry)).toBe("off");
       yield* first.set(entry, "read-write");
       expect(yield* second.get(entry)).toBe("read-write");
+      const legacyKey = "t3code:github-routing:first"; // goat-rename: legacy
+      const legacyPermission = localStorage.getItem("goat:github-routing:first")!;
+      localStorage.setItem(legacyKey, legacyPermission);
+      localStorage.removeItem("goat:github-routing:first");
       const oldPermissions = Option.getOrThrow(yield* Stream.runHead(first.changes));
+      expect(oldPermissions).toHaveLength(1);
+      expect(localStorage.getItem("goat:github-routing:first")).toBe(legacyPermission);
       const staleCatalog = yield* ConnectionStorage.makeCatalogStore({
         read: Effect.succeed(
           encodeCatalog({ ...emptyCatalog, githubRoutingPermissions: oldPermissions }),
@@ -363,6 +378,7 @@ describe("browser GitHub routing permissions", () => {
 
       yield* first.set(entry, "off");
       expect(yield* second.get(entry)).toBe("off");
+      expect(localStorage.getItem(legacyKey)).toBe(legacyPermission);
       secondBrowser.dispatchEvent(Object.assign(new Event("storage"), { key: null }));
       yield* Deferred.await(revoked);
       yield* second.set(other, "read");

@@ -1,3 +1,4 @@
+import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import "culori/css";
@@ -28,10 +29,10 @@ export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, The
 export const GOAT_CHAT_THEME_ID = "goat-chat" as const;
 export const OCEAN_THEME_ID = "ocean" as const;
 export const THEME_FILE_VERSION = 1 as const;
-export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
-export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
-export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
-export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+export const CUSTOM_THEMES_STORAGE_KEY = "goat:themes:v1";
+export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "goat:theme-follow-system";
+export const THEME_APPEARANCE_MODE_STORAGE_KEY = "goat:theme-appearance-mode";
+export const THEME_HALVES_STORAGE_KEY = "goat:theme-halves:v1";
 
 export const ThemePreference = Schema.String;
 export type ThemePreference = typeof ThemePreference.Type;
@@ -204,7 +205,7 @@ function readCustomThemeLibrarySnapshot(): CustomThemeLibrarySnapshot {
 
   let raw: string | null;
   try {
-    raw = window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY);
+    raw = migratingStorage(window.localStorage).getItem(CUSTOM_THEMES_STORAGE_KEY);
   } catch (cause) {
     return { status: "unavailable", reason: "storage-unavailable", cause };
   }
@@ -1151,7 +1152,10 @@ function saveCustomThemes(
 ): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CUSTOM_THEMES_STORAGE_KEY, JSON.stringify(storedThemes));
+    migratingStorage(window.localStorage).setItem(
+      CUSTOM_THEMES_STORAGE_KEY,
+      JSON.stringify(storedThemes),
+    );
     customThemeLibrarySnapshot = { status: "ready", storedThemes, themes };
   } catch (cause) {
     throw new ThemeLibraryStorageError({

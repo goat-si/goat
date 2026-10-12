@@ -213,3 +213,25 @@ export const LEGACY_WSL_RUNTIME_PATH = ".t3/wsl-runtime";
 export const LEGACY_WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
 export const LEGACY_WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
 export const LEGACY_WSL_SERVER_TREE_MARKER = "t3code-wsl-server-tree.json";
+
+/** Client storage namespaces used before the GOAT rename. */
+export const legacyStorageKey = (key: string): string | undefined => {
+  if (key === "goat:chatgpt-sharing-welcome:v1") return "t3:chatgpt-sharing-welcome:v1";
+  if (key.startsWith("goat:")) return `t3code:${key.slice(5)}`;
+  if (key.startsWith("goat.")) return `t3code.${key.slice(5)}`;
+  return undefined;
+};
+
+/** File URIs in persisted mobile drafts still point into these directories. */
+export const LEGACY_ATTACHMENT_DOWNLOAD_DIRECTORY = "t3-attachment-downloads";
+export const LEGACY_COMPOSER_PASTE_DIRECTORY = "t3-composer-paste";
+export const LEGACY_COMPOSER_PREVIEW_DIRECTORY = "t3-composer-previews";
+export const LEGACY_MOBILE_DATABASE_NAME = "t3code-client.db";
+
+/** Canonicalize enumerated browser keys before reading through the migration adapter. */
+export const goatStorageKey = (key: string): string => {
+  if (key === "t3:chatgpt-sharing-welcome:v1") return "goat:chatgpt-sharing-welcome:v1";
+  if (key.startsWith("t3code:")) return `goat:${key.slice(7)}`;
+  if (key.startsWith("t3code.")) return `goat.${key.slice(7)}`;
+  return key;
+};

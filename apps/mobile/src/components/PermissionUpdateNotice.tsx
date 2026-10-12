@@ -1,14 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import { sessionHasLegacyPermissions } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import * as SecureStore from "expo-secure-store";
+import { secureStore } from "../persistence/namespaced-secure-store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "react-native";
 
 import { useEnvironments } from "../state/environments";
 import { environmentSession } from "../state/session";
 
-const storageKey = "t3code.permission-update.v1";
+const storageKey = "goat.permission-update.v1";
 const dismissedThisLaunch = new Set<string>();
 const shownThisLaunch = new Set<string>();
 
@@ -35,7 +35,8 @@ export function PermissionUpdateNotice() {
 
   useEffect(() => {
     let active = true;
-    void SecureStore.getItemAsync(storageKey)
+    void secureStore
+      .getItem(storageKey)
       .then((raw) => {
         const value: unknown = raw === null ? [] : JSON.parse(raw);
         if (active)
@@ -69,7 +70,7 @@ export function PermissionUpdateNotice() {
       // Keep notices serial when several environments have old grants.
       showing.current = false;
       setDismissed(next);
-      void SecureStore.setItemAsync(storageKey, JSON.stringify([...next])).catch(() => {
+      void secureStore.setItem(storageKey, JSON.stringify([...next])).catch(() => {
         // Remember for this launch even if persistent storage is unavailable.
       });
     };

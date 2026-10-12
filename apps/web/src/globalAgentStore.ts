@@ -5,7 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import type { DraftId } from "./composerDraftStore";
 import { resolveStorage } from "./lib/storage";
 
-export const GLOBAL_AGENT_STORAGE_KEY = "t3code:global-agent:v1";
+export const GLOBAL_AGENT_STORAGE_KEY = "goat:global-agent:v1";
 const GLOBAL_AGENT_STORAGE_VERSION = 2;
 
 /**

@@ -1,9 +1,9 @@
 import { ManagedRelay } from "@goat/client-runtime/relay";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SecureStore from "expo-secure-store";
+import { secureStore } from "../../persistence/namespaced-secure-store";
 
-const MANAGED_RELAY_TOKEN_CACHE_KEY = "t3code.cloud.relay-access-tokens";
+const MANAGED_RELAY_TOKEN_CACHE_KEY = "goat.cloud.relay-access-tokens";
 const MANAGED_RELAY_TOKEN_CACHE_VERSION = 1;
 
 const ManagedRelayAccessTokenCacheEntrySchema = Schema.Struct({
@@ -53,7 +53,7 @@ function logStoreFailure(error: ManagedRelayTokenStoreError) {
 }
 
 const loadManagedRelayAccessTokens = Effect.tryPromise({
-  try: () => SecureStore.getItemAsync(MANAGED_RELAY_TOKEN_CACHE_KEY),
+  try: () => secureStore.getItem(MANAGED_RELAY_TOKEN_CACHE_KEY),
   catch: (cause) =>
     new ManagedRelayTokenStoreError({
       operation: "read",
@@ -95,7 +95,7 @@ const saveManagedRelayAccessTokens = (
     ),
     Effect.flatMap((encoded) =>
       Effect.tryPromise({
-        try: () => SecureStore.setItemAsync(MANAGED_RELAY_TOKEN_CACHE_KEY, encoded),
+        try: () => secureStore.setItem(MANAGED_RELAY_TOKEN_CACHE_KEY, encoded),
         catch: (cause) =>
           new ManagedRelayTokenStoreError({
             operation: "write",
@@ -107,7 +107,7 @@ const saveManagedRelayAccessTokens = (
   );
 
 const clearManagedRelayAccessTokens = Effect.tryPromise({
-  try: () => SecureStore.deleteItemAsync(MANAGED_RELAY_TOKEN_CACHE_KEY),
+  try: () => secureStore.removeItem(MANAGED_RELAY_TOKEN_CACHE_KEY),
   catch: (cause) =>
     new ManagedRelayTokenStoreError({
       operation: "clear",

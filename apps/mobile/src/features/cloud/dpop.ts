@@ -6,7 +6,7 @@ import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as ExpoCrypto from "expo-crypto";
-import * as SecureStore from "expo-secure-store";
+import { secureStore } from "../../persistence/namespaced-secure-store";
 import { p256 } from "@noble/curves/nist";
 import { DpopPublicJwk, normalizeDpopHtu } from "@goat/shared/dpopCommon";
 import * as Layer from "effect/Layer";
@@ -86,7 +86,7 @@ export interface DpopProofKeyPair {
   readonly thumbprint: string;
 }
 
-const DPOP_PROOF_KEY_STORAGE_KEY = "t3code.cloud.dpop-proof-key";
+const DPOP_PROOF_KEY_STORAGE_KEY = "goat.cloud.dpop-proof-key";
 
 function base64UrlToBytes(value: string): Uint8Array {
   return Result.getOrThrow(Base64Url.decode(value));
@@ -198,7 +198,7 @@ export function loadOrCreateDpopProofKeyPair(): Effect.Effect<
 > {
   return Effect.gen(function* () {
     const stored = yield* Effect.tryPromise({
-      try: () => SecureStore.getItemAsync(DPOP_PROOF_KEY_STORAGE_KEY),
+      try: () => secureStore.getItem(DPOP_PROOF_KEY_STORAGE_KEY),
       catch: cloudDpopError("Could not read the DPoP proof key."),
     });
     if (stored) {
@@ -229,7 +229,7 @@ export function loadOrCreateDpopProofKeyPair(): Effect.Effect<
       Effect.mapError(cloudDpopError("Could not encode the DPoP proof key.")),
     );
     yield* Effect.tryPromise({
-      try: () => SecureStore.setItemAsync(DPOP_PROOF_KEY_STORAGE_KEY, encodedPrivateJwk),
+      try: () => secureStore.setItem(DPOP_PROOF_KEY_STORAGE_KEY, encodedPrivateJwk),
       catch: cloudDpopError("Could not store the DPoP proof key."),
     });
     return generated;

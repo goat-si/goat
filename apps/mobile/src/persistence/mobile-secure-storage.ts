@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as SecureStore from "expo-secure-store";
+import { secureStore } from "./namespaced-secure-store";
 
 const MobileSecureStorageOperation = Schema.Literals(["read", "write", "delete"]);
 
@@ -31,19 +31,19 @@ export class MobileSecureStorage extends Context.Service<
 export const make = MobileSecureStorage.of({
   getItem: Effect.fn("MobileSecureStorage.getItem")((key) =>
     Effect.tryPromise({
-      try: () => SecureStore.getItemAsync(key),
+      try: () => secureStore.getItem(key),
       catch: (cause) => new MobileSecureStorageError({ operation: "read", key, cause }),
     }),
   ),
   setItem: Effect.fn("MobileSecureStorage.setItem")((key, value) =>
     Effect.tryPromise({
-      try: () => SecureStore.setItemAsync(key, value),
+      try: () => secureStore.setItem(key, value),
       catch: (cause) => new MobileSecureStorageError({ operation: "write", key, cause }),
     }),
   ),
   removeItem: Effect.fn("MobileSecureStorage.removeItem")((key) =>
     Effect.tryPromise({
-      try: () => SecureStore.deleteItemAsync(key),
+      try: () => secureStore.removeItem(key),
       catch: (cause) => new MobileSecureStorageError({ operation: "delete", key, cause }),
     }),
   ),

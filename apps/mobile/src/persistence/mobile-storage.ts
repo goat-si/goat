@@ -13,10 +13,10 @@ import {
 } from "../lib/connection";
 import * as MobileSecureStorage from "./mobile-secure-storage";
 
-const CONNECTIONS_KEY = "t3code.connections";
-const AGENT_AWARENESS_DEVICE_ID_KEY = "t3code.agent-awareness.device-id";
-const AGENT_AWARENESS_REGISTRATION_KEY = "t3code.agent-awareness.registration";
-const RECENT_THREAD_SHORTCUTS_KEY = "t3code.recent-thread-shortcuts";
+const CONNECTIONS_KEY = "goat.connections";
+const AGENT_AWARENESS_DEVICE_ID_KEY = "goat.agent-awareness.device-id";
+const AGENT_AWARENESS_REGISTRATION_KEY = "goat.agent-awareness.registration";
+const RECENT_THREAD_SHORTCUTS_KEY = "goat.recent-thread-shortcuts";
 
 export class MobileStorageDecodeError extends Schema.TaggedError<MobileStorageDecodeError>()(
   "MobileStorageDecodeError",

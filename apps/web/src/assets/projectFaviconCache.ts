@@ -1,3 +1,4 @@
+import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
 import {
   createProjectFaviconCache,
   createProjectFaviconImageLoader,
@@ -5,25 +6,21 @@ import {
   PROJECT_FAVICON_THUMBNAIL_SIZE,
 } from "@goat/client-runtime/project-favicon-cache";
 
-const DATABASE_NAME = "t3code:project-favicons";
+const DATABASE_NAME = "goat:project-favicons";
 const DATABASE_VERSION = 2;
 const STORE_NAME = "images";
+const openMigratedDatabase = createMigratingDatabaseOpener(
+  DATABASE_NAME,
+  DATABASE_VERSION,
+  (database) => {
+    if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME);
+  },
+);
 let database: Promise<IDBDatabase> | undefined;
-
 function openDatabase() {
-  return (database ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      for (const name of request.result.objectStoreNames) {
-        if (name !== STORE_NAME) request.result.deleteObjectStore(name);
-      }
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME);
-      }
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () => reject(request.error));
-    request.addEventListener("blocked", () => reject(new Error("Project icon cache is blocked.")));
+  return (database ??= openMigratedDatabase().catch((cause) => {
+    database = undefined;
+    throw cause;
   }));
 }
 

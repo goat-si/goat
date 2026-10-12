@@ -1,3 +1,6 @@
+import { goatStorageKey } from "@goat/contracts/legacyT3Names";
+import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
+import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import {
   ConnectionCatalogDocument,
   type ConnectionCatalogDocument as ConnectionCatalogDocumentType,
@@ -39,7 +42,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { projectFaviconCache } from "../assets/projectFaviconCache";
 
-const DATABASE_NAME = "t3code:connection-runtime";
+const DATABASE_NAME = "goat:connection-runtime";
 const DATABASE_VERSION = 4;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
@@ -111,44 +114,24 @@ function persistenceError(
   });
 }
 
-const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* () {
-  return yield* Effect.callback<IDBDatabase, ConnectionTransientError>((resume) => {
-    if (typeof indexedDB === "undefined") {
-      resume(
-        Effect.fail(catalogError("open", "IndexedDB is unavailable in this browser context.")),
-      );
-      return;
+const openMigratedDatabase = createMigratingDatabaseOpener(
+  DATABASE_NAME,
+  DATABASE_VERSION,
+  (database) => {
+    for (const name of [
+      CATALOG_STORE_NAME,
+      SHELL_STORE_NAME,
+      THREAD_STORE_NAME,
+      SERVER_CONFIG_STORE_NAME,
+      VCS_REFS_STORE_NAME,
+    ]) {
+      if (!database.objectStoreNames.contains(name)) database.createObjectStore(name);
     }
-    try {
-      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-      request.addEventListener("upgradeneeded", () => {
-        if (!request.result.objectStoreNames.contains(CATALOG_STORE_NAME)) {
-          request.result.createObjectStore(CATALOG_STORE_NAME);
-        }
-        if (!request.result.objectStoreNames.contains(SHELL_STORE_NAME)) {
-          request.result.createObjectStore(SHELL_STORE_NAME);
-        }
-        if (!request.result.objectStoreNames.contains(THREAD_STORE_NAME)) {
-          request.result.createObjectStore(THREAD_STORE_NAME);
-        }
-        if (!request.result.objectStoreNames.contains(SERVER_CONFIG_STORE_NAME)) {
-          request.result.createObjectStore(SERVER_CONFIG_STORE_NAME);
-        }
-        if (!request.result.objectStoreNames.contains(VCS_REFS_STORE_NAME)) {
-          request.result.createObjectStore(VCS_REFS_STORE_NAME);
-        }
-      });
-      request.addEventListener("error", () => {
-        resume(Effect.fail(catalogError("open", request.error ?? "Unknown IndexedDB error")));
-      });
-      request.addEventListener("success", () => {
-        resume(Effect.succeed(request.result));
-      });
-    } catch (cause) {
-      resume(Effect.fail(catalogError("open", cause)));
-    }
-  });
-});
+  },
+);
+const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(() =>
+  Effect.tryPromise({ try: openMigratedDatabase, catch: (cause) => catalogError("open", cause) }),
+);
 
 interface DatabaseHandle {
   readonly get: Effect.Effect<IDBDatabase, ConnectionTransientError>;
@@ -500,8 +483,8 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
   return { read, update } satisfies CatalogStore;
 });
 
-const GITHUB_ROUTING_KEY_PREFIX = "t3code:github-routing:";
-const GITHUB_ROUTING_CHANGED = "t3code:github-routing-changed";
+const GITHUB_ROUTING_KEY_PREFIX = "goat:github-routing:";
+const GITHUB_ROUTING_CHANGED = "goat:github-routing-changed";
 const isStoredGitHubRoutingPermission = Schema.is(StoredGitHubRoutingPermission);
 const encodeStoredGitHubRoutingPermission = Schema.encodeSync(
   Schema.fromJsonString(StoredGitHubRoutingPermission),
@@ -513,7 +496,7 @@ export function makeBrowserGitHubRoutingPermissions(
 ) {
   const read = (key: string): StoredGitHubRoutingPermission | null => {
     try {
-      const raw = browser.localStorage.getItem(key);
+      const raw = migratingStorage(browser.localStorage).getItem(key);
       const value: unknown = raw === null ? null : JSON.parse(raw);
       return isStoredGitHubRoutingPermission(value) &&
         key === `${GITHUB_ROUTING_KEY_PREFIX}${value.environmentId}`
@@ -527,9 +510,14 @@ export function makeBrowserGitHubRoutingPermissions(
     try {
       const values: StoredGitHubRoutingPermission[] = [];
       const storage = browser.localStorage;
+      // Snapshot keys before reads adopt legacy values and change storage.length.
+      const keys = new Set<string>();
       for (let index = 0; index < storage.length; index++) {
         const key = storage.key(index);
-        if (key?.startsWith(GITHUB_ROUTING_KEY_PREFIX)) {
+        if (key !== null) keys.add(goatStorageKey(key));
+      }
+      for (const key of keys) {
+        if (key.startsWith(GITHUB_ROUTING_KEY_PREFIX)) {
           const value = read(key);
           if (value !== null) values.push(value);
         }
@@ -543,8 +531,12 @@ export function makeBrowserGitHubRoutingPermissions(
     Effect.try({
       try: () => {
         const key = `${GITHUB_ROUTING_KEY_PREFIX}${environmentId}`;
-        if (value === null) browser.localStorage.removeItem(key);
-        else browser.localStorage.setItem(key, encodeStoredGitHubRoutingPermission(value));
+        if (value === null) migratingStorage(browser.localStorage).removeItem(key);
+        else
+          migratingStorage(browser.localStorage).setItem(
+            key,
+            encodeStoredGitHubRoutingPermission(value),
+          );
         browser.dispatchEvent(new Event(GITHUB_ROUTING_CHANGED));
       },
       catch: (cause) => catalogError("save GitHub routing permissions in", cause),

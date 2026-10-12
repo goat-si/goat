@@ -1,3 +1,4 @@
+import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import * as Schema from "effect/Schema";
 import * as Record from "effect/Record";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
@@ -29,8 +30,8 @@ const fallbackStorage: Storage = (() => {
   };
 })();
 
-const getStorage = (): Storage =>
-  typeof window !== "undefined" ? window.localStorage : fallbackStorage;
+const getStorage = () =>
+  migratingStorage(typeof window !== "undefined" ? window.localStorage : fallbackStorage);
 
 const read = (key: string) => {
   try {
@@ -78,7 +79,7 @@ export const removeLocalStorageItem = (key: string) => {
   }
 };
 
-const LOCAL_STORAGE_CHANGE_EVENT = "t3code:local_storage_change";
+const LOCAL_STORAGE_CHANGE_EVENT = "goat:local_storage_change";
 
 interface LocalStorageChangeDetail {
   key: string;

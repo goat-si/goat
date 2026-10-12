@@ -76,7 +76,7 @@ private final class ComposerContextAccessibilityElement: UIAccessibilityElement 
 }
 
 private final class ComposerTextView: UITextView {
-  private static let pastedImageDirectoryName = "t3-composer-paste"
+  private static let pastedImageDirectoryName = "t3-composer-paste" // goat-rename: legacy
   private static let stalePastedImageAge: TimeInterval = 60 * 60
   private static let readOnlyActions = Set([
     "cut:",

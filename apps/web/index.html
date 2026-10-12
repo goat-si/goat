@@ -12,12 +12,27 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
       (() => {
+        // Runs before module imports; mirrors storageMigration.ts.
+        const readStorage = (key) => {
+          const current = window.localStorage.getItem(key);
+          if (current !== null) return current === "__goat_storage_removed_v1__" ? null : current;
+          const legacy = `t3code:${key.slice(5)}`; // goat-rename: legacy
+          const value = window.localStorage.getItem(legacy);
+          if (value !== null) {
+            try {
+              window.localStorage.setItem(key, value);
+            } catch {
+              /* Read-only storage. */
+            }
+          }
+          return value;
+        };
         const LIGHT_BACKGROUND = "#ffffff";
         const DARK_BACKGROUND = "#0a0a0a";
-        const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
-        const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
-        const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
-        const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+        const CUSTOM_THEMES_STORAGE_KEY = "goat:themes:v1";
+        const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "goat:theme-follow-system";
+        const THEME_APPEARANCE_MODE_STORAGE_KEY = "goat:theme-appearance-mode";
+        const THEME_HALVES_STORAGE_KEY = "goat:theme-halves:v1";
         const SPLASH_COLORS = {
           light: {
             background: "#ffffff",
@@ -215,9 +230,7 @@
         const findCustomTheme = (themeId) => {
           if (RESERVED_THEME_IDS.includes(themeId)) return null;
           try {
-            const parsed = JSON.parse(
-              window.localStorage.getItem(CUSTOM_THEMES_STORAGE_KEY) ?? "null",
-            );
+            const parsed = JSON.parse(readStorage(CUSTOM_THEMES_STORAGE_KEY) ?? "null");
             if (!Array.isArray(parsed)) return null;
             return (
               parsed.find((value) => isStoredCustomTheme(value) && value.id === themeId) ?? null
@@ -228,7 +241,7 @@
         };
 
         try {
-          const storedTheme = window.localStorage.getItem("t3code:theme");
+          const storedTheme = readStorage("goat:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           // Older builds stored the dark T3 Chat palette as its own theme id
           // and every maintainer theme under a t3- prefix; keep those
@@ -276,10 +289,8 @@
           const isThemed = isKnownTheme && themeModes !== null;
           const baseAppearance = customTheme ? customTheme.appearance : "light";
           const systemMode = prefersDark ? "dark" : "light";
-          const storedAppearanceMode = window.localStorage.getItem(
-            THEME_APPEARANCE_MODE_STORAGE_KEY,
-          );
-          const storedFollowSystem = window.localStorage.getItem(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
+          const storedAppearanceMode = readStorage(THEME_APPEARANCE_MODE_STORAGE_KEY);
+          const storedFollowSystem = readStorage(THEME_FOLLOW_SYSTEM_STORAGE_KEY);
           // Mirrors the runtime's getThemePreferenceMode fallback: a bare
           // "light"/"dark" preference names its own mode.
           const preferenceMode =
@@ -300,9 +311,7 @@
           let halfThemeId = null;
           let halfCustomTheme = null;
           try {
-            const halvesRaw = JSON.parse(
-              window.localStorage.getItem(THEME_HALVES_STORAGE_KEY) ?? "null",
-            );
+            const halvesRaw = JSON.parse(readStorage(THEME_HALVES_STORAGE_KEY) ?? "null");
             const candidate = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
             if (typeof candidate === "string") {
               const halfId = normalizeThemeId(candidate);

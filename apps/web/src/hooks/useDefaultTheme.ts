@@ -1,3 +1,4 @@
+import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 
@@ -12,7 +13,7 @@ import { useTheme } from "./useTheme";
  * hopping between primary environments neither replays one environment's
  * theme over the user's pick nor swallows another's.
  */
-const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "t3code:default-theme-applied:v2:";
+const APPLIED_DEFAULT_THEME_STORAGE_PREFIX = "goat:default-theme-applied:v2:";
 
 /**
  * One generation per set: keyed on when the theme was set, not just its
@@ -48,7 +49,7 @@ export function defaultThemeToApply(input: {
 function readAppliedGeneration(storageKey: string): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(storageKey);
+    return migratingStorage(window.localStorage).getItem(storageKey);
   } catch {
     return null;
   }
@@ -56,7 +57,7 @@ function readAppliedGeneration(storageKey: string): string | null {
 
 function writeAppliedGeneration(storageKey: string, generation: string): void {
   try {
-    window.localStorage.setItem(storageKey, generation);
+    migratingStorage(window.localStorage).setItem(storageKey, generation);
   } catch {
     // Unrecordable means the next config event applies again; harmless.
   }

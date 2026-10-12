@@ -1,3 +1,4 @@
+import { LEGACY_COMPOSER_PASTE_DIRECTORY } from "@goat/contracts/legacyT3Names";
 import {
   clampFileAttachmentUploadBytes,
   fileAttachmentTooLargeMessage,
@@ -131,7 +132,7 @@ export function composerAttachmentInlineUri(
   return attachment.type === "image" ? (attachment.dataUrl ?? attachment.previewUri) : undefined;
 }
 
-const OWNED_PASTED_IMAGE_DIRECTORY = "t3-composer-paste";
+const OWNED_PASTED_IMAGE_DIRECTORY = LEGACY_COMPOSER_PASTE_DIRECTORY;
 const ATTACHMENT_COPY_CHUNK_BYTES = 64 * 1024;
 
 export async function persistComposerAttachmentFile(

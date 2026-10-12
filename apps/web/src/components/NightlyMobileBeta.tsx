@@ -43,7 +43,7 @@ const ANDROID_BETA_GROUP_URL = "https://groups.google.com/g/t3-code-v2-beta";
 const ANDROID_PLAY_TESTING_URL = "https://play.google.com/apps/testing/com.t3tools.t3code";
 
 const ROW_ID = "nightly-mobile-beta";
-const NOTICE_DISMISSED_STORAGE_KEY = "t3code:nightly-mobile-beta-notice-dismissed:v1";
+const NOTICE_DISMISSED_STORAGE_KEY = "goat:nightly-mobile-beta-notice-dismissed:v1";
 
 // Guards against a second toast from a remount or a Strict Mode effect replay.
 let noticeShown = false;

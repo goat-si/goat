@@ -13,8 +13,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as MobileSecureStorage from "../persistence/mobile-secure-storage";
 import { migrateLegacyConnectionCatalog } from "./migration";
 
-export const CONNECTION_CATALOG_KEY = "t3code.connection-catalog.v1";
-export const LEGACY_CONNECTIONS_KEY = "t3code.connections";
+export const CONNECTION_CATALOG_KEY = "goat.connection-catalog.v1";
+export const LEGACY_CONNECTIONS_KEY = "goat.connections";
 
 function catalogError(operation: string, cause: unknown) {
   return new ConnectionTransientError({
@@ -75,7 +75,6 @@ export const make = Effect.fn("mobile.connectionStorage.makeCatalogStore")(funct
     if (legacyRaw !== null && legacyRaw.trim() !== "") {
       const encoded = yield* encodeCatalog(catalog);
       yield* setItem(CONNECTION_CATALOG_KEY, encoded);
-      yield* deleteItem(LEGACY_CONNECTIONS_KEY);
     }
     return catalog;
   });

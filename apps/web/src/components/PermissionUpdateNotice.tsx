@@ -29,7 +29,7 @@ function EnvironmentPermissionNotice({
     )
       return;
     if (shown.has(environmentId)) return;
-    const key = `t3code:permission-update:v1:${environmentId}`;
+    const key = `goat:permission-update:v1:${environmentId}`;
     try {
       if (getLocalStorageItem(key, Schema.Boolean)) return;
     } catch {

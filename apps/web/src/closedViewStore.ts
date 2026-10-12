@@ -123,7 +123,7 @@ export const useClosedViewStore = create<ClosedViewStoreState>()(
         set((state) => ({ entries: state.entries.filter((entry) => entry.id !== id) })),
     }),
     {
-      name: "t3code:closed-views:v2",
+      name: "goat:closed-views:v2",
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),

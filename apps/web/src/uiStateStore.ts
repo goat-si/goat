@@ -1,18 +1,19 @@
+import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import { Debouncer } from "@tanstack/react-pacer";
 import type { PullRequestMergeMethod } from "@goat/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
 
-export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
+export const PERSISTED_STATE_KEY = "goat:ui-state:v1";
 // Version 1 stored card visibility, not folder expansion.
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 2;
 const LEGACY_PERSISTED_STATE_KEYS = [
-  "t3code:renderer-state:v8",
-  "t3code:renderer-state:v7",
-  "t3code:renderer-state:v6",
-  "t3code:renderer-state:v5",
-  "t3code:renderer-state:v4",
-  "t3code:renderer-state:v3",
+  "goat:renderer-state:v8",
+  "goat:renderer-state:v7",
+  "goat:renderer-state:v6",
+  "goat:renderer-state:v5",
+  "goat:renderer-state:v4",
+  "goat:renderer-state:v3",
   "codething:renderer-state:v4",
   "codething:renderer-state:v3",
   "codething:renderer-state:v2",
@@ -70,7 +71,6 @@ const initialState: UiState = {
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
 const LEGACY_PROJECT_EXPANSION_DEFAULT_KEY = "legacy-project-expansion-default";
-let legacyKeysCleanedUp = false;
 
 export function legacyProjectCwdPreferenceKey(cwd: string): string {
   return `${LEGACY_PROJECT_CWD_PREFERENCE_PREFIX}${normalizeProjectPathForComparison(cwd)}`;
@@ -166,10 +166,10 @@ function readPersistedState(): UiState {
     return initialState;
   }
   try {
-    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
+    const raw = migratingStorage(window.localStorage).getItem(PERSISTED_STATE_KEY);
     if (!raw) {
       for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
-        const legacyRaw = window.localStorage.getItem(legacyKey);
+        const legacyRaw = migratingStorage(window.localStorage).getItem(legacyKey);
         if (!legacyRaw) {
           continue;
         }
@@ -221,7 +221,7 @@ export function persistState(state: UiState): void {
         ([key]) => key !== LEGACY_PROJECT_EXPANSION_DEFAULT_KEY,
       ),
     );
-    window.localStorage.setItem(
+    migratingStorage(window.localStorage).setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
         projectExpandedById,
@@ -234,12 +234,6 @@ export function persistState(state: UiState): void {
         pullRequestMergeMethod: state.pullRequestMergeMethod,
       } satisfies PersistedUiState),
     );
-    if (!legacyKeysCleanedUp) {
-      legacyKeysCleanedUp = true;
-      for (const legacyKey of LEGACY_PERSISTED_STATE_KEYS) {
-        window.localStorage.removeItem(legacyKey);
-      }
-    }
   } catch {
     // Ignore quota/storage errors to avoid breaking chat UX.
   }

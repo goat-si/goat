@@ -1,3 +1,4 @@
+import { openMigratedMobileDatabase } from "./mobile-database-migration";
 import type { EnvironmentId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -6,7 +7,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { SQLiteDatabase } from "expo-sqlite";
 
-const DATABASE_NAME = "t3code-client.db";
 const DATABASE_SCHEMA_VERSION = 1;
 const LEGACY_CACHE_DIRECTORIES = [
   "connection-shell-snapshots",
@@ -179,7 +179,7 @@ async function migrateLegacyFileCaches(database: SQLiteDatabase): Promise<boolea
             Date.now(),
           );
         }
-        directory.delete();
+        // Keep the original cache files available to builds using the retained database.
       } catch (cause) {
         complete = false;
         console.warn(`[mobile-database] could not migrate legacy cache ${directoryName}`, cause);
@@ -241,10 +241,7 @@ export class MobileDatabase extends Context.Service<
 const makeAvailable = Effect.gen(function* () {
   const database = yield* Effect.acquireRelease(
     Effect.tryPromise({
-      try: async () => {
-        const SQLite = await import("expo-sqlite");
-        return SQLite.openDatabaseAsync(DATABASE_NAME);
-      },
+      try: openMigratedMobileDatabase,
       catch: databaseError("open"),
     }),
     (openDatabase) => Effect.promise(() => openDatabase.closeAsync()).pipe(Effect.ignore),
