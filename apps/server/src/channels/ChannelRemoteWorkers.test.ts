@@ -1289,6 +1289,55 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("keeps a remote project answered after the work named a project here", () => {
+    const { machine, harness } = defaultsHarness({});
+    machine.projects = [
+      ...machine.projects,
+      {
+        id: "remote-project:channel-work",
+        title: "Channel work",
+        workspaceRoot: "/Users/jun/developer/channel-work",
+        repositoryIdentity: { canonicalKey: "github.com/jun/channel-work" },
+        defaultModelSelection: null,
+      },
+    ];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      // The work names a project here; the machine cannot be reached at first.
+      harness.script.current = (input) =>
+        input.mode === "input" && (input.inputText ?? "").startsWith("do@")
+          ? Effect.succeed({
+              replyText: "On it.",
+              action: {
+                type: "create_task" as const,
+                title: "build it",
+                instruction: "build it",
+                host: "mac-studio",
+                projectId: ProjectId.make("project:channel-work"),
+              },
+            })
+          : remoteScript(input);
+      machine.down = true;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "p1"), slackContext);
+      const first = yield* until("unreachable", (task) => task.status === "waiting_input");
+      machine.down = false;
+      // A remote project is answered, then the machine fails before the launch.
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "p2"), slackContext);
+      const second = yield* until(
+        "unreachable again",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.environmentReadDown = false;
+      // A remark with no choice in it keeps the newer remote answer over the older project.
+      yield* gateway.ingest(slackInput("answer: try again", "p3"), slackContext);
+      yield* until("running", (task) => task.status === "running" && task.version > second.version);
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {

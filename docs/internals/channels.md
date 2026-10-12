@@ -45,7 +45,7 @@ project named here, or a default that is gone, must match one of its projects. T
 in the current generation that names one of its projects decides, so an answer to a later question
 ("try again" after the machine was unreachable) keeps the project chosen before it, naming another
 replaces it. A retry, or an answer that picks something else (a machine, or a project on this
-machine), asks again; once a project on this machine is chosen, only the newest answer counts.
+machine, matched the way reception records it), ends the reach of older answers and asks again.
 
 ## Who runs the workers
 

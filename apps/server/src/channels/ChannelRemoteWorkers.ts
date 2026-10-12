@@ -230,8 +230,13 @@ export class ChannelRemoteWorkers extends Context.Service<
          * project must not stand in for it; the requester names one instead.
          */
         readonly requireNamedProject?: boolean | undefined;
-        /** This machine's project titles; an answer naming one chose a project here instead. */
-        readonly localProjectTitles?: ReadonlyArray<string> | undefined;
+        /**
+         * This machine's projects; an answer naming one (as reception matches it, by exact id or
+         * title) chose a project here instead.
+         */
+        readonly localProjects?:
+          | ReadonlyArray<{ readonly id: string; readonly title: string }>
+          | undefined;
         readonly runtimeMode: RuntimeMode;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
@@ -259,8 +264,13 @@ export class ChannelRemoteWorkers extends Context.Service<
          * project must not stand in for it; the requester names one instead.
          */
         readonly requireNamedProject?: boolean | undefined;
-        /** This machine's project titles; an answer naming one chose a project here instead. */
-        readonly localProjectTitles?: ReadonlyArray<string> | undefined;
+        /**
+         * This machine's projects; an answer naming one (as reception matches it, by exact id or
+         * title) chose a project here instead.
+         */
+        readonly localProjects?:
+          | ReadonlyArray<{ readonly id: string; readonly title: string }>
+          | undefined;
         readonly runtimeMode: RuntimeMode;
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
@@ -407,11 +417,10 @@ const make = Effect.gen(function* () {
       readonly canonicalKey?: string;
       /** The requester's answers in this generation, newest first. */
       readonly answers?: ReadonlyArray<string>;
-      /**
-       * Machines and this machine's projects an answer may name; an answer that picks one of
-       * them made a newer choice, which ends the older answers' reach.
-       */
-      readonly otherChoices?: ReadonlyArray<string>;
+      /** Machines an answer may name; an answer that picks one made a newer choice. */
+      readonly hosts?: ReadonlyArray<string>;
+      /** This machine's projects; an answer that picks one made a newer choice. */
+      readonly localProjects?: ReadonlyArray<{ readonly id: string; readonly title: string }>;
       readonly requireNamed?: boolean;
     },
   ) => {
@@ -427,9 +436,13 @@ const make = Effect.gen(function* () {
       if (named.length > 0) {
         return named.toSorted((left, right) => right.title.length - left.title.length)[0];
       }
+      // Same matching as reception, which records a project here from an exact id or a title.
       const choseOtherwise =
         meansThisMachine(raw) ||
-        (hint.otherChoices ?? []).some((choice) => answer.includes(choice.toLowerCase()));
+        (hint.hosts ?? []).some((host) => answer.includes(host.toLowerCase())) ||
+        (hint.localProjects ?? []).some(
+          (project) => project.id === raw.trim() || answer.includes(project.title.toLowerCase()),
+        );
       if (choseOtherwise) break;
     }
     // The same repository as the local project, by its canonical remote key.
@@ -481,18 +494,18 @@ const make = Effect.gen(function* () {
       if (projects.length === 0) {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
-      // Once a project here was chosen (named with the work or picked by an answer, by name or
-      // id), only the newest answer may still name a project there; older answers predate or
-      // compete with that choice, so they never decide.
-      const recent = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
-      const answers = task.projectId === undefined ? recent : recent.slice(0, 1);
+      const answers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
       const chosen = chooseProject(projects, {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
         ...(answers.length === 0
           ? {}
-          : { answers, otherChoices: [...hosts, ...(local.localProjectTitles ?? [])] }),
+          : {
+              answers,
+              hosts,
+              ...(local.localProjects === undefined ? {} : { localProjects: local.localProjects }),
+            }),
         ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
       });
       if (chosen === undefined) {

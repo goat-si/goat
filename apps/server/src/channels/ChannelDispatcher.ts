@@ -335,9 +335,9 @@ const make = Effect.gen(function* () {
       const bot = yield* ledger.getBot(stored.ownerId);
       return {
         ...(defaultProjectGone ? { requireNamedProject: true } : {}),
-        localProjectTitles: shells
+        localProjects: shells
           .filter((shell) => shell.id !== bot?.bot.projectId)
-          .map((shell) => shell.title),
+          .map((shell) => ({ id: shell.id, title: shell.title })),
         modelSelection:
           named?.defaultModelSelection ??
           settings.defaultModelSelection ??
