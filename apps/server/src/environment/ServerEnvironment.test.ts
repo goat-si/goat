@@ -81,6 +81,16 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+  it.effect("keeps Slack channel capability off in the assembled server descriptor", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-slack-unavailable-" });
+      const descriptor = yield* ServerEnvironment.ServerEnvironment.use(
+        (environment) => environment.getDescriptor,
+      ).pipe(Effect.provide(layerServerEnvironment(baseDir)));
+      expect(descriptor.capabilities.slackChannel).toBe(false);
+    }),
+  );
   it.effect("publishes proven install ownership only for manually updated servers", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

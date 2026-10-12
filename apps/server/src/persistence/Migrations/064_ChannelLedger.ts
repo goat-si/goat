@@ -109,8 +109,12 @@ export default Effect.gen(function* () {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`;
-  yield* sql`CREATE INDEX IF NOT EXISTS channel_outbox_due_idx ON channel_outbox(state, next_attempt_at)
+  // Oldest open rows first for the delivery claim, and each task's earlier open rows for its
+  // ordering check, so claiming stays cheap however long the delivered history grows.
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_outbox_due_idx ON channel_outbox(state, created_at)
     WHERE state IN ('pending', 'delivering')`;
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_outbox_task_order_idx
+    ON channel_outbox(task_id, destination_kind) WHERE state IN ('pending', 'delivering')`;
 
   yield* sql`CREATE TABLE IF NOT EXISTS channel_runtime_state (
     key TEXT PRIMARY KEY,

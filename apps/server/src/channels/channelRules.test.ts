@@ -4,7 +4,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import { deliveryOutcomeFor } from "./ChannelDeliveryWorker.ts";
-import { effectiveRequester, lowerRuntimeMode } from "./ChannelGateway.ts";
+import { effectiveRequester, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 
 const decodeTask = Schema.decodeUnknownSync(ChannelTask);
@@ -197,5 +197,22 @@ describe("linked account permissions", () => {
     );
     assert.strictEqual(requester.runtimeModeCeiling, "auto-accept-edits");
     assert.deepStrictEqual(requester.grantedScopes, ["orchestration:operate"]);
+  });
+
+  it("lets only someone with the asker's reach answer a task's question", () => {
+    const asker = task().requester;
+    const answerer = (overrides: Partial<typeof asker>) => ({ ...asker, ...overrides });
+    assert.isTrue(mayAnswerFor(answerer({ principalId: "colleague" }), asker));
+    // Read-only accounts and agents cannot steer running work.
+    assert.isFalse(mayAnswerFor(answerer({ grantedScopes: ["orchestration:read"] }), asker));
+    // A lower ceiling would steer work running above what the answerer may run.
+    assert.isFalse(mayAnswerFor(answerer({ runtimeModeCeiling: "auto" }), asker));
+    assert.isFalse(mayAnswerFor(answerer({ ownerId: "someone-else" }), asker));
+    assert.isTrue(
+      mayAnswerFor(answerer({ runtimeModeCeiling: "full-access" }), {
+        ...asker,
+        runtimeModeCeiling: "approval-required",
+      }),
+    );
   });
 });

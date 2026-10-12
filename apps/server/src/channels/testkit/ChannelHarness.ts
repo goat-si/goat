@@ -27,8 +27,10 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -37,10 +39,19 @@ import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
+import * as CommandReceiptStore from "../../orchestration-v2/CommandReceiptStore.ts";
+import * as EffectOutbox from "../../orchestration-v2/EffectOutbox.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderReplayHarness from "../../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
+import * as GitWorkflow from "../../git/GitWorkflowService.ts";
+import * as TerminalManager from "../../terminal/Manager.ts";
+import * as ProviderRegistryMock from "../../provider/testUtils/providerRegistryMock.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
@@ -49,6 +60,7 @@ import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as ChannelIdentityService from "../ChannelIdentityService.ts";
 import * as ChannelLayers from "../ChannelLayers.ts";
 import * as ChannelLedger from "../ChannelLedger.ts";
+import * as ChannelRuntime from "../ChannelRuntime.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
 import { channelOwnerIdFor } from "../channelOwner.ts";
 
@@ -176,17 +188,31 @@ export function makeHarness(
     readonly channelsLayer?: ChannelServicesLayer;
     /** Register the fake Slack transport behind `slackSent` and `slackFailures` (default true). */
     readonly fakeSlackTransport?: boolean;
+    /** Exercise durable launch receipts instead of the scripted worker launch. */
+    readonly realWorkerLaunch?: boolean;
   } = {},
 ) {
   const world = new WorkerWorld();
   const slackSent: Array<SlackSend> = [];
   const slackFailures: Array<ChannelGatewayError> = [];
   const script = { current: defaultScript };
+  const providerCalls: string[] = [];
+  const launch = {
+    afterAccepted: (_input: ThreadLaunch.ThreadLaunchInput): Effect.Effect<void> => Effect.void,
+  };
 
   const layerDatabase = SqlitePersistence.layerMemory;
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
-    ProviderAdapterRegistry.layerFromAdapters([refusingAdapter]),
+    ProviderAdapterRegistry.layerFromAdapters([
+      {
+        ...refusingAdapter,
+        openSession: () =>
+          Effect.sync(() => providerCalls.push("openSession")).pipe(
+            Effect.andThen(Effect.die("the GOAT bot must never start a provider session")),
+          ),
+      },
+    ]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   );
   const layerRealThreads = ThreadManagement.layer.pipe(Layer.provide(layerOrchestrator));
@@ -237,7 +263,7 @@ export function makeHarness(
     }),
   ).pipe(Layer.provide(layerRealThreads));
 
-  const layerLaunch = Layer.mock(ThreadLaunch.ThreadLaunchService)({
+  const layerScriptedLaunch = Layer.mock(ThreadLaunch.ThreadLaunchService)({
     launch: (input) =>
       Effect.sync(() => {
         world.launches.push(input);
@@ -280,6 +306,7 @@ export function makeHarness(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/unused",
       ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
+      folderForThread: () => Effect.succeed(Option.none()),
     }),
     ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
@@ -288,6 +315,55 @@ export function makeHarness(
   ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-channel-scenarios-" })),
     Layer.provideMerge(NodeServices.layer),
+  );
+
+  const layerLaunchDependencies = Layer.mergeAll(
+    layerExternal,
+    layerThreads,
+    CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
+    IdAllocator.layer,
+    WorktreeSetupTracker.layer,
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
+    Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
+    Layer.mock(GitWorkflow.GitWorkflowService)({}),
+    Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+      runForThread: () => Effect.succeed({ status: "no-script" }),
+    }),
+    ProviderRegistryMock.layer(),
+    Layer.mock(ProjectService.ProjectService)({
+      getById: () =>
+        Effect.succeed(
+          Option.some({
+            ...shells[0]!,
+            repositoryIdentity: null,
+            faviconPath: null,
+            defaultThreadEnvMode: null,
+            deletedAt: null,
+          }),
+        ),
+    }),
+  );
+  const layerLaunch = Layer.effect(
+    ThreadLaunch.ThreadLaunchService,
+    Effect.gen(function* () {
+      const service = yield* ThreadLaunch.ThreadLaunchService;
+      return ThreadLaunch.ThreadLaunchService.of({
+        ...service,
+        launch: (input) =>
+          service.launch(input).pipe(
+            Effect.tap(() => {
+              if (options.realWorkerLaunch) world.launches.push(input);
+              return launch.afterAccepted(input);
+            }),
+          ),
+      });
+    }),
+  ).pipe(
+    Layer.provide(
+      options.realWorkerLaunch
+        ? ThreadLaunch.layer.pipe(Layer.provide(layerLaunchDependencies))
+        : layerScriptedLaunch,
+    ),
   );
 
   const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
@@ -319,9 +395,16 @@ export function makeHarness(
     Layer.provideMerge(layerThreads),
     Layer.provideMerge(layerOrchestrator),
     Layer.provideMerge(layerExternal),
+    Layer.provideMerge(layerLaunch),
+    Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
   );
-  return { layer, world, slackSent, slackFailures, script };
+  return { layer, world, slackSent, slackFailures, script, launch, providerCalls };
 }
+
+/** A new process owner over the caller's existing ledger and worker services, in its child scope. */
+export const makeRuntime = Layer.build(Layer.fresh(ChannelRuntime.layer)).pipe(
+  Effect.map((context) => Context.get(context, ChannelRuntime.ChannelRuntime)),
+);
 
 export const setupBot = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;

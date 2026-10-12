@@ -3,30 +3,52 @@ import {
   type ChannelIngestInput,
   ChannelGatewayError,
   CommandId,
+  ChannelReceptionId,
+  ChannelTaskEventId,
   MessageId,
+  ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "../orchestration-v2/ThreadMessageIntake.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
-import { deliveryIdFor, workerLaunchIdsFor } from "./channelIds.ts";
+import {
+  answerForwardIdsFor,
+  deliveryIdFor,
+  taskEventIdFor,
+  workerLaunchIdsFor,
+} from "./channelIds.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 
 import {
   botMessages,
   botThreadId,
   defaultScript,
+  environmentId,
   goatInput,
   linkSlackUser,
   makeHarness,
+  makeRuntime,
+  modelSelection,
   onlyTask,
   owner,
   ownerId,
@@ -34,6 +56,7 @@ import {
   resultsTo,
   rpcContext,
   setupBot,
+  scratchProjectId,
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
@@ -45,6 +68,80 @@ import {
  */
 
 describe("GOAT bot boundary (scenario 6)", () => {
+  it.effect(
+    "refuses MCP and scheduled direct sends without bot run events or provider effects",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const events = yield* EventSink.EventSinkV2;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const effects = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        yield* gateway.ingest(goatInput("do: inspect the build", "boundary-chip"), rpcContext);
+        yield* runtime.drain;
+        // The scheduler retains the task's creation source and marks the dispatch with its task ID.
+        for (const source of ["mcp", "schedule"] as const) {
+          const commandId = CommandId.make("bot-direct-" + source);
+          const before = yield* events.latestSequence();
+          const error = yield* Effect.flip(
+            threads.sendToThread({
+              projectId: scratchProjectId,
+              threadId: botThreadId,
+              commandId,
+              messageId: MessageId.make("bot-direct-message-" + source),
+              text: "do: bypass reception",
+              attachments: [],
+              mode: "queue",
+              createdBy: source === "mcp" ? "agent" : "user",
+              creationSource: source === "mcp" ? "mcp" : "web",
+              ...(source === "schedule"
+                ? { scheduledTaskId: ScheduledTaskId.make("schedule:bot") }
+                : {}),
+            }),
+          );
+          assert.strictEqual(error._tag, "OrchestratorChannelBotThreadError");
+          assert.strictEqual(yield* events.latestSequence(), before);
+          assert.deepStrictEqual(
+            yield* Stream.runCollect(events.readByCommandId({ commandId })),
+            [],
+          );
+          assert.deepStrictEqual(yield* outbox.listByCommandId(commandId), []);
+        }
+        const highWater = yield* events.latestSequence({ threadId: botThreadId });
+        const stored = yield* events.stream({ threadId: botThreadId }).pipe(
+          Stream.takeUntil((event) => event.sequence === highWater),
+          Stream.runCollect,
+        );
+        assert.isFalse(
+          stored.some(
+            ({ event }) => event.type.startsWith("run.") || event.type.startsWith("provider-turn."),
+          ),
+        );
+        for (const commandId of new Set(
+          stored.flatMap((event) => (event.commandId ? [event.commandId] : [])),
+        )) {
+          assert.isFalse(
+            (yield* outbox.listByCommandId(commandId)).some(
+              (effect) => effect.request.type === "provider-turn.start",
+            ),
+          );
+        }
+        yield* effects.drain();
+        assert.deepStrictEqual(harness.providerCalls, []);
+        const records = yield* botMessages;
+        assert.deepStrictEqual(records.runs, []);
+        assert.isTrue(records.messages.some((message) => message.role === "assistant"));
+        assert.isTrue(
+          records.turnItems.some(
+            (item) => item.type === "notification" && item.ledgerTask !== undefined,
+          ),
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
   it.effect(
     "records bot input and replies without any provider run, and refuses coding turns",
     () => {
@@ -228,6 +325,368 @@ describe("concurrent input (scenario 1)", () => {
 
 /** The single ledger task, for tests that create exactly one. */
 describe("duplicates and restarts (scenario 2)", () => {
+  const now = "2026-10-12T00:00:00.000Z";
+  const claimFirstOwner = Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(now));
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    assert.isTrue(
+      yield* ledger.claimOwnership({
+        token: runtime.ownerToken,
+        now,
+        staleBefore: "2026-10-11T23:59:30.000Z",
+      }),
+    );
+    return runtime;
+  });
+  const takeOver = (first: ChannelRuntime.ChannelRuntime["Service"]) =>
+    Effect.gen(function* () {
+      const second = yield* makeRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.notStrictEqual(second.ownerToken, first.ownerToken);
+      assert.isFalse(
+        yield* ledger.claimOwnership({
+          token: second.ownerToken,
+          now,
+          staleBefore: "2026-10-11T23:59:30.000Z",
+        }),
+      );
+      yield* TestClock.adjust(Duration.seconds(31));
+      assert.isTrue(
+        yield* ledger.claimOwnership({
+          token: second.ownerToken,
+          now: "2026-10-12T00:00:31.000Z",
+          staleBefore: "2026-10-12T00:00:01.000Z",
+        }),
+      );
+      yield* second.recover;
+      return second;
+    });
+
+  it.effect("a new owner finishes a processing input once and fences the old reception", () => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const first = yield* claimFirstOwner;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          slackInput("do: recover reception", "restart-input"),
+          slackContext,
+        );
+        const receptionId = ChannelReceptionId.make("reception:old-owner");
+        yield* ledger.beginReception({
+          owner: first.ownerToken,
+          inputId: input.inputId,
+          receptionId,
+          readAt: now,
+        });
+        assert.strictEqual((yield* ledger.getInput(input.inputId))?.snapshot.state, "processing");
+        const second = yield* takeOver(first);
+        yield* second.drain;
+        yield* second.drain;
+        const stored = yield* ledger.getInput(input.inputId);
+        assert.strictEqual(stored?.snapshot.state, "replied");
+        assert.notStrictEqual(stored?.snapshot.receptionId, receptionId);
+        const late = yield* Effect.flip(
+          ledger.completeReception({
+            owner: first.ownerToken,
+            inputId: input.inputId,
+            receptionId,
+            replyText: "Late answer",
+            decision: { replyText: "Late answer", action: { type: "report_only" } },
+            deliveries: [],
+            now: "2026-10-12T00:00:31.000Z",
+          }),
+        );
+        assert.strictEqual(late.reason, "ownership_lost");
+        assert.strictEqual((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.length, 1);
+        assert.strictEqual(harness.world.launches.length, 1);
+        assert.strictEqual(
+          resultsTo(harness.slackSent, "receipt").filter(
+            (send) => send.message.inReplyToInputId === input.inputId,
+          ).length,
+          1,
+        );
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect.each(["before launch", "after launch acceptance"] as const)(
+    "a new owner recovers dispatching %s with one durable worker run",
+    (crashPoint) => {
+      const harness = makeHarness({ realWorkerLaunch: true });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          yield* setupBot;
+          yield* linkSlackUser();
+          const first = yield* claimFirstOwner;
+          const gateway = yield* ChannelGateway.ChannelGateway;
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const reception = yield* ChannelReceptionService.ChannelReceptionService;
+          const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+          const input = yield* gateway.ingest(
+            slackInput("do: recover dispatch", "restart-launch"),
+            slackContext,
+          );
+          yield* reception.receive(input.inputId, first.ownerToken);
+          const task = yield* onlyTask;
+          const stored = (yield* ledger.getTask(task.taskId))!;
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.dispatch.claimed",
+              payload: {
+                generation: task.generation,
+                target: {
+                  environmentId,
+                  projectId,
+                  modelSelection,
+                  runtimeMode: "auto-accept-edits",
+                  interactionMode: "default",
+                  workspaceStrategy: { type: "root" },
+                },
+                leaseExpiresAt: now,
+              },
+            },
+            { owner: first.ownerToken },
+          );
+          const ids = workerLaunchIdsFor(task.taskId, task.generation);
+          if (crashPoint === "after launch acceptance") {
+            const accepted = yield* Deferred.make<void>();
+            harness.launch.afterAccepted = () =>
+              Deferred.succeed(accepted, undefined).pipe(Effect.andThen(Effect.never));
+            const interrupted = yield* dispatcher
+              .dispatch(task.taskId, first.ownerToken)
+              .pipe(Effect.forkScoped);
+            yield* Deferred.await(accepted);
+            yield* Fiber.interrupt(interrupted);
+            harness.launch.afterAccepted = () => Effect.void;
+            assert.strictEqual(harness.world.launches.length, 1);
+            assert.strictEqual(
+              (yield* (yield* Orchestrator.OrchestratorV2).getThreadRecords(ids.threadId, ["runs"]))
+                .runs.length,
+              1,
+            );
+          }
+          assert.strictEqual((yield* onlyTask).status, "dispatching");
+          assert.isUndefined((yield* onlyTask).worker);
+          const second = yield* takeOver(first);
+          yield* second.drain;
+          yield* second.drain;
+          const bound = yield* onlyTask;
+          assert.strictEqual(bound.status, "running");
+          assert.strictEqual(bound.worker?.threadId, ids.threadId);
+          assert.strictEqual(harness.world.launches.length, crashPoint === "before launch" ? 1 : 2);
+          for (const launch of harness.world.launches) {
+            assert.strictEqual(launch.commandId, ids.commandId);
+            assert.strictEqual(launch.threadId, ids.threadId);
+            assert.strictEqual(launch.initialMessage?.messageId, ids.messageId);
+          }
+          const records = yield* (yield* Orchestrator.OrchestratorV2).getThreadRecords(
+            ids.threadId,
+            ["runs", "messages"],
+          );
+          assert.strictEqual(records.runs.length, 1);
+          assert.strictEqual(records.runs[0]?.userMessageId, ids.messageId);
+          assert.strictEqual(bound.worker?.runId, records.runs[0]?.id);
+          assert.strictEqual(
+            records.messages.filter((message) => message.id === ids.messageId).length,
+            1,
+          );
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
+  it.effect("a new owner narrates a persisted completion once", () => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const first = yield* claimFirstOwner;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(slackInput("do: recover result", "restart-result"), slackContext);
+        yield* first.drain;
+        const task = yield* onlyTask;
+        harness.world.setStatus(task.worker!.threadId, 1, "completed", "Recovered result.");
+        yield* reports.reconcile(first.ownerToken);
+        assert.strictEqual(
+          (yield* ledger.listPendingNarrations(50)).filter(
+            (pending) => pending.event.type === "task.completed",
+          ).length,
+          1,
+        );
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+        const second = yield* takeOver(first);
+        yield* second.drain;
+        yield* second.drain;
+        assert.deepStrictEqual(yield* ledger.listPendingNarrations(50), []);
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 1);
+        assert.strictEqual(
+          resultsTo(harness.slackSent, "result")[0]?.message.text,
+          "Done: recover result\nRecovered result.",
+        );
+      }),
+    ).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "a new owner replays an accepted answer forward with the same IDs and one answer run",
+    () => {
+      const harness = makeHarness();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          yield* setupBot;
+          yield* linkSlackUser();
+          const first = yield* claimFirstOwner;
+          const gateway = yield* ChannelGateway.ChannelGateway;
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+          const reception = yield* ChannelReceptionService.ChannelReceptionService;
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          yield* gateway.ingest(slackInput("do: recover answer", "restart-question"), slackContext);
+          yield* first.drain;
+          const task = yield* onlyTask;
+          yield* reports.report(
+            {
+              taskId: task.taskId,
+              eventId: ChannelTaskEventId.make("restart-question"),
+              generation: 1,
+              status: "waiting_input",
+              summary: "Choose",
+              question: "Where?",
+            },
+            task.worker!.threadId,
+          );
+          harness.world.setStatus(task.worker!.threadId, 1, "completed");
+          yield* first.drain;
+          const waiting = yield* onlyTask;
+          const answer = yield* gateway.ingest(
+            {
+              ...slackInput("staging", "restart-answer"),
+              intent: "answer",
+              taskId: task.taskId,
+              questionId: waiting.openQuestions[0]!.questionId,
+            },
+            slackContext,
+          );
+          yield* reception.receive(answer.inputId, first.ownerToken);
+          const [pending] = yield* ledger.listPendingForwards(50);
+          assert.isDefined(pending);
+          const ids = answerForwardIdsFor(pending!.event.eventId);
+          // Worker accepted the send; the old process died before completeForward committed.
+          yield* threads.sendToThread({
+            projectId,
+            threadId: task.worker!.threadId,
+            commandId: ids.commandId,
+            messageId: ids.messageId,
+            text: "Answer from Owner: staging",
+            attachments: [],
+            mode: "queue",
+            createdBy: "user",
+            creationSource: "server",
+          });
+          assert.strictEqual((yield* ledger.listPendingForwards(50)).length, 1);
+          const second = yield* takeOver(first);
+          yield* second.drain;
+          yield* second.drain;
+          assert.deepStrictEqual(yield* ledger.listPendingForwards(50), []);
+          assert.strictEqual(harness.world.sends.length, 2);
+          for (const send of harness.world.sends) {
+            assert.strictEqual(send.commandId, ids.commandId);
+            assert.strictEqual(send.messageId, ids.messageId);
+          }
+          assert.strictEqual(
+            harness.world.runs
+              .get(task.worker!.threadId)
+              ?.filter((run) => run.userMessageId === ids.messageId).length,
+            1,
+          );
+          assert.strictEqual(
+            (yield* onlyTask).worker?.runId,
+            harness.world.latestRun(task.worker!.threadId)?.id,
+          );
+          assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "a new owner's background acquisition settles in-flight Slack and GOAT deliveries",
+    () => {
+      const harness = makeHarness();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          yield* setupBot;
+          yield* linkSlackUser();
+          const first = yield* claimFirstOwner;
+          yield* first.drain;
+          harness.slackSent.length = 0;
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const gateway = yield* ChannelGateway.ChannelGateway;
+          const reception = yield* ChannelReceptionService.ChannelReceptionService;
+          const slack = yield* gateway.ingest(
+            slackInput("Slack interrupted", "restart-delivery-slack"),
+            slackContext,
+          );
+          const goat = yield* gateway.ingest(
+            goatInput("GOAT interrupted", "restart-delivery-goat"),
+            rpcContext,
+          );
+          yield* reception.receive(slack.inputId, first.ownerToken);
+          yield* reception.receive(goat.inputId, first.ownerToken);
+          const claimed = yield* ledger.claimDueDeliveries({
+            owner: first.ownerToken,
+            now,
+            limit: 50,
+          });
+          assert.strictEqual(claimed.length, 2);
+          const slackDelivery = deliveryIdFor("reply:" + slack.inputId);
+          const goatDelivery = deliveryIdFor("reply:" + goat.inputId);
+          assert.strictEqual(yield* ledger.getDeliveryState(slackDelivery), "delivering");
+          assert.strictEqual(yield* ledger.getDeliveryState(goatDelivery), "delivering");
+          const second = yield* makeRuntime;
+          assert.notStrictEqual(second.ownerToken, first.ownerToken);
+          yield* TestClock.adjust(Duration.seconds(31));
+          const recovered = yield* Deferred.make<void>();
+          // Observe recovery's completion, while the real background layer acquires ownership.
+          yield* Layer.build(
+            ChannelRuntime.layerBackground.pipe(
+              Layer.provide(
+                Layer.succeed(ChannelRuntime.ChannelRuntime, {
+                  ...second,
+                  runPass: Effect.succeed(0),
+                  recover: second.recover.pipe(
+                    Effect.tap(() => Deferred.succeed(recovered, undefined)),
+                  ),
+                }),
+              ),
+            ),
+          );
+          yield* Deferred.await(recovered);
+          yield* second.drain;
+          yield* second.drain;
+          assert.strictEqual(yield* ledger.getDeliveryState(slackDelivery), "ambiguous");
+          assert.strictEqual(yield* ledger.getDeliveryState(goatDelivery), "delivered");
+          assert.strictEqual(harness.slackSent.length, 0);
+          assert.strictEqual(
+            (yield* botMessages).messages.filter(
+              (message) =>
+                message.role === "assistant" && message.channel?.inReplyToInputId === goat.inputId,
+            ).length,
+            1,
+          );
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
   it.effect("keeps one input per idempotency key and refuses changed content under it", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -379,6 +838,125 @@ describe("delivery (scenario 3)", () => {
 });
 
 describe("who may do what (scenario 4)", () => {
+  it.effect.each(["connection", "identity"] as const)(
+    "starts no Slack work when the %s ceiling removes orchestration:operate",
+    (lower) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const identities = yield* ChannelIdentityService.ChannelIdentityService;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const connection = {
+          ...slackContext,
+          grantedScopes:
+            lower === "connection"
+              ? ["orchestration:read" as const, "settings:write" as const]
+              : owner.grantedScopes,
+        };
+        const { code } = yield* identities.createLink(
+          {
+            connectionId: "slack-1",
+            runtimeModeCeiling: "auto-accept-edits",
+            grantedScopes:
+              lower === "identity"
+                ? ["orchestration:read"]
+                : ["orchestration:read", "orchestration:operate"],
+          },
+          owner,
+        );
+        yield* gateway.linkIdentity(
+          {
+            connectionId: "slack-1",
+            externalActorId: "U1",
+            code,
+            idempotencyKey: "scope-link",
+            replyAddress: slackInput("", "unused").replyAddress,
+          },
+          connection,
+        );
+        const input = yield* gateway.ingest(
+          slackInput("do: forbidden work", "scope-work"),
+          connection,
+        );
+        yield* runtime.drain;
+        assert.deepStrictEqual((yield* ledger.getInput(input.inputId))?.requester?.grantedScopes, [
+          "orchestration:read",
+        ]);
+        assert.strictEqual((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.length, 0);
+        assert.strictEqual(harness.world.launches.length, 0);
+        assert.strictEqual(harness.world.runs.size, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+  it.effect("refuses an answer from someone who could not run the task", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const identities = yield* ChannelIdentityService.ChannelIdentityService;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      // A colleague in the same Slack thread who may only read.
+      const { code } = yield* identities.createLink(
+        {
+          connectionId: "slack-1",
+          runtimeModeCeiling: "auto-accept-edits",
+          grantedScopes: ["orchestration:read"],
+        },
+        owner,
+      );
+      yield* gateway.linkIdentity(
+        {
+          connectionId: "slack-1",
+          externalActorId: "U2",
+          code,
+          idempotencyKey: "link-U2",
+          replyAddress: slackInput("", "unused").replyAddress,
+        },
+        slackContext,
+      );
+      yield* gateway.ingest(slackInput("do: ship the fix", "answer-scope"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("answer-scope-question"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Choose",
+          question: "Staging or production?",
+        },
+        task.worker!.threadId,
+      );
+      harness.world.setStatus(task.worker!.threadId, 1, "completed");
+      yield* runtime.drain;
+      const waiting = yield* onlyTask;
+      const answer = yield* gateway.ingest(
+        {
+          ...slackInput("production", "answer-scope-U2", undefined, "U2"),
+          intent: "answer",
+          taskId: task.taskId,
+          questionId: waiting.openQuestions[0]!.questionId,
+        },
+        slackContext,
+      );
+      yield* runtime.drain;
+      const after = yield* onlyTask;
+      assert.strictEqual(after.status, "waiting_input");
+      assert.deepStrictEqual(after.openQuestions, waiting.openQuestions);
+      assert.strictEqual(harness.world.sends.length, 0);
+      assert.strictEqual(
+        (yield* ledger.getInput(answer.inputId))?.snapshot.reply?.text,
+        CHANNEL_COPY.answerNotAllowed,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("answers unlinked Slack users with a link notice and starts no work", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -451,7 +1029,7 @@ describe("who may do what (scenario 4)", () => {
         const agent = yield* gateway.ingest(mcpInput, {
           ...owner,
           principalId: "mcp:ns-1",
-          grantedScopes: ["orchestration:read"],
+          grantedScopes: ["orchestration:read", "orchestration:operate"],
           caller: { type: "mcp", requestNamespace: "ns-1" },
         });
         // A caller cannot claim another namespace's conversation.
@@ -467,6 +1045,11 @@ describe("who may do what (scenario 4)", () => {
         assert.strictEqual(spoofed.reason, "forbidden");
         yield* runtime.drain;
         assert.strictEqual((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.length, 0);
+        assert.strictEqual(harness.world.launches.length, 0);
+        assert.deepStrictEqual((yield* ledger.getInput(agent.inputId))?.requester?.grantedScopes, [
+          "orchestration:read",
+          "orchestration:operate",
+        ]);
         assert.strictEqual(
           (yield* ledger.getInput(agent.inputId))?.snapshot.reply?.text,
           CHANNEL_COPY.agentCannotCreateWork,
@@ -619,6 +1202,111 @@ describe("completion (scenario 5)", () => {
       const task = yield* onlyTask;
       return { task, threadId: task.worker!.threadId, runtime };
     });
+
+  it.effect(
+    "refuses a completed report from the wrong generation without recording a completion",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { task, threadId, runtime } = yield* startTask();
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const eventId = ChannelTaskEventId.make("wrong-generation-completed");
+        const error = yield* Effect.flip(
+          reports.report(
+            {
+              taskId: task.taskId,
+              eventId,
+              generation: task.generation + 1,
+              status: "completed",
+              summary: "False success",
+            },
+            threadId,
+          ),
+        );
+        assert.strictEqual(error.reason, "forbidden");
+        yield* runtime.drain;
+        const current = yield* onlyTask;
+        assert.strictEqual(current.status, "running");
+        assert.strictEqual(current.version, task.version);
+        assert.isUndefined(current.proposedCompletion);
+        assert.isFalse(yield* ledger.hasTaskEvent(eventId));
+        assert.isFalse(yield* ledger.hasTaskEvent(taskEventIdFor(task.taskId, task.version + 1)));
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("delivers only failure when a proposed completion's worker run fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("completed-before-failure"),
+          generation: task.generation,
+          status: "completed",
+          summary: "All done",
+        },
+        threadId,
+      );
+      assert.isDefined((yield* onlyTask).proposedCompletion);
+      harness.world.setStatus(threadId, 1, "failed", "This is not a successful result.");
+      yield* runtime.drain;
+      yield* runtime.drain;
+      const failed = yield* onlyTask;
+      assert.strictEqual(failed.status, "failed");
+      assert.strictEqual(failed.resultSummary, "The coding thread ended with failed.");
+      assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+      assert.strictEqual(resultsTo(harness.slackSent, "failure").length, 1);
+      assert.strictEqual(resultsTo(harness.slackSent, "failure")[0]?.message.taskId, task.taskId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps an open question when the worker reports completed and its run finishes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("open-before-completed"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Need a decision",
+          question: "Staging or production?",
+        },
+        threadId,
+      );
+      const waiting = yield* onlyTask;
+      const proposalId = ChannelTaskEventId.make("completed-with-open-question");
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: proposalId,
+          generation: task.generation,
+          status: "completed",
+          summary: "Pretend done",
+        },
+        threadId,
+      );
+      harness.world.setStatus(threadId, 1, "completed", "Pretend done");
+      yield* runtime.drain;
+      yield* runtime.drain;
+      const current = yield* onlyTask;
+      assert.strictEqual(current.status, "waiting_input");
+      assert.deepStrictEqual(current.openQuestions, waiting.openQuestions);
+      assert.strictEqual(current.version, waiting.version);
+      assert.isFalse(yield* ledger.hasTaskEvent(proposalId));
+      assert.isFalse(yield* ledger.hasTaskEvent(taskEventIdFor(task.taskId, waiting.version + 1)));
+      assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+      assert.strictEqual(resultsTo(harness.slackSent, "question").length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("reports failure for an interrupted run and never success", () => {
     const harness = makeHarness();

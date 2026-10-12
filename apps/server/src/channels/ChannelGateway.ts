@@ -101,6 +101,16 @@ const RUNTIME_MODE_ORDER: ReadonlyArray<RuntimeMode> = [
 export const lowerRuntimeMode = (left: RuntimeMode, right: RuntimeMode): RuntimeMode =>
   RUNTIME_MODE_ORDER.indexOf(left) <= RUNTIME_MODE_ORDER.indexOf(right) ? left : right;
 
+/**
+ * Whether someone may answer a task's question. An answer steers work that runs under the asker's
+ * ceiling, so the answerer needs to be allowed to run work and at least as far as the asker.
+ */
+export const mayAnswerFor = (answerer: ChannelRequester, asker: ChannelRequester): boolean =>
+  answerer.ownerId === asker.ownerId &&
+  answerer.grantedScopes.includes("orchestration:operate") &&
+  lowerRuntimeMode(answerer.runtimeModeCeiling, asker.runtimeModeCeiling) ===
+    asker.runtimeModeCeiling;
+
 /** What a linked account may do: the connection's ceiling and the link's, whichever is lower. */
 export const effectiveRequester = (
   owner: ChannelConnectionOwner,

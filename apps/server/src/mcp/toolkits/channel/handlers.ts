@@ -77,9 +77,7 @@ export const layer = McpToolAccess.toLayer(ChannelToolkit, {
         text: input.text,
         attachments: [],
         receivedAt: DateTime.formatIso(yield* DateTime.now),
-        intent: input.taskId !== undefined && input.questionId !== undefined ? "answer" : "message",
-        ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
-        ...(input.questionId === undefined ? {} : { questionId: input.questionId }),
+        intent: "message",
       };
       return yield* gateway.ingest(message, mcpContextOf(scope)).pipe(Effect.mapError(failureFor));
     }),

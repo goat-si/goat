@@ -12,8 +12,10 @@ export const CHANNEL_COPY = {
     'I can\'t take work from this account yet. Open GOAT, create a link code under Settings → Integrations → Slack, and send me "link <code>".',
   receptionFailed: "I couldn't read that just now. Please send it again.",
   agentCannotCreateWork:
-    "Only people can start new work. I can report status or pass an answer to work that already exists.",
+    "Only people can start new work. I can tell you how existing work is going.",
   noReceptionModel:
     "No reception model is available. Pick a Codex or Claude model for text generation in GOAT settings.",
   answerForwarded: "Thanks. I passed your answer on.",
+  answerNotAllowed:
+    "I can't pass that on: answering this task's question needs the same access as the person who asked for it.",
 } as const;

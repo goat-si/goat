@@ -5,7 +5,6 @@ import {
   ChannelInputSnapshot,
   ChannelListTasksInput,
   ChannelListTasksResult,
-  ChannelQuestionId,
   ChannelTask,
   ChannelTaskId,
   ChannelTaskReportInput,
@@ -36,13 +35,11 @@ const shared = {
 const ChannelIngestTool = Tool.make(CHANNEL_MCP_TOOL_NAMES.ingest, {
   ...shared,
   description:
-    "Send a message to GOAT's front desk as an agent. It answers within seconds; read the answer with channel_input_get and the returned inputId. Agents can ask about work, report on it, or answer a question a task asked; only people can start new work. Reuse clientRequestId to retry safely. conversationKey keeps related messages in one conversation (default: one per caller).",
+    "Send a message to GOAT's front desk as an agent. It answers within seconds; read the answer with channel_input_get and the returned inputId. Agents can ask how work is going; only people can start work or answer a task's questions. Reuse clientRequestId to retry safely. conversationKey keeps related messages in one conversation (default: one per caller).",
   parameters: Schema.Struct({
     text: Schema.String.check(Schema.isMaxLength(20_000)),
     clientRequestId: TrimmedNonEmptyString,
     conversationKey: Schema.optional(TrimmedNonEmptyString),
-    taskId: Schema.optional(ChannelTaskId),
-    questionId: Schema.optional(ChannelQuestionId),
   }),
   success: ChannelIngestResult,
 })

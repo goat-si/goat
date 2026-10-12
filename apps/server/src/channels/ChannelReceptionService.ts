@@ -35,6 +35,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
+import { mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -327,6 +328,9 @@ const make = Effect.gen(function* () {
         if (stored === undefined || !open) {
           replyText = "I couldn't match that to an open question. Which task do you mean?";
           finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+        } else if (!mayAnswerFor(requester, stored.task.requester)) {
+          replyText = CHANNEL_COPY.answerNotAllowed;
+          finalDecision = { replyText, action: { type: "report_only" } };
         } else {
           const eventId = taskEventIdFor(stored.task.taskId, stored.task.version + 1);
           const hasWorker = stored.task.worker !== undefined;

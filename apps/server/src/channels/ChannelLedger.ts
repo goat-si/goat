@@ -928,7 +928,9 @@ const make = Effect.gen(function* () {
                 updated_at = ${input.now}
               WHERE delivery_id IN (
                 SELECT due.delivery_id FROM channel_outbox AS due
-                WHERE due.state = 'pending' AND due.next_attempt_at <= ${input.now}
+                -- The IN term lets SQLite use the partial due index; = 'pending' is the real filter.
+                WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
+                  AND due.next_attempt_at <= ${input.now}
                   AND NOT EXISTS (
                     SELECT 1 FROM channel_outbox AS earlier
                     WHERE earlier.task_id = due.task_id
