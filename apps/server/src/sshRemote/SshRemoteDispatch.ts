@@ -1115,14 +1115,13 @@ const make = Effect.gen(function* () {
       notes.push(`Registered ${folder.path} as a new project on ${target.alias}.`);
     }
 
-    const declared =
-      input.launchedBy === undefined &&
-      input.report === undefined &&
-      input.standingInstructions !== false
-        ? null
-        : yield* remoteLaunchArguments(remote);
+    const declared = yield* remoteLaunchArguments(remote);
     const forwardLaunchedBy =
       input.launchedBy !== undefined && declared?.has("launchedBy") === true;
+    // This machine owns any watch of a launch it forwards. Without this, a remote that
+    // watches outside launches would report an unmarked one too, even after the
+    // origin opted out.
+    const forwardWatchOptOut = declared?.has("notifyOnCompletion") === true;
     const forwardStandingOptOut =
       input.standingInstructions === false && declared?.has("standingInstructions") === true;
     if (input.standingInstructions === false && !forwardStandingOptOut)
@@ -1177,6 +1176,7 @@ const make = Effect.gen(function* () {
             ...(attachments.length === 0 ? {} : { attachments }),
             ...(forwardReport ? { report: input.report } : {}),
             ...(forwardStandingOptOut ? { standingInstructions: false } : {}),
+            ...(forwardWatchOptOut ? { notifyOnCompletion: false } : {}),
           },
         });
       const rawLaunched = yield* launch(forwardLaunchedBy).pipe(

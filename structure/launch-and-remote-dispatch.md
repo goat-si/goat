@@ -13,7 +13,10 @@ A launch watch is a launcher thread's request to hear about another thread. The 
 them.
 
 The file is `thread-launch-watches.json` (`LAUNCH_WATCH_FILE`) under the server state directory.
-There is no migration. `register`, `rearm`, `unwatch`, and `list` are the service methods.
+Launcherless watches live beside it in `thread-launch-watches-launcherless.json`
+(`LAUNCHERLESS_WATCH_FILE`), because servers from before them require a launcher on every watch and
+would set the whole shared file aside. Loading moves any launcherless watch an earlier build left in
+the shared file. `register`, `rearm`, `unwatch`, and `list` are the service methods.
 
 `goat_thread_launch` (`apps/server/src/mcp/toolkits/project/handlers.ts`) and
 `goat_ssh_thread_launch` (`apps/server/src/mcp/toolkits/ssh/handlers.ts`) register a watch when
@@ -35,9 +38,16 @@ passed `notifyWebhook: true`, or `completionWebhook.externalLaunches` is set. Ot
 nothing, as before. Such a watch has `launcherThreadId: null` and stores the client's runtime
 mode ceiling in `ceiling`, so its remote reads never go above what that client was approved for.
 Its reports go only to the webhook, with `launcherThreadId: null` in the payload. It is deleted once
-its run is reported or the thread is gone, because no thread can re-arm or unwatch it.
+its run is reported or the thread is gone, because no thread can re-arm or unwatch it. For the same
+reason it is also dropped while its run is still owed once the webhook would no longer post its
+reports, or seven days after it was created.
 `listRemote` leaves it out. `goat_thread_launch` skips a launch that another machine's GOAT forwarded
 (`launchedBy` or `report` set), because the dispatching machine watches that launch itself.
+`SshRemoteDispatch` also forwards `notifyOnCompletion: false` to a remote that declares it, so an
+outside client's SSH launch, which carries neither, is not watched a second time there.
+
+A send queued behind a starting turn may later join it, ending its own run as cancelled. The local
+wait follows it into the joined run, and the follower reports that run under its own id, once.
 
 > Decision record: [ADR-0009](decisions/ADR-0009-launch-watches.md)
 

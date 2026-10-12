@@ -81,6 +81,12 @@ const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
 const REMOTE_READ_TIMEOUT_MS = 60_000;
 /** A watch with nothing left to report is dropped this long after its last change. */
 const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/**
+ * A launcherless watch has no thread that could unwatch it, so it is dropped
+ * this long after it was created even while its run is still owed, for example
+ * when the host never comes back or a question is never answered.
+ */
+const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
 const RETRY_MS = 30_000;
 const TAIL_WINDOW = 40;
@@ -152,10 +158,24 @@ export class LaunchWatchService extends Context.Service<
 >()("t3/mcp/LaunchWatchService") {}
 
 export const LAUNCH_WATCH_FILE = "thread-launch-watches.json";
+/**
+ * Launcherless watches live in their own file. Servers from before they existed
+ * require a launcher thread and would set the whole shared file aside, losing
+ * every ordinary watch; this way they keep reading LAUNCH_WATCH_FILE.
+ */
+export const LAUNCHERLESS_WATCH_FILE = "thread-launch-watches-launcherless.json";
 
 /** What one follower step learned about the run it follows. */
 type StepResult =
-  | { readonly _tag: "Terminal"; readonly status: LaunchWatchTerminalStatus }
+  | {
+      readonly _tag: "Terminal";
+      readonly status: LaunchWatchTerminalStatus;
+      /**
+       * The run that ended: the followed one, or the running turn a queued
+       * message was promoted into, which carries on its work.
+       */
+      readonly runId: RunId;
+    }
   | {
       readonly _tag: "Running";
       readonly questions: ReadonlyArray<{ readonly id: string; readonly kind: string | null }>;
@@ -208,6 +228,7 @@ const isPermanentDispatchFailure = (cause: Cause.Cause<unknown>) =>
   });
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
+const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeRequestIds = Schema.decodeUnknownEffect(
@@ -233,8 +254,11 @@ export const make = Effect.gen(function* () {
   const layerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const statePath = path.join(config.stateDir, LAUNCH_WATCH_FILE);
+  const launcherlessPath = path.join(config.stateDir, LAUNCHERLESS_WATCH_FILE);
 
   let watches = new Map<string, LaunchWatch>();
+  /** What each state file holds on disk, so a save rewrites only the file that changed. */
+  const onDisk = new Map<string, string>();
   /** First sightings of local questions whose escalation message has not landed yet. */
   const missingEscalations = new Map<string, Map<string, number>>();
   /** One follower per watch with runs to report; only touched while holding the lock. */
@@ -245,13 +269,31 @@ export const make = Effect.gen(function* () {
 
   const locked = lock.withPermits(1);
 
+  const writeFile = (filePath: string, list: ReadonlyArray<LaunchWatch>) =>
+    Effect.gen(function* () {
+      const contents = `${yield* encodeDocument({ version: 1, watches: list })}\n`;
+      // A file that never existed is only created once it has a watch to hold.
+      if (onDisk.get(filePath) === contents || (list.length === 0 && !onDisk.has(filePath))) return;
+      yield* writeFileStringAtomically({ filePath, contents }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      );
+      onDisk.set(filePath, contents);
+    });
+
   const persist = (next: Map<string, LaunchWatch>) =>
-    writeFileStringAtomically({
-      filePath: statePath,
-      contents: `${JSON.stringify({ version: 1, watches: [...next.values()] })}\n`,
+    Effect.gen(function* () {
+      const all = [...next.values()];
+      // Launcherless first: moving them out of the shared file must not lose them.
+      yield* writeFile(
+        launcherlessPath,
+        all.filter((watch) => watch.launcherThreadId === null),
+      );
+      yield* writeFile(
+        statePath,
+        all.filter((watch) => watch.launcherThreadId !== null),
+      );
     }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
       Effect.mapError(
         (cause) =>
           new LaunchWatchStoreError({
@@ -276,26 +318,40 @@ export const make = Effect.gen(function* () {
     return persist(next);
   };
 
-  const load = Effect.gen(function* () {
-    const raw = yield* fs.readFileString(statePath).pipe(
-      Effect.map(Option.some),
-      Effect.catch((error) =>
-        error.reason._tag === "NotFound"
-          ? Effect.succeed(Option.none<string>())
-          : Effect.fail(error),
-      ),
-    );
-    if (Option.isNone(raw) || raw.value.trim().length === 0) return [];
-    const decoded = yield* Effect.result(decodeDocument(raw.value));
-    if (decoded._tag === "Success") return decoded.success.watches;
-    // Keep the unreadable file for inspection instead of overwriting it.
-    const aside = `${statePath}.corrupt-${yield* Clock.currentTimeMillis}`;
-    yield* fs.rename(statePath, aside);
-    yield* Effect.logWarning("launch watches: unreadable state file moved aside", {
-      path: aside,
-      cause: decoded.failure,
+  const loadFile = (filePath: string) =>
+    Effect.gen(function* () {
+      const raw = yield* fs.readFileString(filePath).pipe(
+        Effect.map(Option.some),
+        Effect.catch((error) =>
+          error.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<string>())
+            : Effect.fail(error),
+        ),
+      );
+      if (Option.isNone(raw)) return [];
+      onDisk.set(filePath, raw.value);
+      if (raw.value.trim().length === 0) return [];
+      const decoded = yield* Effect.result(decodeDocument(raw.value));
+      if (decoded._tag === "Success") return decoded.success.watches;
+      // Keep the unreadable file for inspection instead of overwriting it.
+      const aside = `${filePath}.corrupt-${yield* Clock.currentTimeMillis}`;
+      yield* fs.rename(filePath, aside);
+      onDisk.delete(filePath);
+      yield* Effect.logWarning("launch watches: unreadable state file moved aside", {
+        path: aside,
+        cause: decoded.failure,
+      });
+      return [];
     });
-    return [];
+
+  const load = Effect.gen(function* () {
+    const ordinary = yield* loadFile(statePath);
+    const launcherless = yield* loadFile(launcherlessPath);
+    return {
+      watches: [...ordinary, ...launcherless],
+      // Earlier builds kept launcherless watches in the shared file.
+      misplaced: ordinary.some((watch) => watch.launcherThreadId === null),
+    };
   });
 
   // ── following ────────────────────────────────────────────────────────
@@ -361,7 +417,12 @@ export const make = Effect.gen(function* () {
       }
       const status = waited.result.run?.status;
       if (status !== undefined && isTerminalStatus(status)) {
-        return { _tag: "Terminal", status } satisfies StepResult;
+        // The wait follows a promoted queued message into the run it joined.
+        return {
+          _tag: "Terminal",
+          status,
+          runId: waited.result.run?.id ?? runId,
+        } satisfies StepResult;
       }
       const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
       const questions = records.runtimeRequests
@@ -449,7 +510,11 @@ export const make = Effect.gen(function* () {
         Effect.flatMap(decodeWait),
       );
       if (!waited.timedOut && isTerminalStatus(waited.status)) {
-        return { _tag: "Terminal", status: waited.status } satisfies StepResult;
+        return {
+          _tag: "Terminal",
+          status: waited.status,
+          runId: waited.runId ?? runId,
+        } satisfies StepResult;
       }
       // Only user questions are listed remotely; approvals show up when the run ends.
       const listedQuestions = yield* callHost(
@@ -666,6 +731,20 @@ export const make = Effect.gen(function* () {
     return watch?.incarnation === incarnation ? watch : undefined;
   };
 
+  const launcherlessExpired = (watch: LaunchWatch, now: number) =>
+    watch.launcherThreadId === null && now - watch.createdAt >= LAUNCHERLESS_RETENTION_MS;
+
+  /**
+   * Whether a launcherless watch can no longer report: the completion webhook,
+   * its only destination, stopped taking it, or it outlived its retention.
+   */
+  const launcherlessStranded = (watch: LaunchWatch, now: number) =>
+    watch.launcherThreadId !== null
+      ? Effect.succeed(false)
+      : webhook
+          .wants(watch)
+          .pipe(Effect.map((wanted) => !wanted || launcherlessExpired(watch, now)));
+
   /**
    * Applies a step result under the lock. Returns how long to pause before the
    * next step. A wake and the state recording it are not split by a shutdown:
@@ -706,13 +785,19 @@ export const make = Effect.gen(function* () {
           switch (result._tag) {
             case "Terminal": {
               missingEscalations.delete(watchId);
+              const endedRunId = result.runId;
+              // A promoted message ends with the run it joined; that run is reported once.
+              if (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) {
+                yield* keep(settleRun(recordContact(watch, now), runId, now));
+                return 0;
+              }
               const title = details.title ?? watch.title;
               const sent = yield* deliver(
                 watch,
-                finishedWake({ watch, runId, status: result.status, ...details }),
+                finishedWake({ watch, runId: endedRunId, status: result.status, ...details }),
                 {
                   event: "run.completed",
-                  runId,
+                  runId: endedRunId,
                   status: result.status,
                   title,
                   prUrl: details.prUrl,
@@ -722,7 +807,11 @@ export const make = Effect.gen(function* () {
                 yield* keep(sent.watch);
                 return RETRY_MS;
               }
-              yield* keep({ ...settleRun(recordContact(sent.watch, now), runId, now), title });
+              const settled = settleRun(recordContact(sent.watch, now), runId, now);
+              yield* keep({
+                ...(endedRunId === runId ? settled : settleRun(settled, endedRunId, now)),
+                title,
+              });
               return 0;
             }
             case "Running": {
@@ -868,6 +957,28 @@ export const make = Effect.gen(function* () {
           return { _tag: "Exit" } satisfies Plan;
         }
         const now = yield* Clock.currentTimeMillis;
+        if (yield* launcherlessStranded(watch, now)) {
+          const dropped = yield* save((map) => map.delete(watchId)).pipe(
+            Effect.as(true),
+            Effect.catch((error) =>
+              Effect.logWarning("launch watch: stranded launcherless watch not dropped", {
+                watchId,
+                cause: error,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+          if (dropped) {
+            yield* Effect.logInfo(
+              "launch watch: dropped a launcherless watch nothing can receive",
+              {
+                watchId,
+              },
+            );
+            releaseSlot(watchId, incarnation);
+            return { _tag: "Exit" } satisfies Plan;
+          }
+          return { _tag: "Sleep", ms: RETRY_MS } satisfies Plan;
+        }
         if (watch.outage !== null && watch.outage.nextRetryAt > now) {
           return { _tag: "Sleep", ms: watch.outage.nextRetryAt - now } satisfies Plan;
         }
@@ -891,7 +1002,8 @@ export const make = Effect.gen(function* () {
           watch.host === null
             ? yield* localStep(watch, runId)
             : yield* remoteStep(watch, watch.host, runId, capability);
-        const details = result._tag === "Terminal" ? yield* detailsFor(watch, runId) : noDetails;
+        const details =
+          result._tag === "Terminal" ? yield* detailsFor(watch, result.runId) : noDetails;
         const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {
@@ -940,16 +1052,26 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     // Keep only watches that still owe a report or changed recently.
     watches = new Map(
-      stored
+      stored.watches
         .filter(
           (watch) =>
-            watch.pendingRuns.length > 0 ||
-            watch.outage !== null ||
-            now - watch.updatedAt < DORMANT_RETENTION_MS,
+            !launcherlessExpired(watch, now) &&
+            (watch.pendingRuns.length > 0 ||
+              watch.outage !== null ||
+              now - watch.updatedAt < DORMANT_RETENTION_MS),
         )
         .map((watch) => [watch.id, watch]),
     );
     loaded = true;
+    if (stored.misplaced) {
+      yield* persist(watches).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("launch watches: launcherless watches not moved to their own file", {
+            cause: error,
+          }),
+        ),
+      );
+    }
     yield* Effect.forEach([...watches.values()], ensureFollower, { discard: true });
   });
 

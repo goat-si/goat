@@ -410,6 +410,8 @@ host outages are posted to the webhook only, and the launch returns
 `watching: true`. Without either, nothing changes: the launch returns
 `watching: false` and nothing is posted. The watch follows remote threads at the
 runtime mode the client was approved for and ends once its run is reported.
+It also ends without a report when the webhook stops posting it (turned off, or
+the launch's settings no longer match) or seven days after the launch.
 `goat_thread_watch`, `goat_thread_unwatch`, and `goat_thread_watch_list` still need
 a thread credential, so a client cannot list or stop these watches.
 

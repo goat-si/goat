@@ -87,6 +87,10 @@ interface World {
   webhookNotify?: Effect.Effect<void>;
   /** What the completion webhook answers when asked to watch an outside launch. */
   webhookWatchesExternal: boolean;
+  /** Whether the completion webhook still posts a watch's reports. */
+  webhookWants: boolean;
+  /** One entry per time the service asked whether the webhook still posts a watch's reports. */
+  readonly wantsAsked: Queue.Queue<void>;
 }
 
 const makeWorld = Effect.gen(function* () {
@@ -126,6 +130,8 @@ const makeWorld = Effect.gen(function* () {
     hostCalls: [],
     webhookReports: [],
     webhookWatchesExternal: true,
+    webhookWants: true,
+    wantsAsked: yield* Queue.unbounded<void>(),
   };
   return world;
 });
@@ -223,6 +229,7 @@ const layerFor = (world: World, baseDir: string) =>
               return world.webhookNotify ?? Effect.void;
             }),
           watchesExternal: () => Effect.sync(() => world.webhookWatchesExternal),
+          wants: () => Queue.offer(world.wantsAsked, undefined).pipe(Effect.as(world.webhookWants)),
         }),
         ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
         NodeCrypto.layer,
@@ -323,6 +330,38 @@ describe("LaunchWatchService", () => {
       );
       expect(world.deliveredLog).toHaveLength(1);
       expect(world.waitCalls).toHaveLength(1);
+    }),
+  );
+
+  it.effect("reports the run a promoted send joined, under that run, once", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      world.assistantMessages.push({ runId: run1, text: "Joined and finished." });
+      const baseDir = yield* tempDir;
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          // run-2 was a queued send promoted into the running run-1; the wait follows it there.
+          yield* watchLocal(service, run2);
+          yield* Queue.offer(world.waits, finished(run1));
+          const wake = yield* Queue.take(world.delivered);
+          expect(wake.text).toContain("finished run run-1 with status completed");
+          expect(wake.text).toContain("Joined and finished.");
+          const [watch] = yield* service.list(launcher);
+          expect(watch?.pendingRuns).toEqual([]);
+          expect(watch?.reportedRuns).toEqual([run2, run1]);
+
+          // When the joined run was watched and reported already, the promoted send adds nothing.
+          yield* service.rearm({ ...local, runId: RunId.make("run-3") });
+          yield* service.rearm({ ...local, runId: RunId.make("run-4") });
+          yield* Queue.offer(world.waits, finished(run1));
+          yield* Queue.offer(world.waits, finished(RunId.make("run-4")));
+          const next = yield* Queue.take(world.delivered);
+          expect(next.text).toContain("finished run run-4");
+          expect(yield* pendingRuns(service)).toEqual([]);
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(2);
+      expect(world.webhookReports.map(({ report }) => report.runId)).toEqual([run1, "run-4"]);
     }),
   );
 
@@ -1469,16 +1508,16 @@ describe("LaunchWatchService launcherless watches", () => {
     requested: input.requested ?? true,
   });
 
-  const stateFile = (baseDir: string) =>
+  const stateFile = (baseDir: string, file = LaunchWatchService.LAUNCHERLESS_WATCH_FILE) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      return path.join(baseDir, "userdata", LaunchWatchService.LAUNCH_WATCH_FILE);
+      return path.join(baseDir, "userdata", file);
     });
 
-  const storedWatches = (baseDir: string) =>
+  const storedWatches = (baseDir: string, file?: string) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const raw = yield* fs.readFileString(yield* stateFile(baseDir));
+      const raw = yield* fs.readFileString(yield* stateFile(baseDir, file));
       return (JSON.parse(raw) as { watches: ReadonlyArray<LaunchWatch> }).watches;
     });
 
@@ -1501,8 +1540,85 @@ describe("LaunchWatchService launcherless watches", () => {
       expect(watch).toBeNull();
       const fs = yield* FileSystem.FileSystem;
       expect(yield* fs.exists(yield* stateFile(baseDir))).toBe(false);
+      expect(
+        yield* fs.exists(yield* stateFile(baseDir, LaunchWatchService.LAUNCH_WATCH_FILE)),
+      ).toBe(false);
       expect(world.waitCalls).toEqual([]);
       expect(world.webhookReports).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["the webhook stops taking it", "it outlives its retention"] as const)(
+    "drops a launcherless watch when $0, while its run is still owed",
+    (reason) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const baseDir = yield* tempDir;
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* service.watchExternal(external());
+            yield* Queue.take(world.waitStarted);
+            if (reason === "the webhook stops taking it") world.webhookWants = false;
+            else yield* TestClock.adjust("7 days");
+            yield* Queue.offer(world.waits, stillRunning(run1));
+            // Asked once before the first wait and once after it.
+            yield* Queue.take(world.wantsAsked);
+            yield* Queue.take(world.wantsAsked);
+            // listRemote waits for the lock the drop runs under.
+            yield* service.listRemote(10);
+          }),
+        );
+        expect(yield* storedWatches(baseDir)).toEqual([]);
+        expect(world.waitCalls).toHaveLength(1);
+        expect(world.webhookReports).toEqual([]);
+        // A restart does not bring it back.
+        yield* withService(world, baseDir, (service) => service.listRemote(10));
+        expect(world.waitCalls).toHaveLength(1);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps launcherless watches out of the file older servers read", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const fs = yield* FileSystem.FileSystem;
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external());
+          yield* watchLocal(service, run2);
+        }),
+      );
+      // Older servers require a launcher on every watch in the shared file.
+      expect(
+        (yield* storedWatches(baseDir, LaunchWatchService.LAUNCH_WATCH_FILE)).map(
+          (watch) => watch.launcherThreadId,
+        ),
+      ).toEqual([launcher]);
+      const launcherless = yield* storedWatches(baseDir);
+      expect(launcherless.map((watch) => watch.launcherThreadId)).toEqual([null]);
+
+      // A shared file from a build that kept them together is split on load.
+      const shared = yield* stateFile(baseDir, LaunchWatchService.LAUNCH_WATCH_FILE);
+      yield* fs.writeFileString(
+        shared,
+        JSON.stringify({
+          version: 1,
+          watches: [
+            ...launcherless,
+            ...(yield* storedWatches(baseDir, LaunchWatchService.LAUNCH_WATCH_FILE)),
+          ],
+        }),
+      );
+      yield* fs.remove(yield* stateFile(baseDir));
+      yield* withService(world, baseDir, (service) => service.list(launcher));
+      expect(
+        (yield* storedWatches(baseDir, LaunchWatchService.LAUNCH_WATCH_FILE)).map(
+          (watch) => watch.launcherThreadId,
+        ),
+      ).toEqual([launcher]);
+      expect((yield* storedWatches(baseDir)).map((watch) => watch.id)).toEqual(
+        launcherless.map((watch) => watch.id),
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

@@ -1267,6 +1267,9 @@ describe("SSH dispatch launch lineage", () => {
   const launchAgainst = (remote: {
     readonly declaresLaunchedBy: boolean;
     readonly declaresReport?: boolean;
+    readonly declaresNotifyOnCompletion?: boolean;
+    /** Launch for an outside client, with no launching thread. */
+    readonly outside?: boolean;
     /** Launch with a report binding and its agent note. */
     readonly withReport?: boolean;
     /** Launch twice through one dispatch service; the remote declares report from the second. */
@@ -1320,6 +1323,9 @@ describe("SSH dispatch launch lineage", () => {
                         title: { type: "string" },
                         ...(remote.declaresLaunchedBy ? { launchedBy: { type: "object" } } : {}),
                         ...(declaresReport ? { report: { type: "object" } } : {}),
+                        ...(remote.declaresNotifyOnCompletion === true
+                          ? { notifyOnCompletion: { type: "boolean" } }
+                          : {}),
                       },
                     },
                   },
@@ -1393,7 +1399,7 @@ describe("SSH dispatch launch lineage", () => {
               title: "Lineage probe",
               runtimeMode: "approval-required",
               callerRuntimeMode: "approval-required",
-              launchedBy: launcher,
+              ...(remote.outside === true ? {} : { launchedBy: launcher }),
               ...(remote.withReport === true
                 ? { message: "Do the work", report: reportBinding, reportNote: "Report back." }
                 : {}),
@@ -1420,6 +1426,22 @@ describe("SSH dispatch launch lineage", () => {
         discoverHosts.mockRestore();
       }
     });
+
+  it.effect("asks a remote that can be told not to watch the launch it is forwarded", () =>
+    Effect.gen(function* () {
+      // An outside client's launch carries no launcher, so only this keeps the
+      // remote from watching it as its own outside launch.
+      for (const [remote, optOut] of [
+        [{ declaresLaunchedBy: true, declaresNotifyOnCompletion: true, outside: true }, false],
+        [{ declaresLaunchedBy: true, declaresNotifyOnCompletion: true }, false],
+        [{ declaresLaunchedBy: true, outside: true }, undefined],
+      ] as const) {
+        const { launches } = yield* launchAgainst(remote);
+        expect(launches).toHaveLength(1);
+        expect(launches[0]?.notifyOnCompletion).toBe(optOut);
+      }
+    }),
+  );
 
   it.effect("forwards the launcher to a remote whose goat_thread_launch declares it", () =>
     Effect.gen(function* () {

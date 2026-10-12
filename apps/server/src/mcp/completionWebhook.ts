@@ -131,6 +131,11 @@ export interface CompletionWebhookShape {
    * the launch asked for it (notifyWebhook) or the settings watch every such launch.
    */
   readonly watchesExternal: (requested: boolean) => Effect.Effect<boolean>;
+  /**
+   * Whether this watch's reports would be posted now. Settings that cannot be
+   * read count as yes, so a passing read failure makes nothing drop a watch.
+   */
+  readonly wants: (watch: LaunchWatch) => Effect.Effect<boolean>;
 }
 
 export class CompletionWebhook extends Context.Service<CompletionWebhook, CompletionWebhookShape>()(
@@ -231,7 +236,21 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  return CompletionWebhook.of({ notify, watchesExternal });
+  const wants: CompletionWebhookShape["wants"] = (watch) =>
+    serverSettings.getSettings.pipe(
+      Effect.map(
+        (settings) =>
+          completionWebhookWanted(settings.completionWebhook, watch) &&
+          isHttpUrl(settings.completionWebhook.url),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("completion webhook: settings unreadable", { cause }).pipe(
+          Effect.as(true),
+        ),
+      ),
+    );
+
+  return CompletionWebhook.of({ notify, watchesExternal, wants });
 });
 
 export const layer = Layer.effect(CompletionWebhook, make);
