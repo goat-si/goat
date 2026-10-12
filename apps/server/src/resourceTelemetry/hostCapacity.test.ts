@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as HostResources from "./HostResources.ts";
@@ -124,5 +125,5 @@ it.effect("HostResources publishes load and disk with the CPU sample", () =>
     expect(snapshot.loadAvg?.oneMinute).toEqual(expect.any(Number));
     expect(snapshot.disk?.path).toBe("/");
     expect(snapshot.disk?.totalBytes).toBeGreaterThan(0);
-  }).pipe(Effect.provide(HostResources.layer), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(HostResources.layer.pipe(Layer.provide(NodeServices.layer)))),
 );

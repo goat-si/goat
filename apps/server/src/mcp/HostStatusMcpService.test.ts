@@ -114,9 +114,9 @@ const run = <A, E>(
           Effect.gen(function* () {
             refreshes.push(instanceId);
             if (options.refreshFails?.has(instanceId)) {
-              return yield* Effect.fail(new Error("probe failed")) as Effect.Effect<
-                ReadonlyArray<ServerProvider>
-              >;
+              // refreshInstance does not fail in its type. This still fails at
+              // runtime so the status read's Effect.ignore can be observed.
+              return yield* Effect.fail("probe failed" as never);
             }
             providers.current = providers.current.map((item) =>
               item.instanceId === instanceId && item.usageLimits !== undefined

@@ -1,3 +1,5 @@
+// Effect FileSystem has no statfs. Disk free space comes from libuv.
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs/promises";
 import * as NodeOS from "node:os";
 import type { HostCapacitySnapshot } from "@t3tools/contracts";

@@ -146,7 +146,7 @@ it("keeps the last successful sample only for an unreachable host", () => {
     lastKnown: true,
     metrics: previous.metrics,
   });
-  expect(unreachableHostStatus("box", "down", previous).message).toHaveLength(500);
+  expect(unreachableHostStatus("box", "y".repeat(600), previous).message).toHaveLength(500);
   expect(unreachableHostStatus("box", "down", undefined).lastKnown).toBeUndefined();
   expect(unsupportedHostStatus("old-mac")).toEqual({
     host: "old-mac",

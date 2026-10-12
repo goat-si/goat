@@ -115,14 +115,14 @@ const make = Effect.gen(function* () {
       metrics: {
         ...snapshot,
         threads: countHostThreads(shells),
-        quotas: yield* readQuotas,
+        quotas: yield* readQuotas(),
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
     return entry;
   });
 
-  const localEntry = readLocal.pipe(
+  const localEntry = readLocal().pipe(
     Effect.catch((error) =>
       Ref.get(known).pipe(
         Effect.map((current) => unreachableHostStatus(null, error.message, current.get(null))),

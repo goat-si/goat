@@ -941,7 +941,11 @@ export const layerEnvironmentToolkit = toolkitRegistration(
 export const layerHostStatusToolkit = toolkitRegistration(
   HostStatusToolkit,
   HostStatusHandlers.layer,
-).pipe(Layer.provide(HostStatusMcpService.layer), Layer.provide(HostThreadsMcpService.layer));
+).pipe(
+  Layer.provide(HostStatusMcpService.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
   Layer.provide(HostThreadsMcpService.layer),
