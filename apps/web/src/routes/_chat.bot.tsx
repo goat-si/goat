@@ -1,38 +1,31 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
-import { resolveGoatBotAvailability } from "../components/goatBot/goatBotAvailability";
-import {
-  useGoatBotEnvironments,
-  useLegacyGlobalAgentRoute,
-} from "../components/goatBot/goatBotHooks";
+import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
+import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
 import { SidebarInset } from "../components/ui/sidebar";
-
-const NO_ROWS = [] as const;
-const noop = () => {};
 
 /**
  * GOAT Bot's entry point. Until a server offers channels, it explains that
  * and keeps sending off; it never falls back to the global agent's provider.
  */
 function GoatBotRouteView() {
-  const environments = useGoatBotEnvironments();
+  const session = useGoatBotSession();
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
-  const availability = resolveGoatBotAvailability({
-    environments,
-    botRef: null,
-    ensure: { state: "idle" },
-  });
+  const navigate = useNavigate();
+  const bot = session.availability.kind === "ready" ? session.availability.bot : null;
+  useEffect(() => {
+    if (bot)
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId: bot.environmentId, threadId: bot.threadId },
+        replace: true,
+      });
+  }, [bot, navigate]);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <GoatBotChatView
-        availability={availability}
-        canOperate={false}
-        rows={NO_ROWS}
-        onSend={noop}
-        onRetryInput={noop}
-        legacyAgentRoute={legacyAgentRoute}
-      />
+      <GoatBotChatView {...session} legacyAgentRoute={legacyAgentRoute} />
     </SidebarInset>
   );
 }

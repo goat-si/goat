@@ -10,8 +10,10 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 
+import { usePrimarySettings } from "~/hooks/useSettings";
+import { formatShortTimestamp } from "~/timestampFormat";
 import { cn } from "~/lib/utils";
-import { useAllEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
+import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
 import { useConnectedEnvironmentIds } from "~/state/environments";
 
 import { Button } from "../ui/button";
@@ -35,6 +37,7 @@ const TONE_TEXT = {
 
 /** One piece of work GOAT Bot started. Its details live in the worker's own thread. */
 export function GoatBotTaskChip({ card }: { readonly card: GoatBotTaskCard }) {
+  const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const Icon = TONE_ICON[card.tone];
   return (
     <div className="flex w-72 max-w-full flex-col gap-1.5 rounded-xl border border-border bg-card p-3 text-card-foreground">
@@ -52,6 +55,9 @@ export function GoatBotTaskChip({ card }: { readonly card: GoatBotTaskCard }) {
       {card.summary ? (
         <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
       ) : null}
+      <time dateTime={card.updatedAt} className="text-xs text-muted-foreground">
+        Updated {formatShortTimestamp(card.updatedAt, timestampFormat)}
+      </time>
       <div className="pt-0.5">
         <GoatBotTaskTarget target={card.target} />
       </div>
@@ -74,12 +80,13 @@ function GoatBotThreadTarget({
     [target.environmentId, target.threadId],
   );
   const shell = useThreadShell(threadRef);
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const bootstrapped = useEnvironmentShellsBootstrapped(target.environmentId);
   const connected = useConnectedEnvironmentIds().includes(target.environmentId);
-  if (!connected) return <DisabledTarget label="Computer offline" />;
+  if (!connected) return <DisabledTarget label="Can't reach the work computer" />;
   if (bootstrapped && (shell === null || shell.deletedAt != null)) {
-    return <DisabledTarget label="Thread unavailable" />;
+    return <DisabledTarget label="Work history not found" />;
   }
+  if (!bootstrapped) return <DisabledTarget label="Loading work history…" />;
   return (
     <Button
       size="xs"

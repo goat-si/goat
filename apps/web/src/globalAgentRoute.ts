@@ -91,3 +91,10 @@ export function isGoatBotRoute(
     target.threadRef.threadId === botRef.threadId
   );
 }
+
+/** The logo and bot row use the same feature predicate supplied by the channel session. */
+export function globalAgentLogoTarget(goatBotEnabled: boolean) {
+  return goatBotEnabled
+    ? ({ to: GOAT_BOT_PATH, label: "Open GOAT Bot" } as const)
+    : ({ to: "/", label: "Open global agent" } as const);
+}

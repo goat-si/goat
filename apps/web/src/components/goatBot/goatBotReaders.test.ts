@@ -34,7 +34,8 @@ describe("presentTaskChip", () => {
       title: "Re-verify the Opus 5.5 call",
       statusLabel: "Working",
       tone: "active",
-      sourceLabel: null,
+      sourceLabel: "Jun",
+      updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
       attentionLabel: null,
       target: { kind: "thread", environmentId: "env", threadId: "worker" },
@@ -55,8 +56,8 @@ describe("presentTaskChip", () => {
   });
 
   it("names where outside requests came from", () => {
-    expect(presentTaskChip(chip({ originKind: "slack" })).sourceLabel).toBe("From Slack · Jun");
-    expect(presentTaskChip(chip({ originKind: "mcp" })).sourceLabel).toBe("From an agent · Jun");
+    expect(presentTaskChip(chip({ originKind: "slack" })).sourceLabel).toBe("Slack · Jun");
+    expect(presentTaskChip(chip({ originKind: "mcp" })).sourceLabel).toBe("Agent · Jun");
   });
 
   it("counts open questions and drops an empty summary", () => {
@@ -117,6 +118,8 @@ describe("goatBotItemReaders", () => {
       tone: "reply",
       readAt: "2026-10-12T12:00:02.000Z",
       requestKey: "in-1",
+      replyToKey: "in-0",
+      clientKey: "m-1",
     });
   });
 

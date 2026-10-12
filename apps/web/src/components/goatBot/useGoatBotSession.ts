@@ -1,0 +1,289 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type {
+  ChannelBotRef,
+  ChannelGatewayError,
+  EnvironmentId,
+  OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
+import { useContext, useEffect, useMemo } from "react";
+import { create } from "zustand";
+
+import { useGlobalAgentStore } from "~/globalAgentStore";
+import { useThreadShell } from "~/state/entities";
+import {
+  pickGoatBotEnvironment,
+  resolveGoatBotAvailability,
+  type GoatBotEnvironmentInput,
+} from "./goatBotAvailability";
+import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
+import {
+  initialGoatBotEnsure,
+  retryGoatBotEnsure,
+  settleGoatBotEnsure,
+  startGoatBotEnsure,
+  syncGoatBotEnsure,
+  type GoatBotEnsureMachine,
+} from "./goatBotEnsure";
+import { useGoatBotEnvironments } from "./goatBotHooks";
+import { goatBotItemReaders } from "./goatBotReaders";
+import { buildGoatBotTimeline } from "./goatBotRows";
+import { createGoatBotSendQueue, type GoatBotSendQueue } from "./goatBotSendQueue";
+
+interface Session {
+  readonly connected: boolean;
+  readonly capability: boolean;
+  readonly generation: number;
+  readonly machine: GoatBotEnsureMachine;
+  readonly port: GoatBotChannelPort | null;
+  readonly canOperate: boolean;
+  readonly legacyRunning: boolean;
+  readonly queue: GoatBotSendQueue;
+}
+
+const useSessions = create<{ sessions: ReadonlyMap<EnvironmentId, Session>; revision: number }>(
+  () => ({ sessions: new Map(), revision: 0 }),
+);
+const EMPTY_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [];
+const changed = () => useSessions.setState((state) => ({ revision: state.revision + 1 }));
+
+function update(environmentId: EnvironmentId, session: Session) {
+  useSessions.setState((state) => ({
+    sessions: new Map(state.sessions).set(environmentId, session),
+  }));
+}
+
+function newQueue(environmentId: EnvironmentId) {
+  return createGoatBotSendQueue({
+    onChange: changed,
+    canDispatch: (bot) => {
+      const session = useSessions.getState().sessions.get(environmentId);
+      return (
+        session?.connected === true &&
+        session.capability &&
+        session.canOperate &&
+        session.port !== null &&
+        session.machine.ensure.state === "confirmed" &&
+        session.machine.ensure.bot.environmentId === bot.environmentId &&
+        session.machine.ensure.bot.threadId === bot.threadId
+      );
+    },
+    send: async ({ clientKey, text, receivedAt, bot }) => {
+      const port = useSessions.getState().sessions.get(environmentId)?.port;
+      if (!port) throw new Error("GOAT Bot isn't available");
+      const result = await port.ingest(bot.environmentId, {
+        kind: "goat",
+        connectionId: "goat",
+        conversationKey: bot.threadId,
+        externalMessageId: clientKey,
+        idempotencyKey: clientKey,
+        actor: {},
+        replyAddress: { kind: "goat", environmentId: bot.environmentId, threadId: bot.threadId },
+        text,
+        attachments: [],
+        receivedAt,
+        intent: "message",
+      });
+      if (result.state === "rejected") throw new Error("GOAT Bot did not accept this message");
+      return { requestKey: result.inputId };
+    },
+  });
+}
+
+/** Sidebar observers also track reconnects while the bot screen is closed. */
+function useObservedEnvironments() {
+  const environments = useGoatBotEnvironments();
+  useEffect(() => {
+    const observed = new Map(environments.map((entry) => [entry.environmentId, entry]));
+    for (const [environmentId, session] of useSessions.getState().sessions) {
+      if (!observed.has(environmentId) && session.connected) {
+        update(environmentId, {
+          ...session,
+          connected: false,
+          machine: syncGoatBotEnsure(session.machine, null),
+        });
+      }
+    }
+    for (const environment of environments) {
+      const previous = useSessions.getState().sessions.get(environment.environmentId);
+      if (
+        previous?.connected === environment.connected &&
+        previous.capability === environment.supportsChannelLedger
+      )
+        continue;
+      const generation =
+        (previous?.generation ?? 0) + (environment.connected && !previous?.connected ? 1 : 0);
+      const key =
+        environment.connected && environment.supportsChannelLedger
+          ? `${environment.environmentId}:${generation}:channel`
+          : null;
+      update(environment.environmentId, {
+        connected: environment.connected,
+        capability: environment.supportsChannelLedger,
+        generation,
+        machine: syncGoatBotEnsure(previous?.machine ?? initialGoatBotEnsure, key),
+        port: previous?.port ?? null,
+        canOperate: false,
+        legacyRunning: previous?.legacyRunning ?? false,
+        queue: previous?.queue ?? newQueue(environment.environmentId),
+      });
+    }
+  }, [environments]);
+  return environments;
+}
+
+export function goatBotEnabled(
+  port: GoatBotChannelPort | null,
+  environment: GoatBotEnvironmentInput | null,
+): boolean {
+  return port !== null && environment?.supportsChannelLedger === true;
+}
+
+export function useGoatBotEnabled() {
+  const port = useContext(GoatBotChannelContext);
+  const environments = useObservedEnvironments();
+  const botRef = useGlobalAgentStore((state) => state.botRef);
+  const environment = pickGoatBotEnvironment(environments, botRef);
+  const session = useSessions((state) =>
+    environment === null ? undefined : state.sessions.get(environment.environmentId),
+  );
+  return {
+    enabled: goatBotEnabled(port, environment),
+    environment,
+    generation:
+      session?.connected === environment?.connected &&
+      session?.capability === environment?.supportsChannelLedger
+        ? (session?.generation ?? 0)
+        : 0,
+    port,
+  };
+}
+
+const useCannotSend = (_environmentId: EnvironmentId | null) => false;
+
+/** One ensure and send queue per environment, shared by the entry route and thread view. */
+export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
+  const { enabled, environment, port } = useGoatBotEnabled();
+  const environmentId = environment?.environmentId ?? null;
+  const session = useSessions((state) =>
+    environmentId === null ? undefined : state.sessions.get(environmentId),
+  );
+  useSessions((state) => state.revision);
+  const botRef = useGlobalAgentStore((state) => state.botRef);
+  const legacyRef = useGlobalAgentStore((state) => state.ref);
+  const legacyThreadRef = useMemo(
+    () => (legacyRef === null ? null : scopeThreadRef(legacyRef.environmentId, legacyRef.threadId)),
+    [legacyRef],
+  );
+  const legacyShell = useThreadShell(legacyThreadRef);
+  const legacyRunning =
+    legacyRef?.environmentId === environmentId && legacyShell?.runtime?.activeRunId != null;
+  // The transport supplies a hook, installed for the lifetime of the app provider.
+  // oxlint-disable-next-line react/hooks -- The channel port owns its permission hook.
+  const useCanSend = port?.useCanSend ?? useCannotSend;
+  // oxlint-disable-next-line react/hooks -- Invoke the injected hook unconditionally.
+  const canOperate = useCanSend(environmentId);
+
+  useEffect(() => {
+    if (environmentId === null || session === undefined) return;
+    let current = useSessions.getState().sessions.get(environmentId);
+    if (!current) return;
+    let machine = current.machine;
+    if (current.port !== port) machine = retryGoatBotEnsure(machine);
+    if (machine.ensure.state === "legacy_active" && current.legacyRunning && !legacyRunning)
+      machine = retryGoatBotEnsure(machine);
+    if (
+      machine !== current.machine ||
+      current.port !== port ||
+      current.canOperate !== canOperate ||
+      current.legacyRunning !== legacyRunning
+    ) {
+      current = { ...current, port, canOperate, legacyRunning, machine };
+      update(environmentId, current);
+    }
+    if (!enabled || !current.connected || !port || machine.ensure.state !== "idle") return;
+    const request = startGoatBotEnsure(machine);
+    update(environmentId, { ...current, machine: request.machine });
+    const candidateThreadId =
+      legacyRef?.environmentId === environmentId &&
+      legacyShell !== null &&
+      !legacyRunning &&
+      legacyShell.archivedAt === null &&
+      legacyShell.deletedAt == null
+        ? legacyRef.threadId
+        : undefined;
+    const settle = (result: Parameters<typeof settleGoatBotEnsure>[2], bot?: ChannelBotRef) => {
+      const latest = useSessions.getState().sessions.get(environmentId);
+      if (!latest) return;
+      const settled = settleGoatBotEnsure(latest.machine, request.token, result);
+      if (settled === latest.machine) return;
+      update(environmentId, { ...latest, machine: settled });
+      if (bot) useGlobalAgentStore.getState().setBotRef(bot);
+    };
+    void (async () => {
+      try {
+        const bot = await port.ensureBot(
+          environmentId,
+          candidateThreadId === undefined ? {} : { candidateThreadId },
+        );
+        settle({ kind: "confirmed", bot }, bot);
+      } catch (error) {
+        const gatewayError = error as ChannelGatewayError | null;
+        settle(
+          gatewayError?.reason === "legacy_active"
+            ? { kind: "legacy_active" }
+            : {
+                kind: "failed",
+                message: error instanceof Error ? error.message : "Couldn't reach GOAT Bot",
+              },
+        );
+      }
+    })();
+  }, [environmentId, enabled, port, session, canOperate, legacyRunning, legacyRef, legacyShell]);
+
+  const availability = !enabled
+    ? { kind: "unsupported" as const }
+    : resolveGoatBotAvailability({
+        environments: environment === null ? [] : [environment],
+        botRef,
+        ensure:
+          session?.connected === environment?.connected &&
+          session?.capability === environment?.supportsChannelLedger &&
+          session?.port === port
+            ? session.machine.ensure
+            : { state: "idle" },
+      });
+  const queue = session?.queue;
+  useEffect(() => {
+    const keys = new Set<string>();
+    for (const { item } of visibleTurnItems) {
+      if (item.type !== "user_message") continue;
+      const presentation = goatBotItemReaders.message(item);
+      if (presentation?.requestKey) keys.add(presentation.requestKey);
+      if (presentation?.clientKey) keys.add(presentation.clientKey);
+    }
+    // An entry-route consumer has no projection and must not clear a thread consumer's keys.
+    if (visibleTurnItems !== EMPTY_ITEMS) queue?.acknowledge(keys);
+  }, [queue, visibleTurnItems]);
+  const rows = buildGoatBotTimeline({
+    visibleTurnItems,
+    pendingInputs: queue?.pendingInputs() ?? [],
+    readers: goatBotItemReaders,
+  });
+  return {
+    availability,
+    canOperate,
+    rows,
+    onSend: (text: string) => {
+      if (availability.kind === "ready" && canOperate) queue?.submit(text, availability.bot);
+    },
+    onRetryInput: (key: string) => {
+      if (availability.kind === "ready" && canOperate) queue?.retry(key);
+    },
+    onRetryAvailability: () => {
+      if (environmentId === null) return;
+      const current = useSessions.getState().sessions.get(environmentId);
+      if (current)
+        update(environmentId, { ...current, machine: retryGoatBotEnsure(current.machine) });
+    },
+  };
+}

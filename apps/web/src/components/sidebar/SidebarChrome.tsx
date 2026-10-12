@@ -4,7 +4,7 @@ import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 
 import { useGlobalAgentStore } from "../../globalAgentStore";
-import { isGlobalAgentRoute } from "../../globalAgentRoute";
+import { globalAgentLogoTarget, isGoatBotRoute, isGlobalAgentRoute } from "../../globalAgentRoute";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -33,6 +33,8 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { useGoatBotEnabled } from "../goatBot/useGoatBotSession";
+import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
 import { SidebarViewToggles } from "./SidebarViewToggles";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -126,13 +128,20 @@ function SidebarBrand({
   onBackdrop: boolean;
   placement?: "header" | "collapsed";
 }) {
+  const { enabled } = useGoatBotEnabled();
+  const waitingCount = useGoatBotWaitingCount();
+  const botRef = useGlobalAgentStore((state) => state.botRef);
+  const logo = globalAgentLogoTarget(enabled);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const pathname = useLocation({ select: (location) => location.pathname });
   const params = useParams({ strict: false });
-  const active = isGlobalAgentRoute(pathname, resolveThreadRouteTarget(params), globalAgentRef);
+  const target = resolveThreadRouteTarget(params);
+  const active = enabled
+    ? isGoatBotRoute(pathname, target, botRef)
+    : isGlobalAgentRoute(pathname, target, globalAgentRef);
   return (
     <Link
-      aria-label="Open global agent"
+      aria-label={logo.label}
       aria-current={active ? "page" : undefined}
       data-active={active}
       className={cn(
@@ -147,9 +156,12 @@ function SidebarBrand({
         active && !onBackdrop ? "bg-sidebar-row-selected" : null,
         active && onBackdrop ? "bg-white/15" : null,
       )}
-      to="/"
+      to={logo.to}
     >
       <SidebarBrandMark onBackdrop={onBackdrop} />
+      {enabled && waitingCount !== undefined && waitingCount > 0 ? (
+        <span className="ml-1 text-xs">{waitingCount}</span>
+      ) : null}
     </Link>
   );
 }

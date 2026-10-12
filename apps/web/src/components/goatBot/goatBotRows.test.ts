@@ -101,6 +101,7 @@ function card(key: string, revision: number, statusLabel = "Working"): GoatBotTa
   return {
     key,
     revision,
+    updatedAt: "2026-10-12T12:01:00Z",
     title: `Task ${key}`,
     statusLabel,
     tone: "active",

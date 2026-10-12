@@ -34,7 +34,8 @@ vi.mock("../state/entities", () => ({
   // Another thread exists in the environment, so a missing ordinary thread redirects home.
   useEnvironmentThreadRefs: () => [{ environmentId: "env", threadId: "other" }],
   useThreadRefs: () => [],
-  useThreadShell: () => null,
+  useThreadShell: (ref: { threadId: string } | null) =>
+    ref?.threadId === "worker" ? { deletedAt: null, archivedAt: null } : null,
 }));
 vi.mock("../composerDraftStore", () => {
   const store = {
@@ -97,4 +98,10 @@ it("still sends a missing ordinary thread home", async () => {
   await renderThread(ThreadId.make("gone"));
   expect(container.querySelector("[data-view]")).toBeNull();
   expect(navigate).toHaveBeenCalledWith({ to: "/", replace: true });
+});
+
+it("opens the chip worker target in the coding ChatView rather than the bot view", async () => {
+  await renderThread(ThreadId.make("worker"));
+  expect(container.querySelector("[data-view]")?.getAttribute("data-view")).toBe("chat");
+  expect(navigate).not.toHaveBeenCalled();
 });

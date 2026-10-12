@@ -63,7 +63,7 @@ export function GoatBotTimeline({
                 >
                   <DeliveryMark
                     delivery={row.delivery}
-                    time={time(row.createdAt)}
+                    time={time(row.delivery.state === "read" ? row.delivery.readAt : row.createdAt)}
                     onRetry={onRetry}
                   />
                   <div className="max-w-3/4 rounded-2xl bg-goat-bubble px-3 py-2 text-sm break-words whitespace-pre-wrap text-goat-bubble-foreground">
@@ -86,7 +86,14 @@ export function GoatBotTimeline({
                     ) : row.tone === "question" ? (
                       <MessageCircleQuestionIcon className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
                     ) : null}
-                    <span className="min-w-0 break-words whitespace-pre-wrap">{row.text}</span>
+                    <div className="min-w-0 break-words whitespace-pre-wrap">
+                      {row.replyTo ? (
+                        <blockquote className="mb-1 border-l-2 border-border pl-2 text-xs text-muted-foreground">
+                          {row.replyTo}
+                        </blockquote>
+                      ) : null}
+                      {row.text}
+                    </div>
                   </div>
                   <span className="shrink-0 pb-0.5 text-xs text-muted-foreground">
                     {time(row.createdAt)}
@@ -140,7 +147,7 @@ function DeliveryMark({
         </span>
       );
     case "sent":
-      return <span className="shrink-0 pb-0.5 text-xs text-muted-foreground">{time}</span>;
+      return <span className="shrink-0 pb-0.5 text-xs text-muted-foreground">Sent</span>;
   }
 }
 

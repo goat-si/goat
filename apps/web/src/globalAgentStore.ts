@@ -6,7 +6,7 @@ import type { DraftId } from "./composerDraftStore";
 import { resolveStorage } from "./lib/storage";
 
 export const GLOBAL_AGENT_STORAGE_KEY = "t3code:global-agent:v1";
-export const GLOBAL_AGENT_STORAGE_VERSION = 2;
+const GLOBAL_AGENT_STORAGE_VERSION = 2;
 
 /**
  * The one projectless thread T3 opens on launch and from the sidebar logo.
@@ -47,7 +47,7 @@ export function isGlobalAgentRef(value: unknown): value is GlobalAgentRef {
   );
 }
 
-export function isChannelBotRef(value: unknown): value is ChannelBotRef {
+function isChannelBotRef(value: unknown): value is ChannelBotRef {
   if (typeof value !== "object" || value === null) return false;
   const ref = value as Record<string, unknown>;
   return (

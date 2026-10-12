@@ -1,23 +1,20 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
-import { useGlobalAgentStore } from "~/globalAgentStore";
 import {
   resolveThreadDetailRef,
-  useAllEnvironmentShellsBootstrapped,
+  useEnvironmentShellsBootstrapped,
   useThreadShell,
   useThreadVisibleTurnItems,
 } from "~/state/entities";
 
 import { GoatBotChatView } from "./GoatBotChatView";
-import { resolveGoatBotAvailability } from "./goatBotAvailability";
-import { useGoatBotEnvironments, useLegacyGlobalAgentRoute } from "./goatBotHooks";
-import { goatBotItemReaders } from "./goatBotReaders";
-import { buildGoatBotTimeline } from "./goatBotRows";
+import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
+import { useGoatBotSession } from "./useGoatBotSession";
+import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 
 const NO_PENDING = [] as const;
-const noop = () => {};
 
 /**
  * The GOAT Bot thread. It always renders as the bot, whatever the server or
@@ -36,37 +33,29 @@ export function GoatBotThreadView({
     [environmentId, threadId],
   );
   const shell = useThreadShell(threadRef);
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
+  const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const rows = useMemo(
-    () =>
-      buildGoatBotTimeline({
-        visibleTurnItems,
-        pendingInputs: NO_PENDING,
-        readers: goatBotItemReaders,
-      }),
-    [visibleTurnItems],
-  );
-  const environments = useGoatBotEnvironments();
-  const botRef = useGlobalAgentStore((state) => state.botRef);
-  const availability = resolveGoatBotAvailability({
-    environments,
-    botRef,
-    ensure: { state: "idle" },
-  });
+  const session = useGoatBotSession(visibleTurnItems);
+  const chipRevision = visibleTurnItems
+    .flatMap(({ item }) =>
+      item.type === "notification" && item.ledgerTask
+        ? [`${item.ledgerTask.taskId}:${item.ledgerTask.taskVersion}`]
+        : [],
+    )
+    .join("|");
+  useEffect(() => {
+    refreshGoatBotWaitingCount(environmentId, chipRevision);
+  }, [environmentId, chipRevision]);
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
   const removed =
     bootstrapped && (shell === null || shell.archivedAt !== null || shell.deletedAt != null);
   return (
     <GoatBotChatView
-      availability={availability}
-      canOperate={false}
-      rows={removed ? NO_PENDING : rows}
+      {...session}
+      rows={removed ? NO_PENDING : session.rows}
       removed={removed}
-      onSend={noop}
-      onRetryInput={noop}
       legacyAgentRoute={legacyAgentRoute}
     />
   );

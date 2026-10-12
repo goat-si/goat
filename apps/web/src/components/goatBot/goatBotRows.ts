@@ -26,10 +26,11 @@ export interface GoatBotTaskCard {
   /** Identifies the work across updates; a newer revision replaces an older card. */
   readonly key: string;
   readonly revision: number;
+  readonly updatedAt: string;
   readonly title: string;
   readonly statusLabel: string;
   readonly tone: GoatBotCardTone;
-  /** Where the request came from, such as "From Slack · Jun". Null for requests made here. */
+  /** The requester, prefixed by the originating channel for requests made elsewhere. */
   readonly sourceLabel: string | null;
   readonly summary: string | null;
   /** Something waiting on a person, such as "2 questions". */
@@ -44,6 +45,8 @@ export interface GoatBotMessagePresentation {
   readonly readAt: string | null;
   /** The server's identity for the input, matched against pending sends. */
   readonly requestKey: string | null;
+  readonly replyToKey?: string | null;
+  readonly clientKey?: string | null;
 }
 
 type MessageItem = Extract<OrchestrationV2TurnItem, { type: "user_message" | "assistant_message" }>;
@@ -59,7 +62,7 @@ export interface GoatBotPendingInput {
   readonly clientKey: string;
   readonly text: string;
   readonly createdAt: string;
-  readonly state: "sending" | "failed";
+  readonly state: "sending" | "accepted" | "failed";
   /** The server's identity for the input once it has accepted it. */
   readonly requestKey: string | null;
 }
@@ -86,6 +89,7 @@ export type GoatBotRow =
       readonly text: string;
       readonly createdAt: string;
       readonly tone: GoatBotBotTone;
+      readonly replyTo: string | null;
       readonly firstInGroup: boolean;
     }
   | {
@@ -97,7 +101,7 @@ export type GoatBotRow =
     };
 
 /** Messages further apart than this start a new group. */
-export const GOAT_BOT_GROUP_GAP_MS = 5 * 60 * 1000;
+const GOAT_BOT_GROUP_GAP_MS = 5 * 60 * 1000;
 
 type ContentRow = Exclude<GoatBotRow, { kind: "day" }>;
 type UngroupedRow =
@@ -127,6 +131,8 @@ export function buildGoatBotTimeline(input: {
 }): GoatBotRow[] {
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
+  const inputTexts = new Map<string, string>();
+  let previousInputKey: string | null = null;
   // One card per piece of work: the first position, the newest revision.
   const cardIndexByKey = new Map<string, number>();
 
@@ -134,7 +140,12 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "user_message") {
       if (item.text.trim().length === 0) continue;
       const presentation = input.readers.message(item);
-      if (presentation?.requestKey) committedRequestKeys.add(presentation.requestKey);
+      if (presentation?.requestKey) {
+        committedRequestKeys.add(presentation.requestKey);
+        inputTexts.set(presentation.requestKey, item.text);
+      }
+      if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
+      previousInputKey = presentation?.requestKey ?? null;
       committed.push({
         kind: "user",
         id: item.id,
@@ -155,7 +166,12 @@ export function buildGoatBotTimeline(input: {
         text: item.text,
         createdAt: itemCreatedAt(item),
         tone: presentation?.tone ?? "reply",
+        replyTo:
+          presentation?.replyToKey && presentation.replyToKey !== previousInputKey
+            ? (inputTexts.get(presentation.replyToKey)?.slice(0, 160) ?? null)
+            : null,
       });
+      previousInputKey = null;
       continue;
     }
     if (item.type === "notification") {
@@ -163,6 +179,7 @@ export function buildGoatBotTimeline(input: {
       if (card === null) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
+        previousInputKey = null;
         cardIndexByKey.set(card.key, committed.length);
         committed.push({ kind: "task", id: item.id, createdAt: itemCreatedAt(item), card });
         continue;
@@ -176,7 +193,11 @@ export function buildGoatBotTimeline(input: {
   }
 
   const pending: UngroupedRow[] = input.pendingInputs
-    .filter((entry) => entry.requestKey === null || !committedRequestKeys.has(entry.requestKey))
+    .filter(
+      (entry) =>
+        !committedRequestKeys.has(entry.clientKey) &&
+        (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
+    )
     .map((entry) => ({
       kind: "user",
       id: `pending:${entry.clientKey}`,
@@ -185,7 +206,9 @@ export function buildGoatBotTimeline(input: {
       delivery:
         entry.state === "failed"
           ? { state: "failed", clientKey: entry.clientKey }
-          : { state: "sending" },
+          : entry.state === "accepted"
+            ? { state: "sent" }
+            : { state: "sending" },
     }));
 
   const rows: GoatBotRow[] = [];

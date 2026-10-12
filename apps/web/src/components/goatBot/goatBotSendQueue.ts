@@ -1,5 +1,6 @@
 import { randomUUID } from "~/lib/utils";
 
+import type { GoatBotRef } from "./goatBotAvailability";
 import type { GoatBotPendingInput } from "./goatBotRows";
 
 type EntryState = "queued" | "sending" | "accepted" | "failed";
@@ -8,6 +9,7 @@ interface Entry {
   readonly clientKey: string;
   readonly text: string;
   readonly createdAt: string;
+  readonly bot: GoatBotRef;
   state: EntryState;
   requestKey: string | null;
 }
@@ -17,9 +19,11 @@ export interface GoatBotSendQueueOptions {
   readonly send: (message: {
     readonly clientKey: string;
     readonly text: string;
+    readonly receivedAt: string;
+    readonly bot: GoatBotRef;
   }) => Promise<{ readonly requestKey: string }>;
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
-  readonly canDispatch: () => boolean;
+  readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
   readonly makeKey?: () => string;
   readonly now?: () => string;
@@ -27,7 +31,7 @@ export interface GoatBotSendQueueOptions {
 
 export interface GoatBotSendQueue {
   /** Queues a message and returns its key. */
-  readonly submit: (text: string) => string;
+  readonly submit: (text: string, bot: GoatBotRef) => string;
   /** Sends a failed message again under the same key. Ignored while it is in flight. */
   readonly retry: (clientKey: string) => void;
   /** Forgets accepted messages once their server rows exist. */
@@ -45,6 +49,7 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
   const now = options.now ?? (() => new Date().toISOString());
   let entries: Entry[] = [];
   let busy = false;
+  let projectedKeys: ReadonlySet<string> = new Set();
   let snapshot: ReadonlyArray<GoatBotPendingInput> = [];
 
   const changed = () => {
@@ -52,7 +57,8 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       clientKey: entry.clientKey,
       text: entry.text,
       createdAt: entry.createdAt,
-      state: entry.state === "failed" ? "failed" : "sending",
+      state:
+        entry.state === "accepted" ? "accepted" : entry.state === "failed" ? "failed" : "sending",
       requestKey: entry.requestKey,
     }));
     options.onChange();
@@ -62,7 +68,7 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
     if (busy) return;
     const next = entries.find((entry) => entry.state === "queued");
     if (next === undefined) return;
-    if (!options.canDispatch()) {
+    if (!options.canDispatch(next.bot)) {
       for (const entry of entries) {
         if (entry.state === "queued") entry.state = "failed";
       }
@@ -72,12 +78,20 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
     busy = true;
     next.state = "sending";
     changed();
-    options
-      .send({ clientKey: next.clientKey, text: next.text })
+    (async () =>
+      options.send({
+        clientKey: next.clientKey,
+        text: next.text,
+        receivedAt: next.createdAt,
+        bot: next.bot,
+      }))()
       .then(
         (result) => {
           next.state = "accepted";
           next.requestKey = result.requestKey;
+          if (projectedKeys.has(result.requestKey) || projectedKeys.has(next.clientKey)) {
+            entries = entries.filter((entry) => entry !== next);
+          }
         },
         () => {
           next.state = "failed";
@@ -91,11 +105,11 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
   };
 
   return {
-    submit: (text) => {
+    submit: (text, bot) => {
       const clientKey = makeKey();
       entries = [
         ...entries,
-        { clientKey, text, createdAt: now(), state: "queued", requestKey: null },
+        { clientKey, text, createdAt: now(), bot: { ...bot }, state: "queued", requestKey: null },
       ];
       changed();
       pump();
@@ -109,13 +123,11 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       pump();
     },
     acknowledge: (requestKeys) => {
+      projectedKeys = requestKeys;
       const kept = entries.filter(
         (entry) =>
-          !(
-            entry.state === "accepted" &&
-            entry.requestKey !== null &&
-            requestKeys.has(entry.requestKey)
-          ),
+          !requestKeys.has(entry.clientKey) &&
+          (entry.requestKey === null || !requestKeys.has(entry.requestKey)),
       );
       if (kept.length === entries.length) return;
       entries = kept;

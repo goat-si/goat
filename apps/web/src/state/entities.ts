@@ -11,6 +11,7 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
@@ -18,6 +19,7 @@ import { environmentServerConfigsAtom } from "./server";
 import {
   allEnvironmentProjectSnapshotsReadyAtom,
   allEnvironmentShellsBootstrappedAtom,
+  environmentShell,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 import { waitForAtomValue } from "./waitForAtomValue";
@@ -95,6 +97,11 @@ export function useThreadShells(enabled = true): ReadonlyArray<EnvironmentThread
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
+}
+
+/** A different machine's pending bootstrap cannot decide whether this thread is missing. */
+export function useEnvironmentShellsBootstrapped(environmentId: EnvironmentId): boolean {
+  return Option.isSome(useAtomValue(environmentShell.stateValueAtom(environmentId)).snapshot);
 }
 
 export function useAllEnvironmentProjectSnapshotsReady(): boolean {

@@ -14,7 +14,7 @@ import { GoatBotTimeline } from "./GoatBotTimeline";
 import { canSendToGoatBot, type GoatBotAvailability } from "./goatBotAvailability";
 import type { GoatBotRow } from "./goatBotRows";
 
-export const GOAT_BOT_TITLE = "GOAT Bot";
+const GOAT_BOT_TITLE = "GOAT Bot";
 
 export interface GoatBotChatViewProps {
   readonly availability: GoatBotAvailability;
@@ -56,6 +56,28 @@ export function GoatBotChatView({
           </div>
         </div>
       </WorkspacePageHeader>
+      {availability.kind === "offline" || availability.kind === "connecting" ? (
+        <div
+          role="status"
+          className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
+        >
+          {availability.kind === "offline"
+            ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
+            : "Connecting to GOAT Bot…"}
+        </div>
+      ) : null}
+      {rows.length > 0 &&
+      availability.kind !== "ready" &&
+      availability.kind !== "offline" &&
+      availability.kind !== "connecting" ? (
+        <div role="status">
+          <GoatBotNotice
+            availability={availability}
+            onRetryAvailability={onRetryAvailability}
+            legacyAgentRoute={legacyAgentRoute}
+          />
+        </div>
+      ) : null}
       {rows.length > 0 ? (
         // History stays readable while the bot is unavailable; only sending stops.
         <GoatBotTimeline rows={rows} onRetry={onRetryInput} />
@@ -169,6 +191,15 @@ function GoatBotNotice({
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
+      {availability.kind === "ready" ? (
+        <EmptyContent>
+          <ul className="space-y-1 text-sm text-muted-foreground">
+            <li>Fix the flaky test in my project</li>
+            <li>Review the latest changes</li>
+            <li>How is the work going?</li>
+          </ul>
+        </EmptyContent>
+      ) : null}
       {actions.length > 0 ? (
         <EmptyContent>
           <div className="flex flex-wrap justify-center gap-2">{actions}</div>
@@ -205,7 +236,8 @@ function noticeCopy(availability: GoatBotAvailability): {
     case "legacy_active":
       return {
         title: "Your global agent is still working",
-        description: "GOAT Bot takes over once it finishes. Its history stays in the global agent.",
+        description:
+          "This becomes GOAT Bot when it finishes. Its history stays in the global agent.",
         retryLabel: "Check again",
       };
     case "error":

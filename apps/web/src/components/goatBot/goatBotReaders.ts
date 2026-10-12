@@ -34,8 +34,8 @@ const TASK_STATUS = {
 
 const SOURCE_PREFIX = {
   goat: null,
-  slack: "From Slack",
-  mcp: "From an agent",
+  slack: "Slack",
+  mcp: "Agent",
 } as const satisfies Record<ChannelKind, string | null>;
 
 /** Before a worker exists the task is still being taken in; afterwards a missing one is unusual. */
@@ -55,10 +55,11 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   return {
     key: chip.taskId,
     revision: chip.taskVersion,
+    updatedAt: chip.updatedAt,
     title: chip.title,
     statusLabel: status.label,
     tone: status.tone,
-    sourceLabel: prefix === null ? null : `${prefix} · ${chip.requesterLabel}`,
+    sourceLabel: prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: questionLabel(chip.openQuestionCount),
     target:
@@ -84,6 +85,8 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       tone: MESSAGE_TONE[meta.kind],
       readAt: meta.readAt ?? null,
       requestKey: meta.inputId ?? null,
+      replyToKey: meta.inReplyToInputId ?? null,
+      clientKey: item.type === "user_message" ? item.messageId : null,
     };
   },
   taskCard: (item) => (item.ledgerTask === undefined ? null : presentTaskChip(item.ledgerTask)),
