@@ -99,6 +99,13 @@ describe("Projects view rows", () => {
     ).toBe(true);
     expect(isProjectsViewListedThread(pinned)).toBe(false);
     expect(isProjectsViewListedThread({ ...row, archivedAt: pinned.pinnedAt })).toBe(false);
+    expect(isProjectsViewListedThread({ ...row, archivedAt: pinned.pinnedAt }, true)).toBe(true);
+    expect(
+      isProjectsViewListedThread(
+        { ...row, archivedAt: pinned.pinnedAt, deletedAt: pinned.pinnedAt },
+        true,
+      ),
+    ).toBe(false);
   });
   it("never lists a subagent, pinned or not", () => {
     expect(isProjectsViewListedThread(subagent)).toBe(false);

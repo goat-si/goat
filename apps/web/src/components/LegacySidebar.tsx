@@ -1446,7 +1446,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       pinnedThreads ??
       sortThreads(
         excludeGlobalAgentThreads(
-          projectThreads.filter(isProjectsViewListedThread),
+          projectThreads.filter((thread) => {
+            const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+            return isProjectsViewListedThread(
+              thread,
+              childAttentionByKey.has(key) || openSubagent?.ownerKey === key,
+            );
+          }),
           globalAgentRef,
           goatBotRef,
         ),
@@ -1463,6 +1469,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     childAttentionByKey,
     globalAgentRef,
     goatBotRef,
+    openSubagent,
     pinnedThreads,
     projectThreads,
     threadLastVisitedAts,
@@ -3462,6 +3469,7 @@ export default function LegacySidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const childAttentionByKey = useSidebarSubagentIndex().attentionByOwnerKey;
   const openSubagentOwnerKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? null;
   const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
   const routeTerminalOpen = useTerminalUiStateStore((state) =>
@@ -3825,7 +3833,13 @@ export default function LegacySidebar() {
         ),
         sortedProjects.flatMap((project) => {
           const projectThreads = sortThreads(
-            (threadsByProjectKey.get(project.projectKey) ?? []).filter(isProjectsViewListedThread),
+            (threadsByProjectKey.get(project.projectKey) ?? []).filter((thread) => {
+              const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+              return isProjectsViewListedThread(
+                thread,
+                childAttentionByKey.has(key) || openSubagentOwnerKey === key,
+              );
+            }),
             sidebarThreadSortOrder,
           );
           const projectExpanded = resolveProjectExpanded(
@@ -3863,6 +3877,7 @@ export default function LegacySidebar() {
         }),
       ),
     [
+      childAttentionByKey,
       pinnedThreads,
       sidebarThreadSortOrder,
       sidebarThreadPreviewCount,
