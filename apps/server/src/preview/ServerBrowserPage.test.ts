@@ -1,5 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - existence of Playwright's browser binary is a Node filesystem check.
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import {
   chromium,
@@ -13,12 +16,53 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { presentAsChrome } from "./ServerBrowserContexts.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
-// Playwright does not download a browser with the package. Linux CI installs
-// one; a Mac checkout often has not. Skip the live browser cases instead of
-// failing the file. The drag case below does not launch anything.
+// `chromium.launch({ headless: true })` starts chromium-headless-shell.
+// `chromium.executablePath()` is the full Chrome build, so it stays missing
+// after `install --only-shell`. Linux CI installs the shell; a Mac checkout
+// often has not. Skip the live cases instead of failing the file. The drag
+// case below does not launch anything.
 const chromiumInstalled = (() => {
   try {
-    return NodeFS.existsSync(chromium.executablePath());
+    const require = NodeModule.createRequire(import.meta.url);
+    const packageRoot = NodePath.dirname(require.resolve("playwright-core/package.json"));
+    const browsers = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(packageRoot, "browsers.json"), "utf8"),
+    ) as {
+      browsers: ReadonlyArray<{ name: string; revision: string }>;
+    };
+    const revision = browsers.browsers.find(
+      (browser) => browser.name === "chromium-headless-shell",
+    )?.revision;
+    if (revision === undefined) return false;
+    const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+    const registry =
+      browsersPath === "0"
+        ? NodePath.join(packageRoot, ".local-browsers")
+        : browsersPath
+          ? NodePath.resolve(process.env.INIT_CWD || process.cwd(), browsersPath)
+          : NodePath.join(
+              process.platform === "linux"
+                ? process.env.XDG_CACHE_HOME || NodePath.join(NodeOS.homedir(), ".cache")
+                : process.platform === "darwin"
+                  ? NodePath.join(NodeOS.homedir(), "Library", "Caches")
+                  : process.env.LOCALAPPDATA || NodePath.join(NodeOS.homedir(), "AppData", "Local"),
+              "ms-playwright",
+            );
+    const directory = NodePath.join(registry, `chromium_headless_shell-${revision}`);
+    const executable =
+      process.platform === "win32"
+        ? ["chrome-headless-shell-win64", "chrome-headless-shell.exe"]
+        : process.platform === "darwin"
+          ? [
+              process.arch === "arm64"
+                ? "chrome-headless-shell-mac-arm64"
+                : "chrome-headless-shell-mac-x64",
+              "chrome-headless-shell",
+            ]
+          : process.arch === "arm64"
+            ? ["chrome-linux", "headless_shell"]
+            : ["chrome-headless-shell-linux64", "chrome-headless-shell"];
+    return NodeFS.existsSync(NodePath.join(directory, ...executable));
   } catch {
     return false;
   }
