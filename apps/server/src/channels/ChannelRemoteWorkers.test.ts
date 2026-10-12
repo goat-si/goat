@@ -55,7 +55,7 @@ interface RemoteRun {
 }
 
 class RemoteMachine {
-  readonly host = "mac-studio";
+  host = "mac-studio";
   readonly environmentId = "environment:mac-studio";
   projects = [
     {
@@ -153,6 +153,13 @@ class RemoteMachine {
     this.poke();
   }
 
+  /** What holds a finished run's thread open; undefined plays an older GOAT that omits it. */
+  holds: { backgroundTasks: number; continuationPending: boolean } | undefined;
+  setHolds(holds: { backgroundTasks: number; continuationPending: boolean }) {
+    this.holds = holds;
+    this.poke();
+  }
+
   report(correlationId: string, kind: RemoteReportKind, summary: string, runId?: string | null) {
     const binding = this.bindings.get(correlationId)!;
     binding.last += 1;
@@ -214,6 +221,9 @@ class RemoteMachine {
                 runId: run.runId,
                 status: run.status,
                 summary: TERMINAL.has(run.status) ? run.summary : null,
+                ...(TERMINAL.has(run.status) && this.holds !== undefined
+                  ? { holds: this.holds }
+                  : {}),
               },
         latestRunId: latest?.runId ?? null,
         timedOut: false,
@@ -230,7 +240,7 @@ class RemoteMachine {
       SshRemoteDispatch.SshRemoteDispatch,
       SshRemoteDispatch.SshRemoteDispatch.of({
         listHosts: () =>
-          Effect.succeed([
+          Effect.sync(() => [
             { alias: machine.host, source: "ssh-config" },
             ...machine.knownHostsOnly.map((alias) => ({ alias, source: "known-hosts" as const })),
           ]),
@@ -364,11 +374,19 @@ class RemoteMachine {
                 }
                 const first = machine.read(call.arguments);
                 if ("error" in first) return yield* first.error!;
-                const known = call.arguments.knownRun as { runId: string; status: string } | null;
+                const known = call.arguments.knownRun as {
+                  runId: string;
+                  status: string;
+                  holds?: { backgroundTasks: number; continuationPending: boolean };
+                } | null;
+                const holds = first.value.observedRun?.holds;
                 const changed =
                   first.value.reports.length > 0 ||
                   first.value.observedRun?.runId !== known?.runId ||
-                  first.value.observedRun?.status !== known?.status;
+                  first.value.observedRun?.status !== known?.status ||
+                  (known?.holds !== undefined &&
+                    (known.holds.backgroundTasks !== (holds?.backgroundTasks ?? 0) ||
+                      known.holds.continuationPending !== (holds?.continuationPending ?? false)));
                 const timeoutMs = call.arguments.timeoutMs as number;
                 if (changed || timeoutMs === 0) return first.value;
                 yield* Effect.raceFirst(
@@ -962,6 +980,34 @@ describe("answers and settlement on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect.each(["background", "continuation"] as const)(
+    "keeps a finished run open while the remote reports %s work still to come",
+    (hold) => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(
+          goatInput("do@mac-studio: build in the background", "h1"),
+          rpcContext,
+        );
+        yield* until("running", (task) => task.status === "running");
+        const correlationId = correlationOf(machine);
+        machine.holds = {
+          backgroundTasks: hold === "background" ? 1 : 0,
+          continuationPending: hold === "continuation",
+        };
+        machine.finishRun(correlationId, "completed", "Started the build.");
+        // Well past the second look that settles a finished run with nothing holding it.
+        yield* settle(300);
+        assert.strictEqual((yield* onlyTask).status, "running");
+        machine.setHolds({ backgroundTasks: 0, continuationPending: false });
+        const done = yield* until("completed", (task) => task.status === "completed", 400);
+        assert.strictEqual(done.resultSummary, "Started the build.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect(
     "does not settle a finished run when a continuation starts during the second look",
     () => {
@@ -1101,7 +1147,7 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("asks for the project again when the newest answer names none", () => {
+  it.effect("reuses the chosen remote project when an unreachable question names none", () => {
     const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
     return Effect.gen(function* () {
       yield* setupBot;
@@ -1117,18 +1163,71 @@ describe("Slack defaults for work on another machine", () => {
         (task) => task.status === "waiting_input" && task.version > first.version,
       );
       machine.environmentReadDown = false;
-      // Free text cannot show that "try again" kept the earlier choice rather than replacing it
-      // with a project that has since been renamed, so the project is asked for again.
       yield* gateway.ingest(slackInput("answer: try again", "c3"), slackContext);
-      const third = yield* until(
-        "asked for the project",
+      yield* until("running", (task) => task.status === "running" && task.version > second.version);
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("asks again when the remembered remote project was removed", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "removed1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "removed2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.projects = [
+        { ...machine.projects[0]!, id: "remote-project:replacement", title: "Replacement" },
+      ];
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: try again", "removed3"), slackContext);
+      const asked = yield* until(
+        "project removed",
         (task) => task.status === "waiting_input" && task.version > second.version,
       );
-      assert.include(third.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-studio");
       assert.strictEqual(machine.launches.length, 0);
-      yield* gateway.ingest(slackInput("answer: goat-si/goat", "c4"), slackContext);
-      yield* until("running", (task) => task.status === "running");
-      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("remembers the newer remote project by id after its title changes", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    machine.projects.push({
+      ...machine.projects[0]!,
+      id: "remote-project:other",
+      title: "Other",
+      workspaceRoot: "/other",
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "override1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "override2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      yield* gateway.ingest(slackInput("answer: Other", "override3"), slackContext);
+      const third = yield* until(
+        "newer choice",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      machine.projects[1] = { ...machine.projects[1]!, title: "Renamed" };
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: try again", "override4"), slackContext);
+      yield* until("running", (task) => task.status === "running" && task.version > third.version);
+      assert.strictEqual(machine.launches[0]!.cwd, "/other");
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -1198,6 +1297,38 @@ describe("Slack defaults for work on another machine", () => {
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "m4"), slackContext);
       yield* until("running", (task) => task.status === "running");
       assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("does not reuse a project on a different host, even with the same project id", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "host1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "host2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.host = "second-host";
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: use second-host", "host3"), slackContext);
+      const third = yield* until(
+        "new host",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      assert.strictEqual(third.host, "second-host");
+      yield* gateway.ingest(slackInput("answer: try again", "host4"), slackContext);
+      const fourth = yield* until(
+        "new host still needs project",
+        (task) => task.status === "waiting_input" && task.version > third.version,
+      );
+      assert.include(fourth.openQuestions[0]?.text ?? "", "Which project on second-host");
+      assert.strictEqual(machine.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -1567,7 +1698,7 @@ describe("models the other machine offers", () => {
     },
   );
 
-  it.effect("asks for the project again after a model question that names none", () => {
+  it.effect("reuses the remote project after a model question that names none", () => {
     const { machine, harness } = remoteHarness();
     machine.projects = [
       ...machine.projects,
@@ -1595,17 +1726,7 @@ describe("models the other machine offers", () => {
       );
       assert.isDefined(asked);
       machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
-      // Only the newest answer counts (#66 tracks remembering the choice), so it asks again.
       yield* gateway.ingest(goatInput("answer: try again", "mm8"), rpcContext);
-      yield* until(
-        "which project again",
-        (task) =>
-          task.status === "waiting_input" &&
-          task.openQuestions[0]?.text ===
-            REMOTE_COPY.whichProject(machine.host, ["goat-si/goat", "other"]),
-      );
-      assert.strictEqual(machine.launches.length, 0);
-      yield* gateway.ingest(goatInput("answer: goat-si/goat", "mm9"), rpcContext);
       yield* until("running", (task) => task.status === "running");
       assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
     }).pipe(Effect.provide(harness.layer));

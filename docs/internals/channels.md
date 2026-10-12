@@ -66,10 +66,10 @@ Defaults pick where and with what model; the requester's ceiling still bounds th
 
 On another machine the remote's only project stands in only when no project was asked for: a
 project named here, or a default that is gone, must match one of its projects, or the requester is
-asked. Only the newest answer of the current generation can name the project there; an answer
-that chose nothing ("try again" after the machine was unreachable) asks again, because free text
-cannot show whether an older answer was overtaken by a choice whose project has since been renamed
-or removed.
+asked. Dispatcher answers record their project resolution in the ledger. An answer that names
+nothing can keep an earlier remote project choice only while its id still exists on the same
+host. A newer project or machine choice replaces it; an answer that could not be resolved blocks
+reuse of older choices. A retried generation starts without earlier choices.
 
 ## Who runs the workers
 
