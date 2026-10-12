@@ -11,7 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
+import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 type EnvironmentPatch = Record<string, string>;
 
@@ -460,7 +460,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       }
     }
     // A login shell configured before the GOAT rename exports the legacy opt-out.
-    normalizeLegacyEnv(config.env);
+    adoptLegacyEnv(config.env);
 
     // Locale variables form one precedence group: LC_ALL can override an inherited
     // LANG or LC_CTYPE, so only hydrate the group when the process has none of them.

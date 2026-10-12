@@ -9,6 +9,8 @@
  * arguments and `set_model`. Sessions go to a temporary directory, never the
  * user's Pi session store.
  */
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ProviderReplayEntry, ProviderReplayTranscript } from "@goat/contracts";
 import * as Console from "effect/Console";

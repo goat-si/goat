@@ -22,6 +22,10 @@
     "./legacyT3Names": {
       "types": "./src/legacyT3Names.ts",
       "import": "./src/legacyT3Names.ts"
+    },
+    "./adoptLegacyEnv": {
+      "types": "./src/adoptLegacyEnv.ts",
+      "import": "./src/adoptLegacyEnv.ts"
     }
   },
   "scripts": {

@@ -1262,7 +1262,7 @@ describe("DesktopBackendConfiguration", () => {
           // already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:GOAT_OTLP_HEADERS:GOAT_OTLP_PROTOCOL:GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:GOAT_OTLP_HEADERS:T3CODE_OTLP_HEADERS:GOAT_OTLP_PROTOCOL:T3CODE_OTLP_PROTOCOL:GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR", // goat-rename: legacy,
           );
         }).pipe(
           Effect.provide(

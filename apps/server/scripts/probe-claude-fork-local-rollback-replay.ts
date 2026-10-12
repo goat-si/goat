@@ -1,3 +1,5 @@
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import {
   forkSession,
   query,

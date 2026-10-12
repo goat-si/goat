@@ -23,6 +23,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
+import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -751,8 +752,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   for (const name of WSL_FORWARDED_ENV_NAMES) {
     const value = process.env[name];
     if (value !== undefined && value.length > 0) {
-      forwardedEnv[name] = value;
-      forwardedEnvNames.push(name);
+      // A WSL runtime installed by an older build reads the legacy spelling.
+      for (const forwardedName of [name, legacyEnvName(name)]) {
+        if (forwardedName === undefined || forwardedEnv[forwardedName] !== undefined) continue;
+        forwardedEnv[forwardedName] = value;
+        forwardedEnvNames.push(forwardedName);
+      }
     }
   }
 
@@ -762,18 +767,21 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // /mnt/c, which means both backends read/write the same database and
   // their env-ids collide).
   const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
+  const ownedNames = new Set(
+    ["GOAT_HOME", "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR"].flatMap((name) => [
+      name,
+      legacyEnvName(name) ?? name,
+    ]),
+  );
   for (const [key, value] of Object.entries(process.env)) {
-    if (key === "GOAT_HOME" || key === "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR") continue;
+    if (ownedNames.has(key)) continue;
     // mergeWslEnv preserves inherited suffixes; remove this owned variable
     // before appending its already-translated Linux value as a bare name.
     parentEnvWithoutT3Home[key] =
       key === "WSLENV"
         ? value
             ?.split(":")
-            .filter(
-              (entry) =>
-                getWslEnvEntryName(entry.trim()) !== "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR",
-            )
+            .filter((entry) => !ownedNames.has(getWslEnvEntryName(entry.trim())))
             .join(":")
         : value;
   }

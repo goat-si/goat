@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
@@ -67,12 +68,15 @@ describe("pi T3 MCP injection", () => {
     assert.equal(launch.env[GOAT_MCP_BEARER_ENV], "secret-pi-token");
     assert.equal(launch.env[GOAT_PI_RUNTIME_MODE_ENV], "approval-required");
     assert.equal(launch.env[GOAT_PI_MCP_EXTENSION_PATH_ENV], "/tmp/cache/pi-t3-mcp-extension.ts");
+    // An extension materialized by an older build reads the legacy names.
+    assert.equal(launch.env[legacyEnvName(GOAT_MCP_URL_ENV)!], "http://127.0.0.1:43123/mcp");
+    assert.equal(launch.env[legacyEnvName(GOAT_MCP_BEARER_ENV)!], "secret-pi-token");
 
     const permissionOnly = buildPiRpcLaunch({
       launchArgs: [],
       environment: {
         [GOAT_MCP_URL_ENV]: "http://127.0.0.1:9999/stale",
-        [GOAT_MCP_BEARER_ENV]: "stale-token",
+        [legacyEnvName(GOAT_MCP_BEARER_ENV)!]: "stale-token",
         [GOAT_PI_MCP_EXTENSION_PATH_ENV]: "/stale/extension.ts",
       },
       mcpSession: undefined,
@@ -88,6 +92,7 @@ describe("pi T3 MCP injection", () => {
     assert.isFalse(permissionOnly.hasGoatMcp);
     assert.isUndefined(permissionOnly.env[GOAT_MCP_URL_ENV]);
     assert.isUndefined(permissionOnly.env[GOAT_MCP_BEARER_ENV]);
+    assert.isUndefined(permissionOnly.env[legacyEnvName(GOAT_MCP_BEARER_ENV)!]);
     assert.equal(permissionOnly.env[GOAT_PI_RUNTIME_MODE_ENV], "auto-accept-edits");
     assert.equal(
       permissionOnly.env[GOAT_PI_MCP_EXTENSION_PATH_ENV],

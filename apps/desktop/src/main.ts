@@ -19,7 +19,7 @@ import * as Electron from "electron";
 
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
+import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
@@ -81,9 +81,9 @@ import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
 
-// Shells and launchers configured before the GOAT rename still set legacy names; the
-// backend and every other child run this same build.
-normalizeLegacyEnv(process.env);
+// Shells and launchers configured before the GOAT rename still set legacy names. They stay
+// set for children that may run an older build, such as a WSL backend.
+adoptLegacyEnv(process.env);
 
 if (process.argv.includes("--version")) {
   try {

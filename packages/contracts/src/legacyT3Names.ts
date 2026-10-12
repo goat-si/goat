@@ -99,7 +99,7 @@ export const normalizeLegacyEnv = <E extends Env>(env: E): E => {
 
 /** Server-owned env names, current or legacy (relay keys included), that a terminal must not inherit. */
 export const isOwnedEnvName = (name: string): boolean =>
-  name.startsWith("GOAT_") || name.startsWith("T3CODE_");
+  name.startsWith("GOAT_") || name.startsWith("T3CODE_") || goatEnvName(name) !== undefined;
 
 /**
  * A copy of `env` that also carries the legacy name of every GOAT name it sets. Use it for

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
@@ -290,9 +291,10 @@ export function buildPiRpcLaunch(input: {
   const environment = { ...input.environment };
   // These values belong to the current T3 session. Never let a Pi child reuse
   // credentials inherited from the server or a parent provider process.
-  delete environment[GOAT_MCP_URL_ENV];
-  delete environment[GOAT_MCP_BEARER_ENV];
-  delete environment[GOAT_PI_MCP_EXTENSION_PATH_ENV];
+  for (const name of [GOAT_MCP_URL_ENV, GOAT_MCP_BEARER_ENV, GOAT_PI_MCP_EXTENSION_PATH_ENV]) {
+    delete environment[name];
+    delete environment[legacyEnvName(name) ?? name];
+  }
 
   return {
     args,
@@ -301,20 +303,23 @@ export function buildPiRpcLaunch(input: {
       ...(hasGoatExtension && input.extensionPath !== undefined
         ? { [GOAT_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
         : {}),
-      ...(hasGoatExtension && input.runtimeMode !== undefined
-        ? {
-            [GOAT_PI_RUNTIME_MODE_ENV]:
-              input.runtimeMode === "auto" ? "approval-required" : input.runtimeMode,
-          }
-        : {}),
-      ...(hasGoatMcp && input.mcpSession !== undefined
-        ? {
-            [GOAT_MCP_URL_ENV]: input.mcpSession.endpoint,
-            [GOAT_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
-              input.mcpSession.authorizationHeader,
-            ),
-          }
-        : {}),
+      // An extension materialized by an older build reads the legacy names.
+      ...withLegacyEnvNames({
+        ...(hasGoatExtension && input.runtimeMode !== undefined
+          ? {
+              [GOAT_PI_RUNTIME_MODE_ENV]:
+                input.runtimeMode === "auto" ? "approval-required" : input.runtimeMode,
+            }
+          : {}),
+        ...(hasGoatMcp && input.mcpSession !== undefined
+          ? {
+              [GOAT_MCP_URL_ENV]: input.mcpSession.endpoint,
+              [GOAT_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
+                input.mcpSession.authorizationHeader,
+              ),
+            }
+          : {}),
+      }),
     },
     hasGoatMcp,
   };

@@ -720,9 +720,9 @@ export class Launcher {
 }
 
 export async function main(): Promise<void> {
-  // Units installed before the GOAT rename set legacy names. Keep them: the retained
-  // server versions this launcher starts may be older builds that read only those.
-  adoptLegacyEnv(process.env);
+  // Units installed before the GOAT rename set only legacy names, and the retained server
+  // versions this launcher starts may be older builds that read only those: carry both.
+  Object.assign(process.env, withLegacyEnvNames(adoptLegacyEnv(process.env)));
   const baseDir = process.env.GOAT_HOME?.trim();
   if (baseDir === undefined || baseDir === "") {
     throw new Error("GOAT_HOME is required by the GOAT service launcher.");

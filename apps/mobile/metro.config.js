@@ -1,4 +1,9 @@
 const fs = require("node:fs");
+
+// goat-rename: legacy-begin
+// Set before the GOAT rename as T3CODE_LICENSES_STRICT.
+process.env.GOAT_LICENSES_STRICT ??= process.env.T3CODE_LICENSES_STRICT;
+// goat-rename: legacy-end
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getDefaultConfig } = require("expo/metro-config");

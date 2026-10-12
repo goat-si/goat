@@ -6,6 +6,8 @@
  * dependencies, links the main checkout's gitignored env files into this
  * worktree, then warms the web dependency cache.
  */
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

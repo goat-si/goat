@@ -65,12 +65,9 @@ export function projectScriptRuntimeEnv(
   if (input.worktreePath) {
     env.GOAT_WORKTREE_PATH = input.worktreePath;
   }
-  // User scripts written before the GOAT rename read the legacy names.
-  const named = withLegacyEnvNames(env);
-  if (input.extraEnv) {
-    return { ...named, ...input.extraEnv };
-  }
-  return named;
+  // User scripts written before the GOAT rename read the legacy names. Applied after
+  // overrides, so an overridden GOAT name carries its value to the legacy one.
+  return withLegacyEnvNames(input.extraEnv ? { ...env, ...input.extraEnv } : env);
 }
 
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {

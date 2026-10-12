@@ -1,5 +1,7 @@
 // This file mostly exists because we want dev mode to say "T3 Code (Dev)" instead of "electron"
 
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";

@@ -11,6 +11,8 @@
  * recording replays itself through the fixture's assertions before it is
  * written, so a run that fails them never replaces the existing transcript.
  */
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";

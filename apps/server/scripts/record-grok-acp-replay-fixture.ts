@@ -9,6 +9,8 @@
  *
  *   node scripts/record-grok-acp-replay-fixture.ts --scenario simple
  */
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type ProviderReplayEntry } from "@goat/contracts";
 import { GrokSettings } from "@goat/provider-grok/settings";

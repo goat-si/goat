@@ -67,6 +67,9 @@ export const renderCliShim = (input: {
       // A home set before the GOAT rename keeps winning over the default. goat-rename: legacy
       'if not defined GOAT_HOME if defined T3CODE_HOME set "GOAT_HOME=%T3CODE_HOME%"', // goat-rename: legacy
       `if not defined GOAT_HOME set "GOAT_HOME=${cmdText(input.t3Home)}"`,
+      // The app this shim points at may be a build from before the GOAT rename.
+      'set "T3CODE_CLI_PATH=%GOAT_CLI_PATH%"', // goat-rename: legacy
+      'set "T3CODE_HOME=%GOAT_HOME%"', // goat-rename: legacy
       'set "ELECTRON_RUN_AS_NODE=1"',
       // A goto, not a parenthesized block: "Program Files (x86)" would close the block early.
       `if exist ${cmdWord(target.executable)} goto run`,
@@ -88,6 +91,8 @@ export const renderCliShim = (input: {
     `home=${shellWord(input.t3Home)}`,
     // A home set before the GOAT rename keeps winning over the default.
     'export GOAT_HOME="${GOAT_HOME:-${T3CODE_HOME:-$home}}"', // goat-rename: legacy
+    // The app this shim points at may be a build from before the GOAT rename.
+    'export T3CODE_CLI_PATH="$GOAT_CLI_PATH" T3CODE_HOME="$GOAT_HOME"', // goat-rename: legacy
     "export ELECTRON_RUN_AS_NODE=1",
     `app=${shellWord(target.kind === "appimage" ? target.appImage : target.executable)}`,
     'if [ ! -x "$app" ]; then',

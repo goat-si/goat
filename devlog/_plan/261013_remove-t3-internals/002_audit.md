@@ -104,3 +104,16 @@ Statuses assess the revised roadmap, not an implemented migration.
 - D8 verification should distinguish implicit development homes from worktree homes forwarded as explicit env values (`scripts/dev-runner.ts:327`), preserving directory selection and isolation.
 - D13/D16 deferrals are justified; retaining those identities introduces no migration loss.
 - Static, read-only audit only; no files changed or servers started.
+
+## wp5 review — gpt-6.1-sol (task t2-wp5-review-1) — VERDICT: FAIL → folded
+
+| #   | Finding                                                                                                    | Fold                                                                                              |
+| --- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1   | `bin.ts` normalized before dispatching `__service-launcher`, so retained older versions lost legacy names. | Server and desktop adopt without deleting; the launcher carries both spellings to its children.   |
+| 2   | Server/desktop Vite configs and Metro read raw env.                                                        | Vite configs import `@goat/contracts/adoptLegacyEnv` first; Metro adopts its one variable inline. |
+| 3   | Operator scripts and replay recorders read raw env.                                                        | Each imports `@goat/contracts/adoptLegacyEnv` first.                                              |
+| 4   | No alias-aware `ConfigProvider`.                                                                           | Rebutted: no production code builds a provider from a user env record; D5 text corrected.         |
+| 5   | `loadRepoEnv` aliased after merging, breaking source priority.                                             | Each source is aliased before merging.                                                            |
+| 6   | Pi and Claude MCP handoffs emitted only new names.                                                         | Both spellings emitted; Pi scrubs inherited credentials under both.                               |
+| 7   | WSL backend of an older build lost forwarded settings.                                                     | Forwarded names and `WSLENV` carry both spellings; owned names filtered under both.               |
+| 8   | CLI shims emitted only GOAT names; project-script overrides left stale legacy values.                      | Shims export both; legacy names are derived after overrides.                                      |
