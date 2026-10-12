@@ -291,7 +291,7 @@ interface CreateDevRunnerEnvInput {
   readonly baseEnv: NodeJS.ProcessEnv;
   readonly serverOffset: number;
   readonly webOffset: number;
-  readonly t3Home: string | undefined;
+  readonly goatHome: string | undefined;
   readonly browser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
   readonly logWebSocketEvents: boolean | undefined;
@@ -305,7 +305,7 @@ export function createDevRunnerEnv({
   baseEnv,
   serverOffset,
   webOffset,
-  t3Home,
+  goatHome,
   browser,
   autoBootstrapProjectFromCwd,
   logWebSocketEvents,
@@ -321,8 +321,8 @@ export function createDevRunnerEnv({
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
     // Precedence (--home-dir > worktree .t3 > ambient GOAT_HOME) is resolved
-    // by the caller; an unset t3Home here genuinely means "use the default".
-    const configuredBaseDir = t3Home?.trim() || undefined;
+    // by the caller; an unset goatHome here genuinely means "use the default".
+    const configuredBaseDir = goatHome?.trim() || undefined;
     const resolvedBaseDir = yield* resolveBaseDir(configuredBaseDir);
     const isDesktopMode = mode === "dev:desktop";
 
@@ -619,7 +619,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
 
 interface DevRunnerCliInput {
   readonly mode: DevMode;
-  readonly t3Home: string | undefined;
+  readonly goatHome: string | undefined;
   readonly browser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
   readonly logWebSocketEvents: boolean | undefined;
@@ -682,8 +682,8 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // Trim before choosing: `--home-dir ""` is not a selection, and treating it
     // as one would skip the worktree default and land on the shared home —
     // exactly the outcome this precedence exists to prevent.
-    const resolvedT3Home =
-      (input.t3Home?.trim() || undefined) ??
+    const resolvedGoatHome =
+      (input.goatHome?.trim() || undefined) ??
       worktreeHome ??
       (hostEnvironment.GOAT_HOME?.trim() || undefined);
     const env = yield* createDevRunnerEnv({
@@ -691,7 +691,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       baseEnv: hostEnvironment,
       serverOffset,
       webOffset,
-      t3Home: resolvedT3Home,
+      goatHome: resolvedGoatHome,
       browser: input.browser,
       autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
       logWebSocketEvents: input.logWebSocketEvents,
@@ -856,7 +856,7 @@ const devRunnerCli = Command.make("dev-runner", {
   mode: Argument.Literals("mode", DEV_RUNNER_MODES).pipe(
     Argument.withDescription("Development mode to run."),
   ),
-  t3Home: Flag.String("home-dir").pipe(
+  goatHome: Flag.String("home-dir").pipe(
     Flag.withDescription(
       "Explicit GOAT data directory; runtime state is stored under userdata (equivalent to GOAT_HOME). Inside a git worktree this defaults to that worktree's own .t3 so dev state stays off the shared home.",
     ),

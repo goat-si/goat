@@ -5,23 +5,23 @@ import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 
 export type JoinPath = (first: string, ...segments: string[]) => string;
 
-function normalizeConfiguredBaseDir(t3Home: Option.Option<string>): Option.Option<string> {
-  if (Option.isNone(t3Home)) {
+function normalizeConfiguredBaseDir(goatHome: Option.Option<string>): Option.Option<string> {
+  if (Option.isNone(goatHome)) {
     return Option.none();
   }
-  const trimmed = t3Home.value.trim();
+  const trimmed = goatHome.value.trim();
   return trimmed.length > 0 ? Option.some(trimmed) : Option.none();
 }
 
 export function resolveDesktopBaseDir(input: {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
-  readonly t3Home: Option.Option<string>;
+  readonly goatHome: Option.Option<string>;
   readonly isDevelopment: boolean;
   /** Lets a dev build keep a dev state left in the legacy home (see resolveGoatHome). */
   readonly pathExists?: (path: string) => boolean;
 }): string {
-  return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () => {
+  return Option.getOrElse(normalizeConfiguredBaseDir(input.goatHome), () => {
     if (!input.isDevelopment) return input.joinPath(input.homeDirectory, ".goat", "desktop");
     // The dev runner passes its home explicitly; this is a hand-launched dev build.
     const goatHome = input.joinPath(input.homeDirectory, GOAT_HOME_DIR_NAME);
@@ -37,9 +37,9 @@ export function resolveDesktopStateDir(input: {
   readonly baseDir: string;
   readonly isDevelopment: boolean;
   readonly joinPath: JoinPath;
-  readonly t3Home: Option.Option<string>;
+  readonly goatHome: Option.Option<string>;
 }): string {
   const useDevSubdir =
-    input.isDevelopment && Option.isNone(normalizeConfiguredBaseDir(input.t3Home));
+    input.isDevelopment && Option.isNone(normalizeConfiguredBaseDir(input.goatHome));
   return input.joinPath(input.baseDir, useDevSubdir ? "dev" : "userdata");
 }

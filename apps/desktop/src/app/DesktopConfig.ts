@@ -37,7 +37,7 @@ export const DesktopConfig = Config.all({
   appDataDirectory: trimmedString("APPDATA"),
   xdgConfigHome: trimmedString("XDG_CONFIG_HOME"),
   xdgDataHome: trimmedString("XDG_DATA_HOME"),
-  t3Home: trimmedString("GOAT_HOME"),
+  goatHome: trimmedString("GOAT_HOME"),
   devServerUrl: Config.URL("VITE_DEV_SERVER_URL").pipe(Config.option),
   appUserModelIdOverride: trimmedString("GOAT_DESKTOP_APP_USER_MODEL_ID"),
   devRemoteGoatServerEntryPath: trimmedString("GOAT_DEV_REMOTE_SERVER_ENTRY_PATH"),

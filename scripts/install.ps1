@@ -32,7 +32,7 @@ if (-not $env:GOAT_HOME -and -not (Test-Path (Join-Path $HOME ".goat\userdata"))
   $env:GOAT_HOME = Join-Path $HOME ".t3"
 }
 # goat-rename: legacy-end
-$t3Home = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".goat" }
+$goatHome = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".goat" }
 $binDir = if ($env:GOAT_INSTALL_BIN_DIR) { $env:GOAT_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
 
 function Fail([string] $message) {
@@ -178,7 +178,7 @@ if ($version -match '-preview\.') {
 
 $stem = "goat-$version-win32-$arch"
 $archive = "$stem.zip"
-$versionsDir = Join-Path $t3Home "runtime\goat\versions"
+$versionsDir = Join-Path $goatHome "runtime\goat\versions"
 $targetDir = Join-Path $versionsDir $version
 $marker = Join-Path $targetDir ".install-complete"
 

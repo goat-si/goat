@@ -35,7 +35,7 @@ const writeExecutable = (path: string, content: string) => {
 /** Writes the launcher for `target` at `<root>/bin/goat`, with `<root>/home` as its T3 home. */
 const writeShim = (root: string, target: CliShimTarget) => {
   const shim = NodePath.join(root, "bin", "goat");
-  writeExecutable(shim, renderCliShim({ target, shimPath: shim, t3Home: `${root}/home` }));
+  writeExecutable(shim, renderCliShim({ target, shimPath: shim, goatHome: `${root}/home` }));
   return shim;
 };
 
@@ -117,7 +117,7 @@ describe("renderCliShim", () => {
           const content = renderCliShim({
             target: { kind: "direct", executable, entry: "/bin.mjs" },
             shimPath: shim,
-            t3Home: environment.baseDir,
+            goatHome: environment.baseDir,
           });
           expect(content).toContain(selected);
           expect(content).not.toContain(".t3");
@@ -213,7 +213,7 @@ describe("renderCliShim", () => {
     const script = renderCliShim({
       target: { kind: "windows", executable, entry: "C:\\Apps\\server.asar\\bin.mjs" },
       shimPath: "C:\\Users\\José\\.t3\\bin\\goat.cmd",
-      t3Home: "C:\\Users\\José\\.t3",
+      goatHome: "C:\\Users\\José\\.t3",
     });
     const lines = script.split("\r\n");
     expect(lines).toContain("setlocal EnableExtensions DisableDelayedExpansion");
@@ -233,10 +233,10 @@ describe("renderCliShim", () => {
     const ascii = renderCliShim({
       target: { kind: "windows", executable: "C:\\T3\\T3 Code.exe", entry: "C:\\T3\\bin.mjs" },
       shimPath: "C:\\Users\\me\\.t3\\bin\\goat.cmd",
-      t3Home: "C:\\Users\\me\\.t3",
+      goatHome: "C:\\Users\\me\\.t3",
     });
     // A Ctrl-C that ends the batch would leave the console switched.
     expect(ascii).not.toContain("chcp");
-    expect(ascii.split("\r\n")).toContain("exit /b %t3_exit%");
+    expect(ascii.split("\r\n")).toContain("exit /b %goat_exit%");
   });
 });

@@ -41,14 +41,14 @@ export type CliShimTarget =
 export const renderCliShim = (input: {
   readonly target: CliShimTarget;
   readonly shimPath: string;
-  readonly t3Home: string;
+  readonly goatHome: string;
 }) => {
   const { target } = input;
   if (target.kind === "windows") {
-    const utf8 = [target.executable, target.entry, input.shimPath, input.t3Home].some((value) =>
+    const utf8 = [target.executable, target.entry, input.shimPath, input.goatHome].some((value) =>
       [...value].some((character) => character.codePointAt(0)! > 0x7f),
     );
-    const restore = utf8 ? ["chcp %t3_codepage% >nul"] : [];
+    const restore = utf8 ? ["chcp %goat_codepage% >nul"] : [];
     return [
       "@echo off",
       `rem ${MARKER}`,
@@ -59,14 +59,14 @@ export const renderCliShim = (input: {
       // switch is left out for the common all-ASCII install.
       ...(utf8
         ? [
-            `for /f "tokens=2 delims=:." %%c in ('chcp') do set "t3_codepage=%%c"`,
+            `for /f "tokens=2 delims=:." %%c in ('chcp') do set "goat_codepage=%%c"`,
             "chcp 65001 >nul",
           ]
         : []),
       `set "GOAT_CLI_PATH=${cmdText(input.shimPath)}"`,
       // A home set before the GOAT rename keeps winning over the default. goat-rename: legacy
       'if not defined GOAT_HOME if defined T3CODE_HOME set "GOAT_HOME=%T3CODE_HOME%"', // goat-rename: legacy
-      `if not defined GOAT_HOME set "GOAT_HOME=${cmdText(input.t3Home)}"`,
+      `if not defined GOAT_HOME set "GOAT_HOME=${cmdText(input.goatHome)}"`,
       // The app this shim points at may be a build from before the GOAT rename.
       'set "T3CODE_CLI_PATH=%GOAT_CLI_PATH%"', // goat-rename: legacy
       'set "T3CODE_HOME=%GOAT_HOME%"', // goat-rename: legacy
@@ -78,9 +78,9 @@ export const renderCliShim = (input: {
       "exit /b 127",
       ":run",
       `${cmdWord(target.executable)} ${cmdWord(target.entry)} %*`,
-      'set "t3_exit=%ERRORLEVEL%"',
+      'set "goat_exit=%ERRORLEVEL%"',
       ...restore,
-      "exit /b %t3_exit%",
+      "exit /b %goat_exit%",
       "",
     ].join("\r\n");
   }
@@ -88,7 +88,7 @@ export const renderCliShim = (input: {
     "#!/bin/sh",
     `# ${MARKER}`,
     `export GOAT_CLI_PATH=${shellWord(input.shimPath)}`,
-    `home=${shellWord(input.t3Home)}`,
+    `home=${shellWord(input.goatHome)}`,
     // A home set before the GOAT rename keeps winning over the default.
     'export GOAT_HOME="${GOAT_HOME:-${T3CODE_HOME:-$home}}"', // goat-rename: legacy
     // The app this shim points at may be a build from before the GOAT rename.
@@ -165,7 +165,7 @@ export const install = Effect.gen(function* () {
         // macOS and .deb installs live at a fixed path, so the launcher runs the app directly.
         onNone: () => ({ kind: "direct" as const, executable: process.execPath, entry }),
       });
-  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir });
+  const content = renderCliShim({ target, shimPath, goatHome: environment.baseDir });
 
   return yield* Effect.gen(function* () {
     const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);

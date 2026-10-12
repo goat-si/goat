@@ -122,7 +122,7 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.Port("GOAT_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.String("GOAT_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.String("GOAT_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  goatHome: Config.String("GOAT_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.URL("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.String("GOAT_DEV_ALLOWED_ORIGINS").pipe(
     Config.withDefault(""),
@@ -311,7 +311,7 @@ export const resolveServerConfig = (
       mode === "web" && devUrl !== undefined ? yield* DevAuthTokenConfig : undefined;
     const explicitBaseDir = resolveOptionPrecedence(
       normalizedFlags.baseDir,
-      Option.fromUndefinedOr(env.t3Home),
+      Option.fromUndefinedOr(env.goatHome),
     ).pipe(Option.filter((value) => value.trim().length > 0));
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(

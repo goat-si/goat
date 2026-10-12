@@ -767,7 +767,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // the WSL backend the Linux side ends up sharing C:\Users\...\.t3 via
   // /mnt/c, which means both backends read/write the same database and
   // their env-ids collide).
-  const parentEnvWithoutT3Home: Record<string, string | undefined> = {};
+  const parentEnvWithoutGoatHome: Record<string, string | undefined> = {};
   const ownedNames = new Set(
     ["GOAT_HOME", "GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR"].flatMap((name) => [
       name,
@@ -778,7 +778,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     if (ownedNames.has(key)) continue;
     // mergeWslEnv preserves inherited suffixes; remove this owned variable
     // before appending its already-translated Linux value as a bare name.
-    parentEnvWithoutT3Home[key] =
+    parentEnvWithoutGoatHome[key] =
       key === "WSLENV"
         ? value
             ?.split(":")
@@ -792,7 +792,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     onSome: (directory) => withLegacyEnvNames({ GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: directory }),
   });
   forwardedEnvNames.push(...Object.keys(bundledArchiveEnv));
-  const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
+  const wslEnv = mergeWslEnv(parentEnvWithoutGoatHome.WSLENV, forwardedEnvNames);
 
   const baseConfig = {
     executablePath: "wsl.exe",
@@ -800,7 +800,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       preflight._tag === "Ready" ? preflight.windowsEntryPath : environment.backendEntryPath,
     cwd: environment.backendCwd,
     env: {
-      ...parentEnvWithoutT3Home,
+      ...parentEnvWithoutGoatHome,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
       // wsl.exe receives Windows env; /mnt/... is already a Linux path. WSLENV

@@ -8,7 +8,7 @@ const devBaseDir = (existing: ReadonlyArray<string>) =>
   resolveDesktopBaseDir({
     homeDirectory: "/home/user",
     joinPath,
-    t3Home: Option.none(),
+    goatHome: Option.none(),
     isDevelopment: true,
     pathExists: (path) => existing.includes(path),
   });
