@@ -399,6 +399,11 @@ import {
   SshWorkspaceError,
 } from "./sshWorkspace.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  RemoteLaunchesError,
+  RemoteLaunchesListInput,
+  RemoteLaunchesListResult,
+} from "./remoteReports.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
 
 export const WS_METHODS = {
@@ -554,6 +559,9 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  // Threads this environment launched or watches on other machines
+  remoteLaunchesList: "remoteLaunches.list",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1853,6 +1861,12 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
 
+const WsRemoteLaunchesListRpc = Rpc.make(WS_METHODS.remoteLaunchesList, {
+  payload: RemoteLaunchesListInput,
+  success: RemoteLaunchesListResult,
+  error: Schema.Union([RemoteLaunchesError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
   {
@@ -2049,6 +2063,7 @@ export const WsRpcGroup = RpcGroup.make(
   SlackChannelSubscribeStatusRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
+  WsRemoteLaunchesListRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
