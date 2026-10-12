@@ -81,4 +81,9 @@ describe("withLegacyEnvNames", () => {
       PATH: "/bin",
     });
   });
+
+  it("hands older builds the GOAT value when both spellings disagree", () => {
+    const env = withLegacyEnvNames({ GOAT_HOME: "/new", T3CODE_HOME: "/old" }); // goat-rename: legacy
+    expect(env.T3CODE_HOME).toBe("/new"); // goat-rename: legacy
+  });
 });

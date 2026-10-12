@@ -105,17 +105,16 @@ export const isOwnedEnvName = (name: string): boolean =>
   name.startsWith("GOAT_") || name.startsWith("T3CODE_") || goatEnvName(name) !== undefined;
 
 /**
- * A copy of `env` that also carries the legacy name of every GOAT name it sets. Use it for
- * env handed to a process that may run an older build: retained service versions, SSH
+ * A copy of `env` that also carries the legacy name of every GOAT name it sets, with the GOAT
+ * value, so an older child cannot pick a stale legacy value this build already overrode. Use
+ * it for env handed to a process that may run an older build: retained service versions, SSH
  * helpers, user project scripts, provider bridges.
  */
 export const withLegacyEnvNames = <E extends Env>(env: E): E => {
   const result: Env = { ...env };
   for (const [name, value] of Object.entries(env)) {
     const legacy = legacyEnvName(name);
-    if (legacy !== undefined && value !== undefined && result[legacy] === undefined) {
-      result[legacy] = value;
-    }
+    if (legacy !== undefined && value !== undefined) result[legacy] = value;
   }
   return result as E;
 };
