@@ -98,6 +98,7 @@ export function makeFakeGateway() {
           return script.requestNotice(input);
         }),
       send: () => Effect.die("the Slack adapter never sends through the gateway"),
+      getInput: () => Effect.die("the Slack adapter never reads inputs back"),
     }),
   );
   return { layer, calls, script };
