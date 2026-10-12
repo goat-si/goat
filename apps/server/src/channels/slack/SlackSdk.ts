@@ -89,6 +89,7 @@ const SlackSdkFailureCategory = Schema.Literals([
   "channel_not_found",
   "platform",
   "network",
+  "timeout",
   "http",
   /** The call returned without the receipt it should carry; it may still have taken effect. */
   "unconfirmed",
@@ -149,7 +150,10 @@ export function classifySlackSdkError(
     return new SlackSdkFailure({ operation, category });
   }
   if (error instanceof WebAPIRequestError) {
-    return new SlackSdkFailure({ operation, category: "network" });
+    return new SlackSdkFailure({
+      operation,
+      category: error.original?.name === "TimeoutError" ? "timeout" : "network",
+    });
   }
   if (error instanceof WebAPIHTTPError) {
     return new SlackSdkFailure({ operation, category: "http", httpStatus: error.statusCode });

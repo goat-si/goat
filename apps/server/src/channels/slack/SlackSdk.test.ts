@@ -43,6 +43,11 @@ describe("classifySlackSdkError", () => {
     ["unknown channel", platformError("channel_not_found"), { category: "channel_not_found" }],
     ["other platform error", platformError("msg_too_long"), { category: "platform" }],
     [
+      "request timeout",
+      new WebAPIRequestError(Object.assign(new Error(BOT_TOKEN), { name: "TimeoutError" })),
+      { category: "timeout" },
+    ],
+    [
       "network failure",
       new WebAPIRequestError(new Error(`connect failed ${BOT_TOKEN}`)),
       { category: "network" },
