@@ -71,6 +71,9 @@ describe("pi T3 MCP injection", () => {
     // An extension materialized by an older build reads the legacy names.
     assert.equal(launch.env[legacyEnvName(GOAT_MCP_URL_ENV)!], "http://127.0.0.1:43123/mcp");
     assert.equal(launch.env[legacyEnvName(GOAT_MCP_BEARER_ENV)!], "secret-pi-token");
+    // Older extensions identify their own tools by this exact spelling.
+    assert.equal(launch.env.T3_PI_MCP_EXTENSION_PATH, "/tmp/cache/pi-goat-mcp-extension.ts"); // goat-rename: legacy
+    assert.equal(launch.env.T3_PI_RUNTIME_MODE, "approval-required"); // goat-rename: legacy
 
     const permissionOnly = buildPiRpcLaunch({
       launchArgs: [],

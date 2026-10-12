@@ -300,11 +300,11 @@ export function buildPiRpcLaunch(input: {
     args,
     env: {
       ...environment,
-      ...(hasGoatExtension && input.extensionPath !== undefined
-        ? { [GOAT_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
-        : {}),
       // An extension materialized by an older build reads the legacy names.
       ...withLegacyEnvNames({
+        ...(hasGoatExtension && input.extensionPath !== undefined
+          ? { [GOAT_PI_MCP_EXTENSION_PATH_ENV]: input.extensionPath }
+          : {}),
         ...(hasGoatExtension && input.runtimeMode !== undefined
           ? {
               [GOAT_PI_RUNTIME_MODE_ENV]:
