@@ -611,5 +611,5 @@ it.effect("grants approvals only to issued clients with operate and approve, and
     expect(
       sessions.find((session) => session.sessionId === approver.sessionId)?.lastConnectedAt,
     ).not.toBeNull();
-  }).pipe(Effect.provide(layerEnvironmentAuth), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(layerEnvironmentAuth.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
