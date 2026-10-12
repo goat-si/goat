@@ -6268,7 +6268,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         },
       }),
     ];
-    const start = (attempt: number): Array<CodexReplay.CodexAppServerReplayEntry> => [
+    const start = (
+      attempt: number,
+      input: ReadonlyArray<unknown> = [],
+    ): Array<CodexReplay.CodexAppServerReplayEntry> => [
       {
         type: "expect_outbound",
         label: "turn/start",
@@ -6277,7 +6280,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           method: "turn/start",
           params: {
             threadId: nativeThreadId,
-            input: [],
+            input,
             cwd: "/workspace",
             model: "gpt-5.4",
             approvalPolicy: "never",
@@ -6399,6 +6402,69 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               .slice(0, outcome === "stop" ? 1 : 3)
               .map((retryDelayMs, index) => ({ attempt: index + 1, maxAttempts: 3, retryDelayMs })),
           );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    it.effect("starts the retry with a steer that arrives during the backoff", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const waiting = yield* Deferred.make<void>();
+          const steerText = "Use the fallback model instead.";
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({
+              scenario: "capacity-steer-during-backoff",
+              entries: [
+                ...codexReplayPreamble({ nativeThreadId, nativeTurnId: "capacity-0", prompt }),
+                ...failure("capacity-0", "serverOverloaded"),
+                ...start(1, [{ type: "text", text: steerText }]),
+                notification("turn/completed", {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: "capacity-1", status: "completed" }),
+                }),
+              ],
+            }),
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "error" &&
+              event.turnItem.status === "running"
+                ? Deferred.succeed(waiting, undefined)
+                : Effect.void,
+          );
+          const turnInput = makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            text: prompt,
+            attemptId: RunAttemptId.make("capacity-attempt"),
+          });
+          yield* harness.runtime.startTurn(turnInput);
+          yield* Deferred.await(waiting);
+          const firstTurn = harness.events.find((event) => event.type === "provider_turn.updated");
+          if (firstTurn?.type !== "provider_turn.updated")
+            return yield* Effect.die("Missing initial turn");
+          // No clock advance: the steer must start the retry without waiting
+          // out the 30 s backoff.
+          yield* harness.runtime.steerTurn({
+            threadId: harness.threadId,
+            runId: turnInput.runId,
+            providerThread: harness.providerThread,
+            providerTurnId: firstTurn.providerTurn.id,
+            message: {
+              ...turnInput.message,
+              messageId: MessageId.make("message-capacity-steer"),
+              text: steerText,
+            },
+          });
+          yield* harness.firstTerminal;
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+          // The backoff timer that fires later must not start a second retry.
+          yield* TestClock.adjust("10 minutes");
+          assert.lengthOf(harness.terminalEvents(), 1);
         }).pipe(
           Effect.provide(
             Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

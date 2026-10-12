@@ -1919,6 +1919,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             attempt: number;
             starting: boolean;
             next: Deferred.Deferred<ActiveCodexTurnContext | undefined>;
+            // Starts the retry now unless it already started or was cancelled.
+            // A steer calls this with its own input so it never waits out the
+            // backoff (and never holds an effect worker for minutes).
+            start: (
+              codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>,
+            ) => Effect.Effect<"started" | "busy" | "failed">;
           }
         >();
         // `/goal` runs whose goal turns active after the first turn starts.
@@ -5816,11 +5822,48 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   terminal.failure.class !== "usage_limit" &&
                   retryDelayMs !== undefined
                 ) {
+                  const next = yield* Deferred.make<ActiveCodexTurnContext | undefined>();
+                  const startRetry = (
+                    codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>,
+                  ) =>
+                    Effect.gen(function* () {
+                      const claimed = yield* turnTerminalizationPermit.withPermits(1)(
+                        Effect.sync(() => {
+                          if (retryHolds.get(nativeThreadId) !== hold || hold.starting)
+                            return false;
+                          hold.starting = true;
+                          return true;
+                        }),
+                      );
+                      if (!claimed) return "busy" as const;
+                      return yield* startNativeTurn(
+                        {
+                          ...input.context.input,
+                          providerTurnOrdinal: input.context.providerTurnOrdinal + 1,
+                        },
+                        codexInput,
+                      ).pipe(
+                        Effect.as("started" as const),
+                        Effect.catch((cause) =>
+                          Effect.gen(function* () {
+                            retryHolds.delete(nativeThreadId);
+                            input.context.preOutputRetryAttempt = hold.attempt;
+                            yield* Effect.logWarning("orchestration-v2.codex-retry-start-failed", {
+                              cause,
+                            });
+                            yield* finalizeCodexTurn(input);
+                            yield* Deferred.succeed(hold.next, undefined);
+                            return "failed" as const;
+                          }),
+                        ),
+                      );
+                    });
                   const hold = {
                     context: input.context,
                     attempt: attempt + 1,
                     starting: false,
-                    next: yield* Deferred.make<ActiveCodexTurnContext | undefined>(),
+                    next,
+                    start: startRetry,
                   };
                   retryHolds.set(nativeThreadId, hold);
                   const retry = {
@@ -5856,38 +5899,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       updatedAt: state.startedAt,
                     }),
                   });
-                  yield* Effect.gen(function* () {
-                    yield* Effect.sleep(retryDelayMs);
-                    const start = yield* turnTerminalizationPermit.withPermits(1)(
-                      Effect.sync(() => {
-                        if (retryHolds.get(nativeThreadId) !== hold) return false;
-                        hold.starting = true;
-                        return true;
-                      }),
-                    );
-                    if (!start) return;
-                    // Codex recorded the user message in the failed native turn.
-                    // Empty input continues that history without duplicating it.
-                    yield* startNativeTurn(
-                      {
-                        ...input.context.input,
-                        providerTurnOrdinal: input.context.providerTurnOrdinal + 1,
-                      },
-                      [],
-                    ).pipe(
-                      Effect.catch((cause) =>
-                        Effect.gen(function* () {
-                          retryHolds.delete(nativeThreadId);
-                          input.context.preOutputRetryAttempt = hold.attempt;
-                          yield* Effect.logWarning("orchestration-v2.codex-retry-start-failed", {
-                            cause,
-                          });
-                          yield* finalizeCodexTurn(input);
-                          yield* Deferred.succeed(hold.next, undefined);
-                        }),
-                      ),
-                    );
-                  }).pipe(Effect.forkIn(scope));
+                  // Codex recorded the user message in the failed native turn.
+                  // Empty input continues that history without duplicating it.
+                  yield* Effect.sleep(retryDelayMs).pipe(
+                    Effect.andThen(startRetry([])),
+                    Effect.forkIn(scope),
+                  );
                   return false;
                 }
               }
@@ -6817,6 +6834,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               let latestTurnId = latestGoalTurnId(turnInput.providerTurnId);
               const retryHold = retryHolds.get(threadId);
               if (retryHold?.context.providerTurnId === latestTurnId) {
+                // During an overload backoff, the steer starts the retry now
+                // and becomes its input.
+                const started = yield* retryHold.start(yield* toCodexInput(turnInput));
+                if (started === "started") return;
+                if (started === "failed")
+                  return yield* toProtocolError(
+                    `Provider turn ${turnInput.providerTurnId} could not be retried with the steer.`,
+                  );
                 yield* Deferred.await(retryHold.next);
                 latestTurnId = latestGoalTurnId(turnInput.providerTurnId);
               }
