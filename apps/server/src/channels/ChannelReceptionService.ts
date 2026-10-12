@@ -490,6 +490,12 @@ const make = Effect.gen(function* () {
         return;
       }
       const task = stored.task;
+      // The requester's own words set the reply's language; the worker's summary may use another.
+      const request = yield* ledger.getInput(task.originInputId);
+      const requestTail =
+        request === undefined
+          ? []
+          : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
       // Questions keep their exact words; results and failures may be phrased by the model.
       const worded =
         base.kind === "question"
@@ -500,7 +506,7 @@ const make = Effect.gen(function* () {
                 conversationId: task.conversationId,
                 originKind: task.requester.originKind,
                 taskEvent: { taskId: task.taskId, type: pending.event.type, summary: base.text },
-                tail: [],
+                tail: requestTail,
                 tasks: [],
                 allowedTargets: [],
                 requester: task.requester,

@@ -140,7 +140,7 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     // Last, so the language follows the person rather than the environment the model runs in.
     input.mode === "input"
       ? "Write replyText in the same language as the new message above."
-      : "Write replyText in the same language as the task update above.",
+      : "Write replyText in the language the person used in the recent conversation, not the language of the update. Say only what the update says happened.",
   ].join("\n");
 
   return { prompt, outputSchema: ChannelReceptionModelOutput };

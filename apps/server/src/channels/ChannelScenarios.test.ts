@@ -1484,6 +1484,35 @@ describe("completion (scenario 5)", () => {
     },
   );
 
+  it.effect(
+    "words a result with the requester's own message, not only the worker's summary",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const seen: Array<ReadonlyArray<string>> = [];
+        harness.script.current = (input) => {
+          if (input.mode === "task_event") seen.push(input.tail.map((entry) => entry.text));
+          return defaultScript(input);
+        };
+        yield* gateway.ingest(
+          slackInput("do: notes.txt 파일을 만들어 줘", "Ev-language"),
+          slackContext,
+        );
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        harness.world.setStatus(task.worker!.threadId, 1, "completed", "Created notes.txt.");
+        yield* runtime.drain;
+        yield* runtime.drain;
+        // The worker reported in English; the requester's Korean words travel with the update.
+        assert.deepStrictEqual(seen, [["do: notes.txt 파일을 만들어 줘"]]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("ends a waiting task when a newer run on its worker fails", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
