@@ -42,12 +42,12 @@ import {
   type RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import type * as Result from "effect/Result";
@@ -131,7 +131,9 @@ const RemoteWorkerState = Schema.Struct({
   inbox: Schema.Array(RemoteReport),
   dropped: Schema.Number,
   /** The run an answer started on the remote; reports wait until the remote shows it. */
-  receipt: Schema.optional(Schema.Struct({ eventId: Schema.String, runId: Schema.String })),
+  receipt: Schema.optional(
+    Schema.Struct({ eventId: Schema.String, runId: Schema.String, messageId: Schema.String }),
+  ),
   /** Answers already sent, by task event id. */
   forwarded: Schema.Array(Schema.String),
   /** A finished run seen once; it settles the task if a second look finds nothing newer. */
@@ -165,7 +167,17 @@ const decodeProjects = Schema.decodeUnknownEffect(
 const decodeEnvironment = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
-const decodeSent = Schema.decodeUnknownEffect(Schema.Struct({ runId: RunId }));
+const decodeSent = Schema.decodeUnknownEffect(
+  Schema.Struct({ runId: RunId, messageId: Schema.String }),
+);
+
+/** A failure's tag for logs; causes can quote remote text, so they are never printed. */
+const causeTag = (cause: Cause.Cause<unknown>) => {
+  const failure = Cause.squash(cause);
+  return typeof failure === "object" && failure !== null && "_tag" in failure
+    ? String((failure as { readonly _tag: unknown })._tag)
+    : "defect";
+};
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 
@@ -174,7 +186,13 @@ class Superseded extends Data.TaggedError("ChannelRemoteSuperseded")<{}> {}
 
 const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-const basename = (path: string) => path.replace(/\/+$/u, "").split("/").at(-1) ?? path;
+/** A remote project's repository key, when the remote resolved one. */
+const canonicalKeyOf = (project: RemoteProject) => {
+  const identity = project.repositoryIdentity;
+  if (typeof identity !== "object" || identity === null) return undefined;
+  const key = (identity as { readonly canonicalKey?: unknown }).canonicalKey;
+  return typeof key === "string" ? key : undefined;
+};
 
 /** "this machine" and its common spellings, in English and Korean. */
 export const meansThisMachine = (text: string) =>
@@ -199,7 +217,7 @@ export class ChannelRemoteWorkers extends Context.Service<
         readonly runtimeMode: RuntimeMode;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
-        readonly workspaceRoot?: string | undefined;
+        readonly canonicalKey?: string | undefined;
       },
     ) => Effect.Effect<RemoteResolution, ChannelLedger.ChannelLedgerError>;
     /** Starts (or resumes) the remote launch of a dispatching task in the background. */
@@ -218,7 +236,7 @@ export class ChannelRemoteWorkers extends Context.Service<
         readonly modelSelection: ModelSelection;
         readonly runtimeMode: RuntimeMode;
         readonly title?: string | undefined;
-        readonly workspaceRoot?: string | undefined;
+        readonly canonicalKey?: string | undefined;
       },
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     /** Sends a recorded answer to a remote worker in the background; completes the forward. */
@@ -228,8 +246,6 @@ export class ChannelRemoteWorkers extends Context.Service<
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     /** Starts an observer for every running remote task that has none. Returns how many. */
     readonly ensure: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
-    /** Resolves when the named task's background launch, forward, and observer are idle. */
-    readonly idle: (taskId: ChannelTaskId) => Effect.Effect<void>;
   }
 >()("t3/channels/ChannelRemoteWorkers") {}
 
@@ -351,7 +367,7 @@ const make = Effect.gen(function* () {
     hint: {
       readonly projectId?: string;
       readonly localTitle?: string;
-      readonly localRoot?: string;
+      readonly canonicalKey?: string;
       readonly answer?: string;
     },
   ) => {
@@ -364,11 +380,9 @@ const make = Effect.gen(function* () {
         return named.toSorted((left, right) => right.title.length - left.title.length)[0];
       }
     }
-    if (hint.localRoot !== undefined) {
-      const folder = basename(hint.localRoot).toLowerCase();
-      const same = projects.filter(
-        (project) => basename(project.workspaceRoot).toLowerCase() === folder,
-      );
+    // The same repository as the local project, by its canonical remote key.
+    if (hint.canonicalKey !== undefined) {
+      const same = projects.filter((project) => canonicalKeyOf(project) === hint.canonicalKey);
       if (same.length === 1) return same[0];
     }
     if (hint.localTitle !== undefined) {
@@ -411,7 +425,7 @@ const make = Effect.gen(function* () {
       const chosen = chooseProject(projects, {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
-        ...(local.workspaceRoot === undefined ? {} : { localRoot: local.workspaceRoot }),
+        ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
         ...(answer === undefined ? {} : { answer }),
       });
       if (chosen === undefined) {
@@ -579,7 +593,20 @@ const make = Effect.gen(function* () {
       if (remote === undefined) return;
       const now = yield* nowIso;
       let state = yield* readState(taskId);
-      if (state === undefined || state.generation !== task.generation) {
+      const moved =
+        state !== undefined &&
+        state.generation === task.generation &&
+        (state.host !== remote.host || state.cwd !== remote.cwd);
+      if (moved && state!.attempts > 0) {
+        // The first destination may already run it; a new destination needs a new generation.
+        return yield* failTask(
+          owner,
+          stored,
+          "launch_uncertain",
+          REMOTE_COPY.launchUncertain(state!.host),
+        );
+      }
+      if (state === undefined || state.generation !== task.generation || moved) {
         const fresh: RemoteWorkerState = {
           generation: task.generation,
           host: remote.host,
@@ -632,7 +659,8 @@ const make = Effect.gen(function* () {
           return;
         }
         if (code !== "capability_denied") return;
-        // No binding we can reach: the earlier attempt did not keep one, so launching is safe.
+        // No binding we can reach. Launching again is safe either way: the remote refuses a
+        // second binding with this id, so it can never start a second thread.
       }
       if (state.attempts >= MAX_LAUNCH_ATTEMPTS) {
         return yield* failTask(
@@ -722,7 +750,9 @@ const make = Effect.gen(function* () {
       ) {
         return; // the next pass looks for the thread before trying again
       }
-      // A refusal may be the remote refusing a duplicate binding: look once before failing.
+      // A refusal may be the remote refusing a duplicate binding: look before failing. Only a
+      // binding we cannot reach makes the refusal definite; anything else is looked at again on
+      // the next pass, under the same grace as a lost launch answer.
       const seen = yield* probe(state, authorize).pipe(Effect.result);
       if (seen._tag === "Success") {
         return yield* bindWorker(
@@ -733,6 +763,7 @@ const make = Effect.gen(function* () {
           seen.success.latestRunId,
         );
       }
+      if (remoteCode(seen.failure) !== "capability_denied") return;
       yield* failTask(owner, stored, "launch_refused", REMOTE_COPY.launchRefused(state.host));
     });
 
@@ -745,6 +776,31 @@ const make = Effect.gen(function* () {
     stored.task.generation === state.generation &&
     stored.task.worker?.host === state.host &&
     stored.task.worker.threadId === state.remoteThreadId;
+
+  /** The binding an observer follows; answers for any other binding are stale. */
+  interface Followed {
+    readonly generation: number;
+    readonly correlationId: string;
+    readonly remoteThreadId: string;
+  }
+
+  /** The current state and task, if they still belong to the binding the observer follows. */
+  const followedNow = (taskId: ChannelTaskId, followed: Followed) =>
+    Effect.gen(function* () {
+      const state = yield* readState(taskId);
+      const stored = yield* ledger.getTask(taskId);
+      if (
+        state === undefined ||
+        stored === undefined ||
+        state.correlationId !== followed.correlationId ||
+        state.generation !== followed.generation ||
+        state.remoteThreadId !== followed.remoteThreadId ||
+        !sameWorker(stored, state)
+      ) {
+        return undefined;
+      }
+      return { state, stored };
+    });
 
   /** One report becomes at most one event, committed with its removal from the inbox. */
   const importReport = (
@@ -830,13 +886,20 @@ const make = Effect.gen(function* () {
     });
 
   /** Applies one wait answer. Returns whether to keep observing and how soon to look again. */
-  const reduce = (owner: string, taskId: ChannelTaskId, answer: RemoteOriginReportsWaitResult) =>
+  const reduce = (
+    owner: string,
+    taskId: ChannelTaskId,
+    followed: Followed,
+    answer: RemoteOriginReportsWaitResult,
+  ) =>
     Effect.gen(function* () {
-      let state = yield* readState(taskId);
-      let stored = yield* ledger.getTask(taskId);
-      if (state === undefined || !sameWorker(stored, state)) return "stop" as const;
-      if (answer.threadId !== state.remoteThreadId) {
-        yield* failTask(owner, stored!, "remote_lost", REMOTE_COPY.lost(state.host));
+      const now = yield* followedNow(taskId, followed);
+      // An answer for a binding the task no longer follows (a retry, a new owner) changes nothing.
+      if (now === undefined) return "stop" as const;
+      let state: RemoteWorkerState | undefined = now.state;
+      let stored: Stored | undefined = now.stored;
+      if (answer.threadId !== followed.remoteThreadId) {
+        yield* failTask(owner, stored, "remote_lost", REMOTE_COPY.lost(state.host));
         return "stop" as const;
       }
 
@@ -942,6 +1005,35 @@ const make = Effect.gen(function* () {
         return "stop" as const;
       }
       const runId = stored.task.worker?.runId;
+      // A worker that asked and then failed or was stopped ends the task, as on this machine.
+      if (
+        stored.task.status === "waiting_input" &&
+        stored.pendingAnswerMessageId === undefined &&
+        runId !== undefined &&
+        watched !== null &&
+        watched.runId === runId &&
+        latest === runId &&
+        TERMINAL.has(watched.status) &&
+        watched.status !== "completed"
+      ) {
+        yield* commitTransition(
+          ledger,
+          stored,
+          watched.status === "cancelled"
+            ? { type: "task.cancelled", payload: { reason: "The coding thread was stopped." } }
+            : {
+                type: "task.failed",
+                payload: {
+                  generation: stored.task.generation,
+                  reason: watched.status,
+                  summary:
+                    "The coding thread ended with " + watched.status.replaceAll("_", " ") + ".",
+                },
+              },
+          { owner, narrate: true, completionHold: null },
+        );
+        return "stop" as const;
+      }
       const settles =
         stored.task.status === "running" &&
         stored.task.openQuestions.length === 0 &&
@@ -1023,7 +1115,7 @@ const make = Effect.gen(function* () {
     });
 
   /** One observer: long-polls the binding until the task settles, moves on, or ownership goes. */
-  const observe = (taskId: ChannelTaskId, owner: string) =>
+  const observe = (taskId: ChannelTaskId, generation: number, owner: string) =>
     Effect.gen(function* () {
       let backoff = BACKOFF_START_MS;
       let failures = 0;
@@ -1033,6 +1125,12 @@ const make = Effect.gen(function* () {
         const state = yield* readState(taskId);
         const stored = yield* ledger.getTask(taskId);
         if (state === undefined || !sameWorker(stored, state)) return;
+        if (state.generation !== generation) return;
+        const followed: Followed = {
+          generation: state.generation,
+          correlationId: state.correlationId,
+          remoteThreadId: state.remoteThreadId!,
+        };
         const waitMs: number =
           mode === "settle" ? REMOTE_SETTLE_WAIT_MS : mode === "now" ? 0 : REMOTE_WAIT_MS;
         const answer: Result.Result<
@@ -1061,9 +1159,9 @@ const make = Effect.gen(function* () {
         if (answer._tag === "Success") {
           failures = 0;
           backoff = BACKOFF_START_MS;
-          if (state.outageNoticed) yield* noticeOutage(owner, taskId, false);
+          if (state.outageNoticed) yield* noticeOutage(owner, taskId, followed, false);
           const next: "stop" | "wait" | "now" | "settle" = yield* serialized(taskId)(
-            reduce(owner, taskId, answer.success),
+            reduce(owner, taskId, followed, answer.success),
           );
           if (next === "stop") return;
           mode = next;
@@ -1075,29 +1173,41 @@ const make = Effect.gen(function* () {
         if (code === "run_not_found" && state.receipt !== undefined) {
           // The answer's run is gone: forget the receipt and follow the newest run.
           yield* serialized(taskId)(
-            writeState(owner, taskId, state.generation, ({ receipt: _receipt, ...rest }) => rest),
+            Effect.gen(function* () {
+              const now = yield* followedNow(taskId, followed);
+              if (now === undefined) return;
+              const forget = stateUpdate(
+                taskId,
+                followed.generation,
+                ({ receipt: _r, ...rest }) => rest,
+              );
+              if (
+                now.stored.pendingAnswerMessageId !== undefined &&
+                now.stored.task.status === "running"
+              ) {
+                const next = yield* commitTransition(
+                  ledger,
+                  now.stored,
+                  { type: "task.worker.bound", payload: { worker: now.stored.task.worker! } },
+                  { owner, pendingAnswerMessageId: null, remoteWorker: forget },
+                );
+                if (next !== undefined) return;
+              }
+              yield* ledger.updateRemoteWorker({ owner, now: yield* nowIso, update: forget });
+            }),
           );
-          const reread = yield* ledger.getTask(taskId);
-          if (
-            reread !== undefined &&
-            reread.pendingAnswerMessageId !== undefined &&
-            reread.task.status === "running"
-          ) {
-            yield* commitTransition(
-              ledger,
-              reread,
-              { type: "task.worker.bound", payload: { worker: reread.task.worker! } },
-              { owner, pendingAnswerMessageId: null },
-            );
-          }
           mode = "now";
           continue;
         }
         if (code === "thread_not_found" || code === "capability_denied") {
-          const reread = yield* ledger.getTask(taskId);
-          if (reread !== undefined && sameWorker(reread, state)) {
-            yield* failTask(owner, reread, "remote_lost", REMOTE_COPY.lost(state.host));
-          }
+          yield* serialized(taskId)(
+            Effect.gen(function* () {
+              const now = yield* followedNow(taskId, followed);
+              if (now !== undefined) {
+                yield* failTask(owner, now.stored, "remote_lost", REMOTE_COPY.lost(now.state.host));
+              }
+            }),
+          );
           return;
         }
         failures += isUnreachable(error) ? 1 : 0;
@@ -1107,7 +1217,7 @@ const make = Effect.gen(function* () {
           reason: error._tag === "SshRemoteDispatchError" ? error.reason : "decode",
         });
         if (failures >= OUTAGE_NOTICE_AFTER && !state.outageNoticed) {
-          yield* noticeOutage(owner, taskId, true);
+          yield* noticeOutage(owner, taskId, followed, true);
         }
         yield* Effect.sleep(Duration.millis(backoff));
         backoff = Math.min(BACKOFF_MAX_MS, backoff * 2);
@@ -1115,25 +1225,22 @@ const make = Effect.gen(function* () {
       }
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("channel remote observer stopped", {
-          taskId,
-          cause: cause.toString().slice(0, 200),
-        }),
+        Effect.logWarning("channel remote observer stopped", { taskId, failure: causeTag(cause) }),
       ),
     );
 
   /** Tells the requester once per outage, with the flag in the same write. */
-  const noticeOutage = (owner: string, taskId: ChannelTaskId, down: boolean) =>
+  const noticeOutage = (owner: string, taskId: ChannelTaskId, followed: Followed, down: boolean) =>
     serialized(taskId)(
       Effect.gen(function* () {
-        const state = yield* readState(taskId);
-        const stored = yield* ledger.getTask(taskId);
-        if (state === undefined || state.outageNoticed === down) return;
+        const now = yield* followedNow(taskId, followed);
+        if (now === undefined || now.state.outageNoticed === down) return;
+        const { state, stored } = now;
         const flag = stateUpdate(taskId, state.generation, (current) => ({
           ...current,
           outageNoticed: down,
         }));
-        if (stored !== undefined && stored.task.status === "running" && sameWorker(stored, state)) {
+        if (stored.task.status === "running") {
           const next = yield* commitTransition(
             ledger,
             stored,
@@ -1154,16 +1261,16 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const observerKey = (taskId: ChannelTaskId, generation: number) =>
+    "observe:" + taskId + ":" + generation;
+
   const background = <E>(key: string, effect: Effect.Effect<void, E>) =>
     FiberMap.run(
       fibers,
       key,
       effect.pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("channel remote work failed", {
-            key,
-            cause: cause.toString().slice(0, 200),
-          }),
+          Effect.logWarning("channel remote work failed", { key, failure: causeTag(cause) }),
         ),
       ),
       { onlyIfMissing: true },
@@ -1180,7 +1287,10 @@ const make = Effect.gen(function* () {
           .pipe(
             Effect.flatMap((stored) =>
               stored?.task.status === "running" && stored.task.worker?.host !== undefined
-                ? background("observe:" + taskId, observe(taskId, owner))
+                ? background(
+                    observerKey(taskId, stored.task.generation),
+                    observe(taskId, stored.task.generation, owner),
+                  )
                 : Effect.void,
             ),
           ),
@@ -1269,7 +1379,11 @@ const make = Effect.gen(function* () {
       }
       yield* writeState(owner, stored.task.taskId, state.generation, (current) => ({
         ...current,
-        receipt: { eventId: event.eventId, runId: sent.success.runId },
+        receipt: {
+          eventId: event.eventId,
+          runId: sent.success.runId,
+          messageId: sent.success.messageId,
+        },
         forwarded: [...current.forwarded.slice(-19), event.eventId],
       }));
       yield* ledger.completeForward({ owner, sequence: pending.sequence });
@@ -1286,23 +1400,15 @@ const make = Effect.gen(function* () {
       let started = 0;
       for (const stored of yield* ledger.listTasksByStatus(["running", "waiting_input"])) {
         if (stored.task.worker?.host === undefined) continue;
-        const key = "observe:" + stored.task.taskId;
+        const key = observerKey(stored.task.taskId, stored.task.generation);
         if (yield* FiberMap.has(fibers, key)) continue;
-        yield* background(key, observe(stored.task.taskId, owner));
+        yield* background(key, observe(stored.task.taskId, stored.task.generation, owner));
         started += 1;
       }
       return started;
     });
 
-  const idle: ChannelRemoteWorkers["Service"]["idle"] = (taskId) =>
-    Effect.gen(function* () {
-      for (const prefix of ["launch:", "observe:"]) {
-        const fiber = yield* FiberMap.get(fibers, prefix + taskId);
-        if (fiber._tag === "Some") yield* Fiber.await(fiber.value);
-      }
-    });
-
-  return ChannelRemoteWorkers.of({ knownHosts, resolve, launch, dispatch, forward, ensure, idle });
+  return ChannelRemoteWorkers.of({ knownHosts, resolve, launch, dispatch, forward, ensure });
 });
 
 /** Progress goes first, then the oldest of the rest. */

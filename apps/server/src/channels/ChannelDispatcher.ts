@@ -32,6 +32,7 @@ import {
   DispatchModeLimit,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -256,13 +257,20 @@ const make = Effect.gen(function* () {
 
   /**
    * What a task on another machine falls back to from this one: the named project's model and
-   * runtime mode, and its title and folder to find the same project there.
+   * runtime mode, and its title and repository key to find the same project there.
    */
   const remoteHints = (stored: ChannelLedger.ChannelStoredTask) =>
     Effect.gen(function* () {
       const task = stored.task;
       const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
       const named = shells.find((shell) => shell.id === task.projectId);
+      const identities = yield* Effect.serviceOption(
+        RepositoryIdentityResolver.RepositoryIdentityResolver,
+      );
+      const identity =
+        named === undefined || identities._tag === "None"
+          ? null
+          : yield* identities.value.resolve(named.workspaceRoot);
       const settings = resolveProjectSettings(
         yield* serverSettings.getSettings.pipe(Effect.orDie),
         named?.id ?? null,
@@ -276,7 +284,8 @@ const make = Effect.gen(function* () {
           task.requester.runtimeModeCeiling,
           settings.defaultRuntimeMode,
         ),
-        ...(named === undefined ? {} : { title: named.title, workspaceRoot: named.workspaceRoot }),
+        ...(named === undefined ? {} : { title: named.title }),
+        ...(identity === null ? {} : { canonicalKey: identity.canonicalKey }),
       };
     });
 
