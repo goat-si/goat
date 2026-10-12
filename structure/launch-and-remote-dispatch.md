@@ -90,8 +90,9 @@ older origins, which never declare it, keep the error that names the origin and 
 a live thread in default interaction mode. Migration
 `apps/server/src/persistence/Migrations/068_RemoteReportRelay.ts` stores the flag on the binding
 and the send on its report row, which travels as `RemoteReport.relay` and answers the agent with
-`delivery: "relayed"`. A retry with the same `clientRequestId` before the origin collects it
-returns the same report.
+`delivery: "relayed"`. A retry with the same `clientRequestId` returns the same report, even
+after the origin collected it. Report retention never prunes a relay the origin has not collected;
+instead, a thread with 50 uncollected relays is refused another one.
 
 The origin acts on it in `RemoteDispatchCoordinator.importBatch`, and only for a dispatch whose
 own `relay_send` column records that it offered relaying; rows from before that column refuse. It

@@ -201,6 +201,22 @@ test("stores a relay only for a binding whose origin declared it", ({ service })
     // Still the same request after the origin collected and acknowledged it.
     expect(yield* service.relay(relaying, retried)).toEqual({ sequence: 2 });
   }));
+test("keeps uncollected relays through report retention and caps how many wait", ({ service }) =>
+  Effect.gen(function* () {
+    const relaying = ThreadId.make("relaying-thread");
+    yield* service.bind(relaying, { ...binding, correlationId: "relaying", relaySend: true });
+    const send = { host: "sibling", threadId: ThreadId.make("target"), message: "hello" };
+    yield* service.relay(relaying, send);
+    for (let i = 0; i < 205; i++)
+      yield* service.report(relaying, { status: "needs_input", summary: String(i) });
+    const kept = yield* service.wait({ ...waitInput, correlationId: "relaying", timeoutMs: 0 });
+    expect(kept.reports[0]).toMatchObject({ sequence: 1, relay: send });
+    for (let i = 1; i < RemoteReportService.MAX_PENDING_RELAYS; i++)
+      yield* service.relay(relaying, send);
+    expect((yield* service.relay(relaying, send).pipe(Effect.flip)).reason).toBe(
+      "relay_queue_full",
+    );
+  }));
 test("refuses binding replacement and validates domain input", ({ service }) =>
   Effect.gen(function* () {
     const invalidWait = yield* service

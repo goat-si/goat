@@ -41,6 +41,7 @@ export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
       "run_not_found",
       "thread_deleted",
       "relay_unsupported",
+      "relay_queue_full",
       "unavailable",
       "storage",
     ]),
@@ -76,6 +77,8 @@ const decodeReports = (rows: unknown) =>
     ),
   );
 const isRemoteReportError = Schema.is(RemoteReportError);
+/** Relays the origin has not collected yet. They are never pruned, so they are capped. */
+export const MAX_PENDING_RELAYS = 50;
 
 const sameRequestIds = (
   known: ReadonlyArray<string> | undefined,
@@ -207,6 +210,14 @@ const make = Effect.gen(function* () {
               AND client_request_id = ${relay.clientRequestId}`;
             if (earlier[0] !== undefined) return { sequence: earlier[0].sequence };
           }
+          if (relay !== null) {
+            const pending = yield* sql<{
+              count: number;
+            }>`SELECT COUNT(*) AS count FROM remote_reports
+              WHERE correlation_id = ${binding.correlationId} AND relay IS NOT NULL`;
+            if ((pending[0]?.count ?? 0) >= MAX_PENDING_RELAYS)
+              return yield* new RemoteReportError({ reason: "relay_queue_full" });
+          }
           const sequence = binding.lastSequence + 1;
           yield* sql`UPDATE remote_report_bindings SET last_sequence = ${sequence} WHERE thread_id = ${threadId}`;
           yield* sql`
@@ -216,12 +227,14 @@ const make = Effect.gen(function* () {
           if (relay?.clientRequestId !== undefined)
             yield* sql`INSERT INTO remote_relay_requests (correlation_id, client_request_id, sequence)
               VALUES (${binding.correlationId}, ${relay.clientRequestId}, ${sequence})`;
-          // Keep the newest 200, preferring substantive reports and relays over progress.
+          // Keep the newest 200 reports, preferring substantive ones over progress. A relay
+          // stays until the origin collects it, because a pruned one would never be sent.
           yield* sql`
         DELETE FROM remote_reports WHERE correlation_id = ${binding.correlationId}
           AND sequence IN (
-            SELECT sequence FROM remote_reports WHERE correlation_id = ${binding.correlationId}
-            ORDER BY CASE WHEN kind = 'progress' AND relay IS NULL THEN 1 ELSE 0 END, sequence DESC
+            SELECT sequence FROM remote_reports
+            WHERE correlation_id = ${binding.correlationId} AND relay IS NULL
+            ORDER BY CASE WHEN kind = 'progress' THEN 1 ELSE 0 END, sequence DESC
             LIMIT -1 OFFSET 200
           )
       `;
