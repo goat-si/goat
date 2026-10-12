@@ -8,7 +8,10 @@ import {
   IOS_APP_STORE_URL,
   MARKETING_STATS,
 } from "../lib/site";
+import { fetchGithubStars } from "../lib/githubStars";
 import { tweets } from "../lib/tweets";
+
+const githubStars = await fetchGithubStars();
 
 const screenshot = await getImage({
   src: desktopScreenshot,
@@ -374,8 +377,8 @@ const mobileEndorsementRows = [
           <div class="open-pitch-footer">
             <div class="open-pitch-meta">
               <span>MIT licensed</span>
-              <span aria-hidden="true">·</span>
-              <span>{MARKETING_STATS.githubStars} stars</span>
+              {githubStars !== null && <span aria-hidden="true">·</span>}
+              {githubStars !== null && <span>{githubStars} stars</span>}
             </div>
 
             <div class="open-pitch-actions">
