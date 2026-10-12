@@ -123,6 +123,21 @@ const LINT_RULE_IDS =
 
 export const TEXT_RULES: readonly TextRule[] = [
   {
+    id: "pull-request-context-tag",
+    category: "local-names",
+    find: /t3\/PullRequestService\/routingCredential/g,
+    replace: "goat/PullRequestService/routingCredential",
+    scope: (path) => path === "apps/server/src/pullRequest/PullRequestService.ts",
+  },
+  {
+    id: "showcase-temp-prefix",
+    category: "fixtures",
+    find: /t3-(?=showcase-wake-)/g,
+    replace: "goat-",
+    scope: (path) => path === "scripts/mobile-showcase.ts",
+  },
+
+  {
     id: "local-plugin-names",
     category: "local-names",
     find: /t3code:(?=dev-compression|third-party-licenses)/g,
@@ -432,6 +447,46 @@ export const PATH_RULES: readonly PathRule[] = [
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
   {
+    id: "upstream-license-files",
+    pattern: /LICENSE-T3CODE\.txt/g,
+    reason: "The upstream MIT license filename is shipped attribution (D12).",
+  },
+  {
+    id: "packaged-capture-binary",
+    pattern: /t3-\$\{input\.backend\}-snap-shot/g,
+    scope: (path) => path === "scripts/build-desktop-artifact.ts",
+    reason: "Packaging must name the existing shipped native capture binary (D16).",
+  },
+  {
+    id: "upstream-http-client-identities",
+    pattern: /(?<="user-agent": ")t3code/g,
+    scope: (path) => path.startsWith("packages/source-control-"),
+    reason:
+      "Forge operators read this HTTP client identity; coordinate an external-client identity change (D12).",
+  },
+  {
+    id: "existing-pr-clone-directory",
+    pattern: /t3code-pr-/g,
+    scope: (path) => path === "packages/source-control-bitbucket/src/client/definition.ts",
+    reason:
+      "The suggested checkout directory names existing user repositories; retain existing task/checkout paths.",
+  },
+  {
+    id: "shared-ssh-helpers",
+    pattern: /t3code-ssh-askpass|(?<=DISPLAY: ")t3code/g,
+    scope: (path) => path === "packages/ssh/src/auth.ts",
+    reason:
+      "The persisted askpass directory is shared with older builds; preserve the SSH child environment contract (D17).",
+  },
+  {
+    id: "persisted-showcase-simulators",
+    pattern: /T3 Showcase/g,
+    scope: (path) => path === "scripts/mobile-showcase.config.ts",
+    reason:
+      "Named CoreSimulator devices persist on native build hosts; changing them creates duplicate devices (D18).",
+  },
+
+  {
     id: "credential-owner",
     pattern: /(?<=["'])t3(?=["'])/g,
     scope: (path) =>
@@ -443,7 +498,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "retained-tool-history",
-    pattern: /t3_[a-z_]+|t3\[-_ \]\?code|t3-code/g,
+    pattern: /t3_[a-z_]+|t3\[-_ \]\?code|t3-code|t3code/g,
     scope: (path) => path === "packages/shared/src/goatMcpToolPresentation.ts",
     reason: "Presentation aliases recognize tool names in existing thread history (D12).",
   },
@@ -767,7 +822,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "ssh-runner",
-    pattern: /\bT3_[A-Z0-9_]+\b|\bt3_[a-z_]+\b|run-t3\.(?:sh|next)|@@T3_[A-Z0-9_]+@@/g,
+    pattern: /\bT3(?:CODE)?_[A-Z0-9_]+\b|\bt3_[a-z_]+\b|run-t3\.(?:sh|next)|@@T3_[A-Z0-9_]+@@/g,
     reason:
       "SSH runner script bytes, shell names and file name shared with other client versions (plan D17).",
     scope: (path) =>
