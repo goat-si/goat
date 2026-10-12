@@ -164,8 +164,8 @@ export interface SshHostToolCall {
   readonly writes: boolean;
   /**
    * The caller holds `orchestration:approve`, so the remote session asks for
-   * it too. A remote too old to grant it gets a session without, and refuses
-   * approval answers itself.
+   * it too. If the remote cannot grant it, the call fails; it never falls back
+   * to a session with fewer permissions.
    */
   readonly approvals?: boolean;
 }
@@ -545,18 +545,24 @@ const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const cached = sessions.get(key);
     if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
-    const issue = (withApprovals: boolean) =>
-      withRuntime(
-        manager.issueMcpClientSession(target, {
-          label: `GOAT SSH dispatch (${ceiling}${withApprovals ? ", approvals" : ""})`,
-          ttl: SESSION_TTL,
-          runtimeModeCeiling: ceiling,
-          ...(withApprovals ? { approvals: true } : {}),
-        }),
-      );
-    const issued = yield* (
-      approvals ? issue(true).pipe(Effect.catch(() => issue(false))) : issue(false)
-    ).pipe(sshFailed(target.alias));
+    // A session that may answer approvals is never swapped for a narrower one.
+    const issued = yield* withRuntime(
+      manager.issueMcpClientSession(target, {
+        label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
+        ttl: SESSION_TTL,
+        runtimeModeCeiling: ceiling,
+        ...(approvals ? { approvals: true } : {}),
+      }),
+    ).pipe(
+      approvals
+        ? Effect.mapError((error) =>
+            failure(
+              "remote_refused",
+              `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
+            ),
+          )
+        : sshFailed(target.alias),
+    );
     const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
     const session = {
       token: issued.token,
