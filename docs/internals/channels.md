@@ -82,3 +82,11 @@ changed: the worker files `goat_origin_report` there, and
   second look ten seconds later finds no newer run or report; anything after that is not reported.
 - **Reconnects.** An unreachable machine is retried with backoff; the requester hears once that it
   is unreachable and once when it is back, and the work keeps running there.
+- **One destination per generation.** Once a launch was attempted, changing the task's machine
+  (including back to this one) fails it as uncertain; a retry starts a new generation. Before any
+  attempt the destination may change freely. Choosing an existing remote project is best effort:
+  if it is deleted between the check and the launch, the remote may register the folder again.
+- **Bounded inbox.** The local inbox keeps at most 200 reports; past that it drops progress first,
+  then the oldest, and records how many were dropped as task progress.
+- **Refused answers.** If the remote refuses an answer because the worker thread now runs above
+  the requester's ceiling, the question is asked again with the answer quoted, as on this machine.
