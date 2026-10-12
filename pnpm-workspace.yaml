@@ -313,6 +313,10 @@ patchedDependencies:
   react-native-nitro-modules@0.35.9: patches/react-native-nitro-modules@0.35.9.patch
   # Android: a nested WebView hands a vertical drag to its scrolling parent at the page's edge.
   react-native-webview@14.0.1: patches/react-native-webview@14.0.1.patch
+  # iOS: native modules register permission requesters from several threads during reloads.
+  expo-modules-core@58.0.11: patches/expo-modules-core@58.0.11.patch
+  # iOS: keep notification responses that arrive while delegates register or replay pending ones.
+  expo-notifications@58.0.11: patches/expo-notifications@58.0.11.patch
 
 peerDependencyRules:
   allowAny:

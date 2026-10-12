@@ -1,7 +1,8 @@
 diff --git a/ios/Legacy/Services/Permissions/EXPermissionsService.m b/ios/Legacy/Services/Permissions/EXPermissionsService.m
+index 28c983d6552cff7462e9b0df7fd4925051a6ceed..8b8ef70a2ae1a93b63ba4334717b02d5c1911961 100644
 --- a/ios/Legacy/Services/Permissions/EXPermissionsService.m
 +++ b/ios/Legacy/Services/Permissions/EXPermissionsService.m
-@@ -32,8 +32,11 @@
+@@ -32,8 +32,11 @@ NSString * const EXPermissionExpiresNever = @"never";
  
  - (void)registerRequesters:(NSArray<id<EXPermissionsRequester>> *)newRequesters {
    for (id<EXPermissionsRequester> requester in newRequesters) {
@@ -15,7 +16,7 @@ diff --git a/ios/Legacy/Services/Permissions/EXPermissionsService.m b/ios/Legacy
    }
  }
  
-@@ -162,12 +165,16 @@
+@@ -162,12 +165,16 @@ NSString * const EXPermissionExpiresNever = @"never";
  
  - (id<EXPermissionsRequester>)getPermissionRequesterForType:(NSString *)type
  {
