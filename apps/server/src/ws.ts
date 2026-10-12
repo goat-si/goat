@@ -1,4 +1,5 @@
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -1230,6 +1231,7 @@ const layerWsRpc = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+      const remoteLaunchCatalog = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
@@ -2146,6 +2148,7 @@ const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        [WS_METHODS.remoteLaunchesList]: (input) => remoteLaunchCatalog.list(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
@@ -3231,6 +3234,7 @@ export const layer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+    const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3301,6 +3305,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
               // The goat_host_status tool's instance, so both share last-known samples.
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
+              Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

@@ -207,6 +207,10 @@
       "types": "./src/state/providerInstanceDisplay.ts",
       "default": "./src/state/providerInstanceDisplay.ts"
     },
+    "./state/remote-launches": {
+      "types": "./src/state/remoteLaunches.ts",
+      "default": "./src/state/remoteLaunches.ts"
+    },
     "./state/pull-requests": {
       "types": "./src/state/pullRequests.ts",
       "default": "./src/state/pullRequests.ts"

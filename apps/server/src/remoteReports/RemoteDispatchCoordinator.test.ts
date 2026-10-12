@@ -1633,6 +1633,31 @@ it.effect("limits origin dispatches in SQL while preserving newest-first order",
   }).pipe(Effect.provide(database)),
 );
 
+it.effect("lists every origin's dispatches by latest update", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.supported(false);
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const first = yield* f.launch(c);
+      const second = yield* f.launch(c);
+      yield* f.sql`UPDATE remote_dispatches SET updated_at = '2026-10-11T00:00:00.000Z'`;
+      yield* f.sql`UPDATE remote_dispatches SET origin_thread_id = 'another-origin', updated_at = ${at} WHERE correlation_id = ${first.correlationId}`;
+      assert.deepEqual(
+        (yield* c.listRecent(10)).map((row) => [row.correlationId, row.originThreadId]),
+        [
+          [first.correlationId, "another-origin"],
+          [second.correlationId, origin],
+        ],
+      );
+      assert.deepEqual(
+        (yield* c.listRecent(1)).map((row) => row.correlationId),
+        [first.correlationId],
+      );
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
 it.effect.each([
   "remote_refused",
   "invalid_request",

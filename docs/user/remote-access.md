@@ -267,6 +267,14 @@ on it. Sending to or stopping a thread on another machine needs an agent in the
 default interaction mode, and that machine still refuses threads that run with
 broader permissions than the agent has.
 
+**Settings → Connections → Remote launches** lists the threads each connected
+environment started or watches on other machines, grouped by SSH host, even
+when this app runs on a different computer from the one that started them. A
+thread opens from there once this app is also connected to its machine. In the
+desktop app, **Connect** adds the host over SSH using the same host name. A
+thread started from another machine shows **Launched by** with that machine's
+name in its header, also when the launching thread is not open here.
+
 ## Browser on a remote environment
 
 Browser tabs belong to the environment, so you and your agents see the same

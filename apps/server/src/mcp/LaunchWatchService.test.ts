@@ -159,7 +159,7 @@ const dispatchIn = (world: World, command: OrchestrationV2ServerCommand) =>
   });
 
 const layerFor = (world: World, baseDir: string) =>
-  LaunchWatchService.layer.pipe(
+  LaunchWatchService.layerWithoutDependencies.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -1105,6 +1105,38 @@ describe("LaunchWatchService", () => {
         }),
       );
       expect(world.deliveredLog).toHaveLength(1);
+    }),
+  );
+
+  it.effect("lists the newest remote watches across launchers, up to the limit", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const listed = yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          const remote = (host: string, threadId: string) =>
+            service.register({
+              launcherThreadId: launcher,
+              host,
+              threadId: ThreadId.make(threadId),
+              projectId: null,
+              title: threadId,
+              runId: null,
+            });
+          yield* remote("box", "oldest");
+          yield* TestClock.adjust("1 second");
+          yield* remote("gpu", "middle");
+          yield* TestClock.adjust("1 second");
+          yield* remote("box", "newest");
+          yield* TestClock.adjust("1 second");
+          yield* watchLocal(service, null);
+          return yield* service.listRemote(2);
+        }),
+      );
+      expect(listed.map((watch) => [watch.host, watch.threadId])).toEqual([
+        ["box", "newest"],
+        ["gpu", "middle"],
+      ]);
     }),
   );
 

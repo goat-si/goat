@@ -2,6 +2,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { EnvironmentId, ThreadId, type OrchestrationV2ThreadLauncher } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  describeThreadLauncher,
   isLaunchedFromThread,
   resolveLauncherRef,
   threadLauncherLabel,
@@ -117,4 +118,31 @@ it("keeps launched threads with the same id in different environments distinct",
 it("labels launches and promotions", () => {
   expect(threadLauncherLabel("launch")).toBe("Launched by");
   expect(threadLauncherLabel("promotion")).toBe("Promoted from");
+});
+
+describe("describeThreadLauncher", () => {
+  it("names the launching machine for a launch from another machine", () => {
+    expect(
+      describeThreadLauncher({
+        kind: "launch",
+        title: "Fix CI",
+        machine: "build-box",
+        available: true,
+      }),
+    ).toBe("Launched by “Fix CI” on build-box");
+  });
+
+  it("says how to reach a launcher this app has not loaded", () => {
+    expect(
+      describeThreadLauncher({
+        kind: "launch",
+        title: "Fix CI",
+        machine: "build-box",
+        available: false,
+      }),
+    ).toBe("Launched by “Fix CI” on build-box. Connect build-box to open it.");
+    expect(
+      describeThreadLauncher({ kind: "promotion", title: "Plan", machine: null, available: false }),
+    ).toBe("Promoted from “Plan”. It is not available in this app.");
+  });
 });

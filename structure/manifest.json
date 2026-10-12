@@ -1,0 +1,427 @@
+{
+  "version": 2,
+  "sizeBudgetLines": 600,
+  "generatedPaths": [],
+  "absentPaths": [],
+  "tiers": [
+    {
+      "id": 1,
+      "name": "Foundation",
+      "purpose": "What GOAT is, which process owns the workspace, and the invariants nothing may break."
+    },
+    {
+      "id": 2,
+      "name": "Shared packages",
+      "purpose": "Wire schemas and the libraries web, desktop, and mobile share."
+    },
+    {
+      "id": 3,
+      "name": "Server",
+      "purpose": "The process that commits orchestration, runs providers, and reaches other machines."
+    },
+    {
+      "id": 4,
+      "name": "Clients",
+      "purpose": "Web, the Electron shell around it, and the React Native app."
+    },
+    {
+      "id": 5,
+      "name": "Local state",
+      "purpose": "Which directory each process writes, and the files under it."
+    }
+  ],
+  "docs": [
+    {
+      "path": "overview.md",
+      "tier": 1,
+      "title": "Overview",
+      "scope": "Product boundary, the client-to-effect path, and the invariants index.",
+      "documents": [
+        "README.md",
+        "apps/server/src/binCli.ts",
+        "apps/server/src/server.ts",
+        "apps/server/src/ws.ts",
+        "apps/server/src/config.ts",
+        "apps/server/src/mcp/McpHttpServer.ts",
+        "apps/web",
+        "apps/desktop",
+        "apps/mobile",
+        "packages/client-runtime",
+        "packages/contracts"
+      ]
+    },
+    {
+      "path": "contracts.md",
+      "tier": 2,
+      "title": "Contracts",
+      "scope": "Effect Schema wire types shared by the server and every client.",
+      "documents": [
+        "packages/contracts",
+        "packages/contracts/package.json",
+        "packages/contracts/src/index.ts",
+        "packages/contracts/src/orchestrationV2.ts",
+        "packages/contracts/src/rpc.ts",
+        "packages/contracts/src/settings.ts",
+        "packages/contracts/src/channelCommon.ts",
+        "packages/contracts/src/channelGateway.ts",
+        "packages/contracts/src/ipc.ts"
+      ]
+    },
+    {
+      "path": "client-runtime.md",
+      "tier": 2,
+      "title": "Client runtime",
+      "scope": "Connection, RPC session, and GOAT Bot helpers shared by web and mobile.",
+      "documents": [
+        "packages/client-runtime",
+        "packages/client-runtime/package.json",
+        "packages/client-runtime/src/rpc/session.ts",
+        "packages/client-runtime/src/goatBot/",
+        "packages/client-runtime/src/goatBot/home.ts",
+        "packages/client-runtime/src/goatBot/index.ts",
+        "apps/web/src/components/goatBot/",
+        "apps/mobile/src/features/goat-bot/"
+      ]
+    },
+    {
+      "path": "shared.md",
+      "tier": 2,
+      "title": "Shared",
+      "scope": "Subpath helpers for settings merge, worktree homes, mobile identity, and SSH runtime archives.",
+      "documents": [
+        "packages/shared",
+        "packages/shared/package.json",
+        "packages/shared/src/serverSettings.ts",
+        "packages/shared/src/devHome.ts",
+        "packages/shared/src/mobileAppIdentity.ts",
+        "packages/shared/src/sshRuntimeProtocol.ts",
+        "packages/shared/src/cliRelease.ts",
+        "packages/shared/src/path.ts",
+        "packages/shared/src/themePalettes.ts",
+        "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts"
+      ]
+    },
+    {
+      "path": "server.md",
+      "tier": 3,
+      "title": "Server",
+      "scope": "Process entry, command commit, orchestration v2, checkpoints, providers, and source control.",
+      "documents": [
+        "apps/server/src/bin.ts",
+        "apps/server/src/binCli.ts",
+        "apps/server/src/cli/server.ts",
+        "apps/server/src/cli/sshHelper.ts",
+        "apps/server/src/server.ts",
+        "apps/server/src/ws.ts",
+        "apps/server/src/orchestration-v2/",
+        "apps/server/src/orchestration-v2/ThreadMessageIntake.ts",
+        "apps/server/src/orchestration-v2/ThreadManagementService.ts",
+        "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts",
+        "apps/server/src/orchestration-v2/Orchestrator.ts",
+        "apps/server/src/orchestration-v2/EventSink.ts",
+        "apps/server/src/orchestration-v2/EffectWorker.ts",
+        "apps/server/src/orchestration-v2/runtimeLayer.ts",
+        "apps/server/src/orchestration-v2/ProviderAdapterRegistry.ts",
+        "apps/server/src/orchestration-v2/CheckpointCaptureService.ts",
+        "apps/server/src/orchestration-v2/CheckpointService.ts",
+        "apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts",
+        "apps/server/src/checkpointing/CheckpointStore.ts",
+        "apps/server/src/checkpointing/Utils.ts",
+        "apps/server/src/vcs/GitVcsDriver.ts",
+        "apps/server/src/provider/builtInDrivers.ts",
+        "apps/server/src/provider/Drivers/CodexDriver.ts",
+        "apps/server/src/provider/Drivers/ClaudeDriver.ts",
+        "apps/server/src/provider/Drivers/AntigravityDriver.ts",
+        "packages/provider-cursor/src/server/driver.ts",
+        "packages/provider-grok/src/server/driver.ts",
+        "packages/provider-opencode/src/server/driver.ts",
+        "packages/provider-pi/src/server/driver.ts",
+        "packages/provider-muse/src/server/driver.ts",
+        "packages/provider-acp-registry/src/server/driver.ts",
+        "packages/provider-core",
+        "packages/provider-acp",
+        "packages/provider-cursor",
+        "packages/provider-grok",
+        "packages/provider-opencode",
+        "packages/provider-pi",
+        "packages/provider-muse",
+        "packages/provider-acp-registry",
+        "apps/server/src/sourceControl/",
+        "apps/server/src/sourceControl/builtInDrivers.ts",
+        "packages/source-control-github",
+        "packages/source-control-gitlab",
+        "packages/source-control-azure-devops",
+        "packages/source-control-bitbucket",
+        "packages/source-control-forgejo",
+        "packages/source-control-gitcafe",
+        "packages/source-control-core",
+        "packages/source-control-testing",
+        "packages/contracts"
+      ]
+    },
+    {
+      "path": "mcp-toolkits.md",
+      "tier": 3,
+      "title": "MCP toolkits",
+      "scope": "The GOAT MCP server, toolkit layout, and which tool names use which prefix.",
+      "documents": [
+        "apps/server/src/mcp/",
+        "apps/server/src/mcp/McpHttpServer.ts",
+        "apps/server/src/mcp/OrchestratorMcpService.ts",
+        "apps/server/src/mcp/HostThreadsMcpService.ts",
+        "apps/server/src/mcp/toolkits/project/handlers.ts",
+        "apps/server/src/orchestration-v2/ThreadManagementService.ts",
+        "apps/server/src/orchestration-v2/ThreadLaunchService.ts",
+        "apps/server/src/mcp/toolkits/project/tools.ts",
+        "apps/server/src/mcp/toolkits/orchestrator/tools.ts",
+        "apps/server/src/mcp/toolkits/ssh/tools.ts",
+        "apps/server/src/mcp/toolkits/preview/tools.ts",
+        "packages/contracts/src/channelGateway.ts"
+      ]
+    },
+    {
+      "path": "channels.md",
+      "tier": 3,
+      "title": "Channels and GOAT Bot",
+      "scope": "The channel ledger, Slack and MCP ingress, and the GOAT Bot thread clients render.",
+      "documents": [
+        "packages/contracts/src/channelCommon.ts",
+        "packages/contracts/src/settings.ts",
+        "apps/server/src/channels/ChannelGateway.ts",
+        "apps/server/src/channels/ChannelBotHome.ts",
+        "apps/server/src/channels/slack/SlackChannelAdapter.ts",
+        "apps/server/src/channels/slack/SlackChannelRuntime.ts",
+        "apps/server/src/channels/slack/SlackChannelSettings.live.ts",
+        "apps/server/src/persistence/Migrations/064_ChannelLedger.ts",
+        "apps/server/src/channels/ChannelReceptionService.ts",
+        "apps/server/src/channels/ChannelDispatcher.ts",
+        "apps/server/src/channels/ChannelBotRegistry.ts",
+        "apps/server/src/channels/ChannelBotTimeline.ts",
+        "packages/client-runtime/src/goatBot/",
+        "packages/client-runtime/src/goatBot/home.ts",
+        "apps/web/src/components/goatBot/",
+        "apps/mobile/src/features/goat-bot/GoatBotScreen.tsx"
+      ]
+    },
+    {
+      "path": "scheduled-tasks.md",
+      "tier": 3,
+      "title": "Scheduled tasks",
+      "scope": "Clock and webhook tasks that launch or send through orchestration services.",
+      "documents": [
+        "apps/server/src/scheduledTasks/ScheduledTaskService.ts",
+        "apps/server/src/scheduledTasks/Schedule.ts",
+        "apps/server/src/scheduling/Scheduler.ts",
+        "apps/server/src/scheduledTasks/webhookRoute.ts",
+        "apps/server/src/scheduledTasks/webhookVerification.ts",
+        "apps/server/src/mcp/toolkits/orchestrator/tools.ts",
+        "apps/server/src/mcp/OrchestratorMcpService.ts",
+        "apps/server/src/ws.ts"
+      ]
+    },
+    {
+      "path": "ssh.md",
+      "tier": 3,
+      "title": "SSH",
+      "scope": "OpenSSH host discovery, the remote ~/.goat server, and agent browse and launch.",
+      "documents": [
+        "packages/ssh",
+        "packages/ssh/package.json",
+        "packages/ssh/src/config.ts",
+        "packages/contracts/src/ipc.ts",
+        "packages/ssh/src/command.ts",
+        "packages/ssh/src/auth.ts",
+        "packages/ssh/src/errors.ts",
+        "packages/ssh/src/tunnel.ts",
+        "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
+        "apps/server/src/sshRemote/SshRemoteDispatch.ts",
+        "apps/server/src/device/SshDeviceHost.ts",
+        "apps/server/src/mcp/toolkits/ssh/tools.ts",
+        "apps/server/src/sshRemote/remoteBrowse.ts",
+        "apps/server/src/sshRemote/SshWorkspaceSync.ts"
+      ]
+    },
+    {
+      "path": "launch-and-remote-dispatch.md",
+      "tier": 3,
+      "title": "Launch watches and remote dispatch",
+      "scope": "Wakes for a launched thread, and durable SSH dispatches that report back.",
+      "documents": [
+        "apps/server/src/mcp/launchWatch.ts",
+        "apps/server/src/mcp/LaunchWatchService.ts",
+        "apps/server/src/mcp/toolkits/project/handlers.ts",
+        "apps/server/src/mcp/toolkits/ssh/handlers.ts",
+        "apps/server/src/mcp/HostThreadsMcpService.ts",
+        "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts",
+        "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts",
+        "apps/server/src/mcp/OrchestratorMcpService.ts",
+        "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
+        "packages/contracts/src/remoteReports.ts"
+      ]
+    },
+    {
+      "path": "web.md",
+      "tier": 4,
+      "title": "Web",
+      "scope": "The Vite React client, pairing, and the desktop preload bridge it detects.",
+      "documents": [
+        "apps/web",
+        "apps/web/package.json",
+        "apps/web/vite.config.ts",
+        "apps/web/src/routes/pair.tsx",
+        "apps/web/src/routes/_chat.tsx",
+        "apps/web/src/environments/primary/auth.ts",
+        "apps/web/src/connection/runtime.ts",
+        "packages/client-runtime/src/rpc/session.ts",
+        "apps/web/src/lib/runtime.ts",
+        "apps/web/src/branding.ts",
+        "apps/web/src/env.ts",
+        "apps/desktop/src/preload.ts",
+        "apps/web/src/components/goatBot/",
+        "packages/client-runtime/src/goatBot/",
+        "apps/web/src/components/settings/GoatBotSettings.tsx"
+      ]
+    },
+    {
+      "path": "desktop.md",
+      "tier": 4,
+      "title": "Desktop",
+      "scope": "Electron shell, bundled server, and the packaged data directory.",
+      "documents": [
+        "apps/desktop",
+        "apps/desktop/package.json",
+        "apps/desktop/src/main.ts",
+        "apps/desktop/src/app/DesktopEnvironment.ts",
+        "apps/desktop/src/electron/ElectronProtocol.ts",
+        "apps/desktop/src/backend/DesktopBackendManager.ts",
+        "apps/desktop/src/preload.ts",
+        "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
+        "packages/ssh"
+      ]
+    },
+    {
+      "path": "mobile.md",
+      "tier": 4,
+      "title": "Mobile",
+      "scope": "The Expo React Native app, its store identity, and the GOAT Bot screen.",
+      "documents": [
+        "apps/mobile",
+        "apps/mobile/src/App.tsx",
+        "apps/mobile/src/Stack.tsx",
+        "apps/mobile/src/features/connection/pairing.ts",
+        "apps/mobile/app.config.ts",
+        "packages/shared/src/mobileAppIdentity.ts",
+        "apps/mobile/src/features/goat-bot/GoatBotScreen.tsx",
+        "apps/mobile/src/features/goat-bot/goatBotHomeMode.ts",
+        "apps/mobile/README.md"
+      ]
+    },
+    {
+      "path": "settings-and-storage.md",
+      "tier": 5,
+      "title": "Settings and storage",
+      "scope": "The ~/.t3 default, the packaged desktop home, the SSH host home, and statev2.sqlite.",
+      "documents": [
+        "apps/server/src/os-jank.ts",
+        "apps/server/src/cli/config.ts",
+        "apps/server/src/config.ts",
+        "apps/server/src/serverSettings.ts",
+        "packages/contracts/src/settings.ts",
+        "apps/desktop/src/app/DesktopStatePaths.ts",
+        "apps/desktop/src/app/DesktopUserData.ts",
+        "packages/ssh/src/tunnel.ts",
+        "packages/shared/src/devHome.ts",
+        "apps/server/src/persistence/initializeV2Database.ts",
+        "apps/server/src/persistence/Migrations/064_ChannelLedger.ts",
+        "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts"
+      ]
+    }
+  ],
+  "contracts": {
+    "version": 1,
+    "entries": [
+      {
+        "id": "command-commit",
+        "owner": {
+          "document": "server.md",
+          "anchor": "command-commit"
+        },
+        "dependents": [
+          "overview.md",
+          "channels.md",
+          "scheduled-tasks.md",
+          "mcp-toolkits.md",
+          "launch-and-remote-dispatch.md"
+        ]
+      },
+      {
+        "id": "state-roots",
+        "owner": {
+          "document": "settings-and-storage.md",
+          "anchor": "state-roots"
+        },
+        "dependents": ["overview.md", "server.md", "desktop.md", "ssh.md"]
+      }
+    ]
+  },
+  "grace": {
+    "undocumentedSourceAreas": [
+      {
+        "path": "apps/marketing",
+        "reason": "public marketing site; not a control-surface runtime"
+      },
+      {
+        "path": "packages/effect-acp",
+        "reason": "ACP codec library; provider packages consume it and this map does not describe the codec"
+      },
+      {
+        "path": "packages/effect-codex-app-server",
+        "reason": "Codex app-server codec library; the Codex driver consumes it and this map does not describe the codec"
+      },
+      {
+        "path": "packages/provider-testing",
+        "reason": "provider test doubles, not a runtime driver"
+      },
+      {
+        "path": "packages/tailscale",
+        "reason": "tailnet helper for remote access; connection behavior for clients is in client-runtime.md, and this map does not describe the tailscale package"
+      }
+    ],
+    "unboundInvariants": [
+      {
+        "id": "INV-ORCH-01",
+        "reason": "EventSink transaction coverage lives in orchestration-v2 tests, and those tests do not name this id. Annotating them is a source change."
+      },
+      {
+        "id": "INV-HOME-01",
+        "reason": "resolveBaseDir coverage does not name this id. Annotating a test is a source change."
+      },
+      {
+        "id": "INV-DESKTOP-01",
+        "reason": "DesktopStatePaths coverage does not name this id. Annotating a test is a source change."
+      },
+      {
+        "id": "INV-SSH-01",
+        "reason": "tunnel script coverage does not name this id. Annotating a test is a source change."
+      },
+      {
+        "id": "INV-CKPT-01",
+        "reason": "checkpoint ref coverage does not name this id. Annotating a test is a source change."
+      },
+      {
+        "id": "INV-MCP-01",
+        "reason": "MCP server name coverage does not name this id. Annotating a test is a source change."
+      },
+      {
+        "id": "INV-CHAN-01",
+        "reason": "ChannelKind coverage does not name this id. Annotating a test is a source change."
+      }
+    ],
+    "oversizeDocs": [],
+    "staleRefs": []
+  }
+}

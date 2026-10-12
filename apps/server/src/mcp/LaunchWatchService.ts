@@ -115,6 +115,10 @@ export interface LaunchWatchServiceShape {
   readonly list: (
     launcherThreadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
+  /** Up to `limit` watches of threads on other machines, from every launcher, most recently updated first. */
+  readonly listRemote: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
 }
 
 export class LaunchWatchService extends Context.Service<
@@ -980,6 +984,16 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const listRemote: LaunchWatchServiceShape["listRemote"] = (limit) =>
+    locked(ensureLoaded).pipe(
+      Effect.map(() =>
+        [...watches.values()]
+          .filter((watch) => watch.host !== null)
+          .toSorted((left, right) => right.updatedAt - left.updatedAt)
+          .slice(0, limit),
+      ),
+    );
+
   // ── start ────────────────────────────────────────────────────────────
 
   yield* forkParked(
@@ -993,7 +1007,9 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  return LaunchWatchService.of({ register, rearm, unwatch, list });
+  return LaunchWatchService.of({ register, rearm, unwatch, list, listRemote });
 });
 
-export const layer = Layer.effect(LaunchWatchService, make);
+export const layerWithoutDependencies = Layer.effect(LaunchWatchService, make);
+
+export const layer = layerWithoutDependencies.pipe(Layer.provide(CompletionWebhook.layer));

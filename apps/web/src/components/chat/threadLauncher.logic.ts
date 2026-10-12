@@ -28,3 +28,20 @@ export function resolveLauncherRef(
 export function threadLauncherLabel(kind: OrchestrationV2ThreadLauncher["kind"]) {
   return kind === "launch" ? "Launched by" : "Promoted from";
 }
+
+/**
+ * Names the launching thread and, for a launch from another machine, that
+ * machine. When the launcher is not loaded here, says how to reach it.
+ */
+export function describeThreadLauncher(input: {
+  readonly kind: OrchestrationV2ThreadLauncher["kind"];
+  readonly title: string;
+  readonly machine: string | null;
+  readonly available: boolean;
+}): string {
+  const lead = `${threadLauncherLabel(input.kind)} “${input.title}”${input.machine === null ? "" : ` on ${input.machine}`}`;
+  if (input.available) return lead;
+  return input.machine === null
+    ? `${lead}. It is not available in this app.`
+    : `${lead}. Connect ${input.machine} to open it.`;
+}

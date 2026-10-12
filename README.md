@@ -28,7 +28,7 @@ Desktop builds and the `goat` command line are published as [releases of this re
 
 ## Documentation
 
-User guides live in [docs/user](./docs/user).
+User guides live in [docs/user](./docs/user). The maintainer map of the current system is [structure/INDEX.md](./structure/INDEX.md).
 
 - [Install and first run](./docs/user/install.md)
 - [Permission modes](./docs/user/permission-modes.md)

@@ -969,6 +969,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "remote-launches",
+    title: "Remote launches",
+    to: "/settings/connections",
+    searchTerms: ["ssh dispatch launched threads other machines hosts cross-host import open"],
+  },
+  {
     id: "load-balancing",
     title: "Load balancing",
     to: "/settings/connections",
