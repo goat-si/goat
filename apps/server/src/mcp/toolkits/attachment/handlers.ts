@@ -101,7 +101,7 @@ export const layer = McpToolAccess.toLayer(
               ...(caller === undefined ? {} : { senderThreadId: caller.id }),
               text: input.message ?? "",
               attachments,
-              mode: "auto",
+              mode: "steer_when_ready",
               createdBy: "agent",
               creationSource: "mcp",
             }).pipe(

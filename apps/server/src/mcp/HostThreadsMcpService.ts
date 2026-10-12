@@ -1,4 +1,5 @@
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
   OrchestratorMcpFailure,
   OrchestratorMcpThreadInterruptResult,
@@ -22,6 +23,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -152,6 +154,8 @@ export interface HostThreadsMcpServiceShape {
       readonly arguments: Readonly<Record<string, unknown>>;
       /** Defaults to the thread-tool deadline. Host status passes a shorter one. */
       readonly timeoutMs?: number;
+      /** Ask the host for a session that may answer approvals; see SshHostToolCall. */
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -173,6 +177,7 @@ export interface HostThreadsMcpServiceShape {
       readonly host: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -208,6 +213,8 @@ const make = Effect.gen(function* () {
   const local = yield* OrchestratorMcpService.OrchestratorMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+  // Only words an error better, so a layer without report bindings goes without.
+  const reports = yield* Effect.serviceOption(RemoteReportService.RemoteReportService);
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
 
@@ -250,6 +257,32 @@ const make = Effect.gen(function* () {
             ),
           );
 
+  /**
+   * A thread started from another machine names hosts as that machine knows them.
+   * One this machine cannot reach may still be reachable from there, so say where
+   * this thread came from and how to hand the call back.
+   */
+  const unknownHostFailure = (
+    scope: McpInvocationScope,
+    host: string,
+    error: SshRemoteDispatch.SshRemoteDispatchError,
+  ) =>
+    (scope.thread === undefined || Option.isNone(reports)
+      ? Effect.succeed(null)
+      : reports.value.origin(scope.thread.threadId).pipe(Effect.orElseSucceed(() => null))
+    ).pipe(
+      Effect.flatMap((origin) =>
+        Effect.fail(
+          origin === null
+            ? hostFailure(error)
+            : failure(
+                "invalid_request",
+                `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
+              ),
+        ),
+      ),
+    );
+
   const call = (
     scope: McpInvocationScope,
     input: {
@@ -258,6 +291,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly approvals?: boolean;
     },
   ) =>
     dispatch
@@ -268,6 +302,7 @@ const make = Effect.gen(function* () {
           arguments: input.arguments,
           writes: input.writes,
           timeoutMs: input.timeoutMs ?? REMOTE_TIMEOUT_MS,
+          ...(input.approvals === true ? { approvals: true } : {}),
         },
         authorize(input.writes).pipe(
           Effect.provideService(McpInvocationContext, scope),
@@ -275,8 +310,12 @@ const make = Effect.gen(function* () {
         ),
       )
       .pipe(
-        Effect.mapError((error) =>
-          error instanceof SshRemoteDispatch.SshRemoteDispatchError ? hostFailure(error) : error,
+        Effect.catch((error) =>
+          !(error instanceof SshRemoteDispatch.SshRemoteDispatchError)
+            ? Effect.fail(error)
+            : error.reason === "host_unknown"
+              ? unknownHostFailure(scope, input.host, error)
+              : Effect.fail(hostFailure(error)),
         ),
       );
 
@@ -289,6 +328,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) =>
@@ -487,7 +527,12 @@ const make = Effect.gen(function* () {
             {
               host: input.host,
               tool: "goat_thread_send",
-              arguments: withoutHost(input),
+              // The remote sees an outside client; a thread's queue or steer still means "like
+              // steering" there, which its auto now does.
+              arguments:
+                scope.thread !== undefined && (input.mode === "queue" || input.mode === "steer")
+                  ? { ...withoutHost(input), mode: "auto" }
+                  : withoutHost(input),
               writes: true,
             },
             decodeSend,

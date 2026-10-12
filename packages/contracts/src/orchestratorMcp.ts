@@ -26,6 +26,7 @@ import {
 } from "./scheduledTask.ts";
 import {
   ProviderInteractionMode,
+  ProviderRequestKind,
   RuntimeMode,
   ProviderUserInputAnswers,
   UserInputRespondedBy,
@@ -33,6 +34,7 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
+import { ThreadResult } from "./threadResult.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import {
   OrchestrationV2Actor,
@@ -374,6 +376,8 @@ export type OrchestratorMcpLaunchedQuestionsResult =
 export const OrchestratorMcpThreadPendingRequestsResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   requestIds: Schema.Array(RuntimeRequestId),
+  /** Pending approvals, listed only for callers allowed to answer them. */
+  approvalRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
 });
 export const OrchestratorMcpPendingRequestListResult = Schema.Union([
   OrchestratorMcpThreadPendingRequestsResult,
@@ -392,6 +396,13 @@ export const OrchestratorMcpPendingRequestReadResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   requestId: RuntimeRequestId,
   questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  /** Set for an approval request; its questions are empty. */
+  approval: Schema.optional(
+    Schema.Struct({
+      kind: ProviderRequestKind,
+      prompt: Schema.optional(Schema.String),
+    }),
+  ),
   status: Schema.optional(OrchestrationV2RuntimeRequest.fields.status),
   decision: Schema.optional(ProviderApprovalDecision),
   respondedBy: Schema.optional(UserInputRespondedBy),
@@ -399,11 +410,14 @@ export const OrchestratorMcpPendingRequestReadResult = Schema.Struct({
 });
 export type OrchestratorMcpPendingRequestReadResult =
   typeof OrchestratorMcpPendingRequestReadResult.Type;
+/** Single-shot approval answers; session-wide grants stay with the user. */
+export const OrchestratorMcpApprovalDecision = Schema.Literals(["accept", "decline"]);
 export const OrchestratorMcpPendingRequestRespondInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   host: Schema.optional(OrchestratorMcpHost),
   requestId: RuntimeRequestId,
-  answers: ProviderUserInputAnswers,
+  answers: Schema.optional(ProviderUserInputAnswers),
+  decision: Schema.optional(OrchestratorMcpApprovalDecision),
   reason: UserInputResponseReason,
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
@@ -570,6 +584,11 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  /**
+   * The latest run's structured result; null before the thread's first run.
+   * Optional because hosts running an older GOAT do not send it.
+   */
+  result: Schema.optional(Schema.NullOr(ThreadResult)),
 });
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
@@ -610,6 +629,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  /** The waited run's structured result, once that run has ended. */
+  result: Schema.optional(ThreadResult),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 

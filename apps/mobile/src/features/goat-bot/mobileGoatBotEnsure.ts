@@ -30,3 +30,30 @@ export function settleMobileGoatBotEnsure(
   }
   return settleGoatBotEnsure(machine, token, result);
 }
+
+/** One constructor for request generation and live settle validation. */
+export function goatBotSessionKey(input: {
+  readonly environmentId: EnvironmentId | null;
+  readonly generation: number | null;
+  readonly homeKey: string;
+}): string | null {
+  return input.environmentId === null || input.generation === null
+    ? null
+    : `${input.environmentId}:${input.generation}:channel:${input.homeKey}`;
+}
+
+export interface MobileGoatBotNotHome {
+  readonly homeKey: string;
+  readonly settingsSnapshot: object | null;
+}
+
+/** A retry click or reconnect is not evidence that a not_home refusal changed. */
+export function mobileGoatBotWaitingForHome(
+  refusal: MobileGoatBotNotHome | null,
+  homeKey: string,
+  settingsSnapshot: object | null,
+): boolean {
+  return (
+    refusal !== null && refusal.homeKey === homeKey && refusal.settingsSnapshot === settingsSnapshot
+  );
+}

@@ -26,6 +26,7 @@ import {
   SettingsEnvironmentFilterHeader,
 } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
+import { StandingInstructionsSettings } from "./components/StandingInstructionsSettings";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -58,7 +59,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "branchNamePrefix",
     "branchNameInstructions",
   ],
-  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess"],
+  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess", "standingInstructions"],
   maintenance: ["continueThreadsAfterServerUpdate"],
 };
 
@@ -423,6 +424,14 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                     />
                   </SettingsSection>
+                  <StandingInstructionsSettings
+                    key={targets
+                      .map((target) => `${target.environment.environmentId}:${target.projectId}`)
+                      .join(",")}
+                    instructions={uniform("standingInstructions")}
+                    disabled={disabledFor("standingInstructions")}
+                    onChange={write}
+                  />
                 </>
               ) : null}
 

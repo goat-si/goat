@@ -69,6 +69,8 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelEnsureBotInput,
   ChannelEnsureBotResult,
+  ChannelGetBotStatusInput,
+  ChannelGetBotStatusResult,
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
@@ -1901,6 +1903,12 @@ export const ChannelEnsureBotRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ensureBot
   error: ChannelRpcError,
 });
 
+export const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus, {
+  payload: ChannelGetBotStatusInput,
+  success: ChannelGetBotStatusResult,
+  error: ChannelRpcError,
+});
+
 export const ChannelIngestRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.ingest, {
   payload: ChannelIngestInput,
   success: ChannelIngestResult,
@@ -2037,6 +2045,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
   ChannelEnsureBotRpc,
+  ChannelGetBotStatusRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelListTasksRpc,

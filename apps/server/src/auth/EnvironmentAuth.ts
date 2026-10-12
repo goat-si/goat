@@ -2,6 +2,7 @@ import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
   AuthAdministrativeScopes,
+  AuthOrchestrationApproveScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthStandardClientScopes,
@@ -91,6 +92,8 @@ export interface McpClientSession {
   readonly sessionId: AuthSessionId;
   readonly label: string;
   readonly access: AuthMcpClientAccess;
+  /** Holds `orchestration:approve` next to write access; OAuth sign-ins never do. */
+  readonly approvals: boolean;
 }
 
 export interface AuthenticatedSession {
@@ -1207,13 +1210,18 @@ export const make = Effect.gen(function* () {
       mapSessionVerificationErrors,
       Effect.flatMap((session) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
-          ? Effect.succeed({
-              sessionId: session.sessionId,
-              label: session.client.label ?? "MCP client",
-              access: session.scopes.includes(AuthOrchestrationOperateScope)
-                ? (session.runtimeModeCeiling ?? "approval-required")
-                : "read-only",
-            } satisfies McpClientSession)
+          ? sessions.markUsed(session.sessionId).pipe(
+              Effect.as({
+                sessionId: session.sessionId,
+                label: session.client.label ?? "MCP client",
+                access: session.scopes.includes(AuthOrchestrationOperateScope)
+                  ? (session.runtimeModeCeiling ?? "approval-required")
+                  : "read-only",
+                approvals:
+                  session.scopes.includes(AuthOrchestrationOperateScope) &&
+                  session.scopes.includes(AuthOrchestrationApproveScope),
+              } satisfies McpClientSession),
+            )
           : Effect.fail(
               new ServerAuthInvalidCredentialError({
                 diagnostic: "Only MCP client sessions are accepted here.",

@@ -38,6 +38,7 @@ import {
   ProjectId,
   RemoteOriginReportsWaitResult,
   RemoteReport,
+  RemoteRunHolds,
   RunId,
   type RuntimeMode,
   ThreadId,
@@ -65,6 +66,7 @@ import {
   remoteReportEventIdFor,
 } from "./channelIds.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
+import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 export const REMOTE_WAIT_MS = 50_000;
@@ -83,14 +85,6 @@ const INBOX_LIMIT = 200;
 const MAX_PROJECT_PAGES = 5;
 
 /** What the requester reads. Fixed text: remote error text never reaches a channel. */
-/**
- * How many of a task's answers the remote project choice reads: only the newest of the current
- * generation. Free text cannot show whether an older answer was overtaken (a later choice may
- * name a project that has since been renamed or removed), so an older choice is asked for again
- * rather than revived.
- */
-const MAX_ANSWERS_READ = 1;
-
 export const REMOTE_COPY = {
   unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
     "I can't send work to " +
@@ -157,7 +151,14 @@ const RemoteWorkerState = Schema.Struct({
   attempts: Schema.Number,
   remoteThreadId: Schema.optional(Schema.String),
   cursor: Schema.Number,
-  knownRun: Schema.optional(Schema.Struct({ runId: Schema.String, status: Schema.String })),
+  knownRun: Schema.optional(
+    Schema.Struct({
+      runId: Schema.String,
+      status: Schema.String,
+      /** Echoed back so the wait releases when background work or a continuation ends. */
+      holds: Schema.optional(RemoteRunHolds),
+    }),
+  ),
   inbox: Schema.Array(RemoteReport),
   dropped: Schema.Number,
   /** The run an answer started on the remote; reports wait until the remote shows it. */
@@ -274,6 +275,7 @@ export class ChannelRemoteWorkers extends Context.Service<
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
       },
+      owner: string,
     ) => Effect.Effect<RemoteResolution, ChannelLedger.ChannelLedgerError>;
     /** Starts (or resumes) the remote launch of a dispatching task in the background. */
     readonly launch: (
@@ -447,36 +449,11 @@ const make = Effect.gen(function* () {
       readonly projectId?: string;
       readonly localTitle?: string;
       readonly canonicalKey?: string;
-      /** The requester's answers in this generation, newest first. */
-      readonly answers?: ReadonlyArray<string>;
-      /** Machines an answer may name; an answer that picks one made a newer choice. */
-      readonly hosts?: ReadonlyArray<string>;
-      /** This machine's projects; an answer that picks one made a newer choice. */
-      readonly localProjects?: ReadonlyArray<{ readonly id: string; readonly title: string }>;
       readonly requireNamed?: boolean;
     },
   ) => {
     const byId = projects.find((project) => project.id === hint.projectId);
     if (byId !== undefined) return byId;
-    // The newest answer naming one of its projects decides. An answer that picked something else
-    // (a machine, or a project on this machine) is the newer choice and names none here.
-    for (const raw of hint.answers ?? []) {
-      const answer = raw.toLowerCase();
-      const named = projects.filter((project) => answer.includes(project.title.toLowerCase()));
-      if (named.length > 0) {
-        return named.toSorted((left, right) => right.title.length - left.title.length)[0];
-      }
-      // Same matching as reception, which records a project here from an exact id or a title.
-      const choseOtherwise =
-        meansThisMachine(raw) ||
-        (hint.hosts ?? []).some((host) => answer.includes(host.toLowerCase())) ||
-        (hint.localProjects ?? []).some(
-          (project) =>
-            project.id === raw.trim() ||
-            (project.title !== "" && answer.includes(project.title.toLowerCase())),
-        );
-      if (choseOtherwise) break;
-    }
     // The same repository as the local project, by its canonical remote key.
     if (hint.canonicalKey !== undefined) {
       const same = projects.filter((project) => canonicalKeyOf(project) === hint.canonicalKey);
@@ -498,7 +475,7 @@ const make = Effect.gen(function* () {
     return projects.length === 1 && !askedForOne ? projects[0] : undefined;
   };
 
-  const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local) =>
+  const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local, owner) =>
     Effect.gen(function* () {
       const task = stored.task;
       const host = task.host;
@@ -526,19 +503,54 @@ const make = Effect.gen(function* () {
       if (projects.length === 0) {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
-      const answers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
-      // The project chosen here stays a barrier by id even after it leaves the catalog.
-      const localProjects = [
-        ...(local.localProjects ?? []),
-        ...(task.projectId === undefined ? [] : [{ id: task.projectId, title: "" }]),
-      ];
-      const chosen = chooseProject(projects, {
-        ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
-        ...(local.title === undefined ? {} : { localTitle: local.title }),
-        ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
-        ...(answers.length === 0 ? {} : { answers, hosts, localProjects }),
-        ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
-      });
+      const latest = (yield* ledger.recentAnswers(task.taskId, 1))[0];
+      let choice = latest?.payload.projectChoice;
+      if (latest !== undefined && choice === undefined) {
+        const raw = latest.payload.answer;
+        const answer = raw.toLowerCase();
+        const named = projects
+          .filter(
+            (project) =>
+              project.id === raw.trim() ||
+              (project.title !== "" && answer.includes(project.title.toLowerCase())),
+          )
+          .toSorted((left, right) => right.title.length - left.title.length)[0];
+        const localProject = (local.localProjects ?? []).find(
+          (project) =>
+            project.id === raw.trim() ||
+            (project.title !== "" && answer.includes(project.title.toLowerCase())),
+        );
+        const namedHost = hosts
+          .filter((alias) => answer.includes(alias.toLowerCase()))
+          .toSorted((left, right) => right.length - left.length)[0];
+        choice =
+          named !== undefined
+            ? { type: "remote", host, projectId: named.id }
+            : localProject !== undefined
+              ? { type: "local", projectId: ProjectId.make(localProject.id) }
+              : meansThisMachine(raw)
+                ? { type: "host", host: null }
+                : namedHost !== undefined
+                  ? { type: "host", host: namedHost }
+                  : { type: "none" };
+        yield* ledger.recordAnswerProjectChoice({ owner, eventId: latest.eventId, choice });
+      }
+      // Never reinterpret an older answer against today's catalog. An unresolved answer is
+      // also a barrier: it might have named a project while that machine was unreachable.
+      const remembered =
+        choice?.type === "none" ? yield* ledger.rememberedProjectChoice(task.taskId) : choice;
+      const remoteChoice = remembered?.type === "remote" ? remembered : undefined;
+      const chosen =
+        remoteChoice !== undefined
+          ? remoteChoice.host === host
+            ? projects.find((project) => project.id === remoteChoice.projectId)
+            : undefined
+          : chooseProject(projects, {
+              ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
+              ...(local.title === undefined ? {} : { localTitle: local.title }),
+              ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
+              ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
+            });
       if (chosen === undefined) {
         return {
           type: "question",
@@ -1088,7 +1100,13 @@ const make = Effect.gen(function* () {
           cursor: Math.max(current.cursor, ...fresh.map((report) => report.sequence)),
           ...(watched === null
             ? {}
-            : { knownRun: { runId: watched.runId, status: watched.status } }),
+            : {
+                knownRun: {
+                  runId: watched.runId,
+                  status: watched.status,
+                  ...(watched.holds === undefined ? {} : { holds: watched.holds }),
+                },
+              }),
         };
       });
       if (state === undefined) return "stop" as const;
@@ -1232,6 +1250,26 @@ const make = Effect.gen(function* () {
             REMOTE_COPY.launchIncomplete(state.host),
           );
           return "stop" as const;
+        }
+        return "wait" as const;
+      }
+      // As on this machine, a continuation still to come or background work left after a
+      // completed run keeps the task open. An older remote does not say, and the grace below
+      // stands in for it.
+      const holds = watched.holds;
+      const backgroundPending =
+        watched.status === "completed" && holds !== undefined && holds.backgroundTasks > 0;
+      if (holds?.continuationPending === true || backgroundPending) {
+        if (backgroundPending && stored.completionHold !== BACKGROUND_HOLD) {
+          yield* ledger.setCompletionHold({ owner, taskId, hold: BACKGROUND_HOLD });
+        }
+        if (state.settleRunId !== undefined) {
+          yield* writeState(
+            owner,
+            taskId,
+            state.generation,
+            ({ settleRunId: _s, ...rest }) => rest,
+          );
         }
         return "wait" as const;
       }
@@ -1471,7 +1509,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const stored = yield* ledger.getTask(taskId);
         if (stored === undefined || stored.task.status !== "received") return;
-        const resolved = yield* resolve(stored, local);
+        const resolved = yield* resolve(stored, local, owner);
         if (resolved.type === "local" || resolved.type === "retry") return;
         if (!(yield* ledger.isOwner(owner))) return;
         const reread = yield* ledger.getTask(taskId);

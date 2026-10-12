@@ -217,6 +217,7 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("run_not_found", error.message);
     case "ThreadManagementThreadArchivedError":
     case "ThreadManagementNoSteerableRunError":
+    case "ThreadManagementTargetStoppedError":
       return failure("thread_not_sendable", error.message);
     case "ThreadManagementThreadNotInterruptibleError":
       return failure("thread_not_interruptible", error.message);
@@ -1441,6 +1442,16 @@ const make = Effect.gen(function* () {
       if (task.remote !== undefined) {
         const status = isTerminalTaskStatus(task.status) ? task.status : "running";
         const terminal = isTerminalTaskStatus(status);
+        // The coordinator records the remote run's open questions before announcing them.
+        const pendingRequestIds = terminal
+          ? []
+          : ((yield* remoteDispatch
+              .get(task.remote.correlationId)
+              .pipe(
+                Effect.mapError(() =>
+                  failure("orchestration_error", "Unable to load the persisted remote dispatch."),
+                ),
+              ))?.pendingRequestIds ?? []);
         const response = {
           taskId: task.id,
           host: task.remote.host,
@@ -1459,6 +1470,7 @@ const make = Effect.gen(function* () {
           latestTerminalSummary: terminal ? task.result : null,
           latestTerminalResultContextTransferId: null,
           waitTimedOut,
+          ...(pendingRequestIds.length === 0 ? {} : { pendingRequestIds }),
         } satisfies OrchestratorMcpDelegateTaskResult;
         if (acknowledgeTerminal)
           yield* acknowledgeTaskResult(
@@ -2981,7 +2993,11 @@ const make = Effect.gen(function* () {
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 
-        const mode = input.mode ?? "auto";
+        const mode = ThreadManagementService.threadSendMode({
+          requested: input.mode,
+          senderThreadId: parent?.thread.id,
+          targetThreadId: input.threadId,
+        });
         const key = yield* requestKey(input.clientRequestId);
         const messageId = stableOperationMessageId({
           scope,

@@ -22,6 +22,8 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  ThreadResult,
+  ThreadResultReport,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -30,6 +32,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -145,7 +148,7 @@ const pendingTool = {
 const PendingRequestListTool = Tool.make("goat_pending_request_list", {
   ...pendingTool,
   description:
-    "List pending user-input questions; approvals are human-only and excluded. Omit threadId for this thread, or pass host and threadId for another machine. scope='launched' shows your launched threads' questions locally and on connected hosts plus hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Results cap at 100; when truncated, answer questions or narrow with host and threadId. Launcher filters are reserved for outside host transport.",
+    "List pending user-input questions. Approvals are human-only and excluded, except that an MCP client token with orchestration:approve also gets approvalRequestIds for one thread. Omit threadId for this thread, or pass host and threadId for another machine. scope='launched' shows your launched threads' questions locally and on connected hosts plus hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Results cap at 100; when truncated, answer questions or narrow with host and threadId. Launcher filters are reserved for outside host transport.",
   parameters: OrchestratorMcpPendingRequestListInput,
   success: OrchestratorMcpPendingRequestListResult,
 })
@@ -154,7 +157,7 @@ const PendingRequestListTool = Tool.make("goat_pending_request_list", {
 const PendingRequestReadTool = Tool.make("goat_pending_request_read", {
   ...pendingTool,
   description:
-    "Read a pending or resolved user question, including status, responder and resolution time when available. Pass host and threadId for another machine. Answer with goat_pending_request_respond or forward to the user; old remotes may omit status and provenance.",
+    "Read a pending or resolved user question, including status, responder and resolution time when available. A caller with orchestration:approve can also read an approval, returned with approval.kind and approval.prompt. Pass host and threadId for another machine. Answer with goat_pending_request_respond or forward to the user; old remotes may omit status and provenance.",
   parameters: OrchestratorMcpPendingRequestReadInput,
   success: OrchestratorMcpPendingRequestReadResult,
 })
@@ -163,7 +166,7 @@ const PendingRequestReadTool = Tool.make("goat_pending_request_read", {
 const PendingRequestRespondTool = Tool.make("goat_pending_request_respond", {
   ...pendingTool,
   description:
-    "Answer a pending user-input question with answers and a required reason (1–2000 characters, including non-whitespace text). Pass host and threadId for another machine; remote writes need default interaction mode. Approvals are human-only; forward humanRequired questions to the user. respondedBy is reserved for outside host transport; thread callers must omit it.",
+    "Answer a pending user-input question with answers and a required reason (1–2000 characters, including non-whitespace text). Pass host and threadId for another machine; remote writes need default interaction mode. Approvals are human-only, except for an MCP client token with orchestration:approve, which answers one with decision ('accept' or 'decline') instead of answers. Forward humanRequired questions to the user. respondedBy is reserved for outside host transport; thread callers must omit it.",
   parameters: OrchestratorMcpPendingRequestRespondInput,
   success: OrchestratorMcpPendingRequestRespondResult,
 })
@@ -266,8 +269,26 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadReportResultTool = Tool.make("goat_thread_report_result", {
+  description:
+    "Record the structured result of this thread's current run, so whoever dispatched it can read the outcome from goat_thread_read or goat_thread_wait instead of parsing your messages. Call it once you finish a dispatched task, and again to replace it if the result changes. outcome is succeeded, failed, blocked (you need something you cannot get), or cancelled. Report only facts you checked: pull request URLs you opened or updated, the test command you ran with its counts, and commit SHAs you pushed. Pull requests linked to this thread and its branch are added automatically. Recording a result does not end the run.",
+  parameters: ThreadResultReport,
+  success: ThreadResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ThreadResultService.ThreadResultService,
+  ],
+})
+  .annotate(Tool.Title, "Report this thread's result")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
+  ThreadReportResultTool,
   ThreadSearchTool,
   ThreadForkTool,
   ThreadMergeBackTool,

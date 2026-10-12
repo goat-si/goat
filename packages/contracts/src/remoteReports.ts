@@ -3,6 +3,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -38,18 +39,42 @@ export const RemoteOriginReportInput = Schema.Struct({
 export type RemoteOriginReportInput = typeof RemoteOriginReportInput.Type;
 export const RemoteOriginReportResult = Schema.Struct({ sequence: NonNegativeInt });
 export type RemoteOriginReportResult = typeof RemoteOriginReportResult.Type;
+/**
+ * What still holds a finished run's thread open: provider background work and a
+ * restart continuation still to come. Present only for a terminal run; an older
+ * GOAT omits it, so an origin that settles on it must treat absence as unknown.
+ */
+export const RemoteRunHolds = Schema.Struct({
+  backgroundTasks: NonNegativeInt,
+  continuationPending: Schema.Boolean,
+});
+export type RemoteRunHolds = typeof RemoteRunHolds.Type;
 export const RemoteObservedRun = Schema.Struct({
   runId: RunId,
   status: OrchestrationV2RunStatus,
   summary: Schema.NullOr(Summary),
+  /** Pending user-input questions on this run. An older GOAT omits it. */
+  pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  holds: Schema.optional(RemoteRunHolds),
 });
 export type RemoteObservedRun = typeof RemoteObservedRun.Type;
+/**
+ * The caller's last view of the observed run. A wait releases when the run, its
+ * status, or (when the caller sends them) its questions or holds differ from it.
+ */
+export const RemoteKnownRun = Schema.Struct({
+  runId: RunId,
+  status: Schema.String,
+  pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  holds: Schema.optional(RemoteRunHolds),
+});
+export type RemoteKnownRun = typeof RemoteKnownRun.Type;
 export const RemoteOriginReportsWaitInput = Schema.Struct({
   correlationId: CorrelationId,
   readKey: HexKey,
   afterSequence: NonNegativeInt,
   watchRunId: Schema.NullOr(RunId),
-  knownRun: Schema.NullOr(Schema.Struct({ runId: RunId, status: Schema.String })),
+  knownRun: Schema.NullOr(RemoteKnownRun),
   timeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 600000 })),
 });
 export type RemoteOriginReportsWaitInput = typeof RemoteOriginReportsWaitInput.Type;

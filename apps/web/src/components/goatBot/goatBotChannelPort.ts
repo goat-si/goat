@@ -1,6 +1,7 @@
 import type {
   ChannelBotRef,
   ChannelEnsureBotInput,
+  ChannelGetBotStatusResult,
   ChannelIngestInput,
   ChannelIngestResult,
   ChannelListTasksInput,
@@ -22,6 +23,8 @@ export interface GoatBotChannelPort {
     environmentId: EnvironmentId,
     input: ChannelEnsureBotInput,
   ) => Promise<ChannelBotRef>;
+  /** Which thread is the bot and how many GOAT tasks wait; never creates the bot. */
+  readonly getBotStatus: (environmentId: EnvironmentId) => Promise<ChannelGetBotStatusResult>;
   readonly ingest: (
     environmentId: EnvironmentId,
     input: ChannelIngestInput,

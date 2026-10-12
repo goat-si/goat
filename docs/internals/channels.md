@@ -17,10 +17,13 @@ starts a provider turn there. Replies come from a one-shot, tool-free text gener
 work. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
 An owner has one bot, in the Scratch project, and one bot conversation keyed by the owner rather
-than the thread. If the bot thread is deleted, the next `ensureBot` starts a replacement and
-records it in its place. The conversation, its open questions, and outstanding work carry over;
-deliveries addressed to the old thread go to the current bot, and timeline ids include the thread
-so a replayed record lands in the replacement without colliding with the old one.
+than the thread. Where Scratch is off because the data directory is inside a Git work tree, the bot
+gets a project of its own under the data directory instead: the bot never runs a provider or
+checkpoints, so the repository around it does not matter. If the bot thread is deleted, the next
+`ensureBot` starts a replacement and records it in its place. The conversation, its open
+questions, and outstanding work carry over; deliveries addressed to the old thread go to the
+current bot, and timeline ids include the thread so a replayed record lands in the replacement
+without colliding with the old one.
 
 ## One home per cluster
 
@@ -66,10 +69,10 @@ Defaults pick where and with what model; the requester's ceiling still bounds th
 
 On another machine the remote's only project stands in only when no project was asked for: a
 project named here, or a default that is gone, must match one of its projects, or the requester is
-asked. Only the newest answer of the current generation can name the project there; an answer
-that chose nothing ("try again" after the machine was unreachable) asks again, because free text
-cannot show whether an older answer was overtaken by a choice whose project has since been renamed
-or removed.
+asked. Dispatcher answers record their project resolution in the ledger. An answer that names
+nothing can keep an earlier remote project choice only while its id still exists on the same
+host. A newer project or machine choice replaces it; an answer that could not be resolved blocks
+reuse of older choices. A retried generation starts without earlier choices.
 
 ## Who runs the workers
 

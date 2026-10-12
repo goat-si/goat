@@ -467,11 +467,18 @@ describe("SshRemoteDispatch.callHostTool", () => {
       readonly answer: (request: { readonly method: string; readonly tool?: string }) => ToolAnswer;
       readonly ensureFails?: boolean;
       readonly ceilingApplied?: boolean;
+      /** The remote CLI cannot grant orchestration:approve. */
+      readonly approvalsFail?: boolean;
     },
     body: Effect.Effect<A, E, SshRemoteDispatch.SshRemoteDispatch>,
   ) =>
     Effect.gen(function* () {
-      const record = { toolCalls: [] as string[], sessionsIssued: 0, requests: 0 };
+      const record = {
+        toolCalls: [] as string[],
+        sessionsIssued: 0,
+        requests: 0,
+        sessionRequests: [] as Array<boolean>,
+      };
       const fetchEndpoint = vi.fn(async (_url: string, init?: RequestInit) => {
         record.requests += 1;
         const request = JSON.parse(String(init?.body)) as {
@@ -517,15 +524,26 @@ describe("SshRemoteDispatch.callHostTool", () => {
               }),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
-        issueMcpClientSession: () =>
-          Effect.sync(() => {
-            record.sessionsIssued += 1;
-            return {
-              token: `session-${record.sessionsIssued}`,
-              expiresAt: null,
-              runtimeModeCeilingApplied: options.ceilingApplied ?? true,
-            };
-          }),
+        issueMcpClientSession: (_target, sessionOptions) => {
+          record.sessionRequests.push(sessionOptions.approvals === true);
+          return sessionOptions.approvals === true && options.approvalsFail === true
+            ? Effect.fail(
+                new SshCommandError({
+                  message: "unknown option value: orchestration:approve",
+                  command: ["ssh", host],
+                  exitCode: 2,
+                  stderr: "",
+                }),
+              )
+            : Effect.sync(() => {
+                record.sessionsIssued += 1;
+                return {
+                  token: `session-${record.sessionsIssued}`,
+                  expiresAt: null,
+                  runtimeModeCeilingApplied: options.ceilingApplied ?? true,
+                };
+              });
+        },
         runRemoteScript: () => Effect.die("Unexpected remote script"),
       });
       const discoverHosts = vi
@@ -582,6 +600,39 @@ describe("SshRemoteDispatch.callHostTool", () => {
       );
       return { value, connected: yield* dispatch.connectedHosts };
     });
+
+  it.effect("fails instead of issuing a narrower session when approvals cannot be granted", () =>
+    Effect.gen(function* () {
+      const approvalCall = Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        return yield* dispatch.callHostTool(
+          {
+            host,
+            tool: "goat_pending_request_respond",
+            arguments: { threadId: "thread-1" },
+            timeoutMs: 5_000,
+            writes: true,
+            approvals: true,
+          },
+          Effect.succeed("full-access" as const),
+        );
+      });
+      const { result, record } = yield* withRemote(
+        { answer: (request) => initialize(request) ?? { result: {} }, approvalsFail: true },
+        approvalCall,
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          reason: "remote_refused",
+          message: expect.stringContaining("may answer approvals"),
+        },
+      });
+      expect(record.sessionRequests).toEqual([true]);
+      expect(record.sessionsIssued).toBe(0);
+      expect(record.toolCalls).toEqual([]);
+    }),
+  );
 
   it.effect("returns the remote result and remembers the host as connected", () =>
     Effect.gen(function* () {

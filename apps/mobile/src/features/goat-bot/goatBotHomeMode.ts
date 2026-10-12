@@ -1,20 +1,18 @@
-import type { ChannelBotRef, EnvironmentId } from "@t3tools/contracts";
+import type { GoatBotEnvironmentInput } from "@t3tools/client-runtime/goatBot";
+import type { ChannelBotRef, GoatBotHomeClaim } from "@t3tools/contracts";
 
 export type MobileHomeMode = "thread" | "bot";
 
-export interface MobileGoatBotEnvironment {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly connected: boolean;
-  readonly supportsChannelLedger: boolean;
-  readonly connecting: boolean;
-}
-
 export function mobileGoatBotKnown(
-  environments: ReadonlyArray<Pick<MobileGoatBotEnvironment, "supportsChannelLedger">>,
+  environments: ReadonlyArray<Pick<GoatBotEnvironmentInput, "supportsChannelLedger">>,
   botRef: ChannelBotRef | null,
+  homeClaim: GoatBotHomeClaim | null = null,
 ): boolean {
-  return botRef !== null || environments.some((environment) => environment.supportsChannelLedger);
+  return (
+    homeClaim !== null ||
+    botRef !== null ||
+    environments.some((environment) => environment.supportsChannelLedger)
+  );
 }
 
 export function effectiveHomeMode(
@@ -24,11 +22,11 @@ export function effectiveHomeMode(
   return botKnown && preference === "bot" ? "bot" : "thread";
 }
 
-/** A saved bot owns its environment even while that computer is unavailable. */
+/** A saved legacy bot owns its environment even while that computer is unavailable. */
 export function pickMobileGoatBotEnvironment(
-  environments: ReadonlyArray<MobileGoatBotEnvironment>,
+  environments: ReadonlyArray<GoatBotEnvironmentInput>,
   botRef: ChannelBotRef | null,
-): MobileGoatBotEnvironment | null {
+): GoatBotEnvironmentInput | null {
   if (botRef !== null) {
     return (
       environments.find((environment) => environment.environmentId === botRef.environmentId) ?? null
@@ -39,7 +37,7 @@ export function pickMobileGoatBotEnvironment(
       .filter((environment) => environment.connected && environment.supportsChannelLedger)
       .sort(
         (left, right) =>
-          left.label.localeCompare(right.label) ||
+          (left.label ?? left.environmentId).localeCompare(right.label ?? right.environmentId) ||
           left.environmentId.localeCompare(right.environmentId),
       )[0] ?? null
   );

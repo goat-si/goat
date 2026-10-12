@@ -216,7 +216,16 @@ const taskEvent = <Type extends ChannelTaskEventType, Payload extends Schema.Str
     payload: Schema.Struct(payload),
   });
 
-/** Append-only task history. Each type has its own payload; nothing executes free-form JSON. */
+/** The dispatcher records this once; absent means the answer has not been resolved. */
+export const ChannelAnswerProjectChoice = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("remote"), host: Schema.String, projectId: ProjectId }),
+  Schema.Struct({ type: Schema.Literal("local"), projectId: ProjectId }),
+  Schema.Struct({ type: Schema.Literal("host"), host: Schema.NullOr(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("none") }),
+]);
+export type ChannelAnswerProjectChoice = typeof ChannelAnswerProjectChoice.Type;
+
+/** Task history with optional dispatcher resolution metadata on answers. */
 export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.created", {
     title: TrimmedNonEmptyString,
@@ -234,6 +243,7 @@ export const ChannelTaskEvent = Schema.Union([
   taskEvent("task.question.answered", {
     questionId: ChannelQuestionId,
     answer: Schema.String,
+    projectChoice: Schema.optional(ChannelAnswerProjectChoice),
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
   taskEvent("task.completed", {

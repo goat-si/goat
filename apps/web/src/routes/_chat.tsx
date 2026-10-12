@@ -132,7 +132,7 @@ function ChatRouteGlobalShortcuts() {
         // single-project setups) keep the immediate contextual create.
         // Activity view chooses a project; Projects view creates in the current context,
         // including before client settings finish hydrating.
-        if (!legacySidebarEnabled && projectGroupCount > 1) {
+        if (legacySidebarEnabled === false && projectGroupCount > 1) {
           openCommandPalette({ open: "new-thread-in" });
           return;
         }

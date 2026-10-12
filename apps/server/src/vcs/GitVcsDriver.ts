@@ -419,6 +419,14 @@ export class GitVcsDriver extends Context.Service<
      * main checkout included. Worktrees whose directory is gone are left out.
      */
     readonly listWorktreePaths: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+    /**
+     * Absolute path of the worktree that has `branch` checked out, or null when
+     * no worktree of the repository at `cwd` has it.
+     */
+    readonly branchWorktreePath: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<string | null, GitCommandError>;
     readonly deleteLocalBranch: (
       input: GitDeleteLocalBranchInput,
     ) => Effect.Effect<void, GitCommandError>;

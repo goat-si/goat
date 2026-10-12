@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthAdministrativeScopes,
   type AuthCreatePairingCredentialInput,
+  type AuthEnvironmentScope,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -572,3 +573,43 @@ it("matches loopback redirects on everything but the port, and https redirects e
   expect(matches("https://bot.example/cb", "https://bot.example/cb?x=1")).toBe(false);
   expect(matches("https://bot.example/cb", "https://evil.example/cb")).toBe(false);
 });
+
+it.effect("grants approvals only to issued clients with operate and approve, and records use", () =>
+  Effect.gen(function* () {
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    const issue = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
+      auth.issueSession({
+        subject: "mcp-client",
+        scopes,
+        label: "Grok Bot",
+        runtimeModeCeiling: "approval-required",
+      });
+    const authenticate = (token: string) =>
+      auth.authenticateMcpClient(
+        HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization: `Bearer ${token}` } })),
+      );
+
+    const approver = yield* issue([
+      "orchestration:read",
+      "orchestration:operate",
+      "orchestration:approve",
+    ]);
+    expect(yield* authenticate(approver.token)).toMatchObject({
+      label: "Grok Bot",
+      access: "approval-required",
+      approvals: true,
+    });
+    const operator = yield* issue(["orchestration:read", "orchestration:operate"]);
+    expect((yield* authenticate(operator.token)).approvals).toBe(false);
+    const reader = yield* issue(["orchestration:read", "orchestration:approve"]);
+    expect(yield* authenticate(reader.token)).toMatchObject({
+      access: "read-only",
+      approvals: false,
+    });
+
+    const sessions = yield* auth.listSessions();
+    expect(
+      sessions.find((session) => session.sessionId === approver.sessionId)?.lastConnectedAt,
+    ).not.toBeNull();
+  }).pipe(Effect.provide(layerEnvironmentAuth.pipe(Layer.provideMerge(NodeServices.layer)))),
+);

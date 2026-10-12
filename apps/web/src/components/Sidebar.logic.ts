@@ -14,6 +14,7 @@ import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   effectiveSnoozed,
+  threadWokeAt,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
@@ -811,19 +812,51 @@ export function withSidebarChildRequest<
   };
 }
 
+export type SidebarSettingsHydration = "pending" | "ready" | "failed" | "retrying";
+
+/**
+ * Which sidebar to mount. `null` holds the tree unmounted until settings resolve,
+ * so Projects does not mount and then swap. A synchronous last view paints immediately.
+ * Failed hydration with no saved view uses Projects.
+ */
+export function resolveSidebarViewIsProjects(input: {
+  readonly status: SidebarSettingsHydration;
+  readonly value: boolean;
+  readonly synchronousValue: boolean | null;
+}): boolean | null {
+  if (input.status === "ready") return input.value;
+  if (input.synchronousValue !== null) return input.synchronousValue;
+  if (input.status === "failed") return true;
+  return null;
+}
+
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
     environmentId: string;
     projectId: string;
+    id?: SidebarThreadSummary["id"];
+    deletedAt?: SidebarThreadSummary["deletedAt"];
   },
->(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
-  return threads.filter(
-    (thread) =>
-      thread.archivedAt === null &&
-      !isSidebarSubagentThread(thread) &&
-      (scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-  );
+>(
+  threads: readonly T[],
+  scopedProjectKeys: ReadonlySet<string> | null,
+  /** Archived owners kept so a child's request or the open subagent still has a row. */
+  retainedArchivedKeys?: ReadonlySet<string>,
+): T[] {
+  return threads.filter((thread) => {
+    if (thread.deletedAt != null || isSidebarSubagentThread(thread)) return false;
+    if (thread.archivedAt !== null) {
+      if (retainedArchivedKeys === undefined || thread.id === undefined) return false;
+      const key = scopedThreadKey(
+        scopeThreadRef(thread.environmentId as SidebarThreadSummary["environmentId"], thread.id),
+      );
+      if (!retainedArchivedKeys.has(key)) return false;
+    }
+    return (
+      scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)
+    );
+  });
 }
 
 export function getSidebarForkParentThreadId(
@@ -1025,24 +1058,26 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   return completedAt > lastVisitedAt;
 }
 
-/** Only writable unread threads are targets of Priority's bulk visit action. */
+/** Writable unread completions and woke-only rows are targets of Priority's bulk visit. */
 export function selectSidebarMarkReadTargets<
   T extends ThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "id">,
 >(input: {
   readonly threads: readonly T[];
   readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
+  readonly wokeAtByKey?: ReadonlyMap<string, string | null>;
   readonly canOperate: (thread: T) => boolean;
 }): T[] {
   return input.threads.filter((thread) => {
     if (!input.canOperate(thread)) return false;
     const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    return hasUnseenCompletion({
-      ...thread,
-      lastVisitedAt: resolveThreadLastVisitedAt(
-        thread.lastVisitedAt,
-        input.localLastVisitedAtByKey[key],
-      ),
-    });
+    const lastVisitedAt = resolveThreadLastVisitedAt(
+      thread.lastVisitedAt,
+      input.localLastVisitedAtByKey[key],
+    );
+    return (
+      hasUnseenCompletion({ ...thread, lastVisitedAt }) ||
+      isSidebarThreadWoke(input.wokeAtByKey?.get(key) ?? null, lastVisitedAt)
+    );
   });
 }
 
@@ -1089,9 +1124,114 @@ export function holdSidebarPriorityRank(input: {
   readonly key: string;
   readonly settledOverride: SidebarThreadSummary["settledOverride"];
   readonly holds: SidebarPriorityHolds;
+  /** Mark all as read drops the row once it no longer qualifies, instead of holding it. */
+  readonly released?: boolean;
 }): 0 | 1 | 2 | null {
+  if (input.released) return input.rank;
   if (input.rank !== null || !input.holds.has(input.key)) return input.rank;
   return input.holds.get(input.key) === input.settledOverride ? 2 : null;
+}
+
+/**
+ * Settling acknowledges a wake. The acknowledgement sticks until the shell stops
+ * reporting one, so a later hold cannot put the Woke pill back. Un-settling restores it.
+ */
+export function resolveSidebarWokeAtForRow(input: {
+  readonly key: string;
+  readonly rawWokeAt: string | null;
+  readonly settledOverride: SidebarThreadSummary["settledOverride"];
+  readonly heldSettledOverride: SidebarThreadSummary["settledOverride"] | undefined;
+  readonly acknowledged: Set<string>;
+}): string | null {
+  const settling =
+    input.heldSettledOverride !== undefined &&
+    input.heldSettledOverride !== input.settledOverride &&
+    input.settledOverride === "settled";
+  if (settling) input.acknowledged.add(input.key);
+  if (input.settledOverride !== "settled" || input.rawWokeAt === null) {
+    input.acknowledged.delete(input.key);
+  }
+  return input.acknowledged.has(input.key) ? null : input.rawWokeAt;
+}
+
+type SidebarPriorityMember = ThreadStatusInput &
+  ThreadSnoozeShell &
+  Pick<SidebarThreadSummary, "settledOverride" | "pinnedAt" | "deletedAt">;
+
+/** Priority membership shared by the section and the activity bell. Holds are not included. */
+export function isSidebarPriorityMember(input: {
+  readonly thread: SidebarPriorityMember;
+  readonly now: string;
+  readonly localLastVisitedAt: string | undefined;
+  readonly hasChildAttention: boolean;
+  readonly supportsSnooze: boolean;
+  readonly supportsSettlement: boolean;
+}): boolean {
+  if (input.thread.deletedAt != null) return false;
+  const rank = resolveSidebarPriorityRank({
+    thread: input.thread,
+    localLastVisitedAt: input.localLastVisitedAt,
+    wokeAt: threadWokeAt(input.thread, { now: input.now }),
+    hasChildAttention: input.hasChildAttention,
+  });
+  return (
+    resolveSidebarThreadSection({
+      snoozed: input.supportsSnooze && effectiveSnoozed(input.thread, { now: input.now }),
+      settled: input.supportsSettlement && input.thread.settledOverride === "settled",
+      pinned: input.thread.pinnedAt != null,
+      priority: rank !== null,
+    }) === "priority"
+  );
+}
+
+export function countVisibleSidebarPriorityThreads<
+  T extends SidebarPriorityMember & Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(input: {
+  readonly threads: readonly T[];
+  readonly now: string;
+  readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
+  readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
+  readonly supportsSnooze: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
+  readonly supportsSettlement: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
+}): number {
+  let count = 0;
+  for (const thread of input.threads) {
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    if (
+      isSidebarPriorityMember({
+        thread,
+        now: input.now,
+        localLastVisitedAt: input.localLastVisitedAtByKey[key],
+        hasChildAttention: input.attentionByOwnerKey.has(key),
+        supportsSnooze: input.supportsSnooze(thread.environmentId),
+        supportsSettlement: input.supportsSettlement(thread.environmentId),
+      })
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+let publishedSidebarPriorityCount: number | null = null;
+const sidebarPriorityCountListeners = new Set<() => void>();
+
+/** Activity publishes the Priority row count so the bell shows the same number. */
+export function publishSidebarPriorityCount(count: number | null): void {
+  if (publishedSidebarPriorityCount === count) return;
+  publishedSidebarPriorityCount = count;
+  for (const listener of sidebarPriorityCountListeners) listener();
+}
+
+export function subscribeSidebarPriorityCount(listener: () => void): () => void {
+  sidebarPriorityCountListeners.add(listener);
+  return () => {
+    sidebarPriorityCountListeners.delete(listener);
+  };
+}
+
+export function getPublishedSidebarPriorityCount(): number | null {
+  return publishedSidebarPriorityCount;
 }
 
 /**

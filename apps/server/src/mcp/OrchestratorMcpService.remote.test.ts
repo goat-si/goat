@@ -11,6 +11,7 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2Subagent,
@@ -36,6 +37,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import Migration0063 from "../persistence/Migrations/063_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/065_RemoteDispatchQuestions.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -95,6 +97,7 @@ const catalog: OrchestratorMcpCapabilitiesResult = {
 const fixture = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* Migration0063;
+  yield* Migration0065;
   const now = yield* DateTime.now;
   let shell: OrchestrationV2ThreadShell | null = liveThreadShell(threadId, {
     activeRunId: parentRunId,
@@ -400,6 +403,40 @@ it.effect(
         assert.equal(f.launches.length, 1);
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),
+);
+
+it.effect("a remote task's question releases a waiting delegate and shows in task_status", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const waiting = yield* service
+        .delegateTask(scope, { ...input, mode: "wait", timeoutMs: 600_000 })
+        .pipe(Effect.forkChild);
+      const question = RuntimeRequestId.make("request-1");
+      const call = yield* Queue.take(f.calls);
+      yield* Deferred.succeed(call.reply, {
+        threadId: remoteThreadId,
+        reports: [],
+        hasMore: false,
+        latestRunId: remoteRunId,
+        observedRun: {
+          runId: remoteRunId,
+          status: "running",
+          summary: null,
+          pendingRequestIds: [question],
+        },
+        timedOut: false,
+      });
+      const released = yield* Fiber.join(waiting);
+      assert.equal(released.status, "running");
+      assert.equal(released.waitTimedOut, false);
+      assert.deepEqual(released.pendingRequestIds, [question]);
+      assert.deepEqual((yield* service.taskStatus(scope, released.taskId)).pendingRequestIds, [
+        question,
+      ]);
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
 );
 
 it.effect.each(["before", "after"] as const)(

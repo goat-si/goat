@@ -4,6 +4,8 @@ import {
   OrchestratorMcpThreadPendingRequestsResult,
   OrchestratorMcpPendingRequestReadResult,
   OrchestratorMcpPendingRequestRespondResult,
+  ProviderRequestKind,
+  type OrchestrationV2RuntimeRequest,
   type OrchestratorMcpPendingRequestListInput,
   type OrchestratorMcpPendingRequestListResult,
   type OrchestratorMcpPendingRequestReadInput,
@@ -40,6 +42,24 @@ const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
 const FORWARD_TO_HUMAN =
   " This question needs a person: forward it to the user in your own thread, or let them answer it in the asking thread.";
+
+/**
+ * Only an outside MCP client whose session holds `orchestration:approve` may
+ * see and answer provider approvals; agents inside GOAT never can.
+ */
+const canApprove = (scope: McpInvocationScope) =>
+  scope.thread === undefined && scope.client?.approvals === true;
+const approvalKinds: ReadonlySet<string> = new Set(ProviderRequestKind.literals);
+const isApproval = (
+  request: OrchestrationV2RuntimeRequest,
+): request is OrchestrationV2RuntimeRequest & { readonly kind: ProviderRequestKind } =>
+  approvalKinds.has(request.kind);
+const approvalDenied = () =>
+  new OrchestratorMcpFailure({
+    code: "capability_denied",
+    message:
+      "Approvals are human-only for this caller. An MCP client token needs the orchestration:approve scope to answer them; otherwise forward the approval to the user.",
+  });
 
 export class PendingQuestionsMcpService extends Context.Service<
   PendingQuestionsMcpService,
@@ -92,18 +112,35 @@ const make = Effect.gen(function* () {
           }),
         )
       : Effect.void;
-  const readQuestion = (input: OrchestratorMcpPendingRequestReadInput) =>
+  const readRequest = (scope: McpInvocationScope, input: OrchestratorMcpPendingRequestReadInput) =>
     Effect.gen(function* () {
       const context = yield* readThread(input.threadId, ["runtimeRequests", "turnItems"]);
       const request = context.projection.runtimeRequests.find(
-        (request) => request.id === input.requestId && request.kind === "user_input",
+        (request) => request.id === input.requestId,
       );
-      const item = context.projection.turnItems.find(
-        (item) => item.type === "user_input_request" && item.requestId === input.requestId,
-      );
-      if (request === undefined || item?.type !== "user_input_request")
-        return yield* invalid("The user-input request was not found.");
-      return { ...context, request, item };
+      if (request?.kind === "user_input") {
+        const item = context.projection.turnItems.find(
+          (item) => item.type === "user_input_request" && item.requestId === input.requestId,
+        );
+        if (item?.type === "user_input_request")
+          return { ...context, request, questions: item.questions, approval: undefined };
+      } else if (request !== undefined && isApproval(request) && canApprove(scope)) {
+        const item = context.projection.turnItems.find(
+          (item) => item.type === "approval_request" && item.requestId === input.requestId,
+        );
+        return {
+          ...context,
+          request,
+          questions: [],
+          approval: {
+            kind: item?.type === "approval_request" ? item.requestKind : request.kind,
+            ...(item?.type === "approval_request" && item.prompt !== undefined
+              ? { prompt: item.prompt }
+              : {}),
+          },
+        };
+      }
+      return yield* invalid("The user-input request was not found.");
     });
   const responseIdentity = (input: OrchestratorMcpPendingRequestRespondInput) =>
     Effect.gen(function* () {
@@ -121,7 +158,18 @@ const make = Effect.gen(function* () {
       }
       const origin = input.respondedBy;
       if (origin === undefined)
-        return { type: "client", reason: input.reason } satisfies UserInputRespondedBy;
+        return {
+          type: "client",
+          ...(context.scope.client === undefined ? {} : { label: context.scope.client.label }),
+          reason: input.reason,
+        } satisfies UserInputRespondedBy;
+      // A host relaying an approval names the outside client that decided it.
+      if (
+        origin.type === "client" &&
+        input.decision !== undefined &&
+        origin.reason === input.reason
+      )
+        return origin;
       if (
         origin.type !== "agent" ||
         origin.environmentId === null ||
@@ -332,14 +380,21 @@ const make = Effect.gen(function* () {
                 host: input.host,
                 tool: "goat_pending_request_list",
                 arguments: remoteInput,
+                approvals: canApprove(scope),
               },
               decodeList,
             );
           const { projection } = yield* readThread(input.threadId, ["runtimeRequests"]);
+          const pending = projection.runtimeRequests.filter(
+            (request) => request.status === "pending",
+          );
           return {
-            requestIds: projection.runtimeRequests
-              .filter((request) => request.kind === "user_input" && request.status === "pending")
+            requestIds: pending
+              .filter((request) => request.kind === "user_input")
               .map((request) => request.id),
+            ...(canApprove(scope)
+              ? { approvalRequestIds: pending.filter(isApproval).map((request) => request.id) }
+              : {}),
           };
         }),
       ),
@@ -355,13 +410,15 @@ const make = Effect.gen(function* () {
                 host: input.host,
                 tool: "goat_pending_request_read",
                 arguments: withoutHost(input),
+                approvals: canApprove(scope),
               },
               decodeRead,
             );
-          const { request, item } = yield* readQuestion(input);
+          const { request, questions, approval } = yield* readRequest(scope, input);
           return {
             requestId: request.id,
-            questions: item.questions,
+            questions,
+            ...(approval === undefined ? {} : { approval }),
             status: request.status,
             ...(request.decision === undefined ? {} : { decision: request.decision }),
             ...(request.respondedBy === undefined ? {} : { respondedBy: request.respondedBy }),
@@ -374,6 +431,11 @@ const make = Effect.gen(function* () {
         scope,
         Effect.gen(function* () {
           yield* requireRemoteThread(input);
+          if ((input.answers === undefined) === (input.decision === undefined))
+            return yield* invalid(
+              "Pass answers to answer a question, or decision to answer an approval.",
+            );
+          if (input.decision !== undefined && !canApprove(scope)) return yield* approvalDenied();
           const identity = yield* responseIdentity(input);
           if (input.host !== undefined) {
             const { caller } = yield* readCaller();
@@ -394,13 +456,24 @@ const make = Effect.gen(function* () {
                             environmentId: identity.environmentId ?? scope.environmentId,
                           },
                         }
-                      : {}),
+                      : input.decision !== undefined
+                        ? { respondedBy: identity }
+                        : {}),
                   },
+                  approvals: input.decision !== undefined,
                 },
                 decodeRespond,
               )
               .pipe(
                 Effect.mapError((error) => {
+                  if (
+                    input.decision !== undefined &&
+                    error.message.includes("so nothing ran") &&
+                    error.message.includes("does not take decision")
+                  )
+                    return invalid(
+                      `GOAT on ${input.host} is too old to accept approvals over MCP; update GOAT there, or let the user answer in that thread.`,
+                    );
                   if (
                     error.message.includes("so nothing ran") &&
                     (error.message.includes("does not take respondedBy") ||
@@ -420,14 +493,19 @@ const make = Effect.gen(function* () {
                 }),
               );
           }
-          const { projection } = yield* readQuestion(input);
+          const { projection, request } = yield* readRequest(scope, input);
+          if (input.decision !== undefined && !isApproval(request))
+            return yield* invalid("This request is a question; answer it with answers.");
+          if (input.answers !== undefined && request.kind !== "user_input")
+            return yield* invalid("This request is an approval; answer it with decision.");
           const result = yield* threads
             .dispatch({
               type: "runtime-request.respond",
               commandId: yield* newCommandId(),
               threadId: projection.thread.id,
               requestId: input.requestId,
-              answers: input.answers,
+              ...(input.answers === undefined ? {} : { answers: input.answers }),
+              ...(input.decision === undefined ? {} : { decision: input.decision }),
               respondedBy: identity,
             })
             .pipe(Effect.mapError(dispatchFailure));

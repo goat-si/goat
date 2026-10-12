@@ -44,7 +44,11 @@ import {
   resolveSidebarSweepKeys,
   resolveSidebarStageBadgeLabel,
   resolveSidebarThreadSection,
+  resolveSidebarViewIsProjects,
   resolveSidebarPriorityRank,
+  resolveSidebarWokeAtForRow,
+  countVisibleSidebarPriorityThreads,
+  isSidebarPriorityMember,
   holdSidebarPriorityRank,
   resolveSidebarThreadPresentation,
   sortPriorityThreadsForSidebar,
@@ -371,6 +375,32 @@ describe("sidebar subagent index", () => {
     expect(buildSidebarSubagentIndex(all).attentionByOwnerKey.size).toBe(0);
   });
 
+  it("keeps an archived parent visible when it carries a child's request", () => {
+    const archivedParent = { ...parent, archivedAt: parent.updatedAt };
+    const question = delegatedChild("question", input("question", "user_input"));
+    const index = buildSidebarSubagentIndex([archivedParent, question]);
+    expect(index.attentionByOwnerKey.get(delegatedParentKey)).toBe("input");
+    expect(filterSidebarV2VisibleThreads([archivedParent, question], null)).toEqual([]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [archivedParent, question],
+        null,
+        new Set(index.attentionByOwnerKey.keys()),
+      ),
+    ).toEqual([archivedParent]);
+    const running = delegatedChild("open-child", { status: "running" });
+    expect(
+      filterSidebarV2VisibleThreads([archivedParent, running], null, new Set([delegatedParentKey])),
+    ).toEqual([archivedParent]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [{ ...archivedParent, deletedAt: archivedParent.updatedAt }, question],
+        null,
+        new Set([delegatedParentKey]),
+      ),
+    ).toEqual([]);
+  });
+
   it("shows the strongest request on the owner without hiding its own", () => {
     const owner = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
       delegatedChild("owner", { creationSource: "web", status: "running", ...overrides });
@@ -485,6 +515,35 @@ describe("animateSidebarLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animateSidebarLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("sidebar view hydration", () => {
+  it("holds the sidebar until settings resolve when no view was saved", () => {
+    expect(
+      resolveSidebarViewIsProjects({ status: "pending", value: true, synchronousValue: null }),
+    ).toBeNull();
+    expect(
+      resolveSidebarViewIsProjects({ status: "retrying", value: false, synchronousValue: null }),
+    ).toBeNull();
+  });
+
+  it.each([true, false])("paints a synchronous last view of %s before hydration", (value) => {
+    expect(
+      resolveSidebarViewIsProjects({ status: "pending", value: !value, synchronousValue: value }),
+    ).toBe(value);
+  });
+
+  it("uses the hydrated choice, and Projects when hydration fails with nothing saved", () => {
+    expect(
+      resolveSidebarViewIsProjects({ status: "ready", value: false, synchronousValue: true }),
+    ).toBe(false);
+    expect(
+      resolveSidebarViewIsProjects({ status: "failed", value: false, synchronousValue: null }),
+    ).toBe(true);
+    expect(
+      resolveSidebarViewIsProjects({ status: "failed", value: true, synchronousValue: false }),
+    ).toBe(false);
   });
 });
 
@@ -651,6 +710,115 @@ describe("Activity Priority", () => {
     expect(rank({ ...thread, lastVisitedAt: after }, false, after)).toBeNull();
     expect(rank(thread, false, "invalid")).toBeNull();
     expect(isSidebarThreadWoke(after, "invalid")).toBe(true);
+  });
+
+  it("includes woke-only rows in mark all as read", () => {
+    const woke = makeThread({ id: ThreadId.make("woke-only"), lastVisitedAt: before });
+    const read = makeThread({ id: ThreadId.make("already-visited"), lastVisitedAt: after });
+    const wokeAtByKey = new Map([
+      [delegatedChildKey(woke), after],
+      [delegatedChildKey(read), after],
+    ]);
+    expect(
+      selectSidebarMarkReadTargets({
+        threads: [read, woke],
+        localLastVisitedAtByKey: {},
+        wokeAtByKey,
+        canOperate: () => true,
+      }),
+    ).toEqual([woke]);
+  });
+
+  it("clears a wake when the row is settled and restores it when unsettled", () => {
+    const acknowledged = new Set<string>();
+    const row = (
+      key: string,
+      settledOverride: "settled" | null,
+      heldSettledOverride: "settled" | null | undefined,
+      rawWokeAt: string | null = after,
+    ) =>
+      resolveSidebarWokeAtForRow({
+        key,
+        rawWokeAt,
+        settledOverride,
+        heldSettledOverride,
+        acknowledged,
+      });
+    expect(row("settling", "settled", null)).toBeNull();
+    expect(row("settling", "settled", "settled")).toBeNull();
+    expect(row("settling", null, "settled")).toBe(after);
+    expect(row("already", "settled", "settled")).toBe(after);
+    expect(row("gone", "settled", null, null)).toBeNull();
+    expect(acknowledged.has("gone")).toBe(false);
+  });
+
+  it("lets mark all as read drop a row once it no longer qualifies", () => {
+    const holds = new Map([["read", null as null]]);
+    expect(
+      holdSidebarPriorityRank({
+        rank: null,
+        key: "read",
+        settledOverride: null,
+        holds,
+        released: true,
+      }),
+    ).toBeNull();
+    expect(
+      holdSidebarPriorityRank({
+        rank: 2,
+        key: "read",
+        settledOverride: null,
+        holds,
+        released: true,
+      }),
+    ).toBe(2);
+  });
+
+  it("counts the threads Priority shows, including wakes and running work", () => {
+    const now = "2026-03-09T10:10:00.000Z";
+    const unread = makeThread({ latestRun: makeLatestRun(), lastVisitedAt: before });
+    const woke = makeThread({
+      id: ThreadId.make("woke"),
+      snoozedAt: before,
+      snoozedUntil: before,
+      lastVisitedAt: "2026-03-09T10:00:00.000Z",
+    });
+    const running = makeThread({
+      id: ThreadId.make("running"),
+      runtime: delegatedChild("count-running", { status: "running" }).runtime,
+    });
+    const snoozedRunning = makeThread({
+      id: ThreadId.make("snoozed-running"),
+      runtime: delegatedChild("count-running", { status: "running" }).runtime,
+      snoozedAt: before,
+      snoozedUntil: "2026-03-09T12:00:00.000Z",
+    });
+    const deleted = makeThread({
+      id: ThreadId.make("deleted"),
+      deletedAt: before,
+      hasPendingApprovals: true,
+    });
+    const idle = makeThread({ id: ThreadId.make("idle"), lastVisitedAt: after });
+    expect(
+      countVisibleSidebarPriorityThreads({
+        threads: [unread, woke, running, snoozedRunning, deleted, idle],
+        now,
+        localLastVisitedAtByKey: {},
+        attentionByOwnerKey: new Map(),
+        supportsSnooze: () => true,
+        supportsSettlement: () => true,
+      }),
+    ).toBe(3);
+    expect(
+      isSidebarPriorityMember({
+        thread: snoozedRunning,
+        now,
+        localLastVisitedAt: undefined,
+        hasChildAttention: false,
+        supportsSnooze: true,
+        supportsSettlement: true,
+      }),
+    ).toBe(false);
   });
 
   it("keeps a read Priority row until Activity is shown again, unless its settled state changes", () => {

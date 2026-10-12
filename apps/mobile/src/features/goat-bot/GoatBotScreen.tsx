@@ -6,6 +6,7 @@ import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useHomeThreadSelection } from "../home/home-thread-navigation";
+import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
@@ -18,12 +19,76 @@ const dayFormatter = new Intl.DateTimeFormat(undefined, {
 const availabilityCopy = {
   ready: "Answers here, works in its own threads",
   connecting: "Connecting to GOAT Bot…",
+  home_offline: "GOAT Bot’s computer is offline.",
   offline: "GOAT Bot's computer is offline. Messages will be available when it reconnects.",
   unsupported: "Update the server to use GOAT Bot here.",
   permission: "This connection does not have permission to message GOAT Bot.",
   legacy_active: "Your global agent is still working. Check again when it finishes.",
   error: "Couldn't reach GOAT Bot",
 };
+
+type GoatBotTaskRow = Extract<GoatBotRow, { kind: "task" }>;
+
+/** A piece of work GOAT Bot started; remote work names its machine and waits for it to connect. */
+function GoatBotTaskCard(props: {
+  readonly card: GoatBotTaskRow["card"];
+  readonly onSelectThread: (thread: ThreadSelection) => void;
+}) {
+  const { card } = props;
+  const target = card.target;
+  const { connectedEnvironments } = useRemoteConnectionStatus();
+  const unreachableHost =
+    target.kind === "thread" &&
+    target.host !== undefined &&
+    !connectedEnvironments.some(
+      (environment) =>
+        environment.environmentId === target.environmentId &&
+        environment.connectionState === "connected",
+    )
+      ? target.host
+      : null;
+  const action =
+    target.kind !== "thread"
+      ? target.label
+      : unreachableHost !== null
+        ? `Connect ${unreachableHost} to open`
+        : "Open thread";
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${card.title}. ${card.statusLabel}. ${action}`}
+      disabled={target.kind !== "thread" || unreachableHost !== null}
+      onPress={() => {
+        if (target.kind === "thread" && unreachableHost === null)
+          props.onSelectThread({ environmentId: target.environmentId, id: target.threadId });
+      }}
+      className="my-2 max-w-[90%] gap-1 rounded-2xl border border-border bg-card p-3"
+    >
+      <Text
+        className={
+          card.tone === "danger"
+            ? "text-xs text-danger-foreground"
+            : "text-xs text-foreground-muted"
+        }
+      >
+        {card.statusLabel}
+        {card.attentionLabel ? ` · ${card.attentionLabel}` : ""}
+      </Text>
+      <Text className="font-semibold text-foreground">{card.title}</Text>
+      {card.sourceLabel ? (
+        <Text className="text-xs text-foreground-muted">{card.sourceLabel}</Text>
+      ) : null}
+      {card.summary ? (
+        <Text numberOfLines={3} className="text-sm text-foreground">
+          {card.summary}
+        </Text>
+      ) : null}
+      <Text className="text-xs text-foreground-muted">
+        {action === "Open thread" ? "Open thread ↗" : action}
+      </Text>
+    </Pressable>
+  );
+}
 
 const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly row: GoatBotRow;
@@ -42,43 +107,7 @@ const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
     );
   }
   if (row.kind === "task") {
-    const { card } = row;
-    const target = card.target;
-    return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${card.title}. ${card.statusLabel}. ${target.kind === "thread" ? "Open thread" : target.label}`}
-        disabled={target.kind !== "thread"}
-        onPress={() => {
-          if (target.kind === "thread")
-            props.onSelectThread({ environmentId: target.environmentId, id: target.threadId });
-        }}
-        className="my-2 max-w-[90%] gap-1 rounded-2xl border border-border bg-card p-3"
-      >
-        <Text
-          className={
-            card.tone === "danger"
-              ? "text-xs text-danger-foreground"
-              : "text-xs text-foreground-muted"
-          }
-        >
-          {card.statusLabel}
-          {card.attentionLabel ? ` · ${card.attentionLabel}` : ""}
-        </Text>
-        <Text className="font-semibold text-foreground">{card.title}</Text>
-        {card.sourceLabel ? (
-          <Text className="text-xs text-foreground-muted">{card.sourceLabel}</Text>
-        ) : null}
-        {card.summary ? (
-          <Text numberOfLines={3} className="text-sm text-foreground">
-            {card.summary}
-          </Text>
-        ) : null}
-        <Text className="text-xs text-foreground-muted">
-          {target.kind === "thread" ? "Open thread ↗" : target.label}
-        </Text>
-      </Pressable>
-    );
+    return <GoatBotTaskCard card={row.card} onSelectThread={props.onSelectThread} />;
   }
   if (row.kind === "user") {
     const delivery = row.delivery;
@@ -212,9 +241,11 @@ export function GoatBotScreen(props: {
       {session.availability !== "ready" ? (
         <View accessibilityRole="alert" className="gap-2 border-b border-border px-4 py-3">
           <Text className="text-sm text-foreground-muted">
-            {session.availability === "error"
-              ? (session.error ?? availabilityCopy.error)
-              : availabilityCopy[session.availability]}
+            {session.availability === "home_offline"
+              ? `GOAT Bot runs on ${session.homeLabel}. It will continue when that computer connects.`
+              : session.availability === "error"
+                ? (session.error ?? availabilityCopy.error)
+                : availabilityCopy[session.availability]}
           </Text>
           {session.availability === "error" || session.availability === "legacy_active" ? (
             <Pressable

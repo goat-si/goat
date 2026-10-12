@@ -39,6 +39,8 @@ import {
   supportsSharedSettingsSync,
 } from "@t3tools/client-runtime/state/shared-settings";
 import { ensureLocalApi } from "~/localApi";
+import { readBrowserClientSettings } from "~/clientPersistenceStorage";
+import { resolveSidebarViewIsProjects } from "~/components/Sidebar.logic";
 import {
   getThemeDefinition,
   getThemePreviewSidebarArtwork,
@@ -59,6 +61,62 @@ import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "~
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
+const SIDEBAR_VIEW_STORAGE_KEY = "t3code:sidebar-view";
+
+const sidebarViewMirrorListeners = new Set<() => void>();
+let sidebarViewMirrorCache: boolean | null | undefined;
+
+function readSynchronousSidebarView(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY);
+    if (stored === "projects") return true;
+    if (stored === "activity") return false;
+  } catch {
+    // A blocked storage read falls through to the browser settings blob.
+  }
+  try {
+    const settings = readBrowserClientSettings();
+    if (settings) return settings.legacySidebarEnabled;
+  } catch {
+    // Corrupt browser settings are ignored; hydration still loads the desktop file.
+  }
+  return null;
+}
+
+function getSidebarViewMirrorSnapshot(): boolean | null {
+  if (sidebarViewMirrorCache === undefined) {
+    sidebarViewMirrorCache = readSynchronousSidebarView();
+  }
+  return sidebarViewMirrorCache;
+}
+
+function subscribeSidebarViewMirror(listener: () => void): () => void {
+  sidebarViewMirrorListeners.add(listener);
+  return () => {
+    sidebarViewMirrorListeners.delete(listener);
+  };
+}
+
+function emitSidebarViewMirror(): void {
+  for (const listener of sidebarViewMirrorListeners) {
+    listener();
+  }
+}
+
+/** Remember the last sidebar view synchronously so the next launch does not guess. */
+function writeSynchronousSidebarView(projects: boolean): void {
+  if (getSidebarViewMirrorSnapshot() === projects) return;
+  sidebarViewMirrorCache = projects;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, projects ? "projects" : "activity");
+    } catch (error) {
+      console.error("Could not persist the sidebar view.", error);
+    }
+  }
+  emitSidebarViewMirror();
+}
 
 type UnifiedSettingsPatch = ServerSettingsPatch & ClientSettingsPatch;
 
@@ -90,6 +148,7 @@ function getClientSettingsSnapshot(): ClientSettings {
 
 function replaceClientSettingsSnapshot(settings: ClientSettings): void {
   clientSettingsSnapshot = settings;
+  writeSynchronousSidebarView(settings.legacySidebarEnabled);
   emitClientSettingsChange();
 }
 
@@ -148,6 +207,7 @@ async function hydrateClientSettings(): Promise<void> {
       if (persistedSettings) {
         replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, ...persistedSettings });
       }
+      writeSynchronousSidebarView(getClientSettingsSnapshot().legacySidebarEnabled);
       setClientSettingsHydrationStatus("ready");
     } catch (error) {
       if (hydrationGeneration === clientSettingsHydrationGeneration) {
@@ -376,15 +436,19 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   });
 }
 
-/** Keep Projects view through pending/failed hydration; preserve explicit choices once ready. */
-export function resolveSidebarViewIsProjects(input: { hydrated: boolean; value: boolean }) {
-  return input.hydrated ? input.value : true;
-}
-
-export function useLegacySidebarEnabled(): boolean {
-  const settingsHydrated = useClientSettingsHydrated();
+export function useLegacySidebarEnabled(): boolean | null {
+  const status = useClientSettingsHydrationStatus();
   const legacySidebarEnabled = useClientSettingsValue().legacySidebarEnabled;
-  return resolveSidebarViewIsProjects({ hydrated: settingsHydrated, value: legacySidebarEnabled });
+  const synchronousValue = useSyncExternalStore(
+    subscribeSidebarViewMirror,
+    getSidebarViewMirrorSnapshot,
+    getSidebarViewMirrorSnapshot,
+  );
+  return resolveSidebarViewIsProjects({
+    status,
+    value: legacySidebarEnabled,
+    synchronousValue,
+  });
 }
 
 /** Read current settings for one environment, merged with client-local preferences. */
@@ -637,6 +701,15 @@ export function __resetClientSettingsPersistenceForTests(): void {
   deferredClientSettingsPatchCount = 0;
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
+  sidebarViewMirrorCache = undefined;
+  sidebarViewMirrorListeners.clear();
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(SIDEBAR_VIEW_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export function __setClientSettingsForTests(settings: ClientSettings): void {

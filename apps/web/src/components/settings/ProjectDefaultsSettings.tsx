@@ -28,6 +28,7 @@ import { Switch } from "../ui/switch";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { StandingInstructionsSettings } from "./StandingInstructionsSettings";
 import {
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
   SettingResetButton,
@@ -269,6 +270,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         <>
           {modelRow}
           {workspaceRow}
+          <StandingInstructionsSettings isProjectScope={isProjectScope} />
         </>
       ) : category === "general" ? (
         <>
@@ -381,6 +383,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               </Select>
             }
           />
+          <StandingInstructionsSettings isProjectScope={isProjectScope} />
         </>
       ) : category === "source-control" ? (
         <>
