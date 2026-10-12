@@ -90,6 +90,7 @@ import {
   formatDesktopSshTarget,
 } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { HostsSettings } from "./HostsSettings";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 import { Input } from "../ui/input";
@@ -4166,6 +4167,15 @@ export function ConnectionsSettings() {
             setPendingT3ConnectRemoval(null);
             void removeSavedBackend(pendingT3ConnectRemoval);
           }}
+        />
+      ) : null}
+      {primaryEnvironmentId !== null ? (
+        <HostsSettings
+          environmentId={primaryEnvironmentId}
+          localLabel={primaryEnvironment?.label ?? "This machine"}
+          localKind={
+            primaryServerConfig ? resolveEnvironmentMachineKind(primaryServerConfig) : "desktop"
+          }
         />
       ) : null}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />

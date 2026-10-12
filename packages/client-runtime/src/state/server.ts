@@ -1082,6 +1082,14 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
+    /** This machine and connected SSH hosts; each silent host is cut off at 10s on the server. */
+    hostStatus: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:server:host-status",
+      idleTtlMs: 0,
+      staleTimeMs: 5_000,
+      execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostStatus>) =>
+        request(WS_METHODS.serverGetHostStatus, input).pipe(Effect.timeout("30 seconds")),
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
