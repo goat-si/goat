@@ -14,6 +14,7 @@ import {
   type ChannelBotRef,
   type ChannelEnsureBotInput,
   ChannelGatewayError,
+  type ChannelGetBotStatusResult,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -42,6 +43,13 @@ export class ChannelBotRegistry extends Context.Service<
       input: ChannelEnsureBotInput,
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelBotRef, ChannelGatewayError>;
+    /**
+     * The stored bot and its waiting count, read without creating anything, so a client that
+     * never opens the bot still knows which thread it is. Answers on any server, home or not.
+     */
+    readonly status: (
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelGetBotStatusResult, ChannelGatewayError>;
   }
 >()("t3/channels/ChannelBotRegistry") {}
 
@@ -81,26 +89,13 @@ const make = Effect.gen(function* () {
       Effect.catch(() => Effect.succeed(false)),
     );
 
-  /** Starts a bot thread in the scratch project. Ids are fixed per owner and replaced thread. */
+  /** Starts a bot thread in the bot's project. Ids are fixed per owner and replaced thread. */
   const launchBot = (owner: ChannelConnectionOwner, replacing?: ThreadId) =>
     Effect.gen(function* () {
       const environmentId = yield* environment.getEnvironmentId;
-      const scratch = yield* folders.ensureScratchProject.pipe(
-        Effect.catch((error) =>
-          error._tag === "ScratchUnavailableError"
-            ? // The bot lives in Scratch, which is off while the data directory is inside a Git
-              // work tree (a dev worktree's .t3, a dotfiles home).
-              Effect.logWarning(
-                "GOAT bot is unavailable: the Scratch project is off because the data directory is inside a Git work tree. Start the server with --home-dir outside the checkout.",
-              ).pipe(
-                Effect.andThen(
-                  Effect.fail(new ChannelGatewayError({ reason: "adapter_unavailable" })),
-                ),
-              )
-            : Effect.logWarning("GOAT bot Scratch project failed", { cause: error }).pipe(
-                Effect.andThen(Effect.fail(persistence())),
-              ),
-        ),
+      const project = yield* folders.ensureBotProject.pipe(
+        Effect.tapError((cause) => Effect.logWarning("GOAT bot project failed", { cause })),
+        Effect.mapError(persistence),
       );
       const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(persistence));
       const ids = botLaunchIdsFor(owner.ownerId, replacing);
@@ -109,7 +104,7 @@ const make = Effect.gen(function* () {
         .launch({
           commandId: ids.commandId,
           threadId: ids.threadId,
-          projectId: scratch.projectId,
+          projectId: project.projectId,
           title: GOAT_BOT_TITLE,
           modelSelection: settings.textGenerationModelSelection,
           runtimeMode: "approval-required",
@@ -122,7 +117,7 @@ const make = Effect.gen(function* () {
           Effect.tapError((cause) => Effect.logWarning("GOAT bot launch failed", { cause })),
           Effect.mapError(persistence),
         );
-      return { environmentId, projectId: scratch.projectId, threadId: launched.threadId };
+      return { environmentId, projectId: project.projectId, threadId: launched.threadId };
     });
 
   const ensure: ChannelBotRegistry["Service"]["ensure"] = (input, owner) =>
@@ -172,7 +167,13 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(persistence));
     });
 
-  return ChannelBotRegistry.of({ ensure });
+  const status: ChannelBotRegistry["Service"]["status"] = (owner) =>
+    Effect.all({
+      bot: ledger.getBot(owner.ownerId).pipe(Effect.map((stored) => stored?.bot ?? null)),
+      waitingCount: ledger.countWaitingGoatTasks(owner.ownerId),
+    }).pipe(Effect.mapError(persistence));
+
+  return ChannelBotRegistry.of({ ensure, status });
 });
 
 export const layer = Layer.effect(ChannelBotRegistry, make);

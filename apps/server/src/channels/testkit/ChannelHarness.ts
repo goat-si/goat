@@ -320,6 +320,7 @@ export function makeHarness(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/unused",
       ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
+      ensureBotProject: Effect.succeed({ projectId: scratchProjectId }),
       folderForThread: () => Effect.succeed(Option.none()),
     }),
     options.settingsLayer ??
