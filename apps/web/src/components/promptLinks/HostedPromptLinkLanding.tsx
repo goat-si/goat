@@ -21,7 +21,7 @@ import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 
 const OPENER_STORAGE_KEY = "t3code:prompt-link-opener";
 const Opener = Schema.NullOr(Schema.Literals(["app", "browser"]));
-const DOWNLOAD_URL = "https://t3.codes/download";
+const DOWNLOAD_URL = "https://github.com/goat-si/goat-releases/releases";
 
 interface LinkSummary {
   readonly prompt: LinkedPrompt | null;
@@ -146,7 +146,7 @@ function HostedPromptLinkLanding({
         <Alert className="mt-5" variant="error">
           <AlertTitle>This prompt had hidden characters, it may be malicious</AlertTitle>
           <AlertDescription>
-            T3 Code removed {prompt.hiddenCharacters} hidden character
+            GOAT removed {prompt.hiddenCharacters} hidden character
             {prompt.hiddenCharacters === 1 ? "" : "s"}. Read the prompt before you send it.
           </AlertDescription>
         </Alert>
@@ -167,7 +167,7 @@ function HostedPromptLinkLanding({
           </Button>
         ) : null}
         <Button variant="ghost" render={<a href={DOWNLOAD_URL} />}>
-          Get T3 Code
+          Get GOAT
         </Button>
       </div>
       <label className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
