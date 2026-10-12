@@ -65,3 +65,25 @@ Conclusion: `070_finish.md` plans the rebase onto dev `8bb1bf0b6`, the fold of `
 Did not improve / died: the first plan treated merge `a3173a84a` as pure conflict resolution; its remerge diff also carries guard tightening and key-only threading, so the rebase inserts that content as its own commit. The idea that assemble produces merged manifests died: `merge-update-manifests.ts` merges, assemble only validates.
 
 Next: wp1 (rebase).
+
+## Continuation wp1 (rebase) — D
+
+Conclusion: the branch is a linear rebase on dev (`8bb1bf0b6`, then `19327628e` before push) with no merge commits. The old merge's extra content became its own commit (guard tightening + key-only test narrowing). The only real conflict was `ensureTunnelEntry` in `packages/ssh/src/tunnel.ts`: a healthy tunnel with no pending replacement goes through dev's `keepAnsweringTunnel` (wake fix), a tunnel that needs replacement keeps the branch's probe + `createTunnelEntry({ previous })` path, signature `(key, target, runner, background = false, keyOnly = false)`. Adaptations to dev: `preflightTarget` (SSH workspace sync) maps a pending runtime to `host_unavailable` like launch and tool calls; dev's sleep-revalidation test uses the ready launch output; a desktop pending test stub gained `revalidateTunnels`.
+
+Evidence: end state equals `git merge-tree 8287d75c7 origin/dev` except the tunnel conflict region and the adaptations above; receipt (`/tmp/goat-wp1-check.sh`): 9 typechecks clean, 271 test files / 4147 tests passed.
+
+Did not improve / died: the earlier sketch "rerere will replay the merge" died — rerere recorded preimages but the linear replay met different hunks, so resolutions were written by hand from the old merge's text.
+
+## Continuation wp2 (finish) — D
+
+Conclusion: the only commit of `goat/ssh-runtime-supply` not in dev (`a77b19874`, docs/user/remote-access.md) is folded and rewritten for this branch; the same paragraph block also dropped the stale "download needs gh" claim. The hand-off now carries Activation, a standalone Bootstrap and the license decision (task 13).
+
+Recommendation for the sibling lane: after this PR merges, delete branch `goat/ssh-runtime-supply` and remove the worktree `~/Developer/new/700_projects/t3code-lanes/goat-release-rename` (clean, nothing else unmerged).
+
+Pre-existing failures re-checked on the new base: `DesktopApplicationMenu.test.ts` now passes; `apps/server/scripts/migrate-dev-db.test.ts` (snapshot phase) and `apps/mobile/scripts` (Swift `Mutex` unavailable) still fail for environmental reasons; the branch touches no migration, mobile or `.github/scripts` file.
+
+## Continuation wp3 (verify) — D
+
+Conclusion: local proofs pass — release script tests (14 files / 318 tests), actionlint, version check and resolver, fmt and lint on all 163 changed files (no warning on a branch line), typechecks; a real darwin-arm64 CLI archive with smoke test and payload scan; unsigned arm64 and x64 DMG/ZIP builds whose merged `nightly-mac.yml` matches the files byte for byte and whose app points its feed at goat-si/goat-releases; the CLI notarization gate, the mac signing gate and assemble all refuse unsigned output (`evidence/finish_archive_manifest.md`). Review gpt-6.1-sol (high) r1 NEAR-PASS → r2 NEAR-PASS, only doc findings, all folded.
+
+Did not improve: nothing ran with a real Developer ID, notary profile, Windows/Linux runner or goat-releases write; the x64 app cannot be launched here (no Rosetta). Local lint carries a decoder-hoist fix in this branch's own test.
