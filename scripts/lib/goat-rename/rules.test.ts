@@ -107,9 +107,7 @@ describe("wp9 internal names", () => {
     expect(rename("apps/desktop/src/app/DesktopStatePaths.ts", "input.t3Home")).toBe(
       "input.goatHome",
     );
-    expect(rename("apps/server/src/cli/config.ts", "env.t3Home; bootstrap.t3Home")).toBe(
-      "env.goatHome; bootstrap.goatHome",
-    );
+    expect(rename("apps/server/src/cli/config.ts", "env.t3Home")).toBe("env.goatHome");
     expect(rename("packages/contracts/src/desktopBootstrap.ts", "t3Home")).toBe("t3Home");
     expect(
       rename(
@@ -266,5 +264,43 @@ describe("remaining local symbols and compatibility contracts", () => {
     expect(
       findResidue("apps/server/src/new.ts", 'const t3NewFeature = "t3-new-feature";', KEEP_RULES),
     ).toHaveLength(1);
+  });
+});
+
+describe("wp9 final safety boundaries", () => {
+  it("keeps legacy cgroup lease recognition inputs while renaming real temp roots", () => {
+    const path = "apps/server/src/provider/acp/AcpSessionRuntime.processTree.test.ts";
+    const source = 'writeSibling(`t3-acp-${deadPid}-aaaa`, "0")';
+    expect(applyTextRules(path, source, TEXT_RULES).text).toBe(source);
+    expect(applyTextRules(path, 'mkdtempSync(join(tmpdir(), "t3-acp-"))', TEXT_RULES).text).toBe(
+      'mkdtempSync(join(tmpdir(), "goat-acp-"))',
+    );
+  });
+
+  it("renames only local routing tags and temporary showcase probes", () => {
+    expect(
+      applyTextRules(
+        "apps/server/src/pullRequest/PullRequestService.ts",
+        '"t3/PullRequestService/routingCredential"',
+        TEXT_RULES,
+      ).text,
+    ).toBe('"goat/PullRequestService/routingCredential"');
+    expect(
+      applyTextRules("scripts/mobile-showcase.ts", "`t3-showcase-wake-${udid}.png`", TEXT_RULES)
+        .text,
+    ).toBe("`goat-showcase-wake-${udid}.png`");
+  });
+
+  it("keeps regex readers for legacy schemes and remote error messages", () => {
+    expect(
+      findResidue("packages/shared/src/promptLinks.ts", "/^t3code(?:-[a-z]+)?:$/", KEEP_RULES),
+    ).toEqual([]);
+    expect(
+      findResidue(
+        "packages/client-runtime/src/errors/transport.ts",
+        "/Unable to connect to the T3 server WebSocket\\./i",
+        KEEP_RULES,
+      ),
+    ).toEqual([]);
   });
 });

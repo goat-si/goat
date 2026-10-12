@@ -414,7 +414,7 @@ export const TEXT_RULES: readonly TextRule[] = [
     // Disposable temp directories: `prefix: "t3-..."` options and `mkdtemp(... "t3-...")` calls.
     id: "temp-prefixes",
     category: "fixtures",
-    find: /(?<=(?:prefix\s*[:=]\s*|mkdtemp(?:Sync)?\(.*|makeTempDir\(.*)["'`]\.?)t3(?:code)?-(?=[a-z$])|(?<=["'`])t3(?:code)?-(?=(?:git-manager|codex-home|claude-home|workspace|codex-shared|codex-shadow-root|acp)-)|(?<=prefix\s*[:=]\s*["'`])t3-(?=\$\{input\.kind\}-vcs-contract-)/g,
+    find: /(?<=(?:prefix\s*[:=]\s*|mkdtemp(?:Sync)?\(.*|makeTempDir\(.*)["'`]\.?)t3(?:code)?-(?=[a-z$])|(?<=["'`])t3(?:code)?-(?=(?:git-manager|codex-home|claude-home|workspace|codex-shared|codex-shadow-root)-)|(?<=prefix\s*[:=]\s*["'`])t3-(?=\$\{input\.kind\}-vcs-contract-)/g,
     scope: (path) => isTest(path) || path.endsWith("VcsDriverContractHarness.ts"),
     replace: "goat-",
   },
@@ -446,6 +446,14 @@ export const PATH_RULES: readonly PathRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "legacy-server-error-reader",
+    pattern: /T3 server WebSocket/g,
+    scope: (path) => path === "packages/client-runtime/src/errors/transport.ts",
+    reason:
+      "Compatibility matcher recognizes error messages emitted by older remote servers (D17).",
+  },
+
   {
     id: "upstream-license-files",
     pattern: /LICENSE-T3CODE\.txt/g,
@@ -512,7 +520,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "electron-schemes",
-    pattern: /t3code(?:-[a-z]+)?[:\\]|t3code(?:-[a-z]+)?(?=["'])/g,
+    pattern: /t3code/g,
     scope: (path) =>
       /(?:codexAuthHandoff|promptLinks|providerAuthReturnUrl|features\/connection\/pairing)\./.test(
         path,
