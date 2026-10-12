@@ -52,7 +52,7 @@ const repeat = Number(values.repeat);
 NodeAssert.ok(Number.isSafeInteger(repeat) && repeat > 0, "repeat must be a positive integer");
 if (values.scenario === "all" || repeat > 1) {
   const reportDirectory = NodeFS.mkdtempSync(
-    NodePath.join(NodeOS.tmpdir(), "t3-background-suite-"),
+    NodePath.join(NodeOS.tmpdir(), "goat-background-suite-"),
   );
   console.log(`Suite report: ${reportDirectory}`);
   const outcomes = [];

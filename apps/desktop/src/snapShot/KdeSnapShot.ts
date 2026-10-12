@@ -254,7 +254,7 @@ export async function captureKdeWindow(
         activate: async (title) => {
           targetTitle = title;
           const activation = await NodeFSP.mkdtemp(
-            NodePath.join(NodeOS.tmpdir(), "t3-kde-activate-"),
+            NodePath.join(NodeOS.tmpdir(), "goat-kde-activate-"),
           );
           try {
             await run(

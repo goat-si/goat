@@ -149,7 +149,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   ): Effect.Effect<string, TextGenerationError> =>
     fileSystem
       .makeTempFile({
-        prefix: `t3code-${prefix}-${process.pid}-`,
+        prefix: `goat-${prefix}-${process.pid}-`,
       })
       .pipe(
         Effect.tap((filePath) =>
