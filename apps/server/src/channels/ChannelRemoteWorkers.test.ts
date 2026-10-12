@@ -1213,6 +1213,46 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("lets a newer choice of a project here end an older remote project answer", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    machine.projects = [
+      ...machine.projects,
+      {
+        id: "remote-project:other",
+        title: "goat-si/other",
+        workspaceRoot: "/Users/jun/developer/goat-si/other",
+        repositoryIdentity: { canonicalKey: "github.com/goat-si/other" },
+        defaultModelSelection: null,
+      },
+    ];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "l1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "l2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.environmentReadDown = false;
+      // A project on this machine with no counterpart there is the newer choice; the earlier
+      // remote answer does not stand in for it.
+      yield* gateway.ingest(slackInput("answer: Channel work", "l3"), slackContext);
+      const third = yield* until(
+        "asked for a project there",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      assert.include(third.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/other", "l4"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/other");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {

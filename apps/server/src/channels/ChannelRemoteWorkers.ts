@@ -230,6 +230,8 @@ export class ChannelRemoteWorkers extends Context.Service<
          * project must not stand in for it; the requester names one instead.
          */
         readonly requireNamedProject?: boolean | undefined;
+        /** This machine's project titles; an answer naming one chose a project here instead. */
+        readonly localProjectTitles?: ReadonlyArray<string> | undefined;
         readonly runtimeMode: RuntimeMode;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
@@ -257,6 +259,8 @@ export class ChannelRemoteWorkers extends Context.Service<
          * project must not stand in for it; the requester names one instead.
          */
         readonly requireNamedProject?: boolean | undefined;
+        /** This machine's project titles; an answer naming one chose a project here instead. */
+        readonly localProjectTitles?: ReadonlyArray<string> | undefined;
         readonly runtimeMode: RuntimeMode;
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
@@ -403,8 +407,11 @@ const make = Effect.gen(function* () {
       readonly canonicalKey?: string;
       /** The requester's answers in this generation, newest first. */
       readonly answers?: ReadonlyArray<string>;
-      /** Machines an answer may name; an answer that picks one ends the older answers' reach. */
-      readonly hosts?: ReadonlyArray<string>;
+      /**
+       * Machines and this machine's projects an answer may name; an answer that picks one of
+       * them made a newer choice, which ends the older answers' reach.
+       */
+      readonly otherChoices?: ReadonlyArray<string>;
       readonly requireNamed?: boolean;
     },
   ) => {
@@ -412,18 +419,18 @@ const make = Effect.gen(function* () {
     if (byId !== undefined) return byId;
     // The newest answer that names one of its projects decides, so a later answer to another
     // question ("try again") keeps the project chosen before it, and a newer name replaces it.
-    // Answers before one that picked a machine were about another destination, so they stop
-    // counting there, even when that machine has a project with the same name.
+    // An answer that picked something else (a machine, or a project on this machine) is the
+    // newer choice: older answers stop counting, even when they name a project here.
     for (const raw of hint.answers ?? []) {
       const answer = raw.toLowerCase();
       const named = projects.filter((project) => answer.includes(project.title.toLowerCase()));
       if (named.length > 0) {
         return named.toSorted((left, right) => right.title.length - left.title.length)[0];
       }
-      const pickedMachine =
+      const choseOtherwise =
         meansThisMachine(raw) ||
-        (hint.hosts ?? []).some((host) => answer.includes(host.toLowerCase()));
-      if (pickedMachine) break;
+        (hint.otherChoices ?? []).some((choice) => answer.includes(choice.toLowerCase()));
+      if (choseOtherwise) break;
     }
     // The same repository as the local project, by its canonical remote key.
     if (hint.canonicalKey !== undefined) {
@@ -479,7 +486,9 @@ const make = Effect.gen(function* () {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
-        ...(answers.length === 0 ? {} : { answers, hosts }),
+        ...(answers.length === 0
+          ? {}
+          : { answers, otherChoices: [...hosts, ...(local.localProjectTitles ?? [])] }),
         ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
       });
       if (chosen === undefined) {
