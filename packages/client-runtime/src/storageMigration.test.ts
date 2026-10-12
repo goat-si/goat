@@ -152,6 +152,29 @@ describe("migration under pressure", () => {
     expect(base.values.size).toBe(0);
   });
 
+  it("clears a current value whose legacy copy is already gone when the marker does not fit", async () => {
+    const base = memory([["goat:composer-drafts:v1", "draft"]]);
+    base.setItem.mockImplementation(() => {
+      throw quotaError();
+    });
+    migratingStorage(base).removeItem("goat:composer-drafts:v1");
+    expect(base.values.size).toBe(0);
+
+    const values = new Map([["goat.cloud.relay-token", "token"]]);
+    const asyncStorage = migratingStorage({
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async () => {
+        throw quotaError();
+      },
+      removeItem: async (key: string) => {
+        values.delete(key);
+      },
+    });
+    await asyncStorage.removeItem("goat.cloud.relay-token");
+    expect(await asyncStorage.getItem("goat.cloud.relay-token")).toBeNull();
+    expect(values.size).toBe(0);
+  });
+
   it("makes room the same way when an async backend rejects over quota", async () => {
     const values = new Map([["t3code.cloud.relay-token", "legacy token"]]); // goat-rename: legacy
     const storage = migratingStorage({

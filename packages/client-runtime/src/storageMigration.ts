@@ -82,7 +82,14 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
   // Over quota, the retained legacy copy of a key is what crowds out its current value (a
   // write used to replace it in place), so that copy alone may go to make room. Any other
   // failure, or a recovery that cannot complete, surfaces the original write error.
-  const withRoom = (key: string, write: () => unknown, afterDrop: () => unknown) =>
+  // A clear whose marker does not fit can still finish by plain removal when no legacy copy
+  // is left to resurrect (`clearing`); a value write without a legacy copy simply fails.
+  const withRoom = (
+    key: string,
+    write: () => unknown,
+    afterDrop: () => unknown,
+    clearing = false,
+  ) =>
     chain(write, same, (error) => {
       const legacy = legacyStorageKey(key);
       if (legacy === undefined || !isQuotaError(error)) throw error;
@@ -93,7 +100,9 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
         () => storage.getItem(legacy),
         (old) =>
           old === null
-            ? original()
+            ? clearing
+              ? chain(afterDrop, same, original)
+              : original()
             : chain(
                 () => storage.removeItem(legacy),
                 () => chain(afterDrop, same, original),
@@ -138,6 +147,7 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
               key,
               () => storage.setItem(key, REMOVED_STORAGE_VALUE),
               () => storage.removeItem(key),
+              true,
             ),
       ),
   };
