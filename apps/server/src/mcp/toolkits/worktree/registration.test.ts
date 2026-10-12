@@ -4,6 +4,7 @@ import Migration0062 from "../../../persistence/Migrations/062_RemoteReports.ts"
 import Migration0063 from "../../../persistence/Migrations/063_RemoteDispatches.ts";
 import Migration0065 from "../../../persistence/Migrations/065_RemoteDispatchQuestions.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -39,6 +40,7 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
+import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -100,7 +102,11 @@ const decodeToolsListPayload = Schema.decodeUnknownEffect(ToolsListPayload);
 it.effect("production mcp layer lists worktree tools over http", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layerRoutes = McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer));
+      const layerRoutes = McpHttpServer.layer.pipe(
+        Layer.provide(McpSessionRegistry.layer),
+        Layer.provide(LaunchWatchService.layer),
+        Layer.provide(RemoteDispatchCoordinator.layer),
+      );
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
         disableLogger: true,

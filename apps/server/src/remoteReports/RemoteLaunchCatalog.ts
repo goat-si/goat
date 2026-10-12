@@ -118,14 +118,8 @@ const make = Effect.gen(function* () {
   return RemoteLaunchCatalog.of({ list });
 });
 
-export const layerWithoutDependencies = Layer.effect(RemoteLaunchCatalog, make);
-
 /**
- * Both dependencies follow runs and wake launchers, so a second instance would
- * wake them twice. These are the same layer values McpHttpServer provides;
- * built inside the same route build, the memo map hands both one instance.
+ * Needs the server's single LaunchWatchService and RemoteDispatchCoordinator:
+ * both follow runs and wake launchers, so a second instance would wake them twice.
  */
-export const layer = layerWithoutDependencies.pipe(
-  Layer.provide(LaunchWatchService.layer),
-  Layer.provide(RemoteDispatchCoordinator.layer),
-);
+export const layerWithoutDependencies = Layer.effect(RemoteLaunchCatalog, make);
