@@ -36,7 +36,7 @@ const layerTest = Layer.empty.pipe(
 const makeTempDir = Effect.fn(function* (opts?: { prefix?: string; git?: boolean }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const dir = yield* fileSystem.makeTempDirectoryScoped({
-    prefix: opts?.prefix ?? "t3code-workspace-entries-",
+    prefix: opts?.prefix ?? "goat-workspace-entries-",
   });
   if (opts?.git) {
     yield* git(dir, ["init"]);

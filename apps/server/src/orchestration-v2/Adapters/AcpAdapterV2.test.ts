@@ -12303,7 +12303,7 @@ describe("AcpAdapterV2", () => {
             env: { GOAT_ACP_SESSION_LIFECYCLE: "1" },
           },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-acp-test", version: "0.0.0" },
+          clientInfo: { name: "goat-acp-test", version: "0.0.0" },
           ownDetachedProcessGroup: true,
           processGroupPlatform: "win32",
         }).pipe(Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner))),
@@ -12413,7 +12413,7 @@ describe("AcpAdapterV2", () => {
         AcpSessionRuntime.layer({
           spawn: { command: process.execPath, args: [mockAgentPath], cwd: process.cwd() },
           cwd: process.cwd(),
-          clientInfo: { name: "t3-acp-test", version: "0.0.0" },
+          clientInfo: { name: "goat-acp-test", version: "0.0.0" },
           ownDetachedProcessGroup: true,
           processGroupPlatform: "win32",
           windowsProcessTreeTerminator: () =>

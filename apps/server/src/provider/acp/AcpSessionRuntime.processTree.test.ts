@@ -115,10 +115,10 @@ describe("terminatePosixOwnedProcessTree", () => {
       const deadPid = 2_147_483_646;
       // Synthetic live foreign pid (not this process, still reported alive by the probe).
       const liveForeignPid = 2_147_483_645;
-      const staleEmpty = writeSibling(`t3-acp-${deadPid}-aaaa`, "0");
-      const currentPidSibling = writeSibling(`t3-acp-${process.pid}-bbbb`, "0");
-      const liveForeignSibling = writeSibling(`t3-acp-${liveForeignPid}-cccc`, "0");
-      const stalePopulated = writeSibling(`t3-acp-${deadPid}-dddd`, "1");
+      const staleEmpty = writeSibling(`goat-acp-${deadPid}-aaaa`, "0");
+      const currentPidSibling = writeSibling(`goat-acp-${process.pid}-bbbb`, "0");
+      const liveForeignSibling = writeSibling(`goat-acp-${liveForeignPid}-cccc`, "0");
+      const stalePopulated = writeSibling(`goat-acp-${deadPid}-dddd`, "1");
       const unrelated = writeSibling("other-lease", "0");
       const isProcessAlive = (pid: number) => pid === process.pid || pid === liveForeignPid;
       try {
@@ -136,7 +136,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         expect(NodeFS.existsSync(stalePopulated)).toBe(true);
         expect(NodeFS.existsSync(unrelated)).toBe(true);
         // Missing populated state must not remove a sibling.
-        writeSibling(`t3-acp-${deadPid}-eeee`, null);
+        writeSibling(`goat-acp-${deadPid}-eeee`, null);
         AcpSessionRuntime.sweepStaleLinuxCgroupSiblings(parent, {
           isProcessAlive,
           readPopulated: (path) => populatedByPath.get(path),
@@ -145,7 +145,7 @@ describe("terminatePosixOwnedProcessTree", () => {
             NodeFS.rmdirSync(path);
           },
         });
-        expect(NodeFS.existsSync(NodePath.join(parent, `t3-acp-${deadPid}-eeee`))).toBe(true);
+        expect(NodeFS.existsSync(NodePath.join(parent, `goat-acp-${deadPid}-eeee`))).toBe(true);
         expect(NodeFS.existsSync(currentPidSibling)).toBe(true);
       } finally {
         NodeFS.rmSync(parent, { recursive: true, force: true });
