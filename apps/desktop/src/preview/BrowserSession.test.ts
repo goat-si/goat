@@ -59,7 +59,7 @@ describe("BrowserSession", () => {
       const browserSession = {
         clearCache: vi.fn(() => Promise.resolve()),
         clearStorageData: vi.fn(() => Promise.resolve()),
-        getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/0.0.27"),
+        getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/0.0.27"), // goat-rename: legacy
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
@@ -77,9 +77,22 @@ describe("BrowserSession", () => {
       const first = yield* browserSessions.getSession("scope-a");
       const second = yield* browserSessions.getSession("scope-a");
 
-      assert.strictEqual(partition, "persist:t3code-preview-f051bb2c68cb7b2fe969");
+      assert.strictEqual(partition, "persist:t3code-preview-f051bb2c68cb7b2fe969"); // goat-rename: legacy
       assert.strictEqual(first, second);
       assert.strictEqual(fromPartition.mock.calls.length, 1);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("uses GOAT names for memory-only sessions without sharing persistent cookies", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const ephemeral = yield* browserSessions.getPartition("scope-a", false);
+      const persistent = yield* browserSessions.getPartition("scope-a");
+      assert.strictEqual(ephemeral, "goat-preview-ephemeral-f051bb2c68cb7b2fe969");
+      assert.notStrictEqual(ephemeral, persistent);
+      assert.isTrue(browserSessions.isPartition(ephemeral));
+      yield* browserSessions.getSession("scope-a", false);
+      assert.strictEqual(fromPartition.mock.calls[0]?.[0], ephemeral);
     }).pipe(Effect.provide(layer)),
   );
 
@@ -100,7 +113,7 @@ describe("BrowserSession", () => {
       // And a well-formed scope still lands on its historical partition.
       assert.strictEqual(
         yield* browserSessions.getPartition("scope-a"),
-        "persist:t3code-preview-f051bb2c68cb7b2fe969",
+        "persist:t3code-preview-f051bb2c68cb7b2fe969", // goat-rename: legacy
       );
     }).pipe(Effect.provide(layer)),
   );
@@ -114,8 +127,8 @@ describe("BrowserSession", () => {
       const legacyDefault = yield* browserSessions.getPartition("a::b");
       const nondefaultProfile = yield* browserSessions.getPartition("a::b", true, "profile");
 
-      assert.strictEqual(legacyDefault, "persist:t3code-preview-78f0be89237d77f7a70e");
-      assert.strictEqual(nondefaultProfile, "persist:t3code-preview-profile-78f0be89237d77f7a70e");
+      assert.strictEqual(legacyDefault, "persist:t3code-preview-78f0be89237d77f7a70e"); // goat-rename: legacy
+      assert.strictEqual(nondefaultProfile, "persist:t3code-preview-profile-78f0be89237d77f7a70e"); // goat-rename: legacy
       assert.notStrictEqual(nondefaultProfile, legacyDefault);
       assert.isTrue(browserSessions.isPartition(legacyDefault));
       assert.isTrue(browserSessions.isPartition(nondefaultProfile));
@@ -132,7 +145,7 @@ describe("BrowserSession", () => {
       // Electron's real UA shape: app token, then Chrome, then Electron, then
       // Safari — the token order and casing matter to any strip regex.
       const nativeUserAgent =
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) T3Code(Alpha)/0.0.33 Chrome/146.0.7680.216 Electron/41.5.0 Safari/537.36";
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) T3Code(Alpha)/0.0.33 Chrome/146.0.7680.216 Electron/41.5.0 Safari/537.36"; // goat-rename: legacy
       fromPartition.mockReset();
       fromPartition.mockImplementation((partition: string) => {
         let userAgent = nativeUserAgent;

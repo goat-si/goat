@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import { LEGACY_WSL_SERVER_TREE_MARKER } from "@goat/contracts/legacyT3Names";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
@@ -24,7 +25,7 @@ export type WslServerTreeResult =
   | { readonly ok: true; readonly root: string }
   | { readonly ok: false; readonly reason: string; readonly fatal: boolean };
 
-const MARKER_FILE_NAME = "t3code-wsl-server-tree.json";
+const MARKER_FILE_NAME = "goat-wsl-server-tree.json";
 const COPY_CONCURRENCY = 8;
 
 const Marker = Schema.Struct({ version: Schema.String });
@@ -140,9 +141,21 @@ export const make = Effect.gen(function* () {
   });
 
   const markerMatches = Effect.gen(function* () {
-    const raw = yield* fs.readFileString(join(versionDir, MARKER_FILE_NAME));
+    const markerPath = join(versionDir, MARKER_FILE_NAME);
+    let isLegacy = false;
+    const raw = yield* fs.readFileString(markerPath).pipe(
+      Effect.catchIf(
+        (error) => error.reason._tag === "NotFound",
+        () => {
+          isLegacy = true;
+          return fs.readFileString(join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER));
+        },
+      ),
+    );
     const marker = yield* decodeMarker(raw);
-    return marker.version === version;
+    if (marker.version !== version) return false;
+    if (isLegacy) yield* fs.writeFileString(markerPath, raw);
+    return true;
   }).pipe(Effect.orElseSucceed(() => false));
 
   const extract = Effect.gen(function* () {
@@ -186,6 +199,7 @@ export const make = Effect.gen(function* () {
             // this ordering, a surviving marker makes ensure reuse that
             // half-deleted fallback instead of extracting it again.
             yield* fs.remove(join(versionDir, MARKER_FILE_NAME), { force: true });
+            yield* fs.remove(join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER), { force: true });
             yield* fs.remove(treeRoot, { recursive: true, force: true });
           }).pipe(
             Effect.catch((cause) =>

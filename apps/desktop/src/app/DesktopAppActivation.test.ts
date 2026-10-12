@@ -10,13 +10,19 @@ import {
   type DesktopAppActivationRequest,
   type DesktopAppActivationResponse,
 } from "@goat/contracts";
-import { resolveDesktopAppControlAddress } from "@goat/shared/desktopAppControl";
+import {
+  resolveDesktopAppControlAddress,
+  resolveDesktopAppControlAddresses,
+} from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect } from "vite-plus/test";
 
-import { startDesktopAppControlServer } from "./DesktopAppActivation.ts";
+import {
+  startDesktopAppControlServer,
+  startDesktopAppControlServers,
+} from "./DesktopAppActivation.ts";
 
 const openServers: Array<{ close: () => Promise<void> }> = [];
 
@@ -81,6 +87,99 @@ function exchange(address: string, payload: DesktopAppActivationRequest) {
 }
 
 describe("desktop app control server", () => {
+  it.effect("serves both GOAT and legacy clients and cleans up both addresses", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
+      const userId = yield* HostProcess.UserId;
+      yield* Effect.promise(async () => {
+        const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-app-dual-test-"));
+        const addresses = resolveDesktopAppControlAddresses({
+          stateDir: NodePath.join(root, "userdata"),
+          platform,
+          tempDir: NodeOS.tmpdir(),
+          userId,
+          joinPath: NodePath.join,
+        });
+        const received: string[] = [];
+        const server = await startDesktopAppControlServers({
+          addresses,
+          userId,
+          handle: async (input) => {
+            received.push(input.requestId);
+            return {
+              version: 1,
+              requestId: input.requestId,
+              ok: true,
+              projectId: ProjectId.make("project-1"),
+              threadId: ThreadId.make("thread-1"),
+            };
+          },
+          cancel: () => undefined,
+          onReclaimError: () => undefined,
+        });
+        openServers.push(server);
+        for (const [index, target] of addresses.entries()) {
+          await expect(
+            exchange(target.address, request(`client-${index}`, platform)),
+          ).resolves.toMatchObject({ ok: true });
+        }
+        expect(received).toEqual(["client-0", "client-1"]);
+        if (platform !== "win32") {
+          await Promise.all(addresses.map((target) => NodeFSP.unlink(target.address)));
+          await server.reclaim();
+          for (const target of addresses) {
+            await expect(
+              exchange(target.address, request("reclaimed", platform)),
+            ).resolves.toMatchObject({ ok: true });
+          }
+        }
+        await server.close();
+        for (const target of addresses) {
+          if (target.directory !== null) {
+            await expect(NodeFSP.stat(target.address)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      });
+    }),
+  );
+
+  it.effect("releases the GOAT socket when binding the legacy address fails", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
+      const userId = yield* HostProcess.UserId;
+      if (platform === "win32") return;
+      yield* Effect.promise(async () => {
+        const root = await NodeFSP.mkdtemp(
+          NodePath.join(NodeOS.tmpdir(), "goat-app-dual-failure-"),
+        );
+        const primary = makeTarget(NodePath.join(root, "userdata"), platform, userId);
+        const blocked = NodePath.join(root, "blocked");
+        await NodeFSP.writeFile(blocked, "not a directory");
+        await expect(
+          startDesktopAppControlServers({
+            addresses: [
+              primary,
+              { directory: blocked, address: NodePath.join(blocked, "legacy.sock") },
+            ],
+            userId,
+            handle: async (input) => ({
+              version: 1,
+              requestId: input.requestId,
+              ok: false,
+              code: "invalid-request",
+              message: "unused",
+            }),
+            cancel: () => undefined,
+            onReclaimError: () => undefined,
+          }),
+        ).rejects.toBeDefined();
+        await expect(NodeFSP.stat(primary.address)).rejects.toMatchObject({ code: "ENOENT" });
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      });
+    }),
+  );
+
   it.effect("roundtrips a request and removes its socket on shutdown", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcess.Platform;

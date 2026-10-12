@@ -11,7 +11,10 @@ import {
   DesktopAppActivationRequest,
   type DesktopAppActivationResponse,
 } from "@goat/contracts";
-import { resolveDesktopAppControlAddress } from "@goat/shared/desktopAppControl";
+import {
+  resolveDesktopAppControlAddresses,
+  type DesktopAppControlAddress,
+} from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -298,6 +301,31 @@ export async function startDesktopAppControlServer(input: {
   };
 }
 
+/** Both versions reach the same broker. Failed startup releases any address already bound. */
+export async function startDesktopAppControlServers(
+  input: Omit<Parameters<typeof startDesktopAppControlServer>[0], "address" | "directory"> & {
+    readonly addresses: ReadonlyArray<DesktopAppControlAddress>;
+  },
+): Promise<RunningControlServer> {
+  const servers: RunningControlServer[] = [];
+  try {
+    for (const address of input.addresses) {
+      servers.push(await startDesktopAppControlServer({ ...input, ...address }));
+    }
+  } catch (cause) {
+    await Promise.all(servers.map((server) => server.close()));
+    throw cause;
+  }
+  return {
+    reclaim: async () => {
+      await Promise.all(servers.map((server) => server.reclaim()));
+    },
+    close: async () => {
+      await Promise.all(servers.map((server) => server.close()));
+    },
+  };
+}
+
 export class DesktopAppActivation extends Context.Service<
   DesktopAppActivation,
   {
@@ -317,7 +345,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const userId = yield* HostProcess.UserId;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const address = resolveDesktopAppControlAddress({
+  const addresses = resolveDesktopAppControlAddresses({
     stateDir: path.resolve(desktopEnvironment.stateDir),
     platform: desktopEnvironment.platform,
     tempDir: NodeOS.tmpdir(),
@@ -349,8 +377,8 @@ export const make = Effect.gen(function* () {
     start: Effect.acquireRelease(
       Effect.tryPromise({
         try: () =>
-          startDesktopAppControlServer({
-            ...address,
+          startDesktopAppControlServers({
+            addresses,
             userId,
             handle: (request) => broker.request(request),
             cancel: (requestId) => broker.cancel(requestId),
@@ -359,7 +387,8 @@ export const make = Effect.gen(function* () {
                 logWarning("failed to restore the desktop app control socket", { cause }),
               ),
           }),
-        catch: (cause) => new DesktopAppActivationStartError({ address: address.address, cause }),
+        catch: (cause) =>
+          new DesktopAppActivationStartError({ address: addresses[0].address, cause }),
       }),
       (server) =>
         Effect.promise(() => server.close()).pipe(

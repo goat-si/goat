@@ -9,7 +9,7 @@ import {
   type DesktopAppActivationPlatform,
   type DesktopAppActivationRequest,
 } from "@goat/contracts";
-import { resolveDesktopAppControlAddress } from "@goat/shared/desktopAppControl";
+import { resolveDesktopAppControlAddresses } from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -202,14 +202,14 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     Option.getOrUndefined(flags.workspaceRoot) ?? (yield* HostProcess.WorkingDirectory);
   const workspaceRoot = path.resolve(yield* expandHomePath(rawWorkspaceRoot));
   const userId = yield* HostProcess.UserId;
-  const resolveAddress = (stateDir: string) =>
-    resolveDesktopAppControlAddress({
+  const resolveAddresses = (stateDir: string) =>
+    resolveDesktopAppControlAddresses({
       stateDir,
       platform: hostPlatform,
       tempDir: NodeOS.tmpdir(),
       userId,
       joinPath: path.join,
-    }).address;
+    }).map(({ address }) => address);
   const crypto = yield* Crypto.Crypto;
   const requestId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
   const request: DesktopAppActivationRequest = {
@@ -228,7 +228,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
         ...defaultHomes.flatMap((home) => [path.join(home, "userdata"), path.join(home, "dev")]),
       ]
     : [path.join(baseDir, "userdata")];
-  const [address, ...fallbackAddresses] = stateDirectories.map(resolveAddress);
+  const [address, ...fallbackAddresses] = stateDirectories.flatMap(resolveAddresses);
 
   const response = yield* Effect.tryPromise({
     try: () =>

@@ -8,17 +8,20 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { LEGACY_PREVIEW_PARTITION_PREFIX } from "@goat/contracts/legacyT3Names";
 
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 
-const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
+// Electron exposes storagePath only on an open session and has no partition
+// migration API. Retain the persisted identity rather than risk website logins.
+const PREVIEW_PARTITION_PREFIX = LEGACY_PREVIEW_PARTITION_PREFIX;
 /**
  * Incognito partitions deliberately omit the `persist:` prefix, which is what
  * makes Chromium keep them in memory and discard them with the process. They
  * still carry the product prefix so `isPartition` can admit them — the
  * `will-attach-webview` gate rejects anything it does not recognise.
  */
-const PREVIEW_EPHEMERAL_PARTITION_PREFIX = "t3code-preview-ephemeral-";
+const PREVIEW_EPHEMERAL_PARTITION_PREFIX = "goat-preview-ephemeral-";
 const PROFILE_PARTITION_MARKER = "profile-";
 
 export type BrowserSessionPartitionNamespace = "profile";

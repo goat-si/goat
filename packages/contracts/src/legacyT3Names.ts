@@ -200,3 +200,16 @@ export const LEGACY_PRE_REFRESH_REF = "refs/t3code/pre-refresh";
 export const GOAT_PRE_REFRESH_REF = "refs/goat/pre-refresh";
 export const LEGACY_REFS_ROOT = "refs/t3";
 export const GOAT_REFS_ROOT = "refs/goat";
+
+/** Preview cookies stay in their original Electron partitions until a verified migration exists. */
+export const LEGACY_PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
+
+/** Local IPC addresses accepted across independently updated CLI and desktop builds. */
+export const LEGACY_DESKTOP_APP_PIPE_PREFIX = "t3code-app-";
+export const LEGACY_DESKTOP_APP_SOCKET_DIRECTORY_PREFIX = "t3code-";
+
+/** Existing WSL installs are reused in place; fresh installs use GOAT names. */
+export const LEGACY_WSL_RUNTIME_PATH = ".t3/wsl-runtime";
+export const LEGACY_WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
+export const LEGACY_WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
+export const LEGACY_WSL_SERVER_TREE_MARKER = "t3code-wsl-server-tree.json";

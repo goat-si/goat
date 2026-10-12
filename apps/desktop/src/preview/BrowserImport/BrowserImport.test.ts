@@ -92,7 +92,7 @@ describe("BrowserImport.importCookies", () => {
             sourceProfileDirectory: "../../../../secrets",
             targetProfileId: "default",
           },
-          scope: "persist:t3code-preview-test",
+          scope: "persist:t3code-preview-test", // goat-rename: legacy
           persistent: true,
         })
         .pipe(Effect.flip);
@@ -119,7 +119,7 @@ describe("BrowserImport.importCookies", () => {
               sourceProfileDirectory: "Default",
               targetProfileId: "default",
             },
-            scope: "persist:t3code-preview-test",
+            scope: "persist:t3code-preview-test", // goat-rename: legacy
             persistent: true,
           })
           .pipe(Effect.flip);

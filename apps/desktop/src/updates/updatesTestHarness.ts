@@ -166,7 +166,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   const layerEnvironment = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
-    homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
+    homeDirectory: `/tmp/goat-desktop-updates-home-${process.pid}`,
     platform: options.platform ?? "darwin",
     processArch: "x64",
     appVersion: "1.2.3",
@@ -179,7 +179,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       Layer.mergeAll(
         NodeServices.layer,
         DesktopConfig.layerTest({
-          GOAT_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+          GOAT_HOME: `/tmp/goat-desktop-updates-test-${process.pid}`,
           GOAT_DESKTOP_MOCK_UPDATES: "true",
           GOAT_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
           ...options.env,
@@ -284,7 +284,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(layerSettings),
     Layer.provideMerge(
       DesktopConfig.layerTest({
-        GOAT_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+        GOAT_HOME: `/tmp/goat-desktop-updates-test-${process.pid}`,
         GOAT_DESKTOP_MOCK_UPDATES: "true",
         GOAT_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
         ...options.env,

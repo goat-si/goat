@@ -51,7 +51,7 @@ describe("snapshotCookieDatabase", () => {
         });
         const source = path.join(sourceDirectory, "Cookies");
         yield* fileSystem.writeFileString(source, "not a sqlite database");
-        const prefix = `t3code-cookie-failed-${process.pid}-`;
+        const prefix = `goat-cookie-failed-${process.pid}-`;
         const error = yield* snapshotCookieDatabase(source, prefix).pipe(
           Effect.scoped,
           Effect.flip,

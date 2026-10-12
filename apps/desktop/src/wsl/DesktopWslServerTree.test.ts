@@ -7,6 +7,7 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import { LEGACY_WSL_SERVER_TREE_MARKER } from "@goat/contracts/legacyT3Names";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -154,7 +155,7 @@ describe("DesktopWslServerTree", () => {
         const dep = yield* fileSystem.exists(path.join(root, "node_modules/effect/package.json"));
         assert.isTrue(dep);
         const marker = yield* fileSystem.readFileString(
-          path.join(root, "t3code-wsl-server-tree.json"),
+          path.join(root, "goat-wsl-server-tree.json"),
         );
         assert.include(marker, '"version":"1.2.3"');
       }),
@@ -228,6 +229,78 @@ describe("DesktopWslServerTree", () => {
         const root = second.ok ? second.root : "";
         const entry = yield* fileSystem.readFileString(path.join(root, "apps/server/dist/bin.mjs"));
         assert.equal(entry, "v1");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("recognizes a legacy marker once and reuses the extracted tree", () =>
+    withTempDir((tempDir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const versionDir = path.join(tempDir, "userdata", "wsl-server-tree", "1.2.3");
+        const legacyMarker = path.join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER);
+        const markerPath = path.join(versionDir, "goat-wsl-server-tree.json");
+        yield* fs.makeDirectory(versionDir, { recursive: true });
+        yield* fs.writeFileString(legacyMarker, '{"version":"1.2.3"}');
+        yield* fs.writeFileString(path.join(versionDir, "existing"), "retained");
+        // No source archive exists: trying to extract instead of reuse fails.
+        const input = { baseDir: tempDir, resourcesPath: path.join(tempDir, "missing") };
+        assert.deepEqual(yield* ensureWith(input), { ok: true, root: versionDir });
+        assert.equal(yield* fs.readFileString(markerPath), '{"version":"1.2.3"}');
+        assert.isTrue(yield* fs.exists(legacyMarker));
+        // A successful recognition needs no legacy read on the next launch.
+        yield* fs.remove(legacyMarker);
+        assert.deepEqual(yield* ensureWith(input), { ok: true, root: versionDir });
+        assert.equal(yield* fs.readFileString(path.join(versionDir, "existing")), "retained");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("replaces a legacy extraction with a mismatched version marker", () =>
+    withTempDir((tempDir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const resourcesPath = path.join(tempDir, "resources");
+        const versionDir = path.join(tempDir, "userdata", "wsl-server-tree", "1.2.3");
+        const source = path.join(resourcesPath, "server.asar");
+        yield* fs.makeDirectory(source, { recursive: true });
+        yield* fs.writeFileString(path.join(source, "fresh"), "new");
+        yield* fs.makeDirectory(versionDir, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER),
+          '{"version":"1.0.0"}',
+        );
+        yield* fs.writeFileString(path.join(versionDir, "existing"), "old");
+        assert.deepEqual(yield* ensureWith({ baseDir: tempDir, resourcesPath }), {
+          ok: true,
+          root: versionDir,
+        });
+        assert.isFalse(yield* fs.exists(path.join(versionDir, "existing")));
+        assert.equal(yield* fs.readFileString(path.join(versionDir, "fresh")), "new");
+        assert.isTrue(yield* fs.exists(path.join(versionDir, "goat-wsl-server-tree.json")));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not use a legacy marker to mask a broken GOAT marker", () =>
+    withTempDir((tempDir) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const versionDir = path.join(tempDir, "userdata", "wsl-server-tree", "1.2.3");
+        yield* fs.makeDirectory(versionDir, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER),
+          '{"version":"1.2.3"}',
+        );
+        yield* fs.writeFileString(path.join(versionDir, "goat-wsl-server-tree.json"), "invalid");
+        const result = yield* ensureWith({
+          baseDir: tempDir,
+          resourcesPath: path.join(tempDir, "missing"),
+        });
+        assert.isFalse(result.ok);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -339,6 +412,10 @@ describe("DesktopWslServerTree", () => {
         const versionDir = initial.ok ? initial.root : "";
         const treeRoot = path.dirname(versionDir);
         const extractedEntryPath = path.join(versionDir, "apps/server/dist/bin.mjs");
+        yield* fileSystem.writeFileString(
+          path.join(versionDir, LEGACY_WSL_SERVER_TREE_MARKER),
+          '{"version":"1.2.3"}',
+        );
         let cleanupFailed = false;
         const layerPartialCleanupFileSystem = Layer.effect(
           FileSystem.FileSystem,

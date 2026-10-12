@@ -7,7 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import type { DesktopAppActivationRequest } from "@goat/contracts";
-import { resolveDesktopAppControlAddress } from "@goat/shared/desktopAppControl";
+import { resolveDesktopAppControlAddresses } from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -46,15 +46,16 @@ async function startFakeDesktop(input: {
   readonly stateSubdirectory?: "userdata" | "dev";
   readonly platform: NodeJS.Platform;
   readonly userId: number | undefined;
+  readonly legacy?: boolean;
   readonly reply?: (request: DesktopAppActivationRequest) => unknown;
 }) {
-  const target = resolveDesktopAppControlAddress({
+  const target = resolveDesktopAppControlAddresses({
     stateDir: NodePath.join(input.baseDir, input.stateSubdirectory ?? "userdata"),
     platform: input.platform,
     tempDir: NodeOS.tmpdir(),
     userId: input.userId,
     joinPath: NodePath.join,
-  });
+  })[input.legacy ? 1 : 0];
   if (target.directory !== null) {
     await NodeFSP.mkdir(target.directory, { recursive: true, mode: 0o700 });
     await NodeFSP.unlink(target.address).catch((error: NodeJS.ErrnoException) => {
@@ -206,13 +207,35 @@ describe("goat server command safety", () => {
 });
 
 describe("goat app", () => {
+  it.effect("prefers the GOAT address when both desktop addresses answer", () =>
+    withTempDirectory("goat-app-dual-", (baseDir) =>
+      Effect.gen(function* () {
+        const primary = yield* fakeDesktop({ baseDir });
+        const legacy = yield* fakeDesktop({ baseDir, legacy: true });
+        yield* runCli(["app", "--base-dir", baseDir]);
+        expect(primary.received).toHaveLength(1);
+        expect(legacy.received).toHaveLength(0);
+      }).pipe(Effect.scoped),
+    ),
+  );
+
+  it.effect("reaches an older desktop through its legacy address", () =>
+    withTempDirectory("goat-app-legacy-address-", (baseDir) =>
+      Effect.gen(function* () {
+        const legacy = yield* fakeDesktop({ baseDir, legacy: true });
+        yield* runCli(["app", "--base-dir", baseDir]);
+        expect(legacy.received).toHaveLength(1);
+        expect(yield* pathExists(NodePath.join(baseDir, "userdata"))).toBe(false);
+      }).pipe(Effect.scoped),
+    ),
+  );
   it.effect(
     "finds the packaged GOAT desktop first and keeps explicit home overrides authoritative",
     () =>
       withTempDirectory("goat-app-packaged-home-", (root) =>
         Effect.gen(function* () {
           const packaged = yield* fakeDesktop({ baseDir: NodePath.join(root, ".goat", "desktop") });
-          const legacyHome = NodePath.join(root, ".t3");
+          const legacyHome = NodePath.join(root, ".t3"); // goat-rename: legacy
           const legacy = yield* fakeDesktop({ baseDir: legacyHome });
           const development = yield* fakeDesktop({ baseDir: legacyHome, stateSubdirectory: "dev" });
           yield* runCli(["app"]);
@@ -230,7 +253,7 @@ describe("goat app", () => {
           );
           expect(error).toMatchObject({
             _tag: "DesktopAppUnreachableError",
-            candidateAddresses: [expect.any(String)],
+            candidateAddresses: [expect.any(String), expect.any(String)],
           });
           expect(packaged.received).toHaveLength(2);
         }).pipe(Effect.provideService(HostProcess.HomeDirectory, root), Effect.scoped),
@@ -281,7 +304,7 @@ describe("goat app", () => {
 
         expect(error).toMatchObject({
           _tag: "DesktopAppUnreachableError",
-          candidateAddresses: [expect.any(String)],
+          candidateAddresses: [expect.any(String), expect.any(String)],
           workspaceRoot: yield* HostProcess.WorkingDirectory,
           message: expect.stringContaining("Could not reach the GOAT desktop app."),
           cause: { code: "ENOENT" },
@@ -315,7 +338,7 @@ describe("goat app", () => {
   it.effect("prefers the installed desktop app when a dev desktop is also running", () =>
     withTempDirectory("goat-app-preferred-test-", (root) =>
       Effect.gen(function* () {
-        const baseDir = NodePath.join(root, ".t3");
+        const baseDir = NodePath.join(root, ".t3"); // goat-rename: legacy
         const desktop = yield* fakeDesktop({ baseDir });
         const development = yield* fakeDesktop({ baseDir, stateSubdirectory: "dev" });
 
@@ -330,7 +353,7 @@ describe("goat app", () => {
   it.effect("finds the dev desktop when the default desktop socket is absent", () =>
     withTempDirectory("goat-app-dev-test-", (root) =>
       Effect.gen(function* () {
-        const baseDir = NodePath.join(root, ".t3");
+        const baseDir = NodePath.join(root, ".t3"); // goat-rename: legacy
         const development = yield* fakeDesktop({ baseDir, stateSubdirectory: "dev" });
 
         yield* runCli(["app"]);
@@ -345,7 +368,7 @@ describe("goat app", () => {
   it.effect("never searches a dev state directory for an explicit T3 home", () =>
     withTempDirectory("goat-app-explicit-test-", (root) =>
       Effect.gen(function* () {
-        const baseDir = NodePath.join(root, ".t3");
+        const baseDir = NodePath.join(root, ".t3"); // goat-rename: legacy
         const development = yield* fakeDesktop({ baseDir, stateSubdirectory: "dev" });
 
         const flagError = yield* runCli(["app", "--base-dir", baseDir]).pipe(Effect.flip);
@@ -363,7 +386,7 @@ describe("goat app", () => {
     (responseKind) =>
       withTempDirectory("goat-app-response-test-", (root) =>
         Effect.gen(function* () {
-          const baseDir = NodePath.join(root, ".t3");
+          const baseDir = NodePath.join(root, ".t3"); // goat-rename: legacy
           const desktop = yield* fakeDesktop({
             baseDir,
             reply: (request) =>
@@ -379,10 +402,13 @@ describe("goat app", () => {
           });
           const development = yield* fakeDesktop({ baseDir, stateSubdirectory: "dev" });
 
+          const legacy = yield* fakeDesktop({ baseDir, legacy: true });
+
           const error = yield* runCli(["app"]).pipe(Effect.flip);
 
           expect(desktop.received).toHaveLength(1);
           expect(development.received).toHaveLength(0);
+          expect(legacy.received).toHaveLength(0);
           if (responseKind === "failure") {
             expect(error).toMatchObject({
               _tag: "DesktopAppRequestFailedError",

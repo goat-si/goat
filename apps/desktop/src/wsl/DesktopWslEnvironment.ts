@@ -11,6 +11,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { buildRemoteNodeEnvScript } from "@goat/ssh/tunnel";
 import { satisfiesSemverRange } from "@goat/shared/semver";
+import {
+  LEGACY_WSL_RUNTIME_PATH,
+  LEGACY_WSL_RUNTIME_READY_MARKER,
+  LEGACY_WSL_RUNTIME_SELECTED_MARKER,
+} from "@goat/contracts/legacyT3Names";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { parseWslDistroList, type WslDistro } from "./wslPathParsing.ts";
@@ -280,11 +285,22 @@ const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")
 // promotes a verified tree. Presence alone only says an install once finished
 // here; the digest is what lets a later launch prove the entry still is what
 // that install wrote.
-const WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
-const WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
+const WSL_RUNTIME_READY_MARKER = ".goat-wsl-runtime-ready";
+const WSL_RUNTIME_SELECTED_MARKER = ".goat-wsl-runtime-selected";
 const WSL_RUNTIME_SELECTION_GRACE_MINUTES = 5;
 
 const sanitizeWslRuntimeId = (value: string): string => value.replace(/[^A-Za-z0-9._-]/g, "_");
+
+// Reuse the old parent in place so an upgrade does not install a second copy or
+// move files out from under a running backend. A fresh distro uses the GOAT root.
+const buildWslRuntimeParentScript = (safeRuntimeId: string) => [
+  'runtime_parent="$HOME/.goat/wsl-runtime"',
+  `if [ ! -d "$runtime_parent/${safeRuntimeId}" ] && [ -d "$HOME/${LEGACY_WSL_RUNTIME_PATH}" ]; then`,
+  `  if [ ! -d "$runtime_parent" ] || [ -d "$HOME/${LEGACY_WSL_RUNTIME_PATH}/${safeRuntimeId}" ]; then`,
+  `    runtime_parent="$HOME/${LEGACY_WSL_RUNTIME_PATH}"`,
+  "  fi",
+  "fi",
+];
 
 // `archiveSha256` is the digest the build recorded alongside the archive. The
 // install verifies the bytes before extracting, so an archive can never be
@@ -297,7 +313,7 @@ export const buildWslRuntimeInstallScript = (
   const safeRuntimeId = sanitizeWslRuntimeId(runtimeId);
   return [
     "set -eu",
-    'runtime_parent="$HOME/.t3/wsl-runtime"',
+    ...buildWslRuntimeParentScript(safeRuntimeId),
     `runtime_root="$runtime_parent/${safeRuntimeId}"`,
     `ready_marker="$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
     // The runtime is a self-contained `goat` executable with Node inside, so the
@@ -317,7 +333,11 @@ export const buildWslRuntimeInstallScript = (
     `  sha256sum "$1/goat" 2>/dev/null | cut -d ' ' -f 1`,
     "}",
     "runtime_is_ready() {",
-    '  [ -f "$ready_marker" ] &&',
+    // The usual ready-file check short-circuits legacy recognition on warm launches.
+    '  if [ ! -f "$ready_marker" ]; then',
+    `    ready_marker="$runtime_root/${LEGACY_WSL_RUNTIME_READY_MARKER}"`,
+    '    [ -f "$ready_marker" ] || return 1',
+    "  fi",
     '    runtime_entry_runs "$runtime_root" &&',
     // An empty or unreadable marker is a miss, not a pass: that is what a
     // runtime installed before the marker carried a digest looks like, and one
@@ -332,10 +352,15 @@ export const buildWslRuntimeInstallScript = (
     'exec 9> "$runtime_lock"',
     "flock -x 9",
     "if runtime_is_ready; then",
+    // Promote a recognized legacy marker once. Warm launches read only GOAT.
+    `  if [ "$ready_marker" != "$runtime_root/${WSL_RUNTIME_READY_MARKER}" ]; then`,
+    `    cp "$ready_marker" "$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
+    "  fi",
     `  touch "$runtime_root/${WSL_RUNTIME_SELECTED_MARKER}"`,
     `  printf 'runtimeRoot:%s\\n' "$runtime_root"`,
     "  exit 0",
     "fi",
+    `ready_marker="$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
     // Hash only on a cache miss: a warm launch already exited above, and a cold
     // install is about to read the whole archive through tar anyway. `set -eu`
     // turns a distro without sha256sum into an install failure, which falls back
@@ -422,7 +447,7 @@ export const buildWslRuntimePruneScript = (runtimeId: string): string => {
   const safeRuntimeId = sanitizeWslRuntimeId(runtimeId);
   return [
     "set -eu",
-    'runtime_parent="$HOME/.t3/wsl-runtime"',
+    ...buildWslRuntimeParentScript(safeRuntimeId),
     `current_runtime="$runtime_parent/${safeRuntimeId}"`,
     '[ -d "$runtime_parent" ] || exit 0',
     // Serialize the whole retention decision so two backends cannot select
@@ -440,7 +465,7 @@ export const buildWslRuntimePruneScript = (runtimeId: string): string => {
     'for candidate in "$runtime_parent"/sha256-*; do',
     '  [ -d "$candidate" ] || continue',
     '  [ "$candidate" != "$current_runtime" ] || continue',
-    `  [ -f "$candidate/${WSL_RUNTIME_READY_MARKER}" ] || continue`,
+    `  [ -f "$candidate/${WSL_RUNTIME_READY_MARKER}" ] || [ -f "$candidate/${LEGACY_WSL_RUNTIME_READY_MARKER}" ] || continue`,
     '  if [ -z "$previous_runtime" ] || [ "$candidate" -nt "$previous_runtime" ]; then',
     '    previous_runtime="$candidate"',
     "  fi",
@@ -459,6 +484,7 @@ export const buildWslRuntimePruneScript = (runtimeId: string): string => {
     // Skip instead of waiting or deleting underneath it.
     "  flock -n 9 || continue",
     `  selected_marker="$candidate/${WSL_RUNTIME_SELECTED_MARKER}"`,
+    `  if [ "$candidate/${LEGACY_WSL_RUNTIME_SELECTED_MARKER}" -nt "$selected_marker" ]; then selected_marker="$candidate/${LEGACY_WSL_RUNTIME_SELECTED_MARKER}"; fi`,
     `  if [ -f "$selected_marker" ] && find "$selected_marker" -maxdepth 0 -mmin -${String(WSL_RUNTIME_SELECTION_GRACE_MINUTES)} -print -quit | grep -q .; then`,
     "    flock -u 9",
     "    continue",
@@ -486,7 +512,9 @@ export const buildWslRuntimeInvalidateScript = (runtimeId: string): string => {
   const safeRuntimeId = sanitizeWslRuntimeId(runtimeId);
   return [
     "set -eu",
-    `rm -f "$HOME/.t3/wsl-runtime/${safeRuntimeId}/${WSL_RUNTIME_READY_MARKER}"`,
+    ...buildWslRuntimeParentScript(safeRuntimeId),
+    `runtime_root="$runtime_parent/${safeRuntimeId}"`,
+    `rm -f "$runtime_root/${WSL_RUNTIME_READY_MARKER}" "$runtime_root/${LEGACY_WSL_RUNTIME_READY_MARKER}"`,
   ].join("\n");
 };
 
