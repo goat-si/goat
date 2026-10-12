@@ -13,6 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -738,6 +739,10 @@ describe("launches and observers on another machine", () => {
   it.effect("reports a refused launch in fixed words, never the remote's text", () => {
     const { machine, harness } = remoteHarness();
     machine.refuseLaunchWith = "refused: token=sentinel-secret-do-not-leak";
+    const logs: Array<string> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(JSON.stringify(message));
+    });
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkSlackUser();
@@ -752,7 +757,16 @@ describe("launches and observers on another machine", () => {
       const visible = JSON.stringify([harness.slackSent, records.messages, failed]);
       assert.notInclude(visible, "sentinel-secret-do-not-leak");
       assert.notInclude(visible, JSON.parse(state).readKey);
-    }).pipe(Effect.provide(harness.layer));
+      // The logs say what failed without quoting the remote or the read key.
+      const logged = logs.join("\n");
+      assert.include(logged, "channel remote launch failed");
+      assert.notInclude(logged, "sentinel-secret-do-not-leak");
+      assert.notInclude(logged, JSON.parse(state).readKey);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(harness.layer, Logger.layer([logger], { mergeWithExisting: false })),
+      ),
+    );
   });
 
   it.effect("drops an old generation's late answer instead of failing the new one", () => {
