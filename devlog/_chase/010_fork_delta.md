@@ -41,8 +41,8 @@ G13 `goat-copy`, G14 `launch-watch`.
 ### `ci` CI
 
 - 커밋: `bfce4301d` `cc5003979` `095115376`
-- 경로: `.github/workflows/goat-ci.yml`, `.vite-hooks/`, `packages/ssh/src/tunnel.*.test.ts`
-- 정책: GOAT CI는 EPYC의 goat-ci 하나이고 upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다.
+- 경로: `.github/workflows/goat-ci.yml`, `.vite-hooks/`, `packages/ssh/src/tunnel.*.test.ts`, `.github/scripts/pr-screenshot-gate.*`, `.github/pull_request_template.md`
+- 정책: GOAT CI는 EPYC의 goat-ci 하나이고 upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다.
 
 ### `cli-home` CLI `goat`와 `~/.goat`
 

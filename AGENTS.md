@@ -109,8 +109,8 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - Never make a PR unless the developer explicitly asks you to do so.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
-- UI changes need before/after images. Motion or timing needs a short video.
-- Upload PR evidence to GitHub. Never commit PR-only screenshots or assets such as `.github/pr-assets/`.
+- UI changes need before/after images embedded in the PR description. Motion or timing needs a short video. The `goat-screenshot-gate` check flags a PR that changes `apps/web`, `apps/desktop`, `apps/mobile`, or `apps/marketing` without an embedded image; after adding one, re-run that job. Drafts and non-UI PRs are skipped, and only a maintainer can waive it with the `gui-screenshot-waived` label.
+- Attach images by dragging them into the description editor, or, from the command line, commit them to the orphan `pr-assets` branch as `<pr>/<name>.png` and embed `https://raw.githubusercontent.com/goat-si/goat/<commit-sha>/<pr>/<name>.png`. Link by commit SHA, never by branch name. Never commit screenshots or PR-only assets to the PR branch; the squash merge carries them into `dev`.
 - One request is one PR. Split it only when the maintainer asks. Outside contributions follow the stricter [one problem per PR](CONTRIBUTING.md#one-problem) rule.
 - When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
 

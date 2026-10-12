@@ -30,10 +30,16 @@ There is no line-count or file-count cutoff. -->
 
 <!-- Describe the focused tests or manual checks you ran and the observed results
 for the changed behavior. State anything you could not check. "Tests pass" alone
-is insufficient; broad repo-wide checks are not required.
+is insufficient; broad repo-wide checks are not required. -->
 
-For UI changes, include clear before/after screenshots. Include a short recording
-when motion, timing, transitions, or interaction details are needed to demonstrate
-the change. Upload evidence to GitHub and embed or link it here. Never commit PR-only assets. -->
+## Screenshots
+
+<!-- Required when the PR changes apps/web, apps/desktop, apps/mobile, or apps/marketing.
+Embed clear before/after images here; the goat-screenshot-gate check looks for an embedded
+image. Include a short recording when motion, timing, or interaction details matter.
+
+Drag images into this editor, or commit them to the orphan pr-assets branch and embed them
+by commit SHA: ![after](https://raw.githubusercontent.com/goat-si/goat/<sha>/<pr>/<name>.png)
+Never commit screenshots to the PR branch. Delete this section for non-UI changes. -->
 
 <!-- If you used an agent, end with the model and harness that did the work. -->

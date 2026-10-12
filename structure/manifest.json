@@ -51,6 +51,18 @@
       ]
     },
     {
+      "path": "ci.md",
+      "tier": 1,
+      "title": "CI",
+      "scope": "The goat-ci workflow, its pre-push guard, and the PR screenshot gate.",
+      "documents": [
+        ".github/pull_request_template.md",
+        ".github/scripts/pr-screenshot-gate.cjs",
+        ".github/workflows/goat-ci.yml",
+        ".vite-hooks/goat-workflow-guard.mjs"
+      ]
+    },
+    {
       "path": "contracts.md",
       "tier": 2,
       "title": "Contracts",
