@@ -2233,12 +2233,20 @@ export default function ChatView(props: ChatViewProps) {
   const launcherThread = useThreadShell(launcherThreadRef);
   const launcherThreadTitle = launcherThread?.title;
   const launcherKind = launchedBy?.kind;
+  const launcherStoredTitle = launchedBy?.threadTitle ?? null;
+  const launcherMachine = launchedBy?.environmentLabel ?? null;
   const launcherThreadLink = useMemo(
     () =>
-      launcherThreadRef !== null && launcherThreadTitle !== undefined && launcherKind !== undefined
-        ? { ref: launcherThreadRef, title: launcherThreadTitle, kind: launcherKind }
+      launcherThreadRef !== null && launcherKind !== undefined
+        ? {
+            ref: launcherThreadRef,
+            title: launcherThreadTitle ?? launcherStoredTitle ?? "Untitled thread",
+            kind: launcherKind,
+            machine: launcherMachine,
+            available: launcherThreadTitle !== undefined,
+          }
         : null,
-    [launcherKind, launcherThreadTitle, launcherThreadRef],
+    [launcherKind, launcherMachine, launcherStoredTitle, launcherThreadTitle, launcherThreadRef],
   );
   const onOpenScopedThread = useCallback(
     (ref: ScopedThreadRef) => {

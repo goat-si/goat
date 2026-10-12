@@ -41,6 +41,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
+import { describeThreadLauncher } from "./threadLauncher.logic";
 import { useClientSettings } from "../../hooks/useSettings";
 
 interface ChatHeaderProps {
@@ -64,6 +65,10 @@ interface ChatHeaderProps {
         ref: ScopedThreadRef;
         title: string;
         kind: OrchestrationV2ThreadLauncher["kind"];
+        /** The launching machine's name for a launch from another machine. */
+        machine: string | null;
+        /** False when the launcher thread is not loaded here, so it cannot be opened. */
+        available: boolean;
       }
     | null
     | undefined;
@@ -112,6 +117,12 @@ export const ChatHeader = memo(function ChatHeader({
   onOpenProjectSettings,
 }: ChatHeaderProps) {
   const relatedThreadLink = parentThreadLink ?? (onOpenScopedThread ? launcherThreadLink : null);
+  const launcherOnly =
+    parentThreadLink === null && relatedThreadLink !== null ? launcherThreadLink : null;
+  const relatedThreadUnavailable = launcherOnly?.available === false;
+  const relatedThreadTooltip = launcherOnly
+    ? describeThreadLauncher(launcherOnly)
+    : relatedThreadLink?.title;
   const shownTitle = displayTitle ?? activeThreadTitle;
   // A fixed label is not the thread's own title, so editing it inline would
   // rename something the header never shows.
@@ -386,12 +397,23 @@ export const ChatHeader = memo(function ChatHeader({
                   render={
                     <button
                       type="button"
-                      aria-label={`${parentThreadLink ? "Open parent thread" : launcherThreadLink?.kind === "promotion" ? "Open original parent thread" : "Open launching thread"}: ${relatedThreadLink.title}`}
+                      aria-label={
+                        relatedThreadUnavailable
+                          ? relatedThreadTooltip
+                          : `${parentThreadLink ? "Open parent thread" : launcherThreadLink?.kind === "promotion" ? "Open original parent thread" : "Open launching thread"}: ${relatedThreadLink.title}`
+                      }
+                      aria-disabled={relatedThreadUnavailable || undefined}
                       onClick={() => {
                         if (parentThreadLink) onOpenThread(parentThreadLink.threadId);
-                        else if (launcherThreadLink) onOpenScopedThread?.(launcherThreadLink.ref);
+                        else if (launcherThreadLink?.available)
+                          onOpenScopedThread?.(launcherThreadLink.ref);
                       }}
-                      className="inline-flex min-w-0 max-w-full cursor-pointer items-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      className={cn(
+                        "inline-flex min-w-0 max-w-full items-center rounded-sm text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                        relatedThreadUnavailable
+                          ? "cursor-default"
+                          : "cursor-pointer transition-colors hover:text-foreground",
+                      )}
                     />
                   }
                 >
@@ -407,7 +429,7 @@ export const ChatHeader = memo(function ChatHeader({
                     </span>
                   ) : null}
                 </TooltipTrigger>
-                <TooltipPopup side="top">{relatedThreadLink.title}</TooltipPopup>
+                <TooltipPopup side="top">{relatedThreadTooltip}</TooltipPopup>
               </Tooltip>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator>
