@@ -150,6 +150,8 @@ export interface HostThreadsMcpServiceShape {
       readonly host: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
+      /** Defaults to the thread-tool deadline. Host status passes a shorter one. */
+      readonly timeoutMs?: number;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
