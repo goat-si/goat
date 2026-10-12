@@ -149,6 +149,11 @@ export function useThreadContextDragHandle(input: {
   }, [input.threadKey, input.title]);
   const sensorRef = useRef<SidebarPointerSensor | null>(null);
   useEffect(() => () => sensorRef.current?.cancel(), []);
+  // A row that stops allowing context drag mid-press (rename, or it became sortable) drops
+  // the gesture too, so the press cannot finish as a context drop.
+  useEffect(() => {
+    if (input.disabled) sensorRef.current?.cancel();
+  }, [input.disabled]);
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<Element>) => {
       if (!shouldStartThreadContextDrag(event, navigator.platform)) return;

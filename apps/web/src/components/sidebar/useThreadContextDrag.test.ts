@@ -203,6 +203,24 @@ describe("useThreadContextDragHandle", () => {
     expect(drops).toEqual([]);
   });
 
+  it("drops an in-flight gesture when the row stops allowing context drag", () => {
+    // An Activity row can turn sortable mid-press, say when a pending order write lands.
+    render([{ id: "a", title: "First" }]);
+    act(() => {
+      row("a").dispatchEvent(pointer("pointerdown", 20));
+      document.dispatchEvent(pointer("pointermove", 320));
+    });
+    expect(ghostText()).toBe("First");
+    render([{ id: "a", title: "First", disabled: true }]);
+    expect(ghostText()).toBeNull();
+    act(() => {
+      document.dispatchEvent(pointer("pointermove", 330));
+      document.dispatchEvent(pointer("pointerup", 330, { buttons: 0 }));
+    });
+    expect(ghostText()).toBeNull();
+    expect(drops).toEqual([]);
+  });
+
   it("cancels the gesture and clears the ghost when the row unmounts", () => {
     render([{ id: "a", title: "First" }]);
     act(() => {
