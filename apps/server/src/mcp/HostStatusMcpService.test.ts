@@ -235,6 +235,51 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
   }),
 );
 
+it.effect("reads only this machine for a client session that may not reach hosts", () =>
+  Effect.gen(function* () {
+    const { value, calls, connectedReads } = yield* run(
+      { hosts: ["box"], hostCall: () => Effect.die("read-only session reached SSH") },
+      (service) =>
+        service.readForClient({
+          environmentId: EnvironmentId.make("host-status-test"),
+          sessionId: "web-session",
+          reachHosts: false,
+        }),
+    );
+    expect(connectedReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts).toHaveLength(1);
+    expect(value.success.hosts[0]).toMatchObject({
+      host: null,
+      reachability: "ok",
+      metrics: { platform: process.platform, threads: { running: 1, waiting: 1, queued: 1 } },
+    });
+  }),
+);
+
+it.effect("fans out for a client session that may reach hosts, reading only", () =>
+  Effect.gen(function* () {
+    const { value, calls } = yield* run({ hosts: ["box"] }, (service) =>
+      service.readForClient({
+        environmentId: EnvironmentId.make("host-status-test"),
+        sessionId: "web-session",
+        reachHosts: true,
+      }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+      ["box", "ok"],
+    ]);
+    expect(calls).toMatchObject([
+      { host: "box", tool: "goat_host_status", writes: false, arguments: { local: true } },
+    ]);
+  }),
+);
+
 it.effect("returns the last sample when a host that answered goes unreachable", () =>
   Effect.gen(function* () {
     let down = false;

@@ -940,14 +940,26 @@ export const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentHandlers.layer,
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
+/**
+ * Host status for both the goat_host_status tool and the `server.getHostStatus`
+ * WebSocket RPC. Layers memoize by reference, so the two read one instance and
+ * share its last-known samples and quota refresh limit. It carries the same
+ * services `layer` provides the other toolkits, so whichever side builds it
+ * first builds HostThreadsMcpService the same way.
+ */
+export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(LaunchWatchService.layer),
+  Layer.provide(RemoteReportService.layer),
+  Layer.provide(ThreadResultService.layer),
+  Layer.provide(RemoteDispatchCoordinator.layer),
+);
+
 export const layerHostStatusToolkit = toolkitRegistration(
   HostStatusToolkit,
   HostStatusHandlers.layer,
-).pipe(
-  Layer.provide(HostStatusMcpService.layer),
-  Layer.provide(HostThreadsMcpService.layer),
-  Layer.provide(OrchestratorMcpService.layer),
-);
+).pipe(Layer.provide(layerHostStatusService));
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
   Layer.provide(HostThreadsMcpService.layer),

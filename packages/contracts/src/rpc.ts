@@ -345,6 +345,8 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import { GoatHostStatusResult } from "./hostStatus.ts";
+import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -535,6 +537,7 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
+  serverGetHostStatus: "server.getHostStatus",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -906,6 +909,13 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
   payload: Schema.Struct({}),
   success: HostResourcesSnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+/** The `goat_host_status` payload: this machine, plus connected SSH hosts for sessions that may operate threads. */
+const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
+  payload: Schema.Struct({}),
+  success: GoatHostStatusResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
@@ -2030,6 +2040,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
+  WsServerGetHostStatusRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

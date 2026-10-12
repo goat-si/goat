@@ -93,6 +93,12 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("reads host status with read scope, like host resources", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostStatus)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
   it("allows relay status reads without granting relay installation access", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.cloudGetRelayClientStatus)).toBe(
       AuthRelayReadScope,

@@ -234,6 +234,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -1350,6 +1351,7 @@ const layerWsRpc = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
+      const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2490,6 +2492,16 @@ const layerWsRpc = (
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
+        [WS_METHODS.serverGetHostStatus]: (_input) =>
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) =>
+              hostStatus.readForClient({
+                environmentId,
+                sessionId: currentSessionId,
+                reachHosts: currentSession.scopes.includes(AuthOrchestrationOperateScope),
+              }),
+            ),
+          ),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -3218,6 +3230,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+    const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3286,6 +3299,10 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
+              // The goat_host_status tool's instance, so both share last-known samples.
+              Layer.provide(
+                Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus),
+              ),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
