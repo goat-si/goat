@@ -22,7 +22,14 @@ export interface FakeEnvelope {
 export interface FakeSlackSession extends SlackSocketSession {
   readonly index: number;
   readonly appToken: string;
-  readonly emitEnvelope: (body: unknown, options?: { readonly type?: string }) => FakeEnvelope;
+  readonly emitEnvelope: (
+    body: unknown,
+    options?: {
+      readonly type?: string;
+      /** Replaces the acknowledgement, e.g. to hold or lose it. */
+      readonly ack?: () => Promise<void>;
+    },
+  ) => FakeEnvelope;
   readonly emitLifecycle: (tag: SlackSocketLifecycle["_tag"]) => void;
   readonly listenerCount: () => number;
 }
@@ -106,7 +113,7 @@ export function makeFakeSlackSdk() {
           ack: () => {
             count += 1;
             resolveAcked();
-            return Promise.resolve();
+            return options?.ack?.() ?? Promise.resolve();
           },
         };
         for (const listener of envelopeListeners) listener(envelope);

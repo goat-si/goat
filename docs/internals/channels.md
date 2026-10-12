@@ -22,6 +22,22 @@ records it in its place. The conversation, its open questions, and outstanding w
 deliveries addressed to the old thread go to the current bot, and timeline ids include the thread
 so a replayed record lands in the replacement without colliding with the old one.
 
+## Slack
+
+The server layer assembles the live Slack runtime between the gateway and the workers
+([`ChannelLayers`](../../apps/server/src/channels/ChannelLayers.ts)): the runtime needs the gateway
+and transport registry, and the dispatcher reads the connection's default target. Release runs in
+reverse, so Slack sockets close before the gateway and ledger. Shutdown does not drain envelopes:
+one not yet stored was never acknowledged and Slack sends it again, and one stored but not
+acknowledged comes back as a duplicate the inbox key absorbs. The desktop's short shutdown deadline
+can cut a socket mid-close; that only changes which of those two happens.
+
+A Slack connection's default target fills only what the task left open. The project named with the
+work wins over the default project, which wins over the only project; the default model wins over
+the project's (and, on another machine, the remote project's). A missing default project or an
+unavailable default model becomes a question to the requester, never a different choice. Defaults
+pick where and with what model; the requester's ceiling still bounds everything else.
+
 ## Who runs the workers
 
 Background work (reception, dispatch, answer forwarding, wording task updates, delivery) runs in

@@ -265,8 +265,8 @@ export const make = Effect.gen(function* () {
       serverBrowser: true,
       sshActivity: true,
       channelLedger: true,
-      // No live Slack runtime is assembled yet; the settings RPCs answer adapter_unavailable.
-      slackChannel: false,
+      // ChannelLayers assembles the live Slack runtime behind the slackChannel.* RPCs.
+      slackChannel: true,
     },
   };
 

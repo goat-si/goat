@@ -220,6 +220,8 @@ export class ChannelRemoteWorkers extends Context.Service<
       stored: ChannelLedger.ChannelStoredTask,
       local: {
         readonly modelSelection: ModelSelection;
+        /** A model the requester's channel asks for; wins over the remote project's default. */
+        readonly preferredModelSelection?: ModelSelection | undefined;
         readonly runtimeMode: RuntimeMode;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
@@ -240,6 +242,8 @@ export class ChannelRemoteWorkers extends Context.Service<
       owner: string,
       local: {
         readonly modelSelection: ModelSelection;
+        /** A model the requester's channel asks for; wins over the remote project's default. */
+        readonly preferredModelSelection?: ModelSelection | undefined;
         readonly runtimeMode: RuntimeMode;
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
@@ -469,7 +473,8 @@ const make = Effect.gen(function* () {
       const target: ChannelDispatchTarget = {
         environmentId: environment.success.environmentId,
         projectId: chosen.id,
-        modelSelection: chosen.defaultModelSelection ?? local.modelSelection,
+        modelSelection:
+          local.preferredModelSelection ?? chosen.defaultModelSelection ?? local.modelSelection,
         runtimeMode: local.runtimeMode,
         interactionMode: "default",
         // A repository gets its own worktree per task, as on this machine.

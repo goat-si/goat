@@ -5,6 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelReceptionInput,
   type ChannelTask,
+  ProviderInstanceId,
   type RemoteReport,
   type RemoteReportKind,
   type RuntimeMode,
@@ -13,15 +14,18 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { REMOTE_COPY, REMOTE_SETTLE_WAIT_MS } from "./ChannelRemoteWorkers.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
   botMessages,
   defaultScript,
@@ -994,6 +998,75 @@ describe("answers and settlement on another machine", () => {
       const failed = yield* until("failed", (task) => task.status === "failed");
       assert.strictEqual(failed.resultSummary, REMOTE_COPY.launchUncertain(machine.host));
       assert.strictEqual(harness.world.launches.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("Slack defaults for work on another machine", () => {
+  const slackModel = { instanceId: ProviderInstanceId.make("codex"), model: "slack-default" };
+  const remoteModel = { instanceId: ProviderInstanceId.make("codex"), model: "remote-default" };
+
+  /** A machine whose project has its own default model, and a Slack connection's defaults. */
+  const defaultsHarness = (defaultTarget: { readonly modelSelection?: typeof slackModel }) => {
+    const machine = new RemoteMachine();
+    machine.projects = machine.projects.map((project) => ({
+      ...project,
+      defaultModelSelection: remoteModel as never,
+    }));
+    const settings = Layer.effect(
+      SlackChannelSettings.SlackChannelSettings,
+      Effect.gen(function* () {
+        const unavailable = yield* SlackChannelSettings.SlackChannelSettings;
+        return SlackChannelSettings.SlackChannelSettings.of({
+          ...unavailable,
+          defaultTarget: () => Effect.succeed(Option.some(defaultTarget)),
+        });
+      }),
+    ).pipe(Layer.provide(SlackChannelSettings.layerUnavailable));
+    const harness = makeHarness({
+      sshRemote: machine.layer,
+      channelsLayer: ChannelLayers.makeLayerServices(settings),
+    });
+    harness.script.current = remoteScript;
+    return { machine, harness };
+  };
+
+  it.effect("starts Slack work there with the connection's model, under the link's ceiling", () => {
+    const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d1"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      const launch = machine.launches[0]!;
+      assert.deepStrictEqual(launch.modelSelection, slackModel);
+      // The default picks a model, never more authority.
+      assert.strictEqual(launch.callerRuntimeMode, "auto-accept-edits");
+      assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps the remote project's model without a Slack default", () => {
+    const { machine, harness } = defaultsHarness({});
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d2"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.deepStrictEqual(machine.launches[0]!.modelSelection, remoteModel);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("ignores Slack defaults for work from the GOAT bot", () => {
+    const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: build it", "d3"), rpcContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.deepStrictEqual(machine.launches[0]!.modelSelection, remoteModel);
     }).pipe(Effect.provide(harness.layer));
   });
 });

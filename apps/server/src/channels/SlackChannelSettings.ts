@@ -2,8 +2,8 @@
  * SlackChannelSettings - the port behind the `slackChannel.*` RPCs.
  *
  * Tokens go in through `configure` and are kept in the server secret store; nothing here
- * returns them. Until a live Slack runtime is assembled, the server provides an implementation
- * that fails with `adapter_unavailable` and advertises `slackChannel: false`.
+ * returns them. The server assembles the live implementation from `slack/` (see ChannelLayers);
+ * `layerUnavailable` serves tests that fake Slack.
  *
  * @module SlackChannelSettings
  */
@@ -51,8 +51,8 @@ export class SlackChannelSettings extends Context.Service<
 >()("t3/channels/SlackChannelSettings") {}
 
 /**
- * The port before a live Slack runtime is assembled: every call says Slack is unavailable, and
- * the environment advertises `slackChannel: false`. It never pretends to store a token.
+ * Slack switched off: every call says Slack is unavailable, and no default target exists. It
+ * never pretends to store a token.
  */
 export const layerUnavailable = Layer.succeed(
   SlackChannelSettings,
