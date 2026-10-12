@@ -11,6 +11,8 @@ export interface GoatBotEnvironmentInput {
   readonly environmentId: EnvironmentId;
   readonly connected: boolean;
   readonly supportsChannelLedger: boolean;
+  /** Answers `channel.getBotStatus`; older servers are paged with `listTasks`. */
+  readonly supportsBotStatus?: boolean;
   readonly primary: boolean;
   readonly label?: string;
   readonly homeTarget?: GoatBotHomeTarget;
@@ -76,7 +78,8 @@ export function goatBotHomeReadBack(
 
 /**
  * The machine GOAT Bot lives on: the one a known bot belongs to, else the
- * primary machine when it supports the bot, else the first one that does.
+ * primary machine. Only a client with no primary takes the first machine that
+ * supports the bot, so the bot never lands on a remote by itself.
  */
 export function pickGoatBotEnvironment(
   environments: ReadonlyArray<GoatBotEnvironmentInput>,
@@ -93,7 +96,7 @@ export function pickGoatBotEnvironment(
     if (known) return known;
   }
   return (
-    environments.find((entry) => entry.primary && entry.supportsChannelLedger) ??
+    environments.find((entry) => entry.primary) ??
     environments.find((entry) => entry.supportsChannelLedger) ??
     null
   );
@@ -125,8 +128,13 @@ export function resolveGoatBotAvailability(input: {
       };
     }
     if (resolution.state !== "claimed") {
+      const primary = input.environments.find((entry) => entry.primary);
+      // A loaded primary that cannot be home leaves nothing to claim; Settings can pick a remote.
+      if (candidateId === null && primary?.connected && primary.homeTarget?.settingsLoaded)
+        return { kind: "unsupported" };
       const environmentId =
         candidateId ??
+        primary?.environmentId ??
         input.environments.find((entry) => entry.homeTarget?.supportsHome)?.environmentId;
       return environmentId === undefined
         ? { kind: "unsupported" }

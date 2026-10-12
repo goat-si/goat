@@ -84,7 +84,12 @@ export function newGoatBotHomeClaim({
   };
 }
 
-/** Use this preference order only after resolving an unclaimed cluster. */
+/**
+ * Use this preference order only after resolving an unclaimed cluster. A client with a primary
+ * machine never puts the bot on another machine by itself: the bot stays where it already lives,
+ * else on the primary, and a remote becomes home only when the user picks it. Clients with no
+ * primary (hosted web) take the first machine that supports the bot.
+ */
 export function pickGoatBotHomeCandidate({
   targets,
   knownBotEnvironmentId,
@@ -101,7 +106,7 @@ export function pickGoatBotHomeCandidate({
     (
       eligible.find((target) => target.environmentId === knownBotEnvironmentId) ??
       eligible.find((target) => target.environmentId === primaryEnvironmentId) ??
-      eligible[0]
+      (primaryEnvironmentId === null ? eligible[0] : undefined)
     )?.environmentId ?? null
   );
 }

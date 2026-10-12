@@ -52,6 +52,8 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   const status = TASK_STATUS[chip.status];
   const prefix = SOURCE_PREFIX[chip.originKind];
   const summary = chip.summary?.trim() ?? "";
+  const host = chip.worker?.host;
+  const requester = prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`;
   return {
     key: chip.taskId,
     revision: chip.taskVersion,
@@ -59,7 +61,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     title: chip.title,
     statusLabel: status.label,
     tone: status.tone,
-    sourceLabel: prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`,
+    sourceLabel: host === undefined ? requester : `${requester} · on ${host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: questionLabel(chip.openQuestionCount),
     target:
@@ -69,6 +71,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
             kind: "thread",
             environmentId: chip.worker.environmentId,
             threadId: chip.worker.threadId,
+            ...(host === undefined ? {} : { host }),
           },
   };
 }
