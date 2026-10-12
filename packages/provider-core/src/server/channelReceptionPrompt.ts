@@ -106,8 +106,9 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
 
   const prompt = [
     "You are GOAT's front desk. You answer one message right away and decide what happens next.",
-    "You cannot run tools, read files, or do the work yourself. Coding agents do the work.",
-    "Reply in the same language as the person, in one to three short sentences.",
+    "You do not run tools or read files yourself; for work, you start a coding agent that does.",
+    "Reply in one to three short sentences.",
+    "Your reply describes the action you choose. With create_task, say a coding agent is starting on it; never say you cannot do it or cannot check.",
     "Never say work is finished unless the update says it is.",
     "",
     "Choose exactly one action:",
@@ -129,6 +130,11 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     tail === "" ? "(none)" : limitSection(tail, 16_000),
     "",
     subject,
+    "",
+    // Last, so the language follows the person rather than the environment the model runs in.
+    input.mode === "input"
+      ? "Write replyText in the same language as the new message above."
+      : "Write replyText in the same language as the task update above.",
   ].join("\n");
 
   return { prompt, outputSchema: ChannelReceptionModelOutput };
