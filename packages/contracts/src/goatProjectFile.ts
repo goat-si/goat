@@ -6,10 +6,10 @@ import { ProjectScriptIcon } from "./project.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
 
 /** File name of the checked-in T3 project file, resolved at the workspace root. */
-export const GOAT_PROJECT_FILE_NAME = "t3.json";
+export const GOAT_PROJECT_FILE_NAME = "goat.json";
 
 /** Public URL of the published JSON Schema for {@link GoatProjectFile}. */
-export const GOAT_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
+export const GOAT_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json"; // goat-rename: legacy
 
 const GOAT_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const GOAT_PROJECT_FILE_MAX_SCRIPTS = 50;
@@ -109,7 +109,7 @@ export const GoatProjectFile = Schema.Struct({
 }).annotate({
   title: "GOAT project file",
   description:
-    "Checked-in project configuration for GOAT (t3.json at the repository root). See https://t3.codes for documentation.",
+    "Checked-in project configuration for GOAT (goat.json at the repository root). See https://t3.codes for documentation.",
 });
 export type GoatProjectFile = typeof GoatProjectFile.Type;
 

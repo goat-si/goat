@@ -1,4 +1,6 @@
 import { GOAT_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
+import { goatProjectFileReadPath } from "@goat/client-runtime/goat-project-file";
+import * as Cause from "effect/Cause";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
@@ -24,30 +26,33 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
       () =>
         Atom.make((get) => {
           const files = new Map<string, GoatProjectFile | null>();
+          const paths = new Map<string, string>();
           for (const member of members) {
-            const result = get(
-              getProjectFileQueryAtom(
-                member.environmentId,
-                member.workspaceRoot,
-                GOAT_PROJECT_FILE_NAME,
-              ),
+            const read = (relativePath: string) => {
+              const result = get(
+                getProjectFileQueryAtom(member.environmentId, member.workspaceRoot, relativePath),
+              );
+              const data =
+                get(optimisticFileAtom(member.environmentId, member.workspaceRoot, relativePath))
+                  ?.data ?? Option.getOrNull(AsyncResult.value(result));
+              return { result, data };
+            };
+            const primary = read(GOAT_PROJECT_FILE_NAME);
+            const relativePath = goatProjectFileReadPath(
+              primary.data,
+              primary.result._tag === "Failure" ? Cause.squash(primary.result.cause) : null,
+              primary.result.waiting,
             );
-            if (result.waiting) continue;
-            // A pending in-app save overlays the query, like useProjectFileQuery.
-            const data =
-              get(
-                optimisticFileAtom(
-                  member.environmentId,
-                  member.workspaceRoot,
-                  GOAT_PROJECT_FILE_NAME,
-                ),
-              )?.data ?? Option.getOrNull(AsyncResult.value(result));
+            const { result, data } =
+              relativePath === GOAT_PROJECT_FILE_NAME ? primary : read(relativePath);
+            if (result.waiting && data === null) continue;
+            paths.set(member.physicalProjectKey, relativePath);
             files.set(
               member.physicalProjectKey,
               data === null || data.truncated ? null : parseGoatProjectFile(data.contents),
             );
           }
-          return files;
+          return { files, paths };
         }),
       [members],
     ),
@@ -84,7 +89,8 @@ function useResolvedSettingsScope(rawSearch: SettingsScopeSearch, singleEnvironm
     const targets = resolveScopedSettingsTargets(
       scope,
       selected.connectedEnvironments,
-      projectFiles,
+      projectFiles.files,
+      projectFiles.paths,
     );
     // The representative target supplies display values; project scopes
     // prefer the member on the primary environment, like environments do.

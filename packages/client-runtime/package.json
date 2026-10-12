@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./goat-project-file": {
+      "types": "./src/goatProjectFile.ts",
+      "default": "./src/goatProjectFile.ts"
+    },
     "./goatBot/home": {
       "types": "./src/goatBot/home.ts",
       "default": "./src/goatBot/home.ts"

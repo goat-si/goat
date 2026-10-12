@@ -117,8 +117,8 @@ export function ProjectActionsSettings() {
       )}
       {goatFile.status === "invalid" ? (
         <SettingsRow
-          title="t3.json is invalid"
-          description="A t3.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
+          title={`${goatFile.relativePath} is invalid`}
+          description={`A ${goatFile.relativePath} exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values.`}
           className="text-warning"
         />
       ) : null}

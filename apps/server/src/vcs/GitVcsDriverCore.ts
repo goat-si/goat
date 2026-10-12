@@ -34,6 +34,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { compactTraceAttributes } from "@goat/shared/observability";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
@@ -3470,6 +3471,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const hasSubmodules = yield* fileSystem
       .exists(path.join(worktreePath, ".gitmodules"))
       .pipe(Effect.orElseSucceed(() => false));
+    let projectFileName = GOAT_PROJECT_FILE_NAME;
     const submoduleMode = !hasSubmodules
       ? { value: "none" as const, source: "environment" as const }
       : resolveProjectFileBackedSetting(
@@ -3480,11 +3482,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             : yield* fileSystem
                 .readFileString(path.join(worktreePath, GOAT_PROJECT_FILE_NAME))
                 .pipe(
+                  Effect.catchTags({
+                    PlatformError: (error) => {
+                      if (error.reason._tag !== "NotFound") return Effect.fail(error);
+                      projectFileName = LEGACY_PROJECT_FILE_NAME;
+                      return fileSystem.readFileString(path.join(worktreePath, projectFileName));
+                    },
+                  }),
                   Effect.flatMap((contents) => {
                     const file = parseGoatProjectFile(contents);
                     return file === null
                       ? Effect.logWarning(
-                          "t3.json is invalid; initializing submodules recursively",
+                          `${projectFileName} is invalid; initializing submodules recursively`,
                           {
                             worktreePath,
                           },

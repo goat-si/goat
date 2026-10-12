@@ -1,3 +1,4 @@
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import {
   AuthFilesystemReadScope,
   EnvironmentId,
@@ -171,6 +172,97 @@ describe("project query refresh", () => {
     }
   });
 
+  it("reads the legacy file and overlays its in-app edits when goat.json is missing", () => {
+    const registry = AtomRegistry.make();
+    atomHooks.registry = registry;
+    const primary = Atom.make(
+      AsyncResult.failure(
+        Cause.fail(
+          new ProjectReadFileError({
+            cwd: "/repo",
+            relativePath: "goat.json",
+            failure: "operation_failed",
+            operation: "realpath-target",
+            cause: new Error("ENOENT: no such file"),
+          }),
+        ),
+      ),
+    );
+    const legacy = Atom.make(AsyncResult.success(file('{ "iconPath": "old.svg" }')));
+    const optimistic = Atom.make({ data: file('{ "iconPath": "edited.svg" }') });
+    const emptyOptimistic = Atom.make(null);
+    projectMocks.readFile.mockImplementation(({ input }) =>
+      input.relativePath === "goat.json" ? primary : legacy,
+    );
+    projectMocks.optimisticFile.mockImplementation(({ relativePath }) =>
+      relativePath === LEGACY_PROJECT_FILE_NAME ? optimistic : emptyOptimistic,
+    );
+    try {
+      expect(useGoatProjectFileState(environmentId, "/repo")).toMatchObject({
+        status: "valid",
+        file: { iconPath: "edited.svg" },
+        relativePath: LEGACY_PROJECT_FILE_NAME,
+      });
+      expect(
+        projectMocks.readFile.mock.calls.map(([request]) => request.input.relativePath),
+      ).toEqual(["goat.json", LEGACY_PROJECT_FILE_NAME]);
+    } finally {
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("uses goat.json as the creation path when neither project file exists", () => {
+    const registry = AtomRegistry.make();
+    atomHooks.registry = registry;
+    projectMocks.readFile.mockImplementation(({ input }) =>
+      Atom.make(
+        AsyncResult.failure(
+          Cause.fail(
+            new ProjectReadFileError({
+              cwd: "/repo",
+              relativePath: input.relativePath,
+              failure: "operation_failed",
+              operation: "realpath-target",
+              cause: new Error("ENOENT: no such file"),
+            }),
+          ),
+        ),
+      ),
+    );
+    projectMocks.optimisticFile.mockReturnValue(Atom.make(null));
+    try {
+      expect(useGoatProjectFileState(environmentId, "/repo")).toMatchObject({
+        status: "missing",
+        relativePath: "goat.json",
+        file: null,
+      });
+    } finally {
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("reports invalid goat.json and avoids a legacy query", () => {
+    const registry = AtomRegistry.make();
+    atomHooks.registry = registry;
+    projectMocks.readFile.mockReturnValue(Atom.make(AsyncResult.success(file("{ invalid"))));
+    projectMocks.optimisticFile.mockReturnValue(Atom.make(null));
+    try {
+      expect(useGoatProjectFileState(environmentId, "/repo")).toMatchObject({
+        status: "invalid",
+        relativePath: "goat.json",
+        file: null,
+      });
+      expect(
+        projectMocks.readFile.mock.calls.map(([request]) => request.input.relativePath),
+      ).toEqual(["goat.json"]);
+    } finally {
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
   it("keeps t3.json and the file tree loading until the file grant arrives", () => {
     authorizationMocks.sessionAtom = Atom.make(AsyncResult.initial());
     const registry = AtomRegistry.make();
@@ -208,6 +300,7 @@ describe("project query refresh", () => {
         status: "valid",
         file: config,
         scripts: config.scripts,
+        relativePath: "goat.json",
       });
       expect(useProjectEntriesQuery(environmentId, "/repo")).toMatchObject({
         data: projectEntries(["t3.json"]),
@@ -249,6 +342,7 @@ describe("project query refresh", () => {
           status: "valid",
           file: config,
           scripts: config.scripts,
+          relativePath: "goat.json",
         });
       } finally {
         registry.dispose();

@@ -25,6 +25,7 @@ import {
 } from "@goat/contracts";
 import { sanitizeNewRefName } from "@goat/shared/git";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
+import { goatProjectFileReadPath } from "@goat/client-runtime/goat-project-file";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -513,7 +514,27 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         })
       : null,
   );
-  const goatProjectFileData = goatProjectFileQuery.data as ProjectReadFileResult | null;
+  const projectFilePath = goatProjectFileReadPath(
+    goatProjectFileQuery.data,
+    goatProjectFileQuery.cause,
+    goatProjectFileQuery.isPending,
+  );
+  const legacyProjectFileQuery = useEnvironmentQuery(
+    canReadFiles &&
+      selectedProject !== null &&
+      selectedProject.workspaceRoot !== "" &&
+      projectFilePath !== GOAT_PROJECT_FILE_NAME
+      ? projectEnvironment.readFile({
+          environmentId: selectedProject.environmentId,
+          input: { cwd: selectedProject.workspaceRoot, relativePath: projectFilePath },
+        })
+      : null,
+  );
+  const goatProjectFileData = (
+    projectFilePath === GOAT_PROJECT_FILE_NAME
+      ? goatProjectFileQuery.data
+      : legacyProjectFileQuery.data
+  ) as ProjectReadFileResult | null;
   const goatProjectFile = useMemo(
     () =>
       goatProjectFileData === null || goatProjectFileData.truncated
@@ -559,7 +580,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const defaultWorkspaceModeSettled =
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
     projectSettings.sources.defaultThreadEnvMode !== "environment" ||
-    (!goatProjectFileQuery.isPending && !fileAccessPending);
+    (!goatProjectFileQuery.isPending && !legacyProjectFileQuery.isPending && !fileAccessPending);
   const workspaceMode = canChooseWorkspace
     ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
     : "local";

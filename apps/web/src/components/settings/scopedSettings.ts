@@ -1,5 +1,6 @@
 import {
   ClientSettingsSchema,
+  GOAT_PROJECT_FILE_NAME,
   type ClientSettingsPatch,
   type EnvironmentId,
   isNullableProjectSettingsOverride,
@@ -80,6 +81,7 @@ export interface ScopedSettingsTarget {
   /** The environment's label; a project is the same project on every environment. */
   readonly label: string;
   readonly projectId: ProjectId | null;
+  readonly projectFileName?: string;
   readonly settings: ServerSettings;
   readonly sources: Readonly<Record<ProjectScopedServerSettingKey, ProjectSettingSource>>;
 }
@@ -91,6 +93,7 @@ export function resolveScopedSettingsTargets(
   // Each member's decoded t3.json, keyed by physical project key, once read.
   // A member absent here has no file tier yet; null is a missing or invalid file.
   projectFiles?: ReadonlyMap<string, GoatProjectFile | null>,
+  projectFileNames?: ReadonlyMap<string, string>,
 ): readonly ScopedSettingsTarget[] {
   const byId = new Map(
     connectedEnvironments.map((environment) => [environment.environmentId, environment]),
@@ -109,6 +112,8 @@ export function resolveScopedSettingsTargets(
           environmentId: member.environmentId,
           label: environment.label,
           projectId: member.id,
+          projectFileName:
+            projectFileNames?.get(member.physicalProjectKey) ?? GOAT_PROJECT_FILE_NAME,
           settings: resolved.settings,
           sources: resolved.sources,
         },

@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
+import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -3195,12 +3197,17 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const worktreesDir = yield* makeTmpDir("git-worktrees-");
 
         const createWithMode = Effect.fn(function* (
-          fileMode: WorktreeSubmodules,
+          fileMode: WorktreeSubmodules | "invalid",
           branch: string,
           submodules: WorktreeSubmodules | null = null,
+          fileName = GOAT_PROJECT_FILE_NAME,
         ) {
-          yield* writeTextFile(cwd, "t3.json", `{ "worktreeSubmodules": "${fileMode}" }`);
-          yield* git(cwd, ["add", "t3.json"]);
+          yield* writeTextFile(
+            cwd,
+            fileName,
+            fileMode === "invalid" ? "{ not json" : `{ "worktreeSubmodules": "${fileMode}" }`,
+          );
+          yield* git(cwd, ["add", fileName]);
           // Consecutive cases may reuse a file mode to test the option alone.
           yield* git(cwd, ["commit", "--allow-empty", "-m", `submodules: ${fileMode}`]);
           const worktreePath = pathService.join(worktreesDir, branch);
@@ -3221,6 +3228,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           };
         });
 
+        assert.deepEqual(
+          yield* createWithMode("top-level", "legacy", null, LEGACY_PROJECT_FILE_NAME),
+          {
+            disabled: false,
+            inner: true,
+            nested: false,
+          },
+        );
         assert.deepEqual(yield* createWithMode("recursive", "recursive"), {
           disabled: false,
           inner: true,
@@ -3230,6 +3245,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           disabled: false,
           inner: true,
           nested: false,
+        });
+        assert.deepEqual(yield* createWithMode("invalid", "invalid"), {
+          disabled: false,
+          inner: true,
+          nested: true,
         });
         // A resolved setting outranks the file in both directions.
         assert.deepEqual(yield* createWithMode("recursive", "setting-none", "none"), {

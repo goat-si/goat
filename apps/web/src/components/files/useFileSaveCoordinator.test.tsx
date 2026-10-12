@@ -1,3 +1,4 @@
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import { EnvironmentId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { act, StrictMode } from "react";
@@ -91,6 +92,20 @@ describe("file-save React lifecycle", () => {
       "AUDIT7907NATIVE\n",
     );
     expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", false);
+  });
+
+  it("saves an existing legacy project file to the path that was read", async () => {
+    mount({ ...defaultProps, relativePath: LEGACY_PROJECT_FILE_NAME });
+    changeHandler()('{ "iconPath": "updated.svg" }');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(writeFile).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: {
+        cwd: "/workspace",
+        relativePath: LEGACY_PROJECT_FILE_NAME,
+        contents: '{ "iconPath": "updated.svg" }',
+      },
+    });
   });
 
   it("persists rendered Markdown task changes after StrictMode setup replay", async () => {

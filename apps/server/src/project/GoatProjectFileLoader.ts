@@ -17,6 +17,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { GOAT_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
 import { GoatProjectFileFromJson } from "@goat/shared/goatProjectFile";
 
 const decodeGoatProjectFileJson = Schema.decodeEffect(GoatProjectFileFromJson);
@@ -31,7 +32,10 @@ export class GoatProjectFileLoadError extends Schema.TaggedError<GoatProjectFile
   },
 ) {
   override get message(): string {
-    return `Failed to ${this.operation} ${GOAT_PROJECT_FILE_NAME} at ${this.filePath}.`;
+    const fileName = this.filePath.endsWith(LEGACY_PROJECT_FILE_NAME)
+      ? LEGACY_PROJECT_FILE_NAME
+      : GOAT_PROJECT_FILE_NAME;
+    return `Failed to ${this.operation} ${fileName} at ${this.filePath}.`;
   }
 }
 
@@ -66,8 +70,15 @@ export const make = Effect.gen(function* () {
 
   const load: GoatProjectFileLoader["Service"]["load"] = Effect.fn("GoatProjectFileLoader.load")(
     function* (workspaceRoot) {
-      const filePath = path.join(workspaceRoot, GOAT_PROJECT_FILE_NAME);
+      let filePath = path.join(workspaceRoot, GOAT_PROJECT_FILE_NAME);
       const raw = yield* fileSystem.readFileString(filePath).pipe(
+        Effect.catchTags({
+          PlatformError: (error) => {
+            if (error.reason._tag !== "NotFound") return Effect.fail(error);
+            filePath = path.join(workspaceRoot, LEGACY_PROJECT_FILE_NAME);
+            return fileSystem.readFileString(filePath);
+          },
+        }),
         Effect.asSome,
         Effect.catchTags({
           PlatformError: (error) =>

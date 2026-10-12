@@ -6,6 +6,9 @@
  * Dependency-free on purpose: contracts and shared both import it.
  */
 
+/** Checked-in project file used by builds before the GOAT rename. */
+export const LEGACY_PROJECT_FILE_NAME = "t3.json";
+
 type Env = Record<string, string | undefined>;
 
 /** Home directory (`~/.t3`, a worktree's `.t3`) that builds before the GOAT rename created. */
