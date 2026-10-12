@@ -1,6 +1,8 @@
 import { ScheduledTaskId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { prependStandingInstructions } from "@t3tools/shared/standingInstructions";
+
 import { resolveUserMessagePresentation } from "./userMessage.ts";
 
 describe("resolveUserMessagePresentation", () => {
@@ -13,6 +15,7 @@ describe("resolveUserMessagePresentation", () => {
       text: "Check for crashes.\n",
       attribution: "automation",
       scheduledTaskId: undefined,
+      standingInstructions: null,
     });
   });
 
@@ -24,7 +27,12 @@ describe("resolveUserMessagePresentation", () => {
         scheduledTaskId: ScheduledTaskId.make("task-1"),
         text: legacyText,
       }),
-    ).toEqual({ text: legacyText, attribution: "automation", scheduledTaskId: "task-1" });
+    ).toEqual({
+      text: legacyText,
+      attribution: "automation",
+      scheduledTaskId: "task-1",
+      standingInstructions: null,
+    });
   });
 
   it("preserves user-written and assistant-quoted schedule headers", () => {
@@ -37,6 +45,7 @@ describe("resolveUserMessagePresentation", () => {
         text: legacyText,
         attribution: null,
         scheduledTaskId: undefined,
+        standingInstructions: null,
       });
     }
   });
@@ -51,6 +60,7 @@ describe("resolveUserMessagePresentation", () => {
         text,
         attribution: "agent",
         scheduledTaskId: undefined,
+        standingInstructions: null,
       });
     }
   });
@@ -85,7 +95,29 @@ describe("resolveUserMessagePresentation", () => {
         text: "Check for crashes.\n",
         attribution: "automation",
         scheduledTaskId: "task:daily-audit",
+        standingInstructions: null,
       });
     }
+  });
+
+  it("separates standing instructions from an agent-launched thread's task", () => {
+    const { text, block } = prependStandingInstructions("Use sol for subagents.", "Fix #79.");
+    expect(
+      resolveUserMessagePresentation({
+        role: "user",
+        createdBy: "agent",
+        creationSource: "mcp",
+        text,
+      }),
+    ).toEqual({
+      text: "Fix #79.",
+      attribution: "agent",
+      scheduledTaskId: undefined,
+      standingInstructions: block,
+    });
+    // A person who types the same block sees it as written.
+    expect(resolveUserMessagePresentation({ role: "user", createdBy: "user", text })).toMatchObject(
+      { text, standingInstructions: null },
+    );
   });
 });

@@ -14,12 +14,18 @@ import { buildHomeListFilterMenu } from "./home-list-filter-menu";
 import { createSidebarHeaderItems } from "../threads/sidebar-native-header-items";
 import type { HomeHeaderProps } from "./HomeHeader.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 
 export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
 export function HomeHeader(props: HomeHeaderProps) {
+  const botMode = useMobileGoatBotModeButton();
+  const mode = props.homeMode ?? botMode.mode;
+  const botKnown = props.botKnown ?? botMode.known;
+  const toggleMode = props.onToggleHomeMode ?? botMode.toggle;
   const navigation = useNavigation<NativeStackNavigationProp<ParamListBase>>();
-  const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
+  const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
+  const compactBot = !layout.usesSplitView && mode === "bot";
   const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const primaryColumn = use(NativePrimaryColumnContext);
   const sidebarHeader =
@@ -59,13 +65,13 @@ export function HomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, mode, botKnown, primaryColumn?.selectedThreadKey]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
-          unstable_headerRightItems: () =>
-            sidebarHeader
+          unstable_headerRightItems: () => [
+            ...(sidebarHeader
               ? createSidebarHeaderItems({
                   filterIcon: hasCustomListOptions
                     ? "line.3.horizontal.decrease.circle.fill"
@@ -82,69 +88,96 @@ export function HomeHeader(props: HomeHeaderProps) {
                     onPress: props.onOpenSettings,
                     type: "button",
                   }),
-                ],
+                ]),
+            ...(botKnown
+              ? [
+                  withNativeGlassHeaderItem({
+                    accessibilityLabel:
+                      mode === "bot" && primaryColumn?.selectedThreadKey == null
+                        ? "Show threads"
+                        : "Show GOAT Bot",
+                    icon: {
+                      name:
+                        mode === "bot" && primaryColumn?.selectedThreadKey == null
+                          ? "list.bullet"
+                          : "bubble.left.and.bubble.right",
+                      type: "sfSymbol",
+                    } as const,
+                    identifier: "home-mode",
+                    label: "",
+                    onPress: toggleMode,
+                    type: "button",
+                  }),
+                ]
+              : []),
+          ],
           // The keys below are set per-branch (not `undefined`) so a later
           // reapply cannot clobber options owned by NativeHeaderToolbar.
-          ...(sidebarHeader
+          ...(compactBot
             ? {
-                headerSearchBarOptions: {
-                  ref: searchBarRef,
-                  autoCapitalize: "none" as const,
-                  hideNavigationBar: false,
-                  hideWhenScrolling: false,
-                  obscureBackground: false,
-                  placement: "stacked" as const,
-                  allowToolbarIntegration: false,
-                  placeholder: "Search",
-                  onCancelButtonPress: () => props.onSearchQueryChange(""),
-                  onChangeText: (event) => props.onSearchQueryChange(event.nativeEvent.text),
-                },
+                headerSearchBarOptions: undefined,
                 unstable_headerToolbarItems: () => [],
               }
-            : usesNativeMailSearchToolbar
+            : sidebarHeader
               ? {
                   headerSearchBarOptions: {
                     ref: searchBarRef,
                     autoCapitalize: "none" as const,
-                    onCancelButtonPress: () => props.onSearchQueryChange(""),
-                  },
-                  unstable_headerToolbarItems: () => [
-                    createNativeMailSearchToolbarItem({
-                      composeButtonId: "home-new-task",
-                      composeSystemImageName: "square.and.pencil",
-                      filterMenu,
-                      filterButtonId: "home-filter",
-                      filterSystemImageName: hasCustomListOptions
-                        ? "line.3.horizontal.decrease.circle.fill"
-                        : "line.3.horizontal.decrease",
-                      onComposePress: props.onStartNewTask,
-                      onSearchTextChange: props.onSearchQueryChange,
-                      placeholder: "Search",
-                      searchTextChangeId: "home-search-text",
-                      showsSearchDismissButton: true,
-                    }),
-                  ],
-                }
-              : {
-                  // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                  // bar; create + sort live in the plain bottom toolbar below.
-                  headerSearchBarOptions: {
-                    ref: searchBarRef,
-                    autoCapitalize: "none" as const,
                     hideNavigationBar: false,
+                    hideWhenScrolling: false,
+                    obscureBackground: false,
+                    placement: "stacked" as const,
+                    allowToolbarIntegration: false,
                     placeholder: "Search",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
+                    onCancelButtonPress: () => props.onSearchQueryChange(""),
+                    onChangeText: (event) => props.onSearchQueryChange(event.nativeEvent.text),
                   },
-                }),
+                  unstable_headerToolbarItems: () => [],
+                }
+              : usesNativeMailSearchToolbar
+                ? {
+                    headerSearchBarOptions: {
+                      ref: searchBarRef,
+                      autoCapitalize: "none" as const,
+                      onCancelButtonPress: () => props.onSearchQueryChange(""),
+                    },
+                    unstable_headerToolbarItems: () => [
+                      createNativeMailSearchToolbarItem({
+                        composeButtonId: "home-new-task",
+                        composeSystemImageName: "square.and.pencil",
+                        filterMenu,
+                        filterButtonId: "home-filter",
+                        filterSystemImageName: hasCustomListOptions
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease",
+                        onComposePress: props.onStartNewTask,
+                        onSearchTextChange: props.onSearchQueryChange,
+                        placeholder: "Search",
+                        searchTextChangeId: "home-search-text",
+                        showsSearchDismissButton: true,
+                      }),
+                    ],
+                  }
+                : {
+                    // Pre-Liquid-Glass iOS: standard pull-down search in the nav
+                    // bar; create + sort live in the plain bottom toolbar below.
+                    headerSearchBarOptions: {
+                      ref: searchBarRef,
+                      autoCapitalize: "none" as const,
+                      hideNavigationBar: false,
+                      placeholder: "Search",
+                      onCancelButtonPress: () => {
+                        props.onSearchQueryChange("");
+                      },
+                      onChangeText: (event) => {
+                        props.onSearchQueryChange(event.nativeEvent.text);
+                      },
+                    },
+                  }),
         }}
       />
 
-      {sidebarHeader || usesNativeMailSearchToolbar ? null : (
+      {compactBot || sidebarHeader || usesNativeMailSearchToolbar ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter threads"

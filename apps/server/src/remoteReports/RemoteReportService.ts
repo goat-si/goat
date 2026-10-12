@@ -2,9 +2,13 @@
 import * as NodeCrypto from "node:crypto";
 import {
   NonNegativeInt,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2Run,
   ThreadId,
   RemoteReportBindingInput,
   RemoteReport,
+  type RemoteKnownRun,
+  type RemoteObservedRun,
   RemoteOriginReportInput,
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
@@ -21,7 +25,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import { isTerminalRunStatus } from "../orchestration-v2/ThreadManagementService.ts";
+import {
+  isTerminalRunStatus,
+  pendingUserInputRequestIdsForRun,
+} from "../orchestration-v2/ThreadManagementService.ts";
 
 export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
   "RemoteReportError",
@@ -54,6 +61,30 @@ const decodeWaitInput = Schema.decodeUnknownEffect(RemoteOriginReportsWaitInput)
 const decodeReports = Schema.decodeUnknownEffect(Schema.Array(RemoteReport));
 const isRemoteReportError = Schema.is(RemoteReportError);
 
+const sameRequestIds = (
+  known: ReadonlyArray<string> | undefined,
+  observed: ReadonlyArray<string> | undefined,
+) => known === undefined || known.join("\n") === (observed ?? []).join("\n");
+const sameHolds = (known: RemoteKnownRun["holds"], observed: RemoteObservedRun["holds"]) =>
+  known === undefined ||
+  (known.backgroundTasks === (observed?.backgroundTasks ?? 0) &&
+    known.continuationPending === (observed?.continuationPending ?? false));
+/**
+ * Whether a read differs from the caller's last view. Questions and holds count
+ * only when the caller sent them, so an older origin that cannot echo them back
+ * is not released on every call while a question is open.
+ */
+export const observedRunChanged = (
+  known: RemoteKnownRun | null,
+  observed: RemoteObservedRun | null,
+) =>
+  (observed?.runId ?? null) !== (known?.runId ?? null) ||
+  (observed?.status ?? null) !== (known?.status ?? null) ||
+  (known !== null &&
+    observed !== null &&
+    (!sameRequestIds(known.pendingRequestIds, observed.pendingRequestIds) ||
+      !sameHolds(known.holds, observed.holds)));
+
 export class RemoteReportService extends Context.Service<
   RemoteReportService,
   {
@@ -62,6 +93,13 @@ export class RemoteReportService extends Context.Service<
       input: RemoteReportBindingInput,
     ) => Effect.Effect<void, RemoteReportError>;
     readonly unbind: (threadId: ThreadId) => Effect.Effect<void, RemoteReportError>;
+    /** The machine and thread this thread was launched from, when it reports to one. */
+    readonly origin: (
+      threadId: ThreadId,
+    ) => Effect.Effect<
+      { readonly originLabel: string; readonly originThreadId: ThreadId } | null,
+      RemoteReportError
+    >;
     readonly report: (
       threadId: ThreadId,
       input: RemoteOriginReportInput,
@@ -177,6 +215,48 @@ const make = Effect.gen(function* () {
         const afterSequence = yield* orchestrator
           .getThreadEventSequence(binding.threadId)
           .pipe(Effect.mapError(unavailable));
+        // A live run's open questions; what still holds a finished run's thread open.
+        const runState = (run: OrchestrationV2Run) =>
+          Effect.gen(function* () {
+            if (!isTerminalRunStatus(run.status)) {
+              const items = yield* orchestrator
+                .getThreadRecords(binding.threadId, ["turnItems"], {
+                  turnItemTypes: ["user_input_request"],
+                  turnItemRunIds: [run.id],
+                })
+                .pipe(Effect.mapError(unavailable));
+              const requestIds = items.turnItems.flatMap((item) =>
+                item.type === "user_input_request" && item.runId === run.id ? [item.requestId] : [],
+              );
+              if (requestIds.length === 0) return { pendingRequestIds: [] };
+              const requests = yield* orchestrator
+                .getThreadRecords(binding.threadId, ["runtimeRequests"], {
+                  runtimeRequestIds: requestIds,
+                })
+                .pipe(Effect.mapError(unavailable));
+              return {
+                pendingRequestIds: pendingUserInputRequestIdsForRun(
+                  { ...items, ...requests },
+                  run.id,
+                ),
+              };
+            }
+            const records = yield* orchestrator
+              .getThreadRecords(binding.threadId, ["providerThreads"])
+              .pipe(Effect.mapError(unavailable));
+            const continuationPending = yield* orchestrator
+              .delegatedTaskResultPending(binding.threadId)
+              .pipe(Effect.mapError(unavailable));
+            return {
+              holds: {
+                backgroundTasks: records.providerThreads.reduce(
+                  (count, thread) => count + (thread.pendingBackgroundTasks?.length ?? 0),
+                  0,
+                ),
+                continuationPending,
+              },
+            };
+          });
         const read = Effect.gen(function* () {
           const reports = yield* sql
             .withTransaction(
@@ -226,7 +306,7 @@ const make = Effect.gen(function* () {
                   .at(-1)
                   ?.text.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) ?? null;
             }
-            observedRun = { runId, status: run.status, summary };
+            observedRun = { runId, status: run.status, summary, ...(yield* runState(run)) };
           }
           return {
             threadId: binding.threadId,
@@ -238,20 +318,19 @@ const make = Effect.gen(function* () {
           } satisfies RemoteOriginReportsWaitResult;
         });
         const changed = (result: RemoteOriginReportsWaitResult) =>
-          result.reports.length > 0 ||
-          (result.observedRun?.runId ?? null) !== (value.knownRun?.runId ?? null) ||
-          (result.observedRun?.status ?? null) !== (value.knownRun?.status ?? null);
+          result.reports.length > 0 || observedRunChanged(value.knownRun, result.observedRun);
         const first = yield* read;
         if (changed(first)) return first;
         if (value.timeoutMs === 0) return { ...first, timedOut: true };
-        const events = Stream.merge(
-          orchestrator
-            .streamStoredEventsFrom({
-              threadId: binding.threadId,
-              afterSequence,
-              eventType: "run.updated",
-            })
-            .pipe(
+        const stream = (eventType: OrchestrationV2DomainEvent["type"]) =>
+          orchestrator.streamStoredEventsFrom({
+            threadId: binding.threadId,
+            afterSequence,
+            eventType,
+          });
+        const events = Stream.mergeAll(
+          [
+            stream("run.updated").pipe(
               Stream.filter(
                 (stored) =>
                   value.watchRunId === null ||
@@ -259,21 +338,22 @@ const make = Effect.gen(function* () {
                     stored.event.payload.id === value.watchRunId),
               ),
             ),
-          Stream.merge(
-            orchestrator.streamStoredEventsFrom({
-              threadId: binding.threadId,
-              afterSequence,
-              eventType: "thread.deleted",
-            }),
+            stream("thread.deleted"),
             // Following the latest run means a newly created run is a change too.
-            value.watchRunId === null
-              ? orchestrator.streamStoredEventsFrom({
-                  threadId: binding.threadId,
-                  afterSequence,
-                  eventType: "run.created",
-                })
-              : Stream.empty,
-          ),
+            value.watchRunId === null ? stream("run.created") : Stream.empty,
+            // Questions open and close; background work starts and ends.
+            stream("runtime-request.updated"),
+            // The question item can commit after its request; other items need no read.
+            stream("turn-item.updated").pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "turn-item.updated" &&
+                  stored.event.payload.type === "user_input_request",
+              ),
+            ),
+            stream("provider-thread.updated"),
+          ],
+          { concurrency: "unbounded" },
         ).pipe(
           Stream.mapError(unavailable),
           Stream.map(() => undefined),
@@ -291,6 +371,12 @@ const make = Effect.gen(function* () {
       }),
     );
   });
-  return RemoteReportService.of({ bind, unbind, report, wait });
+  const origin = Effect.fn("RemoteReportService.origin")(function* (threadId: ThreadId) {
+    const binding = (yield* bindingForThread(threadId))[0];
+    return binding === undefined
+      ? null
+      : { originLabel: binding.originLabel, originThreadId: binding.originThreadId };
+  });
+  return RemoteReportService.of({ bind, unbind, origin, report, wait });
 });
 export const layer = Layer.effect(RemoteReportService, make);

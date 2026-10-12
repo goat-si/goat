@@ -7,7 +7,7 @@ import {
   settleGoatBotEnsure,
   startGoatBotEnsure,
   syncGoatBotEnsure,
-} from "./goatBotEnsure";
+} from "./ensure.ts";
 
 const bot = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
 const confirmed = { kind: "confirmed", bot } as const;

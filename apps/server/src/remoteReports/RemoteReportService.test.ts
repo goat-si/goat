@@ -4,6 +4,7 @@ import { expect, it } from "@effect/vitest";
 import {
   ThreadId,
   RunId,
+  RuntimeRequestId,
   MessageId,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShell,
@@ -81,6 +82,10 @@ const setup = Effect.gen(function* () {
     deletedAt: string | null;
     reads: number;
     afterRead: Effect.Effect<void> | undefined;
+    /** Open question ids on runA; the fake joins items and requests as the projection does. */
+    questions: string[];
+    backgroundTasks: number;
+    continuationPending: boolean;
     subscriptions: Array<
       Parameters<Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"]>[0]
     >;
@@ -92,6 +97,9 @@ const setup = Effect.gen(function* () {
     deletedAt: null,
     reads: 0,
     afterRead: undefined,
+    questions: [],
+    backgroundTasks: 0,
+    continuationPending: false,
     subscriptions: [],
   };
   const fake = Layer.mock(Orchestrator.OrchestratorV2)({
@@ -106,19 +114,38 @@ const setup = Effect.gen(function* () {
           }) as unknown as OrchestrationV2ThreadShell,
       ),
     getThreadEventSequence: () => Effect.succeed(17),
-    getThreadRecords: () =>
+    getThreadRecords: (_threadId, fields) =>
       Effect.gen(function* () {
-        state.reads += 1;
+        // Counts run and transcript reads; question and hold lookups ride along.
+        if (fields.some((field) => field === "runs" || field === "messages")) state.reads += 1;
         const result = {
           thread: { id: threadId, deletedAt: state.deletedAt },
           runs: state.runs.map((item) => ({ ...item })),
           messages: [...state.messages],
+          turnItems: state.questions.map((requestId) => ({
+            type: "user_input_request",
+            runId: runA,
+            requestId,
+          })),
+          runtimeRequests: state.questions.map((id) => ({
+            id,
+            kind: "user_input",
+            status: "pending",
+          })),
+          providerThreads: [
+            {
+              pendingBackgroundTasks: Array.from({ length: state.backgroundTasks }, (_, i) => ({
+                taskId: `background-${i}`,
+              })),
+            },
+          ],
         };
         const after = state.afterRead;
         state.afterRead = undefined;
         if (after !== undefined) yield* after;
         return result as unknown as OrchestrationV2ThreadProjection;
       }),
+    delegatedTaskResultPending: () => Effect.sync(() => state.continuationPending),
     streamStoredEventsFrom: (input) => {
       state.subscriptions.push(input);
       return input?.eventType === "run.updated"
@@ -277,10 +304,16 @@ test("observes completed A after B starts and summarizes only A's last assistant
       runId: runA,
       status: "completed",
       summary: "x".repeat(4000),
+      holds: { backgroundTasks: 0, continuationPending: false },
     });
     expect(result.latestRunId).toBe(runB);
     const latest = yield* service.wait({ ...waitInput, watchRunId: null });
-    expect(latest.observedRun).toEqual({ runId: runB, status: "running", summary: null });
+    expect(latest.observedRun).toEqual({
+      runId: runB,
+      status: "running",
+      summary: null,
+      pendingRequestIds: [],
+    });
     expect(
       (yield* service.wait({ ...waitInput, watchRunId: RunId.make("missing") }).pipe(Effect.flip))
         .reason,
@@ -310,7 +343,12 @@ test("a new run wakes a wait that follows the latest run", ({
       stored(18, { type: "run.created", payload: run(runB, "queued", 2) }),
     );
     const result = yield* Fiber.join(fiber);
-    expect(result.observedRun).toEqual({ runId: runB, status: "queued", summary: null });
+    expect(result.observedRun).toEqual({
+      runId: runB,
+      status: "queued",
+      summary: null,
+      pendingRequestIds: [],
+    });
     expect(result.timedOut).toBe(false);
     expect(state.subscriptions).toContainEqual({
       threadId,
@@ -333,7 +371,12 @@ test("replays a run update between initial snapshot and stream subscription", ({
       Effect.asVoid,
     );
     const result = yield* service.wait(waitInput);
-    expect(result.observedRun).toEqual({ runId: runA, status: "completed", summary: null });
+    expect(result.observedRun).toEqual({
+      runId: runA,
+      status: "completed",
+      summary: null,
+      holds: { backgroundTasks: 0, continuationPending: false },
+    });
     expect(state.subscriptions).toContainEqual({
       threadId,
       afterSequence: 17,
@@ -403,6 +446,60 @@ test("times out using TestClock and returns a final running observation", ({
       observedRun: { runId: runA, status: "running" },
     });
     expect(state.reads).toBe(2);
+  }));
+test("an open question releases a caller that echoes questions once, and never an older one", ({
+  service,
+  state,
+  deletions,
+  subscribed,
+}) =>
+  Effect.gen(function* () {
+    const knownRun = { runId: runA, status: "running", pendingRequestIds: [] };
+    const fiber = yield* service.wait({ ...waitInput, knownRun }).pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    state.questions = ["request-1"];
+    yield* Queue.offer(
+      deletions,
+      stored(18, { type: "turn-item.updated", payload: { type: "user_input_request" } }),
+    );
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      timedOut: false,
+      observedRun: { runId: runA, status: "running", pendingRequestIds: ["request-1"] },
+    });
+    // Echoed back, the same question no longer releases the wait.
+    expect(
+      (yield* service.wait({
+        ...waitInput,
+        knownRun: { ...knownRun, pendingRequestIds: [RuntimeRequestId.make("request-1")] },
+        timeoutMs: 0,
+      })).timedOut,
+    ).toBe(true);
+    // An origin that cannot echo questions is not released on every call while one is open.
+    expect((yield* service.wait({ ...waitInput, timeoutMs: 0 })).timedOut).toBe(true);
+  }));
+test("a finished run reports what holds it open and releases when that changes", ({
+  service,
+  state,
+  deletions,
+  subscribed,
+}) =>
+  Effect.gen(function* () {
+    state.runs = [run(runA, "completed")];
+    state.backgroundTasks = 2;
+    state.continuationPending = true;
+    const first = yield* service.wait({ ...waitInput, knownRun: null });
+    expect(first.observedRun?.holds).toEqual({ backgroundTasks: 2, continuationPending: true });
+    const knownRun = { runId: runA, status: "completed", holds: first.observedRun!.holds! };
+    expect((yield* service.wait({ ...waitInput, knownRun, timeoutMs: 0 })).timedOut).toBe(true);
+    const fiber = yield* service.wait({ ...waitInput, knownRun }).pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    state.backgroundTasks = 0;
+    state.continuationPending = false;
+    yield* Queue.offer(deletions, stored(18, { type: "provider-thread.updated", payload: {} }));
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      timedOut: false,
+      observedRun: { holds: { backgroundTasks: 0, continuationPending: false } },
+    });
   }));
 test("unbind removes reports, wakes waiters and blocks future reports", ({
   service,

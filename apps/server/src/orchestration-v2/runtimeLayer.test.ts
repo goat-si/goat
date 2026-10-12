@@ -1555,7 +1555,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       }
     }),
   );
-  it.effect("rejects every non-user approval responder without committing", () =>
+  it.effect("rejects every agent approval responder without committing", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const outbox = yield* EffectOutbox.EffectOutboxV2;
@@ -1567,40 +1567,138 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         "permission",
       ] as const) {
         const question = yield* seedFoundationQuestion(`approval-${kind}`, { kind });
-        for (const respondedBy of [
-          { type: "client" as const, reason: "R" },
-          {
-            type: "agent" as const,
-            threadId: ThreadId.make("caller"),
-            environmentId: null,
-            title: null,
-            reason: "R",
-          },
-        ]) {
-          const commandId = CommandId.make(`approval-${kind}-${respondedBy.type}`);
-          const result = yield* orchestrator
-            .dispatch({
-              type: "runtime-request.respond",
-              commandId,
-              threadId: question.threadId,
-              requestId: question.requestId,
-              decision: "accept",
-              respondedBy,
-            })
-            .pipe(Effect.result);
-          assert.equal(result._tag, "Failure");
-          if (result._tag === "Failure") {
-            assert.equal(result.failure._tag, "OrchestratorDispatchError");
-            if (result.failure._tag === "OrchestratorDispatchError")
-              assert.equal(result.failure.cause, "Only the user can answer approval requests.");
-          }
-          assert.isEmpty(yield* outbox.listByCommandId(commandId));
-          const request = (yield* orchestrator.getThreadProjection(question.threadId))
-            .runtimeRequests[0]!;
-          assert.equal(request.status, "pending");
-          assert.isUndefined(request.respondedBy);
+        const respondedBy = {
+          type: "agent" as const,
+          threadId: ThreadId.make("caller"),
+          environmentId: null,
+          title: null,
+          reason: "R",
+        };
+        const commandId = CommandId.make(`approval-${kind}-${respondedBy.type}`);
+        const result = yield* orchestrator
+          .dispatch({
+            type: "runtime-request.respond",
+            commandId,
+            threadId: question.threadId,
+            requestId: question.requestId,
+            decision: "accept",
+            respondedBy,
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") {
+          assert.equal(result.failure._tag, "OrchestratorDispatchError");
+          if (result.failure._tag === "OrchestratorDispatchError")
+            assert.equal(
+              result.failure.cause,
+              "Only the user or an approved MCP client can answer approval requests.",
+            );
         }
+        assert.isEmpty(yield* outbox.listByCommandId(commandId));
+        const request = (yield* orchestrator.getThreadProjection(question.threadId))
+          .runtimeRequests[0]!;
+        assert.equal(request.status, "pending");
+        assert.isUndefined(request.respondedBy);
       }
+    }),
+  );
+  it.effect("delivers an MCP client's approval decision and labels the approval", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const providerSessionId = ProviderSessionId.make("client-approval-session");
+      const question = yield* seedFoundationQuestion("client-approval", {
+        kind: "command",
+        responseCapability: { type: "live", providerSessionId },
+      });
+      const providerSession = {
+        id: providerSessionId,
+        driver,
+        providerInstanceId: modelSelection.instanceId,
+        status: "running" as const,
+        cwd: process.cwd(),
+        model: modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: question.now,
+        updatedAt: question.now,
+        lastError: null,
+      };
+      yield* eventSink.write({
+        commandId: CommandId.make("client-approval-seed"),
+        events: [
+          {
+            id: EventId.make("client-approval-session-event"),
+            type: "provider-session.attached",
+            threadId: question.threadId,
+            occurredAt: question.now,
+            payload: providerSession,
+          },
+          {
+            id: EventId.make("client-approval-approval-event"),
+            type: "turn-item.updated",
+            threadId: question.threadId,
+            nodeId: question.nodeId,
+            occurredAt: question.now,
+            payload: {
+              id: question.itemId,
+              type: "approval_request",
+              threadId: question.threadId,
+              runId: null,
+              nodeId: question.nodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "waiting",
+              title: null,
+              startedAt: question.now,
+              completedAt: null,
+              updatedAt: question.now,
+              requestId: question.requestId,
+              requestKind: "command",
+              prompt: "hostname",
+            },
+          },
+        ],
+      });
+      const delivered =
+        yield* Deferred.make<ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput>();
+      const spy = vi.spyOn(sessions, "get").mockReturnValue(
+        Effect.succeed(
+          Option.some({
+            providerSession,
+            respondToRuntimeRequest: (
+              input: ProviderAdapter.ProviderAdapterV2RuntimeRequestResponseInput,
+            ) => Deferred.succeed(delivered, input).pipe(Effect.asVoid),
+          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime),
+        ),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const respondedBy = {
+        type: "client" as const,
+        label: "Grok Bot",
+        reason: "Read-only command",
+      };
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: CommandId.make("client-approval-accept"),
+        threadId: question.threadId,
+        requestId: question.requestId,
+        decision: "accept",
+        respondedBy,
+      });
+      yield* worker.drain();
+      assert.deepEqual(yield* Deferred.await(delivered), {
+        requestId: question.requestId,
+        decision: "accept",
+      });
+      const projection = yield* orchestrator.getThreadProjection(question.threadId);
+      assert.deepEqual(projection.runtimeRequests[0]?.respondedBy, respondedBy);
+      const item = projection.turnItems.find((item) => item.type === "approval_request");
+      assert.equal(item?.title, 'Approved by MCP client "Grok Bot"');
     }),
   );
   it.effect("records live agent provenance while delivering exact answer labels", () =>

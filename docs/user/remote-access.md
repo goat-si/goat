@@ -257,7 +257,8 @@ change right away, and the agent's connection list shows which agent added each
 connection.
 
 The agent that started the thread can follow it from here: it waits for the
-thread to finish, reads its messages, sends it follow-ups, or stops it, and it
+thread to finish, reads its messages and the result its agent recorded (outcome,
+pull requests, tests, and commits), sends it follow-ups, or stops it, and it
 can list threads across this machine and the ones it is connected to. The
 remote thread cannot report back on its own, so ask the starting agent to wait
 on it. Sending to or stopping a thread on another machine needs an agent in the

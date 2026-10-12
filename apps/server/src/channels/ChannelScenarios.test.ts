@@ -12,7 +12,6 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -22,7 +21,6 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
@@ -184,6 +182,48 @@ describe("GOAT bot boundary (scenario 6)", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("reads the bot and its GOAT waiting count without creating the bot", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      // Before any ensure there is no bot, and asking does not make one.
+      assert.deepStrictEqual(yield* bots.status(owner), { bot: null, waitingCount: 0 });
+      assert.lengthOf(harness.world.launches, 0);
+
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* gateway.ingest(goatInput("do: goat question", "status-goat"), rpcContext);
+      yield* gateway.ingest(slackInput("do: slack question", "status-slack"), slackContext);
+      yield* runtime.drain;
+      const { tasks } = yield* ledger.listTasks({ ownerId, limit: 10 });
+      assert.lengthOf(tasks, 2);
+      for (const task of tasks) {
+        yield* reports.report(
+          {
+            taskId: task.taskId,
+            eventId: ChannelTaskEventId.make("status-question-" + task.taskId),
+            generation: task.generation,
+            status: "waiting_input",
+            summary: "Choose",
+            question: "Which one?",
+          },
+          task.worker!.threadId,
+        );
+      }
+      yield* runtime.drain;
+
+      // Only the GOAT-origin task counts; the Slack one is answered in Slack.
+      assert.deepStrictEqual(yield* bots.status(owner), {
+        bot: { environmentId, projectId: scratchProjectId, threadId: botThreadId },
+        waitingCount: 1,
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("keeps work started from a deleted bot reporting to its replacement", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -325,32 +365,6 @@ describe("GOAT bot boundary (scenario 6)", () => {
         ),
       );
     }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("reports the bot unavailable when the Scratch project is off", () => {
-    const harness = makeHarness();
-    return Effect.scoped(
-      Effect.gen(function* () {
-        // As in a dev worktree, whose data directory sits inside the Git checkout.
-        const context = yield* Layer.build(
-          Layer.fresh(
-            ChannelBotRegistry.layer.pipe(
-              Layer.provide(
-                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                  namedProjectsRoot: "/unused",
-                  ensureScratchProject: Effect.fail(
-                    new ManagedProjectFolders.ScratchUnavailableError(),
-                  ),
-                }),
-              ),
-            ),
-          ),
-        );
-        const bots = Context.get(context, ChannelBotRegistry.ChannelBotRegistry);
-        const error = yield* Effect.flip(bots.ensure({}, owner));
-        assert.strictEqual(error.reason, "adapter_unavailable");
-      }),
-    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect(

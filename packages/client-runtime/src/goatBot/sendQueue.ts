@@ -1,7 +1,7 @@
-import { randomUUID } from "~/lib/utils";
+import * as DateTime from "effect/DateTime";
 
-import type { GoatBotRef } from "./goatBotAvailability";
-import type { GoatBotPendingInput } from "./goatBotRows";
+import type { GoatBotRef } from "./availability.ts";
+import type { GoatBotPendingInput } from "./rows.ts";
 
 type EntryState = "queued" | "sending" | "accepted" | "failed";
 
@@ -26,7 +26,7 @@ export interface GoatBotSendQueueOptions {
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
-  readonly makeKey?: () => string;
+  readonly makeKey: () => string;
   readonly now?: () => string;
 }
 
@@ -45,8 +45,8 @@ export interface GoatBotSendQueue {
  * a retry lands at its retry time. Each message keeps one key for all attempts.
  */
 export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBotSendQueue {
-  const makeKey = options.makeKey ?? randomUUID;
-  const now = options.now ?? (() => new Date().toISOString());
+  const makeKey = options.makeKey;
+  const now = options.now ?? (() => DateTime.formatIso(DateTime.nowUnsafe()));
   let entries: Entry[] = [];
   let busy = false;
   let projectedKeys: ReadonlySet<string> = new Set();

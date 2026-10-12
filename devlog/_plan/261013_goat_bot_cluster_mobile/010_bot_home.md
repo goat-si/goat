@@ -75,3 +75,12 @@
 - 재시도는 설정 변경이 없어도 예약된 깨움으로 돈다. 정본이 바뀌면 낡은 재시도를 취소하고, 재연결 때 중복 제거 기록을 지운다.
 - 홈이 아닌 서버의 대기 입력은 원장의 접수 펜스 트랜잭션(`ChannelLedger` reception 경로)으로 실패와 전달을 한 번에 기록해 닫는다.
 - channels.md에 적는다: 단조성은 RPC 쓰기에만 적용되고, 디스크 되돌리기는 다른 서버를 잠시 다시 홈으로 만들 수 있다.
+
+### L1 결과 (2026-10-13)
+
+- origin/dev: `0cc0df604` 계약·단조 병합, `ab6ea9cc7` client-runtime `goatBot/home`·문서, `c30d73632` 서버 관문·Slack·capability, `637e0669d` 웹 홈 해석·claim·설정, `7b8ea1dc7` Slack 부분 적용·홈 자체 readback 수정, `8f0a48423` configure 경쟁 수정.
+- 위 wp2 계획의 "공유 키 추가"와 "연결마다 한 번 재동기화" 항목은 감사 반영 절로 대체됐다: 홈 값은 일반 공유 키가 아니고, 재동기화는 `planGoatBotHomeSync`의 대상별 백오프로 돈다.
+- ensure는 정본이 정해지고 홈 서버 자신이 그 claim을 읽어 돌려줄 때만 부른다(`goatBotHomeReadBack`).
+- L3가 쓸 진입점: `@t3tools/client-runtime/goatBot/home`의 `resolveGoatBotHome`, `pickGoatBotHomeCandidate`, `newGoatBotHomeClaim`, `planGoatBotHomeSync`, `reduceGoatBotHomeAttempts`. 웹 `goatBotHomeReadBack`은 아직 웹에 있다.
+- 받아들인 한계: 수렴 보장(일시적 이중 동작 가능), 디스크 되돌리기는 단조성 밖, 이동 전에 시작한 작업은 시작한 서버의 봇 타임라인에 보고.
+- 레인에서 하지 않은 것: 실제 클라이언트 통합 확인(AGENTS.md상 통합 뒤 조정자가 한 번).

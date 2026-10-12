@@ -112,6 +112,8 @@ import { UsageLimitAccountScreen } from "./features/usage/UsageLimitsPooled";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsAboutRouteScreen } from "./features/settings/SettingsAboutRouteScreen";
 import { SettingsNotificationsRouteScreen } from "./features/settings/SettingsNotificationsRouteScreen";
+import { MobileGoatBotHomeWorker } from "./features/goat-bot/MobileGoatBotHomeWorker";
+import { SettingsGoatBotRouteScreen } from "./features/settings/SettingsGoatBotRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { SettingsThreadsRouteScreen } from "./features/settings/SettingsThreadsRouteScreen";
 import { SettingsEnvironmentFilterProvider } from "./features/settings/settings-environment-filter";
@@ -210,6 +212,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       options: {
         title: "Settings",
       },
+    }),
+    SettingsGoatBot: createNativeStackScreen({
+      screen: SettingsGoatBotRouteScreen,
+      linking: "goat-bot",
+      options: { title: "GOAT Bot" },
     }),
     SettingsEnvironments: createNativeStackScreen({
       screen: SettingsEnvironmentsRouteScreen,
@@ -625,6 +632,7 @@ function RootStackLayout(props: {
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
       <ThreadOutboxDrainWorker />
+      <MobileGoatBotHomeWorker />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
         <AdaptiveWorkspaceLayout

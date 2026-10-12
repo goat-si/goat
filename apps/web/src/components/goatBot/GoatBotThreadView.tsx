@@ -19,7 +19,7 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { toastManager } from "../ui/toast";
 import { GoatBotChatView } from "./GoatBotChatView";
-import { resolveGoatBotRemoval, type GoatBotRemoval } from "./goatBotAvailability";
+import { resolveGoatBotRemoval, type GoatBotRemoval } from "@t3tools/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotSession } from "./useGoatBotSession";

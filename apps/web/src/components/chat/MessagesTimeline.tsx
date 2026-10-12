@@ -39,6 +39,7 @@ import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/en
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import type { StandingInstructionsBlock } from "@t3tools/shared/standingInstructions";
 import { Link } from "@tanstack/react-router";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
@@ -2231,7 +2232,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
   );
   const userMessage = resolveUserMessagePresentation(row.message);
-  const resolvedContext = useMemo(() => resolveUserMessageContext(row.message), [row.message]);
+  const resolvedContext = useMemo(() => {
+    // Standing instructions render as their own block, so the body is just the task.
+    const { standingInstructions, text } = resolveUserMessagePresentation(row.message);
+    return resolveUserMessageContext(
+      standingInstructions === null ? row.message : { ...row.message, text },
+    );
+  }, [row.message]);
   const previewImages = useMemo(
     () => userImages.filter((image) => image.name.startsWith("preview-annotation-")),
     [userImages],
@@ -2507,6 +2514,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ))}
           </div>
         ) : null}
+        {userMessage.standingInstructions ? (
+          <UserMessageStandingInstructions block={userMessage.standingInstructions} />
+        ) : null}
         <div onCopyCapture={onBodyCopyCapture}>
           <CollapsibleUserMessageBody
             text={resolvedContext.text}
@@ -2562,6 +2572,32 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** What GOAT put in front of a launched thread's first message, collapsed until asked for. */
+function UserMessageStandingInstructions({ block }: { readonly block: StandingInstructionsBlock }) {
+  const [open, setOpen] = useState(false);
+  const Icon = open ? ChevronDownIcon : ChevronRightIcon;
+  return (
+    <div
+      className="mb-2 border-b border-message-foreground/10 pb-2"
+      data-user-message-standing-instructions={block.version}
+    >
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger
+          data-scroll-anchor-ignore
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Icon aria-hidden="true" className="size-3" />
+          Standing instructions
+          <span className="font-mono text-2xs opacity-70">{block.version}</span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel animate={false}>
+          <p className="mt-1.5 text-xs whitespace-pre-wrap text-muted-foreground">{block.text}</p>
+        </CollapsiblePanel>
+      </Collapsible>
     </div>
   );
 }

@@ -116,6 +116,12 @@ const SshThreadLaunchTool = Tool.make("goat_ssh_thread_launch", {
     runtimeMode: Schema.optional(RuntimeMode),
     interactionMode: Schema.optional(ProviderInteractionMode),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+    standingInstructions: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Default true: the remote GOAT puts its own standing instructions in front of message. Pass false to send message exactly as written; a remote too old to accept that is noted in notes.",
+      }),
+    ),
     reportDelivery: Schema.optional(
       RemoteReportDeliveryMode.annotate({
         description:

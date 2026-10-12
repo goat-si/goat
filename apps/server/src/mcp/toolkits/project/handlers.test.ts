@@ -16,10 +16,15 @@ import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import {
+  splitStandingInstructions,
+  standingInstructionsVersion,
+} from "@t3tools/shared/standingInstructions";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -53,8 +58,11 @@ const launchFromThread = (params: {
   readonly notifyOnCompletion?: boolean;
   readonly notifyWebhook?: boolean;
   readonly launchedBy?: ThreadLaunch.ThreadLaunchInput["launchedBy"];
+  readonly standingInstructions?: boolean;
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
 }) =>
   Effect.gen(function* () {
+    const { settings, ...input } = params;
     const sourceThreadId = ThreadId.make("source-thread");
     const projectId = ProjectId.make("project");
     const providerInstanceId = ProviderInstanceId.make("codex");
@@ -76,6 +84,7 @@ const launchFromThread = (params: {
     const registrations: Array<Registration> = [];
     let launchedInput: ThreadLaunch.ThreadLaunchInput | undefined;
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(settings),
       NodeCrypto.layer,
       launchWatches(registrations),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -143,7 +152,7 @@ const launchFromThread = (params: {
     expect(refused.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launchedInput).toBeUndefined();
     const result = yield* toolkit
-      .handle("goat_thread_launch", params)
+      .handle("goat_thread_launch", input)
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
     return {
       result: result.at(-1)?.result,
@@ -182,6 +191,60 @@ it.effect("rejects a thread caller supplying launchedBy", () =>
     });
     expect(launched.result).toMatchObject({ code: "invalid_request" });
     expect(launched.launchedBy).toBeUndefined();
+  }),
+);
+
+it.effect("puts the project's standing instructions in front of the first message", () =>
+  Effect.gen(function* () {
+    const environment = yield* launchFromThread({
+      title: "Audit",
+      message: "Review the change",
+      settings: { standingInstructions: "Use sol for subagents." },
+    });
+    expect(
+      splitStandingInstructions(environment.launchedInput?.initialMessage?.text ?? ""),
+    ).toEqual({
+      block: {
+        text: "Use sol for subagents.",
+        version: standingInstructionsVersion("Use sol for subagents."),
+      },
+      text: "Review the change",
+    });
+    expect(environment.result).toMatchObject({
+      standingInstructionsVersion: standingInstructionsVersion("Use sol for subagents."),
+    });
+
+    const project = yield* launchFromThread({
+      title: "Audit",
+      message: "Review the change",
+      settings: {
+        standingInstructions: "Use sol for subagents.",
+        projectSettingsOverrides: {
+          [ProjectId.make("project")]: { standingInstructions: "One topic per PR." },
+        },
+      },
+    });
+    expect(
+      splitStandingInstructions(project.launchedInput?.initialMessage?.text ?? "").block?.text,
+    ).toBe("One topic per PR.");
+  }),
+);
+
+it.effect("sends the message as written when the launch opts out or starts no run", () =>
+  Effect.gen(function* () {
+    const settings = { standingInstructions: "Use sol for subagents." };
+    const optedOut = yield* launchFromThread({
+      title: "Audit",
+      message: "Review the change",
+      standingInstructions: false,
+      settings,
+    });
+    expect(optedOut.launchedInput?.initialMessage?.text).toBe("Review the change");
+    expect(optedOut.result).toMatchObject({ standingInstructionsVersion: null });
+
+    const idle = yield* launchFromThread({ title: "Idle", settings });
+    expect(idle.launchedInput?.initialMessage).toBeUndefined();
+    expect(idle.result).toMatchObject({ standingInstructionsVersion: null });
   }),
 );
 
@@ -238,6 +301,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -337,6 +401,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       deletedAt: null,
     };
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -430,6 +495,7 @@ const clientLaunchHarness = (input: {
   const projectId = ProjectId.make("project:client-target");
   const modelSelection = { instanceId: ProviderInstanceId.make("claude"), model: "claude-opus" };
   const layerDependencies = Layer.mergeAll(
+    ServerSettings.layerTest(),
     NodeCrypto.layer,
     launchWatches(),
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -640,6 +706,47 @@ it.effect("a launch into a new worktree creates nothing when its base ref has no
   }),
 );
 
+it.effect(
+  "a launch onto a branch checked out elsewhere names that checkout and creates nothing",
+  () =>
+    Effect.gen(function* () {
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+        checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
+          Effect.fail(
+            new ThreadLaunch.ThreadLaunchBranchError({
+              projectId,
+              projectTitle: "Client target",
+              workspaceRoot: "/projects/client-target",
+              branch: workspaceStrategy.branch ?? "",
+              worktreePath: "/worktrees/lane",
+            }),
+          ),
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      const refused = (yield* toolkit
+        .handle("goat_thread_launch", {
+          title: "Fix",
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "origin/lane", branch: "lane" },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+      expect(refused).toMatchObject({ code: "invalid_request" });
+      expect((refused as { message: string }).message).toBe(
+        'Branch "lane" is already checked out at /worktrees/lane in project "Client target". No thread was created. Launch into that checkout with workspaceStrategy {type:"existing_worktree", worktreePath:"/worktrees/lane"}, or pass a branch name that does not exist yet.',
+      );
+      expect(launched).toHaveLength(0);
+    }),
+);
+
 it.effect("lists and reads another machine's projects through that machine's own tools", () =>
   Effect.gen(function* () {
     const sourceThreadId = ThreadId.make("source-thread");
@@ -656,6 +763,7 @@ it.effect("lists and reads another machine's projects through that machine's own
     };
     const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
     const layerDependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       NodeCrypto.layer,
       launchWatches(),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -760,6 +868,7 @@ const reportLaunch = (options: {
     const providerInstanceId = modelSelection.instanceId;
     // Later mock layers override the base services for these cases only.
     const dependencies = Layer.mergeAll(
+      ServerSettings.layerTest(),
       base.dependencies,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("remote-environment"),

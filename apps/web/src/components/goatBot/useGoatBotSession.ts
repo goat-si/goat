@@ -1,3 +1,16 @@
+import {
+  buildGoatBotTimeline,
+  createGoatBotSendQueue,
+  goatBotItemReaders,
+  goatBotReplyingSince,
+  initialGoatBotEnsure,
+  retryGoatBotEnsure,
+  settleGoatBotEnsure,
+  startGoatBotEnsure,
+  syncGoatBotEnsure,
+  type GoatBotEnsureMachine,
+  type GoatBotSendQueue,
+} from "@t3tools/client-runtime/goatBot";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type {
   ChannelBotRef,
@@ -9,26 +22,18 @@ import { useContext, useEffect, useMemo } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
+import { randomUUID } from "~/lib/utils";
 import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
 import {
+  goatBotHomeReadBack,
+  goatBotSupportUnknown,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "./goatBotAvailability";
+} from "@t3tools/client-runtime/goatBot";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
-import {
-  initialGoatBotEnsure,
-  retryGoatBotEnsure,
-  settleGoatBotEnsure,
-  startGoatBotEnsure,
-  syncGoatBotEnsure,
-  type GoatBotEnsureMachine,
-} from "./goatBotEnsure";
 import { useGoatBotEnvironments } from "./goatBotHooks";
-import { goatBotItemReaders } from "./goatBotReaders";
-import { buildGoatBotTimeline, goatBotReplyingSince } from "./goatBotRows";
-import { createGoatBotSendQueue, type GoatBotSendQueue } from "./goatBotSendQueue";
 
 interface Session {
   readonly homeKey: string;
@@ -58,6 +63,7 @@ function update(environmentId: EnvironmentId, session: Session) {
 function newQueue(environmentId: EnvironmentId) {
   return createGoatBotSendQueue({
     onChange: changed,
+    makeKey: randomUUID,
     canDispatch: (bot) => {
       const session = useSessions.getState().sessions.get(environmentId);
       return (
@@ -148,7 +154,10 @@ export function goatBotEnabled(
   port: GoatBotChannelPort | null,
   environment: GoatBotEnvironmentInput | null,
 ): boolean {
-  return port !== null && environment?.supportsChannelLedger === true;
+  return (
+    port !== null &&
+    (environment?.supportsChannelLedger === true || goatBotSupportUnknown(environment))
+  );
 }
 
 export function useGoatBotEnabled() {
@@ -213,7 +222,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
       ? `${home.resolution.claim.environmentId}:${home.resolution.claim.claimedAt}:${home.resolution.claim.claimId}`
       : home.resolution.state;
   const settingsSnapshot = environment?.settingsSnapshot ?? null;
-  const homeReady = !home.supported || home.resolution.state === "claimed";
+  const homeReady = !home.supported || goatBotHomeReadBack(home);
   useEffect(() => {
     if (environmentId === null || session === undefined) return;
     let current = useSessions.getState().sessions.get(environmentId);
@@ -247,6 +256,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     if (
       !homeReady ||
       !enabled ||
+      !current.capability ||
       !bootstrapped ||
       !current.connected ||
       !port ||

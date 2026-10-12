@@ -17,7 +17,7 @@ import {
   type GoatBotPendingInput,
   type GoatBotRow,
   type GoatBotTaskCard,
-} from "./goatBotRows";
+} from "./rows.ts";
 
 const threadId = ThreadId.make("thread-bot");
 

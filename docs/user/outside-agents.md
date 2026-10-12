@@ -86,7 +86,52 @@ Add the environment as a custom MCP app in ChatGPT's apps settings:
 
 Any agent that supports remote MCP servers over HTTP with OAuth can connect. Give
 it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
-Agents without OAuth support cannot connect.
+Agents without OAuth support can use a client token instead.
+
+## Long-running orchestrators
+
+A bot or script that drives GOAT for weeks, such as an orchestrator on another
+machine, should use one client token instead of signing in for every call.
+Create it on the host:
+
+```sh
+goat auth client create --name "Grok Bot" --runtime-mode-ceiling approval-required --token-only
+```
+
+Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
+days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
+you choose on the sign-in page. Without it, the client gets **Supervised**.
+
+Initialize MCP once and reuse the `mcp-session-id` header from that response
+for later calls, including long `goat_thread_wait` polls. End the session with
+an HTTP `DELETE` when the bot shuts down.
+
+`goat auth client list` shows each token's name and when it was last used.
+The same tokens appear in **Settings → Connections**. Revoke one there or with
+`goat auth client revoke <session-id>`.
+
+### Let an orchestrator answer approvals
+
+By default only you can answer a thread's approval requests, such as running a
+command in a **Supervised** thread. To let a trusted orchestrator answer them
+too, add the approve scope when you create its token:
+
+```sh
+goat auth client create --name "Grok Bot" \
+  --scope orchestration:read --scope orchestration:operate --scope orchestration:approve
+```
+
+The client can then list approvals with `goat_pending_request_list`, read them
+with `goat_pending_request_read`, and answer with `goat_pending_request_respond`
+and `decision` set to `accept` or `decline`. It can only answer approvals in
+threads that run within its ceiling. Each answer records the client's name and
+reason, and the approval shows who answered it. This also works for threads on
+SSH hosts that the client reaches through this environment, once those hosts
+run a GOAT version that supports it.
+
+Agents running inside GOAT and clients that signed in through the sign-in page
+never get this permission. To make approvals human-only again, revoke the token
+and create one without `orchestration:approve`.
 
 ## Remove an agent
 

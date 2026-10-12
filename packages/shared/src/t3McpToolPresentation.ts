@@ -318,6 +318,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Organize", "Organizing", "Organized", "a thread"],
     "thread-organize",
   ),
+  goat_thread_report_result: tool(
+    ["Report", "Reporting", "Reported", "this thread's result"],
+    "thread-update",
+  ),
   goat_thread_update: tool(
     ["Update", "Updating", "Updated", "GOAT thread metadata"],
     "thread-update",

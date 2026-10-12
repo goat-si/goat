@@ -1,3 +1,4 @@
+import type { GoatBotDelivery, GoatBotRow } from "@t3tools/client-runtime/goatBot";
 import { CircleAlertIcon, MessageCircleQuestionIcon } from "lucide-react";
 import {
   Fragment,
@@ -16,7 +17,6 @@ import { formatShortTimestamp } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
-import type { GoatBotDelivery, GoatBotRow } from "./goatBotRows";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;

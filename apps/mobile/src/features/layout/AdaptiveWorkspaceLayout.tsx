@@ -22,7 +22,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Platform, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
 import Animated, {
   useAnimatedStyle,
   useDerivedValue,
@@ -67,6 +67,7 @@ import {
 } from "../../native/v5-workspace-context";
 
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
+import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 
 interface AdaptiveWorkspaceContextValue {
   readonly layout: Layout;
@@ -239,6 +240,7 @@ function AdaptiveWorkspaceLayoutContent(
     readonly projectGroupingMode: SidebarProjectGroupingMode;
   },
 ) {
+  const botHome = useMobileGoatBotModeButton();
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
   const windowDimensions = useWindowDimensions();
@@ -641,6 +643,19 @@ function AdaptiveWorkspaceLayoutContent(
                       searchQuery={primarySidebarSearchQuery}
                     />
                   </AndroidHomeFabLayout>
+                  {Platform.OS === "ios" && botHome.known ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={botHome.toggle}
+                      className="border-t border-border bg-drawer px-4 py-3"
+                    >
+                      <Text className="text-sm font-semibold text-foreground">
+                        {botHome.mode === "bot" && !botHome.threadOpen
+                          ? "Show threads"
+                          : "Show GOAT Bot"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </RenderErrorBoundary>
               </View>
             </Animated.View>

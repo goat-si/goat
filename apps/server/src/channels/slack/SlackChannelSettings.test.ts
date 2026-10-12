@@ -41,7 +41,12 @@ const BOT_TOKEN = "xoxb-SENTINEL-bot";
 
 type SecretStoreOverrides = Partial<
   Pick<ServerSecretStore.ServerSecretStore["Service"], "get" | "set" | "remove">
->;
+> & {
+  /** Fails reads of the matching secrets only; everything else reads the real store. */
+  readonly unreadable?: (name: string) => boolean;
+  /** Runs before each secret write reaches the real store. */
+  readonly beforeSet?: (name: string) => Effect.Effect<void>;
+};
 
 /** One server start against `baseDir`. Building it again on the same directory is a restart. */
 const serverLayer = (
@@ -60,8 +65,19 @@ const serverLayer = (
       const store = yield* ServerSecretStore.ServerSecretStore;
       return ServerSecretStore.ServerSecretStore.of({
         ...store,
-        get: (name) => (secretOverrides.current.get ?? store.get)(name),
-        set: (name, value) => (secretOverrides.current.set ?? store.set)(name, value),
+        get: (name) =>
+          secretOverrides.current.unreadable?.(name) === true
+            ? Effect.fail(
+                new ServerSecretStore.SecretStorePersistError({
+                  resource: "secret",
+                  cause: "unreadable",
+                }),
+              )
+            : (secretOverrides.current.get ?? store.get)(name),
+        set: (name, value) =>
+          (secretOverrides.current.beforeSet?.(name) ?? Effect.void).pipe(
+            Effect.andThen((secretOverrides.current.set ?? store.set)(name, value)),
+          ),
         remove: (name) => (secretOverrides.current.remove ?? store.remove)(name),
       });
     }),
@@ -1508,6 +1524,107 @@ describe("Slack home ownership", () => {
         undefined,
         undefined,
         PublishingServerSettings.layer({ goatBotHome: claim(other, 6) }),
+      );
+    }),
+  );
+
+  it.effect("stops a socket opened before another connection failed when home moves away", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* tempBaseDir;
+      const sdk = makeFakeSlackSdk();
+      const overrides: { current: SecretStoreOverrides } = { current: {} };
+      const self = EnvironmentId.make("environment:slack-test");
+      const other = EnvironmentId.make("environment:other-home");
+      const claim = (environmentId: EnvironmentId, claimedAt: number) => ({
+        environmentId,
+        claimedAt,
+        claimId: "home-" + claimedAt,
+      });
+      yield* withServer(
+        baseDir,
+        sdk,
+        (settings) =>
+          Effect.gen(function* () {
+            const serverSettings = yield* ServerSettings.ServerSettingsService;
+            yield* settings.configure(
+              { enabled: true, appToken: APP_TOKEN, botToken: BOT_TOKEN },
+              owner,
+            );
+            const broken = yield* settings.configure(
+              { enabled: true, appToken: APP_TOKEN, botToken: BOT_TOKEN },
+              owner,
+            );
+            assert.strictEqual(sdk.sessions.length, 0);
+            const brokenSecret = SlackChannelSettingsLive.appTokenSecretName(broken.connectionId);
+            overrides.current = { unreadable: (name) => name === brokenSecret };
+            yield* serverSettings.updateSettings({ goatBotHome: claim(self, 2) });
+            yield* Effect.promise(() => sdk.waitForCall("start:0"));
+            yield* serverSettings.updateSettings({ goatBotHome: claim(other, 3) });
+            yield* Effect.promise(() => sdk.waitForCall("disconnect:0"));
+          }),
+        overrides,
+        undefined,
+        undefined,
+        PublishingServerSettings.layer({ goatBotHome: claim(other, 1) }),
+      );
+    }),
+  );
+
+  it.effect("stops a socket configure opened while home came and went under its lock", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* tempBaseDir;
+      const sdk = makeFakeSlackSdk();
+      const overrides: { current: SecretStoreOverrides } = { current: {} };
+      const moveAway: { current: Effect.Effect<void> } = { current: Effect.void };
+      const self = EnvironmentId.make("environment:slack-test");
+      const other = EnvironmentId.make("environment:other-home");
+      const claim = (environmentId: EnvironmentId, claimedAt: number) => ({
+        environmentId,
+        claimedAt,
+        claimId: "home-" + claimedAt,
+      });
+      yield* withServer(
+        baseDir,
+        sdk,
+        (settings) =>
+          Effect.gen(function* () {
+            const serverSettings = yield* ServerSettings.ServerSettingsService;
+            let movedHere = false;
+            // Home arrives while configure holds the lock, so the watcher's pass waits behind it.
+            overrides.current = {
+              beforeSet: () =>
+                movedHere
+                  ? Effect.void
+                  : Effect.sync(() => {
+                      movedHere = true;
+                    }).pipe(
+                      Effect.andThen(
+                        serverSettings.updateSettings({ goatBotHome: claim(self, 2) }),
+                      ),
+                      Effect.asVoid,
+                      Effect.orDie,
+                    ),
+            };
+            // ...and leaves again once configure has opened the socket, still under the lock.
+            moveAway.current = serverSettings
+              .updateSettings({ goatBotHome: claim(other, 3) })
+              .pipe(Effect.asVoid, Effect.orDie);
+            yield* settings.configure(
+              { enabled: true, appToken: APP_TOKEN, botToken: BOT_TOKEN },
+              owner,
+            );
+            yield* Effect.promise(() => sdk.waitForCall("start:0"));
+            yield* Effect.promise(() => sdk.waitForCall("disconnect:0"));
+          }),
+        overrides,
+        (connection) => {
+          if (connection.appToken === undefined) return Effect.void;
+          const move = moveAway.current;
+          moveAway.current = Effect.void;
+          return move;
+        },
+        undefined,
+        PublishingServerSettings.layer({ goatBotHome: claim(other, 1) }),
       );
     }),
   );

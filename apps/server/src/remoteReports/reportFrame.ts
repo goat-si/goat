@@ -27,3 +27,12 @@ export const framePendingReports = (texts: ReadonlyArray<string>) =>
     ...texts,
     "</remote_reports>",
   ].join("\n\n");
+
+/** Wakes a delegating thread for a remote task's question, which it may answer from here. */
+export const remoteTaskQuestionNotice = (input: {
+  readonly host: string;
+  readonly taskId: string;
+  readonly threadId: string;
+  readonly requestId: string;
+}) =>
+  `Delegated task ${input.taskId} on ${input.host} is waiting on a question. Read it with goat_pending_request_read {host: "${input.host}", threadId: "${input.threadId}", requestId: "${input.requestId}"} and answer with goat_pending_request_respond using the same host, threadId, and requestId (reason required) if you can decide, or forward it to the user.`;

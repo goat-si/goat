@@ -103,6 +103,9 @@ export function HomeHeader(props: HomeHeaderProps) {
         onFilterAction={handleMenuAction}
         onOpenSettings={props.onOpenSettings}
         onOpenEnvironments={props.onOpenEnvironments}
+        homeMode={props.homeMode}
+        botKnown={props.botKnown}
+        onToggleHomeMode={props.onToggleHomeMode}
       />
     </>
   );

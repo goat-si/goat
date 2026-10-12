@@ -38,7 +38,8 @@ const TERMINAL_RUN_STATUSES = new Set([
   "rolled_back",
 ]);
 
-const BACKGROUND_HOLD = "background";
+/** The completion hold a worker gets while its finished run still has background work. */
+export const BACKGROUND_HOLD = "background";
 
 export class ChannelWorkerReports extends Context.Service<
   ChannelWorkerReports,

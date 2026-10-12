@@ -318,6 +318,8 @@ export interface RemoteMcpClientSessionOptions {
   readonly ttl: string;
   /** Most a thread started through this session may run with; null keeps the remote default. */
   readonly runtimeModeCeiling: string | null;
+  /** Also grant `orchestration:approve`. A remote CLI that predates it fails the issue. */
+  readonly approvals?: boolean;
 }
 
 export interface RemoteMcpClientSession {
@@ -1486,7 +1488,7 @@ const REMOTE_MCP_SESSION_SCRIPT = `set -eu
 STATE_DIR="$HOME/.goat/ssh-launch/@@T3_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.goat"
 @@T3_RUNNER_SETUP@@
-set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate --ttl @@T3_TTL@@ --label @@T3_LABEL@@ --json
+set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate @@T3_EXTRA_SCOPES@@--ttl @@T3_TTL@@ --label @@T3_LABEL@@ --json
 CEILING=@@T3_CEILING@@
 recheck_selected_before_use
 if [ -n "$CEILING" ] && OUTPUT="$("$RUNNER_FILE" "$@" --runtime-mode-ceiling "$CEILING" 2>/dev/null)"; then
@@ -1693,6 +1695,7 @@ export function buildRemoteMcpSessionScript(
     T3_TTL: shellSingleQuote(options.ttl),
     T3_LABEL: shellSingleQuote(options.label),
     T3_CEILING: shellSingleQuote(options.runtimeModeCeiling ?? ""),
+    T3_EXTRA_SCOPES: options.approvals === true ? "--scope orchestration:approve " : "",
     T3_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,
       mayUpgradeOwnedServer: false,

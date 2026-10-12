@@ -27,6 +27,9 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";
 import { WorkspaceEmptyDetail } from "./WorkspaceEmptyDetail";
+import { GoatBotScreen } from "../goat-bot/GoatBotScreen";
+import { mobileGoatBotWorkspaceVisible } from "../goat-bot/goatBotHomeMode";
+import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
 import { NativeColumnContent as ColumnContent } from "../../native/NativeColumnContent.ios";
 import {
   modalEnvelopeOptions,
@@ -111,8 +114,13 @@ function ColumnScreen(props: {
 }
 
 function WorkspaceColumns(
-  props: ViewProps & { readonly primary: Route; readonly detail: Route[] },
+  props: ViewProps & {
+    readonly primary: Route;
+    readonly detail: Route[];
+    readonly presentationVisible: boolean;
+  },
 ) {
+  const botHome = useMobileGoatBotHomeMode();
   const { layout, panes, togglePrimarySidebar, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const inspector = use(NativeWorkspaceInspectorContext);
   const hostRef = useRef<SplitHostCommands>(null);
@@ -194,7 +202,7 @@ function WorkspaceColumns(
             <V5StackHeader
               options={{
                 headerShown: true,
-                title: "",
+                title: botHome.mode === "bot" ? "GOAT Bot" : "",
                 unstable_headerRightItems: () =>
                   Platform.OS === "ios" && !Platform.isPad && layout.usesSplitView
                     ? [
@@ -238,11 +246,23 @@ function WorkspaceColumns(
               canGoBack={false}
             />
             <ColumnContent>
-              <WorkspaceEmptyDetail
-                onStartNewTask={() =>
-                  props.navigation.navigate("NewTaskSheet", { screen: "NewTask" })
-                }
-              />
+              {botHome.mode === "bot" ? (
+                <NavigationContext value={primary.navigation}>
+                  <NavigationRouteContext value={props.primary}>
+                    <GoatBotScreen
+                      visible={
+                        layout.usesSplitView && !activeDetailKey && props.presentationVisible
+                      }
+                    />
+                  </NavigationRouteContext>
+                </NavigationContext>
+              ) : (
+                <WorkspaceEmptyDetail
+                  onStartNewTask={() =>
+                    props.navigation.navigate("NewTaskSheet", { screen: "NewTask" })
+                  }
+                />
+              )}
             </ColumnContent>
           </Split.Screen>
           {props.detail.map((route) => {
@@ -280,17 +300,29 @@ function WorkspaceStackView(props: ViewProps) {
   const primaryRoute = projection.primary;
   if (!primaryRoute) return <V5StackView {...props} />;
   const primaryDescriptor = props.descriptors[primaryRoute.key]!;
+  const overlays = partitionStackPresentations(projection.overlays, (route) => {
+    const presentation = props.descriptors[route.key]?.options.presentation;
+    return presentation !== undefined && presentation !== "card";
+  });
+  // Focus also blurs under form sheets, although the workspace remains visible.
+  // Use the actual presentation envelopes so pushed sheet pages keep that visibility.
+  const presentationVisible = mobileGoatBotWorkspaceVisible(
+    overlays.map((group) => props.descriptors[group[0]!.key]?.options.presentation),
+  );
   const baseRoute = { key: `${props.state.key}:workspace`, name: "Workspace" };
   const baseDescriptor: Descriptor = {
     ...primaryDescriptor,
     route: baseRoute,
     options: { headerShown: false },
-    render: () => <WorkspaceColumns {...props} primary={primaryRoute} detail={projection.detail} />,
+    render: () => (
+      <WorkspaceColumns
+        {...props}
+        primary={primaryRoute}
+        detail={projection.detail}
+        presentationVisible={presentationVisible}
+      />
+    ),
   };
-  const overlays = partitionStackPresentations(projection.overlays, (route) => {
-    const presentation = props.descriptors[route.key]?.options.presentation;
-    return presentation !== undefined && presentation !== "card";
-  });
   const routes = [baseRoute, ...overlays.map((group) => group[0]!)];
   return (
     <NativeStackView

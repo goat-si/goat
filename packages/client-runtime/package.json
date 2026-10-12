@@ -7,6 +7,10 @@
       "types": "./src/goatBot/home.ts",
       "default": "./src/goatBot/home.ts"
     },
+    "./goatBot": {
+      "types": "./src/goatBot/index.ts",
+      "default": "./src/goatBot/index.ts"
+    },
     "./composerThreadItems": {
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"

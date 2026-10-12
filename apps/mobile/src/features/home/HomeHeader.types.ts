@@ -7,6 +7,9 @@ import type {
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
 export interface HomeHeaderProps {
+  readonly homeMode?: "thread" | "bot";
+  readonly botKnown?: boolean;
+  readonly onToggleHomeMode?: () => void;
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly searchQuery: string;

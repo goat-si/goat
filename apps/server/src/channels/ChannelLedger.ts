@@ -14,6 +14,7 @@
  */
 import {
   AuthEnvironmentScopes,
+  type ChannelAnswerProjectChoice,
   ChannelBotRef,
   type ChannelConversationId,
   type ChannelDeliveryId,
@@ -28,6 +29,7 @@ import {
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
+  type ChannelTaskEventId,
   type ChannelTaskId,
   type ChannelTaskStatus,
   RuntimeMode,
@@ -205,6 +207,8 @@ export class ChannelLedger extends Context.Service<
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
+    /** How many of an owner's GOAT-origin tasks wait for an answer, without reading them. */
+    readonly countWaitingGoatTasks: (ownerId: string) => Effect.Effect<number, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelStoredTask | undefined, ChannelLedgerError>;
@@ -290,7 +294,20 @@ export class ChannelLedger extends Context.Service<
     readonly recentAnswers: (
       taskId: ChannelTaskId,
       limit: number,
-    ) => Effect.Effect<ReadonlyArray<string>, ChannelLedgerError>;
+    ) => Effect.Effect<
+      ReadonlyArray<Extract<ChannelTaskEvent, { type: "task.question.answered" }>>,
+      ChannelLedgerError
+    >;
+    /** Latest choice or unresolved answer in this generation; no-choice answers preserve it. */
+    readonly rememberedProjectChoice: (
+      taskId: ChannelTaskId,
+    ) => Effect.Effect<ChannelAnswerProjectChoice | undefined, ChannelLedgerError>;
+    /** Resolves an answer once, without changing its task version or delivery state. */
+    readonly recordAnswerProjectChoice: (input: {
+      readonly owner: string;
+      readonly eventId: ChannelTaskEventId;
+      readonly choice: ChannelAnswerProjectChoice;
+    }) => Effect.Effect<void, ChannelLedgerError>;
     /** Reads, changes, and writes one remote worker state in one fenced transaction. */
     readonly updateRemoteWorker: (input: {
       readonly owner: string;
@@ -881,6 +898,16 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listTasksByStatus")),
       ),
 
+    countWaitingGoatTasks: (ownerId) =>
+      sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM channel_tasks
+        WHERE status = 'waiting_input' AND owner_id = ${ownerId}
+          AND json_extract(task_json, '$.originAddress.kind') = 'goat'
+      `.pipe(
+        Effect.map((rows) => Number(rows[0]?.count ?? 0)),
+        Effect.mapError(toLedgerError("countWaitingGoatTasks")),
+      ),
+
     findTaskByWorkerThread: (threadId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
@@ -1141,11 +1168,52 @@ const make = Effect.gen(function* () {
         Effect.map((rows) =>
           rows.flatMap((row) => {
             const event = decodeEvent(row.event_json);
-            return event.type === "task.question.answered" ? [event.payload.answer] : [];
+            return event.type === "task.question.answered" ? [event] : [];
           }),
         ),
         Effect.mapError(toLedgerError("recentAnswers")),
       ),
+
+    rememberedProjectChoice: (taskId) =>
+      sql<{ readonly event_json: string }>`
+        SELECT event_json FROM channel_task_events
+        WHERE task_id = ${taskId} AND type = 'task.question.answered'
+          AND sequence > COALESCE((
+            SELECT MAX(sequence) FROM channel_task_events
+            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+          ), 0)
+          AND COALESCE(json_extract(event_json, '$.payload.projectChoice.type'), '') != 'none'
+        ORDER BY sequence DESC LIMIT 1
+      `.pipe(
+        Effect.map((rows) => {
+          const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
+          return event?.type === "task.question.answered" ? event.payload.projectChoice : undefined;
+        }),
+        Effect.mapError(toLedgerError("rememberedProjectChoice")),
+      ),
+
+    recordAnswerProjectChoice: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            const rows = yield* sql<{ readonly event_json: string }>`
+              SELECT event_json FROM channel_task_events WHERE event_id = ${input.eventId}
+            `;
+            const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
+            if (
+              event?.type !== "task.question.answered" ||
+              event.payload.projectChoice !== undefined
+            )
+              return;
+            const updated = encodeEvent({
+              ...event,
+              payload: { ...event.payload, projectChoice: input.choice },
+            });
+            yield* sql`UPDATE channel_task_events SET event_json = ${updated} WHERE event_id = ${input.eventId}`;
+          }),
+        )
+        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("recordAnswerProjectChoice"))),
 
     updateRemoteWorker: (input) =>
       sql

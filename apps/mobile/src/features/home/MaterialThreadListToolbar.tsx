@@ -4,6 +4,7 @@ import {
   Keyboard,
   type TextInputInstance,
   View,
+  Text,
   type LayoutChangeEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,9 +21,13 @@ import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import { useWorkspaceState } from "../../state/workspace";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { useMaterialToolbarLayout } from "../../components/useMaterialToolbarLayout";
+import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 
 /** One toolbar height for the compact list and expanded sidebar, including search. */
 export function MaterialThreadListToolbar(props: {
+  readonly homeMode?: "thread" | "bot";
+  readonly botKnown?: boolean;
+  readonly onToggleHomeMode?: () => void;
   readonly searchQuery: string;
   readonly onSearchQueryChange: (query: string) => void;
   readonly filterActions: MenuAction[];
@@ -34,6 +39,11 @@ export function MaterialThreadListToolbar(props: {
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
 }) {
+  const botMode = useMobileGoatBotModeButton();
+  const mode = props.homeMode ?? botMode.mode;
+  const botKnown = props.botKnown ?? botMode.known;
+  const toggleMode = props.onToggleHomeMode ?? botMode.toggle;
+  const compactBot = mode === "bot" && !props.sidebar;
   const insets = useSafeAreaInsets();
   const { fabSize } = useAndroidControlSizing();
   const { height: toolbarHeight, ...headerPadding } = useMaterialToolbarLayout();
@@ -105,14 +115,31 @@ export function MaterialThreadListToolbar(props: {
                 <WorkspaceConnectionTitle
                   grow
                   onPress={props.onOpenEnvironments}
-                  brand={<CompactBrandTitle allowFontScaling={false} />}
+                  brand={
+                    compactBot ? (
+                      <Text className="text-xl font-semibold text-foreground">GOAT Bot</Text>
+                    ) : (
+                      <CompactBrandTitle allowFontScaling={false} />
+                    )
+                  }
                 />
               </View>
-              <AndroidHeaderIconButton
-                accessibilityLabel="Search threads"
-                icon="magnifyingglass"
-                onPress={openSearch}
-              />
+              {botKnown ? (
+                <AndroidHeaderIconButton
+                  accessibilityLabel={
+                    mode === "bot" && !botMode.threadOpen ? "Show threads" : "Show GOAT Bot"
+                  }
+                  icon={mode === "bot" && !botMode.threadOpen ? "text.alignleft" : "text.bubble"}
+                  onPress={toggleMode}
+                />
+              ) : null}
+              {compactBot ? null : (
+                <AndroidHeaderIconButton
+                  accessibilityLabel="Search threads"
+                  icon="magnifyingglass"
+                  onPress={openSearch}
+                />
+              )}
               <AndroidHeaderIconButton
                 accessibilityLabel="Open settings"
                 icon="gearshape"
@@ -123,7 +150,7 @@ export function MaterialThreadListToolbar(props: {
         </View>
       </View>
       {/* Keep the filter above the New thread FAB at every text size. */}
-      {state.hasConnections ? (
+      {state.hasConnections && !compactBot ? (
         <View
           className="absolute right-5 z-[5]"
           style={{

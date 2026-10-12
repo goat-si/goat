@@ -9,7 +9,7 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { goatBotItemReaders, presentTaskChip } from "./goatBotReaders";
+import { goatBotItemReaders, presentTaskChip } from "./readers.ts";
 
 const chip = (overrides: Partial<ChannelTaskChip> = {}): ChannelTaskChip => ({
   taskId: ChannelTaskId.make("task-1"),
@@ -58,6 +58,23 @@ describe("presentTaskChip", () => {
   it("names where outside requests came from", () => {
     expect(presentTaskChip(chip({ originKind: "slack" })).sourceLabel).toBe("Slack · Jun");
     expect(presentTaskChip(chip({ originKind: "mcp" })).sourceLabel).toBe("Agent · Jun");
+  });
+
+  it("names the machine that runs remote work", () => {
+    const worker = {
+      environmentId: EnvironmentId.make("remote-env"),
+      threadId: ThreadId.make("worker"),
+      host: "mac-studio",
+    };
+    expect(presentTaskChip(chip({ originKind: "slack", worker }))).toMatchObject({
+      sourceLabel: "Slack · Jun · on mac-studio",
+      target: {
+        kind: "thread",
+        environmentId: "remote-env",
+        threadId: "worker",
+        host: "mac-studio",
+      },
+    });
   });
 
   it("counts open questions and drops an empty summary", () => {

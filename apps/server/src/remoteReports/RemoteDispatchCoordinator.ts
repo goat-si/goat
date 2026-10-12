@@ -6,6 +6,7 @@ import {
   MessageId,
   NodeId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   RuntimeMode,
   IsoDateTime,
@@ -43,7 +44,7 @@ import {
   requestRemoteTaskCancel,
   recoverUnknownRemoteTaskLaunch,
 } from "./recordRemoteTaskResult.ts";
-import { REPORTING_NOTE, frameRemoteReport } from "./reportFrame.ts";
+import { REPORTING_NOTE, frameRemoteReport, remoteTaskQuestionNotice } from "./reportFrame.ts";
 
 export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>()(
   "RemoteDispatchError",
@@ -85,6 +86,7 @@ const Row = Schema.Struct({
   cancel_ceiling: Schema.NullOr(RuntimeMode),
   task_id: Schema.NullOr(NodeId),
   parent_run_id: Schema.NullOr(RunId),
+  pending_request_ids: Schema.NullOr(Schema.fromJsonString(Schema.Array(RuntimeRequestId))),
   last_error: Schema.NullOr(Schema.String),
   created_at: IsoDateTime,
   updated_at: IsoDateTime,
@@ -93,6 +95,7 @@ const Row = Schema.Struct({
 );
 type Row = typeof Row.Type;
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
+const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
 const decodeFailure = (cause: unknown) => new RemoteDispatchError({ stage: "decode", cause });
 const isRemoteTaskError = Schema.is(RemoteTaskError);
@@ -118,6 +121,8 @@ export interface RemoteDispatchRecord {
   readonly cancelRequestedAt: string | null;
   readonly cancelCeiling: RuntimeMode | null;
   readonly task: { readonly taskId: NodeId; readonly parentRunId: RunId } | null;
+  /** The launched task run's open questions, as last observed. */
+  readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
   readonly lastError: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -144,6 +149,7 @@ const publicRow = (r: Row): RemoteDispatchRecord => ({
     r.task_id !== null && r.parent_run_id !== null
       ? { taskId: r.task_id, parentRunId: r.parent_run_id }
       : null,
+  pendingRequestIds: r.pending_request_ids ?? [],
   lastError: r.last_error,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -317,6 +323,55 @@ const make = Effect.gen(function* () {
                 Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
               );
         }
+        // The launched run's open questions, when the host reports them; a finished run has none.
+        const questions =
+          observed === null || observed.runId !== r.launched_run_id
+            ? undefined
+            : terminal(observed.status)
+              ? []
+              : observed.pendingRequestIds;
+        if (questions !== undefined) {
+          // Recorded before the notices, so a task read they wake already sees the questions.
+          yield* db(sql`UPDATE remote_dispatches SET
+            pending_request_ids = ${questions.length === 0 ? null : encodeRequestIds(questions)}
+            WHERE correlation_id = ${id}`);
+          // Each question is announced once: the command ids repeat on every later pass.
+          for (const requestId of questions) {
+            yield* taskEffect(
+              recordRemoteTaskProgress(
+                record,
+                `question:${requestId}`,
+                `needs_input: waiting on question ${requestId}`,
+              ),
+            );
+            if (r.delivery !== "wake" || r.remote_thread_id === null) continue;
+            yield* threads
+              .dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make(`server:remote-task-question:${id}:${requestId}`),
+                threadId: r.origin_thread_id,
+                messageId: MessageId.make(`message:remote-task-question:${id}:${requestId}`),
+                text: remoteTaskQuestionNotice({
+                  host: r.host,
+                  taskId: record.task.taskId,
+                  threadId: r.remote_thread_id,
+                  requestId,
+                }),
+                attachments: [],
+                createdBy: "agent",
+                creationSource: "server",
+                notification: {
+                  source: { kind: "monitor" },
+                  outcome: "updated",
+                  summary: `${r.host}: question`,
+                },
+                dispatchMode: { type: "queue_after_active" },
+              })
+              .pipe(
+                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
+              );
+          }
+        }
         // Claims/monitor commands commit first; result only after the entire backlog.
         const next = hasMore ? null : yield* taskEffect(observeRemoteTask(record, observed));
         const at = yield* now;
@@ -471,7 +526,12 @@ const make = Effect.gen(function* () {
             knownRun:
               r.known_run_id === null || r.known_run_status === null
                 ? null
-                : { runId: r.known_run_id, status: r.known_run_status },
+                : {
+                    runId: r.known_run_id,
+                    status: r.known_run_status,
+                    // Echoed back so an open question releases the wait once, not every call.
+                    pendingRequestIds: r.pending_request_ids ?? [],
+                  },
           }),
         ),
       );

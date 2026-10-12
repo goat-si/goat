@@ -1,3 +1,8 @@
+import type {
+  GoatBotCardTarget,
+  GoatBotCardTone,
+  GoatBotTaskCard,
+} from "@t3tools/client-runtime/goatBot";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { Link } from "@tanstack/react-router";
 import {
@@ -17,7 +22,6 @@ import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entiti
 import { useConnectedEnvironmentIds } from "~/state/environments";
 
 import { Button } from "../ui/button";
-import type { GoatBotCardTarget, GoatBotCardTone, GoatBotTaskCard } from "./goatBotRows";
 
 const TONE_ICON = {
   neutral: CircleIcon,
@@ -82,7 +86,16 @@ function GoatBotThreadTarget({
   const shell = useThreadShell(threadRef);
   const bootstrapped = useEnvironmentShellsBootstrapped(target.environmentId);
   const connected = useConnectedEnvironmentIds().includes(target.environmentId);
-  if (!connected) return <DisabledTarget label="Can't reach the work computer" />;
+  if (!connected) {
+    // Remote work names its machine, so point at where that machine is connected.
+    if (target.host === undefined) return <DisabledTarget label="Can't reach the work computer" />;
+    return (
+      <Button size="xs" variant="outline" render={<Link to="/settings/connections" />}>
+        Connect {target.host} in Settings
+        <ArrowUpRightIcon />
+      </Button>
+    );
+  }
   if (bootstrapped && (shell === null || shell.deletedAt != null)) {
     return <DisabledTarget label="Work history not found" />;
   }

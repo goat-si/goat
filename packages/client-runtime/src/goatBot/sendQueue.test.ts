@@ -1,7 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createGoatBotSendQueue } from "./goatBotSendQueue";
+import { createGoatBotSendQueue } from "./sendQueue.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -15,6 +15,7 @@ function deferred<T>() {
 
 const bot = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
 
+// @effect-diagnostics-next-line globalTimers:off - lets the queue's promise callbacks settle.
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function setup(canDispatch: () => boolean = () => true) {

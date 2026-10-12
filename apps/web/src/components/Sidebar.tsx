@@ -214,7 +214,9 @@ import {
   isSidebarNestedLinkClick,
   isSidebarThreadWoke,
   holdSidebarPriorityRank,
+  publishSidebarPriorityCount,
   resolveSidebarPriorityRank,
+  resolveSidebarWokeAtForRow,
   resolveSidebarThreadPresentation,
   sidebarFolderName,
   sidebarShortDeviceName,
@@ -2044,9 +2046,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                                 )}
                               >
                                 <AlarmClockIcon aria-hidden className="size-3.5 shrink-0" />
-                                <span role="status" className="sr-only">
-                                  {topStatus.label}
-                                </span>
+                                <span role="status">{topStatus.label}</span>
                               </button>
                             }
                           />
@@ -2099,7 +2099,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             // oxlint-enable shadcn/no-raw-colors
                             <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />
                           )}
-                          <span role="status" className="sr-only">
+                          <span
+                            role="status"
+                            className={
+                              topStatus.icon === "approval" || topStatus.icon === "input"
+                                ? undefined
+                                : "sr-only"
+                            }
+                          >
                             {topStatus.label}
                           </span>
                         </span>
@@ -2769,6 +2776,10 @@ export default function Sidebar() {
   // switching away and back lets threads read in the meantime leave Priority.
   const priorityHoldsRef = useRef<SidebarPriorityHolds>(new Map());
   const priorityHolds = priorityHoldsRef.current;
+  // Wakes acknowledged by settling, until the shell stops reporting them.
+  const acknowledgedWakesRef = useRef(new Set<string>());
+  // Mark all as read: these keys leave Priority once they no longer qualify.
+  const priorityReleaseRef = useRef(new Set<string>());
   const {
     pinnedThreads,
     draggableThreadKeys,
@@ -2778,6 +2789,7 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
+    wokeAtByThreadKey,
   } = useMemo(() => {
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
@@ -2787,11 +2799,14 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
+    const retainedArchivedKeys = new Set(subagentIndex.attentionByOwnerKey.keys());
+    if (openSubagentOwnerKey !== undefined) retainedArchivedKeys.add(openSubagentOwnerKey);
     const visible = excludeGlobalAgentThreads(
-      filterSidebarV2VisibleThreads(threads, scopedProjectKeys),
+      filterSidebarV2VisibleThreads(threads, scopedProjectKeys, retainedArchivedKeys),
       globalAgentRef,
       goatBotRef,
     );
+    const wokeAtByThreadKey = new Map<string, string | null>();
     const priority: EnvironmentThreadShell[] = [];
     const priorityRanks = new Map<string, number>();
     const pinned: EnvironmentThreadShell[] = [];
@@ -2834,16 +2849,28 @@ export default function Sidebar() {
             : { ...projected, snoozedAt: thread.snoozedAt, snoozedUntil: thread.snoozedUntil },
         );
       } else {
+        const rawWokeAt = threadWokeAt(thread, { now: preciseNow });
+        const wokeAt = resolveSidebarWokeAtForRow({
+          key: threadKey,
+          rawWokeAt,
+          settledOverride: thread.settledOverride,
+          heldSettledOverride: priorityHolds.has(threadKey)
+            ? priorityHolds.get(threadKey)
+            : undefined,
+          acknowledged: acknowledgedWakesRef.current,
+        });
+        wokeAtByThreadKey.set(threadKey, wokeAt);
         const rank = holdSidebarPriorityRank({
           rank: resolveSidebarPriorityRank({
             thread,
             localLastVisitedAt: localLastVisitedAtByKey[threadKey],
-            wokeAt: threadWokeAt(thread, { now: preciseNow }),
+            wokeAt,
             hasChildAttention: subagentIndex.attentionByOwnerKey.has(threadKey),
           }),
           key: threadKey,
           settledOverride: thread.settledOverride,
           holds: priorityHolds,
+          released: priorityReleaseRef.current.has(threadKey),
         });
         const section = resolveSidebarThreadSection({
           snoozed: supportsSnooze && effectiveSnoozed(thread, { now: preciseNow }),
@@ -2900,6 +2927,7 @@ export default function Sidebar() {
       ),
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
+      wokeAtByThreadKey,
     };
   }, [
     globalAgentRef,
@@ -2912,16 +2940,25 @@ export default function Sidebar() {
     threads,
     subagentIndex.attentionByOwnerKey,
     localLastVisitedAtByKey,
+    openSubagentOwnerKey,
     priorityHolds,
   ]);
   useEffect(() => {
-    priorityHoldsRef.current = new Map(
+    const next = new Map(
       priorityThreads.map((thread) => [
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         thread.settledOverride,
       ]),
     );
+    priorityHoldsRef.current = next;
+    for (const key of priorityReleaseRef.current) {
+      if (!next.has(key)) priorityReleaseRef.current.delete(key);
+    }
   }, [priorityThreads]);
+  useEffect(() => {
+    publishSidebarPriorityCount(priorityThreads.length);
+    return () => publishSidebarPriorityCount(null);
+  }, [priorityThreads.length]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => subscribeSidebarSearchFocus(() => threadSearchInputRef.current?.focus()), []);
@@ -2929,14 +2966,25 @@ export default function Sidebar() {
     priorityThreads,
     AuthOrchestrationOperateScope,
   );
+  const priorityWokeAtByKey = useMemo(() => {
+    const wokeAt = new Map<string, string | null>();
+    for (const thread of priorityThreads) {
+      wokeAt.set(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        threadWokeAt(thread, { now: snoozeNow }),
+      );
+    }
+    return wokeAt;
+  }, [priorityThreads, snoozeNow]);
   const priorityReadTargets = useMemo(
     () =>
       selectSidebarMarkReadTargets({
         threads: priorityThreads,
         localLastVisitedAtByKey,
+        wokeAtByKey: priorityWokeAtByKey,
         canOperate: (thread) => operablePriorityEnvironments.has(thread.environmentId),
       }),
-    [priorityThreads, localLastVisitedAtByKey, operablePriorityEnvironments],
+    [priorityThreads, localLastVisitedAtByKey, operablePriorityEnvironments, priorityWokeAtByKey],
   );
   const visitPriorityThread = useOrchestrationCommand(threadEnvironment.visit, {
     reportFailure: false,
@@ -2946,8 +2994,14 @@ export default function Sidebar() {
     const targets = selectSidebarMarkReadTargets({
       threads: priorityThreads,
       localLastVisitedAtByKey,
+      wokeAtByKey: priorityWokeAtByKey,
       canOperate: (thread) => canOperateThreads([thread]),
     });
+    for (const thread of targets) {
+      priorityReleaseRef.current.add(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+    }
     const visitedAt = new Date().toISOString();
     void (async () => {
       for (const thread of targets) {
@@ -2962,6 +3016,7 @@ export default function Sidebar() {
           input: { threadId: thread.id, visitedAt },
         });
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          priorityReleaseRef.current.delete(scopedThreadKey(threadRef));
           const error = squashAtomCommandFailure(result);
           toastManager.add(
             stackedThreadToast({
@@ -2973,7 +3028,13 @@ export default function Sidebar() {
         }
       }
     })();
-  }, [priorityThreads, localLastVisitedAtByKey, markThreadVisited, visitPriorityThread]);
+  }, [
+    priorityThreads,
+    localLastVisitedAtByKey,
+    markThreadVisited,
+    priorityWokeAtByKey,
+    visitPriorityThread,
+  ]);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
@@ -5461,7 +5522,10 @@ export default function Sidebar() {
                             // into the settled tail (PR merged while snoozed), and
                             // the wake signal must survive the trip. Still-snoozed
                             // rows resolve to null on their own.
-                            wokeAt={threadWokeAt(thread, { now: snoozeNow })}
+                            wokeAt={
+                              wokeAtByThreadKey.get(threadKey) ??
+                              threadWokeAt(thread, { now: snoozeNow })
+                            }
                             isActive={routeThreadKey === threadKey}
                             openPullRequestsInRightPanel={routeThreadRef !== null}
                             jumpLabel={

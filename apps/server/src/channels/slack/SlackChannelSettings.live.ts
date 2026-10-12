@@ -132,6 +132,10 @@ export const make = Effect.gen(function* () {
   );
   const settingsPath = path.join(config.stateDir, SETTINGS_FILE_NAME);
   const lock = yield* Semaphore.make(1);
+  // The home role the runtime fully reflects, or null when unknown: after a partial apply, or once
+  // configure has applied a connection against a home read that may since have changed. Null makes
+  // the next settings change apply again; leaving home always stops every connection.
+  let appliedHome: boolean | null = null;
 
   const loaded = yield* Effect.gen(function* () {
     if (!(yield* fs.exists(settingsPath))) return { loadFailed: false, connections: [] };
@@ -208,7 +212,14 @@ export const make = Effect.gen(function* () {
       : stopRuntime(connection);
 
   const applyToRuntime = (connection: StoredConnection) =>
-    Effect.flatMap(readHome, (isHome) => applyForHome(connection, isHome));
+    Effect.flatMap(readHome, (isHome) => applyForHome(connection, isHome)).pipe(
+      // Configure applied one connection on its own read of the home; the cache no longer covers it.
+      Effect.ensuring(
+        Effect.sync(() => {
+          appliedHome = null;
+        }),
+      ),
+    );
 
   /** Stops a connection without touching its credentials, so stopping cannot fail on them. */
   const stopRuntime = (connection: StoredConnection) =>
@@ -487,23 +498,45 @@ export const make = Effect.gen(function* () {
       ),
   });
 
-  let appliedHome = yield* lock.withPermits(1)(
+  /**
+   * Applies every saved connection for the given home role, one at a time so one unreadable
+   * connection cannot stop the rest. Returns whether all of them applied.
+   */
+  const applyAllForHome = (
+    connections: ReadonlyArray<StoredConnection>,
+    isHome: boolean,
+    prepare: (connection: StoredConnection) => Effect.Effect<void> = () => Effect.void,
+  ) =>
+    Effect.map(
+      Effect.forEach(connections, (connection) =>
+        prepare(connection).pipe(
+          Effect.andThen(applyForHome(connection, isHome)),
+          Effect.as(true),
+          Effect.catch((error) =>
+            Effect.logWarning("Slack connection did not follow the GOAT Bot home", {
+              connectionId: connection.connectionId,
+              error,
+            }).pipe(Effect.as(false)),
+          ),
+        ),
+      ),
+      (results) => results.every(Boolean),
+    );
+
+  appliedHome = yield* lock.withPermits(1)(
     Effect.gen(function* () {
       const isHome = yield* readHome;
       // Bring saved connections back up. Unreadable secrets leave that connection in error.
-      if (!loaded.loadFailed) {
-        const connections = yield* readConnections;
-        yield* Effect.forEach(connections, (connection) =>
-          deleteRevokedSecrets(connection).pipe(
-            Effect.catch(() =>
-              Effect.logWarning("Slack startup revocation cleanup failed; delivery stays blocked."),
-            ),
-            Effect.andThen(applyForHome(connection, isHome)),
-            Effect.ignore({ log: true }),
+      if (loaded.loadFailed) return isHome;
+      const connections = yield* readConnections;
+      const complete = yield* applyAllForHome(connections, isHome, (connection) =>
+        deleteRevokedSecrets(connection).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("Slack startup revocation cleanup failed; delivery stays blocked."),
           ),
-        );
-      }
-      return isHome;
+        ),
+      );
+      return complete ? isHome : null;
     }),
   );
 
@@ -516,8 +549,7 @@ export const make = Effect.gen(function* () {
             const isHome = yield* readHome;
             if (isHome === appliedHome) return;
             const connections = yield* readConnections;
-            yield* Effect.forEach(connections, (connection) => applyForHome(connection, isHome));
-            appliedHome = isHome;
+            appliedHome = (yield* applyAllForHome(connections, isHome)) ? isHome : null;
           }),
         )
         .pipe(Effect.ignore({ log: true })),

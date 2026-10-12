@@ -29,6 +29,8 @@ import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
+import { GoatBotScreen } from "../goat-bot/GoatBotScreen";
+import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -38,13 +40,17 @@ export function HomeRouteScreen() {
   const columnMetrics = useNativeColumnLayoutMetrics();
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
   const { layout, panes } = useAdaptiveWorkspaceLayout();
+  const botHome = useMobileGoatBotModeButton();
+  const compactBot = !layout.usesSplitView && botHome.mode === "bot";
   const projects = useProjects();
   // Streaming turns rewrite thread shells many times a second. While a Thread
   // covers Home, rebuilding this list is invisible work.
   const visible = useHomeRouteVisible();
   const threads = useAtomValueWhileVisible(
     environmentThreadShells.navigationThreadShellsAtom,
-    visible,
+    layout.usesSplitView
+      ? nativePrimaryColumn !== null && panes.primarySidebarVisible
+      : visible && !compactBot,
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -141,11 +147,22 @@ export function HomeRouteScreen() {
           options={
             Platform.OS === "android"
               ? { headerShown: false }
-              : { title: "", headerTitle: "", unstable_headerLeftItems: () => [] }
+              : {
+                  title: botHome.mode === "bot" ? "GOAT Bot" : "",
+                  headerTitle: botHome.mode === "bot" ? "GOAT Bot" : "",
+                  unstable_headerLeftItems: () => [],
+                }
           }
         />
         {Platform.OS === "ios" ? (
           <NativeHeaderToolbar placement="left">
+            {botHome.known ? (
+              <NativeHeaderToolbar.Button
+                accessibilityLabel={botHome.mode === "bot" ? "Show threads" : "Show GOAT Bot"}
+                icon={botHome.mode === "bot" ? "list.bullet" : "bubble.left.and.bubble.right"}
+                onPress={botHome.toggle}
+              />
+            ) : null}
             <NativeHeaderToolbar.Button
               accessibilityLabel="New task"
               icon="square.and.pencil"
@@ -153,26 +170,84 @@ export function HomeRouteScreen() {
             />
           </NativeHeaderToolbar>
         ) : null}
-        {Platform.OS === "android" ? <AndroidScreenHeader title="Threads" /> : null}
-        <WorkspaceEmptyDetail
-          onAddConnection={
-            Platform.OS === "android" && !catalogState.hasConnections
-              ? () =>
-                  navigation.navigate("SettingsSheet", {
-                    screen: "SettingsContent",
-                    params: { screen: "SettingsEnvironmentNew" },
-                  })
-              : undefined
-          }
-          onStartNewTask={
-            Platform.OS === "android" && panes.primarySidebarVisible
-              ? undefined
-              : () => navigation.navigate("NewTaskSheet", { screen: "NewTask" })
-          }
-        />
+        {Platform.OS === "android" ? (
+          <AndroidScreenHeader
+            title={botHome.mode === "bot" ? "GOAT Bot" : "Threads"}
+            actions={
+              botHome.known
+                ? [
+                    {
+                      accessibilityLabel: botHome.mode === "bot" ? "Show threads" : "Show GOAT Bot",
+                      icon: botHome.mode === "bot" ? "text.alignleft" : "text.bubble",
+                      onPress: botHome.toggle,
+                    },
+                  ]
+                : []
+            }
+          />
+        ) : null}
+        {botHome.mode === "bot" ? (
+          <GoatBotScreen visible={visible} />
+        ) : (
+          <WorkspaceEmptyDetail
+            onAddConnection={
+              Platform.OS === "android" && !catalogState.hasConnections
+                ? () =>
+                    navigation.navigate("SettingsSheet", {
+                      screen: "SettingsContent",
+                      params: { screen: "SettingsEnvironmentNew" },
+                    })
+                : undefined
+            }
+            onStartNewTask={
+              Platform.OS === "android" && panes.primarySidebarVisible
+                ? undefined
+                : () => navigation.navigate("NewTaskSheet", { screen: "NewTask" })
+            }
+          />
+        )}
       </>
     );
   }
+
+  const homeHeader = (
+    <HomeHeader
+      homeMode={botHome.mode}
+      botKnown={botHome.known}
+      onToggleHomeMode={botHome.toggle}
+      environments={environments}
+      projects={projectFilterOptions}
+      searchQuery={searchQuery}
+      selectedEnvironmentId={selectedEnvironmentId}
+      selectedProjectKey={selectedProjectKey}
+      onEnvironmentChange={setSelectedEnvironmentId}
+      onProjectChange={setSelectedProjectKey}
+      onOpenEnvironments={() =>
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "SettingsEnvironments" },
+        })
+      }
+      onOpenSettings={() =>
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "Settings" },
+        })
+      }
+      onSearchQueryChange={setSearchQuery}
+      onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
+    />
+  );
+  if (compactBot)
+    return (
+      <>
+        <NativeStackScreenOptions
+          options={{ headerShown: true, title: "GOAT Bot", headerTitle: "GOAT Bot" }}
+        />
+        {homeHeader}
+        <GoatBotScreen visible={visible} />
+      </>
+    );
 
   return (
     <AndroidHomeFabLayout
@@ -188,7 +263,8 @@ export function HomeRouteScreen() {
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth,
               trailingItemCount:
-                nativePrimaryColumn && Platform.OS === "ios" && Platform.isPad ? 2 : 1,
+                (nativePrimaryColumn && Platform.OS === "ios" && Platform.isPad ? 2 : 1) +
+                (botHome.known ? 1 : 0),
               onOpenEnvironments: () =>
                 navigation.navigate("SettingsSheet", {
                   screen: "SettingsContent",
@@ -198,29 +274,7 @@ export function HomeRouteScreen() {
             headerShown: true,
           }}
         />
-        <HomeHeader
-          environments={environments}
-          projects={projectFilterOptions}
-          searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
-          selectedProjectKey={selectedProjectKey}
-          onEnvironmentChange={setSelectedEnvironmentId}
-          onProjectChange={setSelectedProjectKey}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsEnvironments" },
-            })
-          }
-          onOpenSettings={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "Settings" },
-            })
-          }
-          onSearchQueryChange={setSearchQuery}
-          onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-        />
+        {homeHeader}
 
         <HomeScreen
           catalogState={catalogState}

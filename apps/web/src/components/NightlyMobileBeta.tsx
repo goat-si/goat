@@ -22,7 +22,23 @@ import { toastManager } from "./ui/toast";
 export const IS_NIGHTLY_BUILD =
   parseSemver(APP_VERSION)?.prerelease[0] === "nightly" || HOSTED_APP_CHANNEL === "nightly";
 
-const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/XgaxaRtd";
+/**
+ * GOAT's iOS TestFlight invite. GOAT has no public beta yet, so this is null and
+ * the beta notice and Settings row stay hidden. Set it to show them again.
+ */
+export const GOAT_IOS_TESTFLIGHT_URL: string | null = null;
+
+/** Whether a build should advertise the beta mobile app. */
+export function shouldShowNightlyMobileBeta(input: {
+  isNightly: boolean;
+  testflightUrl: string | null | undefined;
+}): boolean {
+  return input.isNightly && Boolean(input.testflightUrl);
+}
+
+/** True when the beta mobile app has a GOAT TestFlight link to point at. */
+export const HAS_MOBILE_BETA_LINK = Boolean(GOAT_IOS_TESTFLIGHT_URL);
+
 const ANDROID_BETA_GROUP_URL = "https://groups.google.com/g/t3-code-v2-beta";
 const ANDROID_PLAY_TESTING_URL = "https://play.google.com/apps/testing/com.t3tools.t3code";
 
@@ -56,7 +72,16 @@ export function NightlyMobileBetaNotice() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!IS_NIGHTLY_BUILD || noticeShown || isNoticeDismissed()) return;
+    if (
+      !shouldShowNightlyMobileBeta({
+        isNightly: IS_NIGHTLY_BUILD,
+        testflightUrl: GOAT_IOS_TESTFLIGHT_URL,
+      }) ||
+      noticeShown ||
+      isNoticeDismissed()
+    ) {
+      return;
+    }
     noticeShown = true;
     const toastId = toastManager.add({
       title: "Nightly needs the beta mobile app",
@@ -101,8 +126,13 @@ function BetaLinkQr({ url, label }: { url: string; label: string }) {
   );
 }
 
-/** Settings → General → About row with the beta app links. Render it only for Nightly. */
+/**
+ * Settings → General → About row with the beta app links. Render it only for
+ * Nightly; it renders nothing until GOAT has a TestFlight link.
+ */
 export function NightlyMobileBetaRow() {
+  const testflightUrl = GOAT_IOS_TESTFLIGHT_URL;
+  if (!testflightUrl) return null;
   return (
     <SettingsRow
       id={ROW_ID}
@@ -121,7 +151,7 @@ export function NightlyMobileBetaRow() {
                   <PopoverTitle>TestFlight beta</PopoverTitle>
                   <p className="text-xs text-muted-foreground">Scan with your iPhone camera.</p>
                 </div>
-                <BetaLinkQr url={IOS_TESTFLIGHT_URL} label="TestFlight beta link" />
+                <BetaLinkQr url={testflightUrl} label="TestFlight beta link" />
               </div>
             </PopoverPopup>
           </Popover>

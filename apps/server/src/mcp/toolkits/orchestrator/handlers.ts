@@ -1,12 +1,15 @@
 import { OrchestratorToolkit } from "./tools.ts";
-import type { ThreadId } from "@t3tools/contracts";
+import type { RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
+import { isTerminalRunStatus } from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import { unavailable } from "../../threadAccess.ts";
 
 /** Whether a thread tool call goes to another machine. */
 const reachesHost = <
@@ -21,6 +24,16 @@ const localTargets = <
 >(
   input: P,
 ) => (input.host === undefined ? [input.threadId] : []);
+
+/**
+ * A local thread's structured run result. A thread on another machine gets
+ * its result from that machine's own read.
+ */
+const localResult = (threadId: ThreadId, runId?: RunId | null) =>
+  ThreadResultService.ThreadResultService.pipe(
+    Effect.flatMap((results) => results.forRun(threadId, runId)),
+    Effect.mapError(unavailable),
+  );
 
 const handlers = {
   orchestrator_capabilities: McpToolAccess.reads(() =>
@@ -110,7 +123,9 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* HostThreadsMcpService.HostThreadsMcpService;
-      return yield* service.readThread(scope, input);
+      const read = yield* service.readThread(scope, input);
+      if (input.host !== undefined) return read;
+      return { ...read, result: yield* localResult(input.threadId, read.thread.latestRunId) };
     }),
   ),
   goat_thread_update: McpToolAccess.writesThreads(
@@ -133,7 +148,12 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* HostThreadsMcpService.HostThreadsMcpService;
-      return yield* service.waitForThread(scope, input);
+      const waited = yield* service.waitForThread(scope, input);
+      if (input.host !== undefined || waited.timedOut || waited.runId === null) return waited;
+      const result = yield* localResult(input.threadId, waited.runId);
+      return result === null || !isTerminalRunStatus(result.runStatus)
+        ? waited
+        : { ...waited, result };
     }),
   ),
   goat_thread_interrupt: McpToolAccess.writesThreads(localTargets, (input) =>

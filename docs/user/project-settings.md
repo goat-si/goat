@@ -52,6 +52,19 @@ to override its environment defaults. Worktree directories keep their original n
 If generation fails, or a custom name is invalid or already taken, the temporary
 branch name remains.
 
+## Standing instructions for launched threads
+
+In **Settings → General → Standing instructions**, write the rules every thread an
+agent launches should follow, such as which model to use for subagents or how to
+commit and open pull requests. GOAT puts them in front of the first message of each
+thread an agent starts here, including threads started from another machine over
+SSH, which get this machine's instructions. Select a project to replace them for
+that project; an empty project value turns them off there.
+
+The launched thread shows them as a collapsed **Standing instructions** block above
+the task, with a short version code that changes whenever the text does. Threads you
+start yourself are unaffected, and an agent can ask for a launch without them.
+
 ## Scheduled tasks on mobile
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing

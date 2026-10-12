@@ -20,6 +20,7 @@ import {
   unavailable,
 } from "../../threadAccess.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
@@ -56,6 +57,25 @@ const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A,
 ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
 
 export const layer = McpToolAccess.toLayer(ThreadToolkit, {
+  goat_thread_report_result: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext.pipe(
+        Effect.flatMap((scope) =>
+          McpInvocationContext.requireThreadScope(scope, "goat_thread_report_result"),
+        ),
+      );
+      const results = yield* ThreadResultService.ThreadResultService;
+      return yield* results
+        .report(scope.thread.threadId, input)
+        .pipe(
+          Effect.mapError((error) =>
+            error.reason === "run_not_found"
+              ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+              : unavailable(),
+          ),
+        );
+    }),
+  ),
   run_scheduled_task_now: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
