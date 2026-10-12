@@ -986,6 +986,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             }),
         }),
         Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+          get: () => Effect.succeed(null),
           cancel: (_id, authorize) =>
             authorize.pipe(
               Effect.map(() => {
