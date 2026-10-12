@@ -7,6 +7,7 @@ import {
   ThreadId,
   RemoteReportBindingInput,
   RemoteReport,
+  RemoteRelaySend,
   type RemoteKnownRun,
   type RemoteObservedRun,
   RemoteOriginReportInput,
@@ -39,6 +40,7 @@ export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
       "access_denied",
       "run_not_found",
       "thread_deleted",
+      "relay_unsupported",
       "unavailable",
       "storage",
     ]),
@@ -52,13 +54,27 @@ export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
 const BindingRow = Schema.Struct({
   threadId: ThreadId,
   ...RemoteReportBindingInput.fields,
+  relaySend: Schema.Number,
   lastSequence: NonNegativeInt,
 });
 const decodeBindingRows = Schema.decodeUnknownEffect(Schema.Array(BindingRow));
 const decodeBindingInput = Schema.decodeUnknownEffect(RemoteReportBindingInput);
 const decodeReportInput = Schema.decodeUnknownEffect(RemoteOriginReportInput);
+const decodeRelayInput = Schema.decodeUnknownEffect(RemoteRelaySend);
 const decodeWaitInput = Schema.decodeUnknownEffect(RemoteOriginReportsWaitInput);
-const decodeReports = Schema.decodeUnknownEffect(Schema.Array(RemoteReport));
+const RelayJson = Schema.fromJsonString(RemoteRelaySend);
+const encodeRelay = Schema.encodeSync(RelayJson);
+const decodeReportRows = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ ...RemoteReport.fields, relay: Schema.NullOr(RelayJson) })),
+);
+const decodeReports = (rows: unknown) =>
+  decodeReportRows(rows).pipe(
+    Effect.map((values) =>
+      values.map(({ relay, ...report }): RemoteReport =>
+        relay === null ? report : { ...report, relay },
+      ),
+    ),
+  );
 const isRemoteReportError = Schema.is(RemoteReportError);
 
 const sameRequestIds = (
@@ -94,15 +110,23 @@ export class RemoteReportService extends Context.Service<
     ) => Effect.Effect<void, RemoteReportError>;
     readonly unbind: (threadId: ThreadId) => Effect.Effect<void, RemoteReportError>;
     /** The machine and thread this thread was launched from, when it reports to one. */
-    readonly origin: (
-      threadId: ThreadId,
-    ) => Effect.Effect<
-      { readonly originLabel: string; readonly originThreadId: ThreadId } | null,
+    readonly origin: (threadId: ThreadId) => Effect.Effect<
+      {
+        readonly originLabel: string;
+        readonly originThreadId: ThreadId;
+        /** The origin delivers this thread's sends to hosts it cannot reach. */
+        readonly relaySend: boolean;
+      } | null,
       RemoteReportError
     >;
     readonly report: (
       threadId: ThreadId,
       input: RemoteOriginReportInput,
+    ) => Effect.Effect<RemoteOriginReportResult, RemoteReportError>;
+    /** Asks the origin to deliver a goat_thread_send; only for a binding with relaySend. */
+    readonly relay: (
+      threadId: ThreadId,
+      input: RemoteRelaySend,
     ) => Effect.Effect<RemoteOriginReportResult, RemoteReportError>;
     readonly wait: (
       input: RemoteOriginReportsWaitInput,
@@ -121,14 +145,14 @@ const make = Effect.gen(function* () {
     sql`
     SELECT thread_id AS "threadId", correlation_id AS "correlationId",
       origin_label AS "originLabel", origin_thread_id AS "originThreadId",
-      read_key_hash AS "readKeyHash", last_sequence AS "lastSequence"
+      read_key_hash AS "readKeyHash", relay_send AS "relaySend", last_sequence AS "lastSequence"
     FROM remote_report_bindings WHERE thread_id = ${threadId}
   `.pipe(Effect.mapError(storage), Effect.flatMap(decodeRows), Effect.mapError(storage));
   const bindingForCorrelation = (correlationId: string) =>
     sql`
     SELECT thread_id AS "threadId", correlation_id AS "correlationId",
       origin_label AS "originLabel", origin_thread_id AS "originThreadId",
-      read_key_hash AS "readKeyHash", last_sequence AS "lastSequence"
+      read_key_hash AS "readKeyHash", relay_send AS "relaySend", last_sequence AS "lastSequence"
     FROM remote_report_bindings WHERE correlation_id = ${correlationId}
   `.pipe(Effect.mapError(storage), Effect.flatMap(decodeRows), Effect.mapError(storage));
   const bind = Effect.fn("RemoteReportService.bind")(function* (
@@ -139,8 +163,8 @@ const make = Effect.gen(function* () {
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     yield* sql`
       INSERT INTO remote_report_bindings
-        (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, created_at)
-      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${createdAt})
+        (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
+      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${value.relaySend === true ? 1 : 0}, ${createdAt})
     `.pipe(Effect.mapError(storage));
   });
   const unbind = Effect.fn("RemoteReportService.unbind")(function* (threadId: ThreadId) {
@@ -149,17 +173,19 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* sql`DELETE FROM remote_reports WHERE correlation_id IN
         (SELECT correlation_id FROM remote_report_bindings WHERE thread_id = ${threadId})`;
+          yield* sql`DELETE FROM remote_relay_requests WHERE correlation_id IN
+        (SELECT correlation_id FROM remote_report_bindings WHERE thread_id = ${threadId})`;
           yield* sql`DELETE FROM remote_report_bindings WHERE thread_id = ${threadId}`;
         }),
       )
       .pipe(Effect.mapError(storage));
     yield* PubSub.publish(signals, undefined);
   });
-  const report = Effect.fn("RemoteReportService.report")(function* (
+  const append = Effect.fn("RemoteReportService.append")(function* (
     threadId: ThreadId,
-    input: RemoteOriginReportInput,
+    value: RemoteOriginReportInput,
+    relay: RemoteRelaySend | null,
   ) {
-    const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
     const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
     if (shell === null || shell.deletedAt !== null)
       return yield* new RemoteReportError({ reason: "thread_deleted" });
@@ -170,18 +196,32 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const binding = (yield* bindingForThread(threadId))[0];
           if (binding === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
+          if (relay !== null && binding.relaySend !== 1)
+            return yield* new RemoteReportError({ reason: "relay_unsupported" });
+          // A retried relay is the same request, even after the origin collected it.
+          if (relay?.clientRequestId !== undefined) {
+            const earlier = yield* sql<{
+              sequence: number;
+            }>`SELECT sequence FROM remote_relay_requests
+              WHERE correlation_id = ${binding.correlationId}
+              AND client_request_id = ${relay.clientRequestId}`;
+            if (earlier[0] !== undefined) return { sequence: earlier[0].sequence };
+          }
           const sequence = binding.lastSequence + 1;
           yield* sql`UPDATE remote_report_bindings SET last_sequence = ${sequence} WHERE thread_id = ${threadId}`;
           yield* sql`
-        INSERT INTO remote_reports (correlation_id, sequence, run_id, kind, summary, created_at)
-        VALUES (${binding.correlationId}, ${sequence}, ${runId}, ${value.status}, ${value.summary}, ${createdAt})
+        INSERT INTO remote_reports (correlation_id, sequence, run_id, kind, summary, relay, created_at)
+        VALUES (${binding.correlationId}, ${sequence}, ${runId}, ${value.status}, ${value.summary}, ${relay === null ? null : encodeRelay(relay)}, ${createdAt})
       `;
-          // Keep the newest 200, preferring substantive reports over progress.
+          if (relay?.clientRequestId !== undefined)
+            yield* sql`INSERT INTO remote_relay_requests (correlation_id, client_request_id, sequence)
+              VALUES (${binding.correlationId}, ${relay.clientRequestId}, ${sequence})`;
+          // Keep the newest 200, preferring substantive reports and relays over progress.
           yield* sql`
         DELETE FROM remote_reports WHERE correlation_id = ${binding.correlationId}
           AND sequence IN (
             SELECT sequence FROM remote_reports WHERE correlation_id = ${binding.correlationId}
-            ORDER BY CASE WHEN kind = 'progress' THEN 1 ELSE 0 END, sequence DESC
+            ORDER BY CASE WHEN kind = 'progress' AND relay IS NULL THEN 1 ELSE 0 END, sequence DESC
             LIMIT -1 OFFSET 200
           )
       `;
@@ -191,6 +231,27 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((cause) => (isRemoteReportError(cause) ? cause : storage(cause))));
     yield* PubSub.publish(signals, undefined);
     return result;
+  });
+  const report = Effect.fn("RemoteReportService.report")(function* (
+    threadId: ThreadId,
+    input: RemoteOriginReportInput,
+  ) {
+    const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
+    return yield* append(threadId, value, null);
+  });
+  const relay = Effect.fn("RemoteReportService.relay")(function* (
+    threadId: ThreadId,
+    input: RemoteRelaySend,
+  ) {
+    const value = yield* decodeRelayInput(input).pipe(Effect.mapError(invalid));
+    return yield* append(
+      threadId,
+      {
+        status: "progress",
+        summary: `Asked to relay goat_thread_send to thread ${value.threadId} on ${value.host}.`,
+      },
+      value,
+    );
   });
   const wait = Effect.fn("RemoteReportService.wait")(function* (
     input: RemoteOriginReportsWaitInput,
@@ -264,7 +325,7 @@ const make = Effect.gen(function* () {
                 yield* authorize;
                 yield* sql`DELETE FROM remote_reports WHERE correlation_id = ${value.correlationId} AND sequence <= ${value.afterSequence}`;
                 const rows = yield* sql`
-            SELECT sequence, run_id AS "runId", kind, summary, created_at AS "createdAt"
+            SELECT sequence, run_id AS "runId", kind, summary, relay, created_at AS "createdAt"
             FROM remote_reports WHERE correlation_id = ${value.correlationId} AND sequence > ${value.afterSequence}
             ORDER BY sequence LIMIT 51
           `;
@@ -375,8 +436,12 @@ const make = Effect.gen(function* () {
     const binding = (yield* bindingForThread(threadId))[0];
     return binding === undefined
       ? null
-      : { originLabel: binding.originLabel, originThreadId: binding.originThreadId };
+      : {
+          originLabel: binding.originLabel,
+          originThreadId: binding.originThreadId,
+          relaySend: binding.relaySend === 1,
+        };
   });
-  return RemoteReportService.of({ bind, unbind, origin, report, wait });
+  return RemoteReportService.of({ bind, unbind, origin, report, relay, wait });
 });
 export const layer = Layer.effect(RemoteReportService, make);

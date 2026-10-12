@@ -49,7 +49,7 @@ import {
   type OrchestratorMcpThreadReadResult,
   type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadSendInput,
-  type OrchestratorMcpThreadSendResult,
+  type OrchestratorMcpThreadSendDelivered,
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
@@ -188,7 +188,7 @@ export interface OrchestratorMcpServiceShape {
   readonly sendToThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
-  ) => Effect.Effect<OrchestratorMcpThreadSendResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<OrchestratorMcpThreadSendDelivered, OrchestratorMcpFailure>;
   readonly waitForThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadWaitInput,
@@ -3150,7 +3150,7 @@ const make = Effect.gen(function* () {
             : { taskId: result.run.delegatedTaskId }),
           status: result.run.status,
           delivery: result.delivery,
-        } satisfies OrchestratorMcpThreadSendResult;
+        } satisfies OrchestratorMcpThreadSendDelivered;
       }),
     waitForThread: (scope, input) =>
       Effect.gen(function* () {

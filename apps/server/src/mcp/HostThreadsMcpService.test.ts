@@ -96,6 +96,8 @@ const runService = <A, E>(
     readonly hosts?: ReadonlyArray<string>;
     /** The machine the caller was launched from, when it has a report binding. */
     readonly originLabel?: string;
+    /** That machine declared at launch that it delivers sends for this one. */
+    readonly relaySend?: boolean;
     readonly hostCall: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -103,6 +105,7 @@ const runService = <A, E>(
   body: (service: HostThreadsMcpService.HostThreadsMcpServiceShape) => Effect.Effect<A, E>,
 ) => {
   const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
+  const relays: Array<unknown> = [];
   const rearms: Array<Parameters<LaunchWatchService.LaunchWatchServiceShape["rearm"]>[0]> = [];
   const layer = HostThreadsMcpService.layer.pipe(
     Layer.provide(
@@ -111,8 +114,17 @@ const runService = <A, E>(
           Effect.succeed(
             options.originLabel === undefined
               ? null
-              : { originLabel: options.originLabel, originThreadId: ThreadId.make("origin") },
+              : {
+                  originLabel: options.originLabel,
+                  originThreadId: ThreadId.make("origin"),
+                  relaySend: options.relaySend ?? false,
+                },
           ),
+        relay: (_threadId, input) =>
+          Effect.sync(() => {
+            relays.push(input);
+            return { sequence: 1 };
+          }),
       }),
     ),
     Layer.provide(
@@ -158,11 +170,80 @@ const runService = <A, E>(
   return Effect.gen(function* () {
     const service = yield* HostThreadsMcpService.HostThreadsMcpService;
     const result = yield* body(service).pipe(Effect.result);
-    return { result, calls, rearms };
+    return { result, calls, rearms, relays };
   }).pipe(Effect.provide(layer));
 };
 
+const unknownHost = new SshRemoteDispatch.SshRemoteDispatchError({
+  reason: "host_unknown",
+  message: "juns-macbook-pro is not in this machine's SSH config or known_hosts.",
+});
+
 describe("HostThreadsMcpService", () => {
+  it.effect("relays a send to an unreachable host through an origin that declared relaying", () =>
+    Effect.gen(function* () {
+      const { result, relays, rearms } = yield* runService(
+        {
+          interactionMode: "default",
+          originLabel: "orchestrator-laptop",
+          relaySend: true,
+          hostCall: () => Effect.fail(unknownHost),
+        },
+        (service) =>
+          service.sendToThread(scope, {
+            host: "juns-macbook-pro",
+            threadId: ThreadId.make("merge-manager"),
+            message: "PR #48 is open.",
+            clientRequestId: "pr-48",
+          } as never),
+      );
+      expect(result._tag).toBe("Success");
+      if (result._tag !== "Success") return;
+      expect(result.success).toEqual({
+        host: "juns-macbook-pro",
+        threadId: "merge-manager",
+        delivery: "relayed",
+        via: "orchestrator-laptop",
+      });
+      expect(relays).toEqual([
+        {
+          host: "juns-macbook-pro",
+          threadId: "merge-manager",
+          message: "PR #48 is open.",
+          clientRequestId: "pr-48",
+        },
+      ]);
+      expect(rearms).toEqual([]);
+    }),
+  );
+
+  it.effect.each(["read", "wait", "interrupt"] as const)(
+    "keeps the clear error for %s, even through an origin that relays sends",
+    (tool) =>
+      Effect.gen(function* () {
+        const target = { host: "juns-macbook-pro", threadId: ThreadId.make("merge-manager") };
+        const { result, relays } = yield* runService(
+          {
+            interactionMode: "default",
+            originLabel: "orchestrator-laptop",
+            relaySend: true,
+            hostCall: () => Effect.fail(unknownHost),
+          },
+          (service) =>
+            tool === "read"
+              ? Effect.asVoid(service.readThread(scope, target as never))
+              : tool === "wait"
+                ? Effect.asVoid(service.waitForThread(scope, target as never))
+                : Effect.asVoid(service.interruptThread(scope, target as never)),
+        );
+        expect(result._tag).toBe("Failure");
+        if (result._tag !== "Failure") return;
+        expect(result.failure.message).toContain("started from orchestrator-laptop");
+        expect(result.failure.message).toContain("goat_origin_report");
+        expect(relays).toEqual([]);
+      }),
+  );
+
   it.effect.each([
     ["orchestrator-laptop", true],
     [undefined, false],

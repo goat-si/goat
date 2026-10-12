@@ -37,9 +37,12 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import Migration0062 from "../persistence/Migrations/063_RemoteReports.ts";
 import Migration0063 from "../persistence/Migrations/064_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/066_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/068_RemoteReportRelay.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
+import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
@@ -97,8 +100,10 @@ const catalog: OrchestratorMcpCapabilitiesResult = {
 
 const fixture = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  yield* Migration0062;
   yield* Migration0063;
   yield* Migration0065;
+  yield* Migration0068;
   const now = yield* DateTime.now;
   let shell: OrchestrationV2ThreadShell | null = liveThreadShell(threadId, {
     activeRunId: parentRunId,
@@ -305,6 +310,7 @@ const fixture = Effect.gen(function* () {
     Layer.mock(ProjectService.ProjectService)({}),
     Layer.mock(SecretRequests.SecretRequests)({}),
     Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+    Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   );
   const layer = OrchestratorMcpService.layer.pipe(
     Layer.provideMerge(RemoteDispatchCoordinator.layer),

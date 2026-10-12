@@ -15,8 +15,10 @@ import {
   RemoteReportKind,
   RemoteOriginReportsWaitResult,
   OrchestratorMcpFailure,
+  OrchestratorMcpThreadSendResult,
   OrchestrationV2RunStatus,
   type RemoteDispatchView,
+  type RemoteRelaySend,
   type RemoteReport,
   type RemoteObservedRun,
 } from "@t3tools/contracts";
@@ -31,6 +33,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import {
@@ -44,7 +47,13 @@ import {
   requestRemoteTaskCancel,
   recoverUnknownRemoteTaskLaunch,
 } from "./recordRemoteTaskResult.ts";
-import { REPORTING_NOTE, frameRemoteReport, remoteTaskQuestionNotice } from "./reportFrame.ts";
+import {
+  REPORTING_NOTE,
+  frameLiteral,
+  frameRelayOutcome,
+  frameRemoteReport,
+  remoteTaskQuestionNotice,
+} from "./reportFrame.ts";
 
 export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>()(
   "RemoteDispatchError",
@@ -87,6 +96,8 @@ const Row = Schema.Struct({
   task_id: Schema.NullOr(NodeId),
   parent_run_id: Schema.NullOr(RunId),
   pending_request_ids: Schema.NullOr(Schema.fromJsonString(Schema.Array(RuntimeRequestId))),
+  relay_send: Schema.Number,
+  relay_attempted: Schema.Number,
   last_error: Schema.NullOr(Schema.String),
   created_at: IsoDateTime,
   updated_at: IsoDateTime,
@@ -97,11 +108,14 @@ type Row = typeof Row.Type;
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
+const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeFailure = (cause: unknown) => new RemoteDispatchError({ stage: "decode", cause });
 const isRemoteTaskError = Schema.is(RemoteTaskError);
 const isRemoteDispatchError = Schema.is(RemoteDispatchError);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const MISSING_RUN_GRACE_MS = 300_000;
+/** What the launcher is told about one relayed send, and whether it is woken for it. */
+type RelayOutcome = { readonly wake: boolean; readonly text: string };
 export interface RemoteDispatchRecord {
   readonly correlationId: string;
   readonly kind: "thread" | "task";
@@ -223,10 +237,13 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const launchWatches = yield* LaunchWatchService.LaunchWatchService;
   const inFlight = new Map<string, Deferred.Deferred<void, RemoteDispatchError>>();
   const drains = yield* FiberMap.make<string, void, RemoteDispatchError>();
   const hosts = new Map<string, Semaphore.Semaphore>();
   const taskHosts = new Map<string, Semaphore.Semaphore>();
+  // Relayed sends must not wait behind report long-polls to the same host.
+  const relayHosts = new Map<string, Semaphore.Semaphore>();
   const locks = new Map<string, Semaphore.Semaphore>();
   const gate = (map: Map<string, Semaphore.Semaphore>, id: string, permits: number) => {
     const held = map.get(id);
@@ -413,6 +430,139 @@ const make = Effect.gen(function* () {
     readonly key: string;
     readonly source: "agent" | "runtime";
   };
+  /**
+   * Delivers a send the remote thread could not make, as its launcher thread. As for
+   * the launcher's own sends, the launcher must be live and in default interaction
+   * mode, and its runtime mode is the ceiling the target host enforces. Only a
+   * dispatch this machine launched with relaySend relays.
+   *
+   * The target dedupes clientRequestId per SSH session, which a restart replaces, so
+   * a relay is marked attempted before it is sent. A replay after a restart reports an
+   * uncertain outcome instead of sending again; a retry in this process reuses the
+   * outcome it already has.
+   */
+  const relayOutcomes = new Map<string, RelayOutcome>();
+  const relay = Effect.fn("RemoteDispatchCoordinator.relay")(function* (
+    r: Row,
+    report: RemoteReport,
+    send: RemoteRelaySend,
+  ) {
+    const key = `${r.correlation_id}:${report.sequence}`;
+    const known = relayOutcomes.get(key);
+    if (known !== undefined) return known;
+    const outcome = (
+      status: string,
+      wake: boolean,
+      quoted?: { readonly reason: string; readonly message: string },
+    ): RelayOutcome => ({
+      wake,
+      text: frameRelayOutcome({
+        host: r.host,
+        correlationId: r.correlation_id,
+        target: { host: send.host, threadId: send.threadId },
+        status,
+        ...quoted,
+      }),
+    });
+    const notDelivered = (reason: string) =>
+      outcome("Not delivered. Send it yourself if it should still go.", true, {
+        reason,
+        message: send.message,
+      });
+    const uncertain = (reason: string) =>
+      outcome(
+        "It may have been delivered. Check the target with goat_thread_read before sending it again.",
+        true,
+        { reason, message: send.message },
+      );
+    const decided = yield* Effect.gen(function* () {
+      if (r.relay_send !== 1) return notDelivered("This launch did not offer to relay sends.");
+      if (report.sequence <= r.relay_attempted)
+        return uncertain("GOAT stopped while it was delivering this send.");
+      yield* db(sql`UPDATE remote_dispatches SET relay_attempted = ${report.sequence}
+        WHERE correlation_id = ${r.correlation_id}`);
+      const refused = (code: OrchestratorMcpFailure["code"], message: string) =>
+        new OrchestratorMcpFailure({ code, message });
+      const launcherMode = threads.getThreadShell(r.origin_thread_id).pipe(
+        Effect.mapError(() =>
+          refused("orchestration_error", "The launcher thread could not be read."),
+        ),
+        Effect.flatMap((shell) =>
+          shell === null || shell.deletedAt !== null || shell.archivedAt !== null
+            ? Effect.fail(refused("thread_not_found", "The launcher thread is gone."))
+            : shell.interactionMode !== "default"
+              ? Effect.fail(
+                  refused(
+                    "interaction_mode_escalation_denied",
+                    `Relaying needs the launcher thread in default interaction mode; it is in ${shell.interactionMode} mode.`,
+                  ),
+                )
+              : Effect.succeed(shell.runtimeMode),
+        ),
+      );
+      const requestKey =
+        send.clientRequestId === undefined
+          ? `seq:${report.sequence}`
+          : `req:${NodeCrypto.createHash("sha256").update(send.clientRequestId).digest("hex").slice(0, 32)}`;
+      const sent = yield* gate(relayHosts, send.host, 4)
+        .withPermits(1)(
+          ssh.callHostTool(
+            {
+              host: send.host,
+              tool: "goat_thread_send",
+              arguments: {
+                threadId: send.threadId,
+                message: send.message,
+                // From a thread, queue and steer mean "like steering", which a remote's auto does.
+                ...(send.mode === undefined
+                  ? {}
+                  : { mode: send.mode === "restart" ? "restart" : "auto" }),
+                clientRequestId: `relay:${r.correlation_id}:${requestKey}`,
+              },
+              writes: true,
+              timeoutMs: 120_000,
+            },
+            launcherMode,
+          ),
+        )
+        .pipe(Effect.flatMap(decodeSend), Effect.result);
+      if (sent._tag === "Failure") {
+        const error = sent.failure;
+        if (isOrchestratorMcpFailure(error)) return notDelivered(error.message);
+        if (!(error instanceof SshRemoteDispatch.SshRemoteDispatchError))
+          return uncertain("The target returned a result goat_thread_send could not read.");
+        // Refused before anything was sent, or by the target with a reason of its own.
+        // A lost answer, or a target that failed after accepting it, may still have it.
+        const refusedBeforeSending =
+          error.reason === "host_unknown" ||
+          error.reason === "invalid_request" ||
+          error.reason === "caller_changed" ||
+          (error.reason === "remote_refused" &&
+            error.remoteCode !== undefined &&
+            error.remoteCode !== "orchestration_error");
+        return refusedBeforeSending ? notDelivered(error.message) : uncertain(error.message);
+      }
+      const result = sent.success;
+      if (result.delivery === "relayed")
+        return outcome(`Handed on again to ${frameLiteral(result.via)}.`, false);
+      // As after the launcher's own send: a watch hears when this run ends, and a
+      // dispatch to that thread follows its reports again.
+      yield* launchWatches
+        .rearm({
+          launcherThreadId: r.origin_thread_id,
+          host: send.host,
+          threadId: send.threadId,
+          runId: result.runId,
+        })
+        .pipe(Effect.catch(() => Effect.logWarning("launch watch: relayed send not followed")));
+      yield* resume(send.host, send.threadId).pipe(
+        Effect.catch(() => Effect.logWarning("Could not resume SSH report observation.")),
+      );
+      return outcome(`Delivered: ${result.delivery}, run ${frameLiteral(result.runId)}.`, false);
+    });
+    relayOutcomes.set(key, decided);
+    return decided;
+  });
   const importBatch = Effect.fn("RemoteDispatchCoordinator.importBatch")(function* (
     id: string,
     reports: ReadonlyArray<RemoteReport>,
@@ -432,14 +582,16 @@ const make = Effect.gen(function* () {
         const fresh = [...reports]
           .filter((p) => p.sequence > r.report_cursor)
           .sort((a, b) => a.sequence - b.sequence);
-        const entries: Entry[] = fresh.map((report) => ({
-          report,
-          key: `seq:${report.sequence}`,
-          source: forced === "lost" ? "runtime" : "agent",
-        }));
+        const entries: Entry[] = fresh
+          .map((report): Entry => ({
+            report,
+            key: `seq:${report.sequence}`,
+            source: forced === "lost" ? "runtime" : "agent",
+          }))
+          .filter((entry) => entry.report.relay === undefined);
         const ended = observed !== null && terminal(observed.status) && !hasMore;
         // The launch watch owns run-end wakes. Observation only settles this ledger.
-        const inbox: Array<{ kind: typeof RemoteReportKind.Type; text: string }> = [];
+        const inbox: Array<{ kind: typeof RemoteReportKind.Type | "relay"; text: string }> = [];
         const latestNeedsInput = entries.findLast((entry) => entry.report.kind === "needs_input");
         for (const entry of entries) {
           const text = frameRemoteReport({
@@ -471,6 +623,34 @@ const make = Effect.gen(function* () {
                 Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
               );
           } else if (r.delivery !== "notify_only") inbox.push({ kind: entry.report.kind, text });
+        }
+        // Only a binding this machine declared relaySend for carries relays.
+        for (const report of forced === undefined ? fresh : []) {
+          if (report.relay === undefined) continue;
+          const outcome = yield* relay(r, report, report.relay);
+          if (r.delivery === "wake" && outcome.wake) {
+            yield* threads
+              .dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make(`server:remote-relay:${id}:seq:${report.sequence}`),
+                threadId: r.origin_thread_id,
+                messageId: MessageId.make(`message:remote-relay:${id}:seq:${report.sequence}`),
+                text: outcome.text,
+                attachments: [],
+                createdBy: "agent",
+                creationSource: "server",
+                notification: {
+                  source: { kind: "monitor" },
+                  outcome: "updated",
+                  summary: `${r.host}: relay not delivered`,
+                },
+                dispatchMode: { type: "queue_after_active" },
+              })
+              .pipe(
+                Effect.mapError((cause) => new RemoteDispatchError({ stage: "delivery", cause })),
+              );
+          } else if (r.delivery !== "notify_only")
+            inbox.push({ kind: "relay", text: outcome.text });
         }
         // No SQLite transaction encloses notification I/O. Its deterministic receipt
         // dedupes a crash here; SQL then atomically imports inbox + ledger + cursor.
@@ -515,6 +695,8 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+        // Imported: the cursor now skips these relays, so their outcomes are no longer needed.
+        for (const report of fresh) relayOutcomes.delete(`${id}:${report.sequence}`);
       }),
     );
   });
@@ -769,8 +951,8 @@ const make = Effect.gen(function* () {
       const readKey = NodeCrypto.randomBytes(32).toString("hex");
       const at = yield* now;
       const acquired = yield* db(sql`INSERT INTO remote_dispatches
-        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, task_id, parent_run_id, created_at, updated_at)
-        VALUES (${id}, ${input.kind}, ${input.originThreadId}, ${input.launch.host}, ${readKey}, ${input.delivery}, 'launching', ${input.task?.taskId ?? null}, ${input.task?.parentRunId ?? null}, ${at}, ${at})`).pipe(
+        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, task_id, parent_run_id, relay_send, created_at, updated_at)
+        VALUES (${id}, ${input.kind}, ${input.originThreadId}, ${input.launch.host}, ${readKey}, ${input.delivery}, 'launching', ${input.task?.taskId ?? null}, ${input.task?.parentRunId ?? null}, ${input.kind === "thread" ? 1 : 0}, ${at}, ${at})`).pipe(
         Effect.result,
       );
       if (acquired._tag === "Failure") {
@@ -798,6 +980,8 @@ const make = Effect.gen(function* () {
               originLabel: NodeOS.hostname(),
               originThreadId: input.originThreadId,
               readKeyHash: NodeCrypto.createHash("sha256").update(readKey).digest("hex"),
+              // Delegated tasks report to their parent task and do not relay.
+              ...(input.kind === "thread" ? { relaySend: true } : {}),
             },
           },
           register,
@@ -907,10 +1091,10 @@ const make = Effect.gen(function* () {
     if (requested._tag === "Failure") return yield* Effect.fail(requested.failure);
     return requested.success;
   });
-  const resume = Effect.fn("RemoteDispatchCoordinator.resume")(function* (
-    host: string,
-    threadId: string,
-  ) {
+  // Typed here because relay calls it and drain reaches relay, which would make it circular.
+  const resume: RemoteDispatchCoordinator["Service"]["resume"] = Effect.fn(
+    "RemoteDispatchCoordinator.resume",
+  )(function* (host: string, threadId: string) {
     const matching = yield* rows(sql`SELECT * FROM remote_dispatches WHERE host = ${host}
       AND remote_thread_id = ${threadId} AND kind = 'thread'
       AND reports_supported = 1

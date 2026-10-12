@@ -25,7 +25,7 @@ import {
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
-  OrchestratorMcpThreadSendResult,
+  OrchestratorMcpThreadSendDelivered,
   OrchestratorMcpThreadWaitResult,
   ProjectId,
   ProviderDriverKind,
@@ -117,7 +117,8 @@ const decodeThreadInterruptResult = Schema.decodeUnknownEffect(
 );
 const decodeThreadListResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadListResult);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
-const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
+// Sends within one environment are always delivered here, never relayed.
+const decodeThreadSendResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendDelivered);
 const decodeThreadWaitResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeThreadUpdateResult = Schema.decodeUnknownEffect(ThreadMetadataMcpUpdateResult);
 

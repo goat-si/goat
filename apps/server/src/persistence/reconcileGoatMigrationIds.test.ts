@@ -49,6 +49,7 @@ describe("GOAT migration ids", () => {
         "ChannelLedger",
         "RemoteDispatchQuestions",
         "ThreadRunResults",
+        "RemoteReportRelay",
       ]);
       assert.isFalse(yield* hasReviewGuides);
       assert.deepStrictEqual(yield* runMigrations(), [[61, "PullRequestReviewGuides"]]);
@@ -66,6 +67,7 @@ describe("GOAT migration ids", () => {
         [65, "ChannelLedger"],
         [66, "RemoteDispatchQuestions"],
         [67, "ThreadRunResults"],
+        [68, "RemoteReportRelay"],
       ]);
       assert.isTrue(yield* hasReviewGuides);
       assert.deepStrictEqual(yield* history, migrationManifest);

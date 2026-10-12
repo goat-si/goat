@@ -765,8 +765,9 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(RemoteLaunchCatalog.layerWithoutDependencies),
   // One launch-watch store and one dispatch coordinator for the MCP tools, host
   // status, and the remote-launch catalog: they all follow runs and wake launchers.
-  Layer.provide(LaunchWatchService.layer),
+  // The coordinator re-arms watches after a relayed send, so the store comes after it.
   Layer.provide(RemoteDispatchCoordinator.layer),
+  Layer.provide(LaunchWatchService.layer),
   Layer.provide(layerSshWorkspace),
   Layer.provide(SshRemoteDispatch.layer),
   // Guides read through the same pull request service as every other surface.

@@ -107,8 +107,8 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       const layerRoutes = McpHttpServer.layer.pipe(
         Layer.provide(McpHttpServer.layerHostStatusService),
         Layer.provide(McpSessionRegistry.layer),
-        Layer.provide(LaunchWatchService.layer),
         Layer.provide(RemoteDispatchCoordinator.layer),
+        Layer.provide(LaunchWatchService.layer),
       );
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,

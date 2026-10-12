@@ -22,14 +22,30 @@ export const RemoteReportBindingInput = Schema.Struct({
   originLabel: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
   originThreadId: ThreadId,
   readKeyHash: HexKey,
+  /**
+   * The origin relays this thread's goat_thread_send to hosts the thread cannot
+   * reach. Only an origin that reads relay reports sets it; an older remote drops it.
+   */
+  relaySend: Schema.optional(Schema.Boolean),
 });
 export type RemoteReportBindingInput = typeof RemoteReportBindingInput.Type;
+/** A goat_thread_send the remote thread asked its origin to deliver on its behalf. */
+export const RemoteRelaySend = Schema.Struct({
+  host: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  threadId: ThreadId,
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)),
+  mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  clientRequestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+});
+export type RemoteRelaySend = typeof RemoteRelaySend.Type;
 export const RemoteReport = Schema.Struct({
   sequence: NonNegativeInt,
   runId: Schema.NullOr(RunId),
   kind: RemoteReportKind,
   summary: Summary,
   createdAt: IsoDateTime,
+  /** Present only for a binding with relaySend; the origin delivers it instead of quoting it. */
+  relay: Schema.optional(RemoteRelaySend),
 });
 export type RemoteReport = typeof RemoteReport.Type;
 export const RemoteOriginReportInput = Schema.Struct({

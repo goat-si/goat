@@ -15,6 +15,7 @@ import {
   type OrchestratorMcpThreadListItem,
   type OrchestratorMcpThreadReadInput,
   type OrchestratorMcpThreadSendInput,
+  type OrchestratorMcpThreadSendRelayed,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWatch,
   type OrchestratorMcpThreadWatchInput,
@@ -239,7 +240,7 @@ const make = Effect.gen(function* () {
     input: OrchestratorMcpThreadSendInput,
     result: OrchestratorMcpThreadSendResult,
   ) =>
-    scope.thread === undefined
+    scope.thread === undefined || result.delivery === "relayed"
       ? Effect.void
       : launchWatches
           .rearm({
@@ -260,28 +261,71 @@ const make = Effect.gen(function* () {
   /**
    * A thread started from another machine names hosts as that machine knows them.
    * One this machine cannot reach may still be reachable from there, so say where
-   * this thread came from and how to hand the call back.
+   * this thread came from and how to hand the call back. A send is handed back by
+   * `relay` when that machine declared at launch that it delivers them.
    */
   const unknownHostFailure = (
     scope: McpInvocationScope,
     host: string,
     error: SshRemoteDispatch.SshRemoteDispatchError,
+    relay: ((originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>) | undefined,
   ) =>
     (scope.thread === undefined || Option.isNone(reports)
       ? Effect.succeed(null)
       : reports.value.origin(scope.thread.threadId).pipe(Effect.orElseSucceed(() => null))
     ).pipe(
       Effect.flatMap((origin) =>
-        Effect.fail(
-          origin === null
-            ? hostFailure(error)
-            : failure(
-                "invalid_request",
-                `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
-              ),
-        ),
+        origin !== null && origin.relaySend && relay !== undefined
+          ? relay(origin.originLabel)
+          : Effect.fail(
+              origin === null
+                ? hostFailure(error)
+                : failure(
+                    "invalid_request",
+                    `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
+                  ),
+            ),
       ),
     );
+
+  /**
+   * Hands a send to the launching machine, which delivers it as its launcher
+   * thread. The caller must still be allowed to change a thread on another machine.
+   */
+  const relaySend =
+    (
+      scope: McpInvocationScope,
+      input: OrchestratorMcpThreadSendInput & { readonly host: string },
+    ) =>
+    (originLabel: string) =>
+      Effect.gen(function* () {
+        yield* authorize(true).pipe(
+          Effect.provideService(McpInvocationContext, scope),
+          Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+        );
+        if (scope.thread === undefined || Option.isNone(reports))
+          return yield* failure("invalid_request", "Only a launched thread can relay a send.");
+        yield* reports.value
+          .relay(scope.thread.threadId, {
+            host: input.host,
+            threadId: input.threadId,
+            message: input.message,
+            ...(input.mode === undefined ? {} : { mode: input.mode }),
+            ...(input.clientRequestId === undefined
+              ? {}
+              : { clientRequestId: input.clientRequestId }),
+          })
+          .pipe(
+            Effect.mapError(() =>
+              failure("orchestration_error", `Could not hand the send to ${originLabel}.`),
+            ),
+          );
+        return {
+          threadId: input.threadId,
+          delivery: "relayed",
+          via: originLabel,
+        } satisfies OrchestratorMcpThreadSendRelayed;
+      });
 
   const call = (
     scope: McpInvocationScope,
@@ -292,6 +336,8 @@ const make = Effect.gen(function* () {
       readonly writes: boolean;
       readonly timeoutMs?: number;
       readonly approvals?: boolean;
+      /** Only goat_thread_send relays through the origin. */
+      readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
     },
   ) =>
     dispatch
@@ -314,7 +360,7 @@ const make = Effect.gen(function* () {
           !(error instanceof SshRemoteDispatch.SshRemoteDispatchError)
             ? Effect.fail(error)
             : error.reason === "host_unknown"
-              ? unknownHostFailure(scope, input.host, error)
+              ? unknownHostFailure(scope, input.host, error, input.relay)
               : Effect.fail(hostFailure(error)),
         ),
       );
@@ -329,6 +375,7 @@ const make = Effect.gen(function* () {
       readonly writes: boolean;
       readonly timeoutMs?: number;
       readonly approvals?: boolean;
+      readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) =>
@@ -521,7 +568,9 @@ const make = Effect.gen(function* () {
     },
     sendToThread: (scope, input) =>
       (input.host === undefined
-        ? local.sendToThread(scope, input)
+        ? local
+            .sendToThread(scope, input)
+            .pipe(Effect.map((result): OrchestratorMcpThreadSendResult => result))
         : onHost(
             scope,
             {
@@ -534,14 +583,15 @@ const make = Effect.gen(function* () {
                   ? { ...withoutHost(input), mode: "auto" }
                   : withoutHost(input),
               writes: true,
+              relay: relaySend(scope, { ...input, host: input.host }),
             },
             decodeSend,
           )
       ).pipe(
         Effect.tap((result) => rearmAfterSend(scope, input, result)),
         // A send to a remote thread this one launched follows its reports again.
-        Effect.tap(() =>
-          input.host === undefined
+        Effect.tap((result) =>
+          input.host === undefined || result.delivery === "relayed"
             ? Effect.void
             : coordinator
                 .resume(input.host, input.threadId)

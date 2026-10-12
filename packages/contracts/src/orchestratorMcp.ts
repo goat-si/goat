@@ -602,7 +602,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 
-export const OrchestratorMcpThreadSendResult = Schema.Struct({
+export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   messageId: MessageId,
@@ -612,6 +612,23 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
 });
+export type OrchestratorMcpThreadSendDelivered = typeof OrchestratorMcpThreadSendDelivered.Type;
+/**
+ * A send to a host this machine cannot reach, handed to the machine that launched
+ * the calling thread. That machine delivers it as its launcher thread; the outcome
+ * arrives there, so there is no run here to follow.
+ */
+export const OrchestratorMcpThreadSendRelayed = Schema.Struct({
+  host: OrchestratorMcpResultHost,
+  threadId: ThreadId,
+  delivery: Schema.Literal("relayed"),
+  via: Schema.String,
+});
+export type OrchestratorMcpThreadSendRelayed = typeof OrchestratorMcpThreadSendRelayed.Type;
+export const OrchestratorMcpThreadSendResult = Schema.Union([
+  OrchestratorMcpThreadSendDelivered,
+  OrchestratorMcpThreadSendRelayed,
+]);
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({

@@ -25,6 +25,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import migration from "../persistence/Migrations/063_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/064_RemoteDispatches.ts";
+import relayMigration from "../persistence/Migrations/068_RemoteReportRelay.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -70,6 +72,8 @@ const stored = (sequence: number, event: object) =>
 const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* migration;
+  yield* dispatchMigration;
+  yield* relayMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const deletions = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const creations = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
@@ -172,6 +176,31 @@ const withFixture = <A, E, R>(body: (fixture: Fixture) => Effect.Effect<A, E, R>
   );
 const test = <E>(name: string, body: (fixture: Fixture) => Effect.Effect<void, E>) =>
   it.effect(name, () => withFixture(body));
+test("stores a relay only for a binding whose origin declared it", ({ service }) =>
+  Effect.gen(function* () {
+    const send = { host: "sibling", threadId: ThreadId.make("target"), message: "hello" };
+    expect((yield* service.origin(threadId))?.relaySend).toBe(false);
+    expect((yield* service.relay(threadId, send).pipe(Effect.flip)).reason).toBe(
+      "relay_unsupported",
+    );
+    const relaying = ThreadId.make("relaying-thread");
+    yield* service.bind(relaying, { ...binding, correlationId: "relaying", relaySend: true });
+    expect((yield* service.origin(relaying))?.relaySend).toBe(true);
+    expect(yield* service.relay(relaying, send)).toEqual({ sequence: 1 });
+    // A retry before the origin collects it is the same request.
+    const retried = { ...send, clientRequestId: "pr-48" };
+    expect(yield* service.relay(relaying, retried)).toEqual({ sequence: 2 });
+    expect(yield* service.relay(relaying, retried)).toEqual({ sequence: 2 });
+    const read = yield* service.wait({ ...waitInput, correlationId: "relaying" });
+    expect(read.reports.map((entry) => entry.relay)).toEqual([send, retried]);
+    const plain = yield* service.report(relaying, { status: "progress", summary: "working" });
+    const next = yield* service.wait({ ...waitInput, correlationId: "relaying", afterSequence: 2 });
+    expect(next.reports.map((entry) => [entry.sequence, entry.relay])).toEqual([
+      [plain.sequence, undefined],
+    ]);
+    // Still the same request after the origin collected and acknowledged it.
+    expect(yield* service.relay(relaying, retried)).toEqual({ sequence: 2 });
+  }));
 test("refuses binding replacement and validates domain input", ({ service }) =>
   Effect.gen(function* () {
     const invalidWait = yield* service
