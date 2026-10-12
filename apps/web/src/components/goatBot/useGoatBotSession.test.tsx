@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
   bootstrapped: true,
   bootstrapByEnvironment: {} as Record<string, boolean>,
   workerMissing: false,
+  workerDeleted: false,
 }));
 vi.mock("./goatBotHooks", () => ({
   useGoatBotEnvironments: () => state.environments,
@@ -41,7 +42,12 @@ vi.mock("~/state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
     ref === null || (ref.threadId === "worker" && state.workerMissing)
       ? null
-      : { runtime: { activeRunId: state.running }, archivedAt: null, deletedAt: null },
+      : {
+          runtime: { activeRunId: state.running },
+          archivedAt: null,
+          deletedAt:
+            ref.threadId === "worker" && state.workerDeleted ? "2026-10-12T12:03:00.000Z" : null,
+        },
   useEnvironmentShellsBootstrapped: (environmentId: EnvironmentId) =>
     state.bootstrapByEnvironment[environmentId] ?? state.bootstrapped,
 }));
@@ -252,6 +258,7 @@ beforeEach(() => {
   state.bootstrapped = true;
   state.bootstrapByEnvironment = {};
   state.workerMissing = false;
+  state.workerDeleted = false;
   items = [];
   permission = true;
   dual = false;
@@ -499,6 +506,11 @@ it("keeps target-specific offline, loading and missing history states with summa
   state.bootstrapped = true;
   state.bootstrapByEnvironment = {};
   state.workerMissing = true;
+  await render();
+  expect(container.textContent).toContain("Work history not found");
+  expect(container.textContent).toContain("Result stays visible");
+  state.workerMissing = false;
+  state.workerDeleted = true;
   await render();
   expect(container.textContent).toContain("Work history not found");
   expect(container.textContent).toContain("Result stays visible");
