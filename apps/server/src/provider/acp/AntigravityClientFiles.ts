@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 
 /**
  * Workspace file access requested through the ACP client `fs` capability.
@@ -14,7 +15,11 @@ const CLIENT_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
 function isInsideRoot(path: Path.Path, root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  // Compare the first segment, so a folder named `..cache` stays inside.
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 /**
@@ -65,7 +70,7 @@ const resolveClientFilePath = Effect.fn("AntigravityClientFiles.resolveClientFil
     if (!roots.some((root) => isInsideRoot(path, root, real))) {
       return yield* outside;
     }
-    return real;
+    return { filePath: real, existingAncestor: path.join(real, ...missing.map(() => "..")) };
   },
 );
 
@@ -76,7 +81,10 @@ export const readAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.r
     readonly allowedRoots: ReadonlyArray<string>;
     readonly request: EffectAcpSchema.ReadTextFileRequest;
   }): Effect.fn.Return<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError> {
-    const filePath = yield* resolveClientFilePath({ ...input, requestPath: input.request.path });
+    const { filePath } = yield* resolveClientFilePath({
+      ...input,
+      requestPath: input.request.path,
+    });
     const info = yield* input.fileSystem
       .stat(filePath)
       .pipe(
@@ -118,12 +126,56 @@ export const writeAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.
     readonly allowedRoots: ReadonlyArray<string>;
     readonly request: EffectAcpSchema.WriteTextFileRequest;
   }): Effect.fn.Return<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError> {
-    const filePath = yield* resolveClientFilePath({ ...input, requestPath: input.request.path });
-    yield* input.fileSystem.makeDirectory(input.path.dirname(filePath), { recursive: true }).pipe(
-      Effect.andThen(input.fileSystem.writeFileString(filePath, input.request.content)),
-      Effect.mapError(() =>
-        EffectAcpErrors.AcpRequestError.internalError(`Could not write '${input.request.path}'.`),
-      ),
+    const { fileSystem, path } = input;
+    const { filePath, existingAncestor } = yield* resolveClientFilePath({
+      ...input,
+      requestPath: input.request.path,
+    });
+    const directory = path.dirname(filePath);
+    const failed = EffectAcpErrors.AcpRequestError.internalError(
+      `Could not write '${input.request.path}'.`,
+    );
+    // Another process can swap a checked directory for a symlink before the
+    // write. Each step re-resolves the directory and refuses to continue if it
+    // no longer resolves to the checked location.
+    const ensureUnmoved = (dir: string) =>
+      fileSystem.realPath(dir).pipe(
+        Effect.mapError(() => failed),
+        Effect.flatMap((resolved) =>
+          resolved === dir
+            ? Effect.void
+            : EffectAcpErrors.AcpRequestError.invalidParams(
+                `Path '${input.request.path}' is outside the session workspace.`,
+              ),
+        ),
+      );
+    if (existingAncestor !== filePath) {
+      let current = existingAncestor;
+      for (const segment of path.relative(existingAncestor, directory).split(path.sep)) {
+        if (segment === "") continue;
+        current = path.join(current, segment);
+        yield* fileSystem.makeDirectory(current).pipe(
+          Effect.catchTags({
+            PlatformError: (error) =>
+              error.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(failed),
+          }),
+        );
+        yield* ensureUnmoved(current);
+      }
+    }
+    yield* ensureUnmoved(directory);
+    // Write a temp file that cannot already exist, then rename it over the
+    // target. A rename replaces a symlink at the target instead of following it.
+    const mode = yield* fileSystem.stat(filePath).pipe(
+      Effect.map((info) => info.mode & 0o7777),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const tempPath = path.join(directory, `.${path.basename(filePath)}.${yield* randomUuidV4}.tmp`);
+    yield* fileSystem.writeFileString(tempPath, input.request.content, { flag: "wx", mode }).pipe(
+      Effect.andThen(ensureUnmoved(directory)),
+      Effect.andThen(fileSystem.rename(tempPath, filePath).pipe(Effect.mapError(() => failed))),
+      Effect.mapError((error) => (error._tag === "PlatformError" ? failed : error)),
+      Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)),
     );
     return {};
   },
