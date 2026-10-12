@@ -481,7 +481,11 @@ const make = Effect.gen(function* () {
       if (projects.length === 0) {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
-      const answers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
+      // Once a project here was chosen (named with the work or picked by an answer, by name or
+      // id), only the newest answer may still name a project there; older answers predate or
+      // compete with that choice, so they never decide.
+      const recent = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
+      const answers = task.projectId === undefined ? recent : recent.slice(0, 1);
       const chosen = chooseProject(projects, {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
