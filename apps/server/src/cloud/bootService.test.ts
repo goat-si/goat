@@ -64,6 +64,23 @@ it("reads the served T3 home back out of a rendered unit or plist", () => {
   expect(BootService.bootServiceBaseDirOf("[Service]\nExecStart=/x\n")).toBeUndefined();
 });
 
+it("reads the home of units installed before the GOAT rename", () => {
+  // goat-rename: legacy-begin
+  expect(
+    BootService.bootServiceBaseDirOf("[Service]\nEnvironment=T3CODE_HOME=/home/theo/.t3\n"),
+  ).toBe("/home/theo/.t3");
+  expect(
+    BootService.bootServiceBaseDirOf(
+      "<dict>\n    <key>T3CODE_HOME</key>\n    <string>/Users/theo/.t3</string>\n</dict>",
+    ),
+  ).toBe("/Users/theo/.t3");
+  // goat-rename: legacy-end
+  const unit = BootService.renderBootServiceUnit(linuxPlan);
+  expect(BootService.bootServiceBaseDirOf(unit)).toBe(linuxPlan.baseDir);
+  expect(unit).toContain(`Environment=GOAT_HOME=${linuxPlan.baseDir}`);
+  expect(unit).toContain(`Environment=T3CODE_HOME=${linuxPlan.baseDir}`); // goat-rename: legacy
+});
+
 it("survives the kernel OOM-killing a greedy agent child", () => {
   const unit = BootService.renderBootServiceUnit(linuxPlan);
 

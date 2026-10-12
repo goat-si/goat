@@ -4,6 +4,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
+import { withLegacyEnvAliases } from "@goat/contracts/legacyT3Names";
+
 export interface GoatPublicConfig {
   readonly clerkPublishableKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
@@ -34,7 +36,8 @@ export function loadRepoEnv({
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
   const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
 
-  return {
+  // .env files written before the GOAT rename still use legacy names.
+  return withLegacyEnvAliases({
     ...rootEnv,
     ...localEnv,
     ...baseEnv,
@@ -100,7 +103,7 @@ export function loadRepoEnv({
           VITE_RELAY_OTLP_TRACES_TOKEN: config.relayClientOtlpTracesToken,
         }
       : {}),
-  };
+  });
 }
 
 export function resolvePublicConfig(...sources: readonly Environment[]): GoatPublicConfig {

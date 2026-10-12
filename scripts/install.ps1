@@ -18,6 +18,13 @@ $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $repo = "goat-si/goat-releases"
+# goat-rename: legacy-begin
+# Settings documented before the GOAT rename used T3CODE_* names.
+foreach ($name in "RELEASE_BASE_URL", "HOME", "INSTALL_BIN_DIR", "CHANNEL", "VERSION") {
+  $legacy = [Environment]::GetEnvironmentVariable("T3CODE_$name")
+  if (-not [Environment]::GetEnvironmentVariable("GOAT_$name") -and $legacy) { Set-Item "env:GOAT_$name" $legacy }
+}
+# goat-rename: legacy-end
 $baseUrl = if ($env:GOAT_RELEASE_BASE_URL) { $env:GOAT_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
 $t3Home = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".t3" }
 $binDir = if ($env:GOAT_INSTALL_BIN_DIR) { $env:GOAT_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }

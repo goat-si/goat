@@ -10,6 +10,8 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+import { adoptLegacyEnv, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
+
 import type {
   PendingServiceUpdate,
   ServiceLauncherChildMessage,
@@ -501,7 +503,10 @@ export class Launcher {
     };
     const spawnArguments = runtimeSpawnArguments(paths);
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
-      env: { ...process.env, [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) },
+      env: {
+        ...process.env,
+        ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
+      },
       stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     await new Promise<void>((resolve, reject) => {
@@ -715,6 +720,9 @@ export class Launcher {
 }
 
 export async function main(): Promise<void> {
+  // Units installed before the GOAT rename set legacy names. Keep them: the retained
+  // server versions this launcher starts may be older builds that read only those.
+  adoptLegacyEnv(process.env);
   const baseDir = process.env.GOAT_HOME?.trim();
   if (baseDir === undefined || baseDir === "") {
     throw new Error("GOAT_HOME is required by the GOAT service launcher.");

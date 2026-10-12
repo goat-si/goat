@@ -1862,6 +1862,9 @@ importers:
       '@electron/osx-sign':
         specifier: 2.7.0
         version: 2.7.0
+      '@goat/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
       '@goat/shared':
         specifier: workspace:*
         version: link:../packages/shared

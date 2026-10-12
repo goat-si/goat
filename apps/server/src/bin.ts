@@ -7,6 +7,8 @@
  * CLI module graph (seconds of evaluation) loads; everything else defers to
  * the real CLI in ./binCli.ts.
  */
+import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
+
 import { isEntrypoint } from "./entrypoint.ts";
 
 if (
@@ -16,6 +18,8 @@ if (
     runtimeMain: import.meta.main,
   })
 ) {
+  // Shells, service units and shims written before the GOAT rename still set legacy names.
+  normalizeLegacyEnv(process.env);
   const command = process.argv[2];
   if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");

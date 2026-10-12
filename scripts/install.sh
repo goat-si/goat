@@ -18,6 +18,15 @@
 # instead of fetching the release again.
 set -eu
 
+# goat-rename: legacy-begin
+# Settings documented before the GOAT rename used T3CODE_* names.
+GOAT_RELEASE_BASE_URL="${GOAT_RELEASE_BASE_URL:-${T3CODE_RELEASE_BASE_URL:-}}"
+GOAT_HOME="${GOAT_HOME:-${T3CODE_HOME:-}}"
+GOAT_INSTALL_BIN_DIR="${GOAT_INSTALL_BIN_DIR:-${T3CODE_INSTALL_BIN_DIR:-}}"
+GOAT_CHANNEL="${GOAT_CHANNEL:-${T3CODE_CHANNEL:-}}"
+GOAT_VERSION="${GOAT_VERSION:-${T3CODE_VERSION:-}}"
+# goat-rename: legacy-end
+
 repo="goat-si/goat-releases"
 base_url="${GOAT_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
 t3_home="${GOAT_HOME:-$HOME/.t3}"

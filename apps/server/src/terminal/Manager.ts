@@ -79,6 +79,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import { isOwnedEnvName } from "@goat/contracts/legacyT3Names";
 
 export {
   TerminalCwdError,
@@ -1258,7 +1259,7 @@ function toSessionKey(threadId: string, terminalId: string): string {
 
 function shouldExcludeTerminalEnvKey(key: string): boolean {
   const normalizedKey = key.toUpperCase();
-  if (normalizedKey.startsWith("T3CODE_")) {
+  if (isOwnedEnvName(normalizedKey)) {
     return true;
   }
   if (normalizedKey.startsWith("VITE_")) {

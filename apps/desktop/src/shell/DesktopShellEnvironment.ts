@@ -11,6 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 type EnvironmentPatch = Record<string, string>;
 
@@ -87,6 +88,7 @@ const LOGIN_SHELL_ENV_NAMES = [
   "XDG_SESSION_TYPE",
   "WAYLAND_DISPLAY",
   "GOAT_TELEMETRY_ENABLED",
+  "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
 const LOCALE_ENV_NAMES = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
@@ -451,11 +453,14 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       "WAYLAND_DISPLAY",
       // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
       "GOAT_TELEMETRY_ENABLED",
+      "T3CODE_TELEMETRY_ENABLED", // goat-rename: legacy
     ] as const) {
       if (!config.env[name] && shellEnvironment[name]) {
         config.env[name] = shellEnvironment[name];
       }
     }
+    // A login shell configured before the GOAT rename exports the legacy opt-out.
+    normalizeLegacyEnv(config.env);
 
     // Locale variables form one precedence group: LC_ALL can override an inherited
     // LANG or LC_CTYPE, so only hydrate the group when the process has none of them.

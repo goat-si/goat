@@ -1,4 +1,5 @@
 import type { ProjectId, ProjectScript, ServerSettings } from "@goat/contracts";
+import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 type ProjectScriptSettings = Pick<
   ServerSettings,
@@ -64,10 +65,12 @@ export function projectScriptRuntimeEnv(
   if (input.worktreePath) {
     env.GOAT_WORKTREE_PATH = input.worktreePath;
   }
+  // User scripts written before the GOAT rename read the legacy names.
+  const named = withLegacyEnvNames(env);
   if (input.extraEnv) {
-    return { ...env, ...input.extraEnv };
+    return { ...named, ...input.extraEnv };
   }
-  return env;
+  return named;
 }
 
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {

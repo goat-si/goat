@@ -20,9 +20,13 @@ import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess } from "effect/process";
 
 import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
+import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
+
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 Object.assign(process.env, loadRepoEnv());
+// Children run this build; legacy names would survive the deletes below.
+normalizeLegacyEnv(process.env);
 
 const BASE_SERVER_PORT = 13773;
 const BASE_WEB_PORT = 5733;

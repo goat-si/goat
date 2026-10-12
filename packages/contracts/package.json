@@ -18,6 +18,10 @@
     "./relay": {
       "types": "./src/relay.ts",
       "import": "./src/relay.ts"
+    },
+    "./legacyT3Names": {
+      "types": "./src/legacyT3Names.ts",
+      "import": "./src/legacyT3Names.ts"
     }
   },
   "scripts": {

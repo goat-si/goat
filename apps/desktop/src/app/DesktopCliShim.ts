@@ -64,6 +64,8 @@ export const renderCliShim = (input: {
           ]
         : []),
       `set "GOAT_CLI_PATH=${cmdText(input.shimPath)}"`,
+      // A home set before the GOAT rename keeps winning over the default. goat-rename: legacy
+      'if not defined GOAT_HOME if defined T3CODE_HOME set "GOAT_HOME=%T3CODE_HOME%"', // goat-rename: legacy
       `if not defined GOAT_HOME set "GOAT_HOME=${cmdText(input.t3Home)}"`,
       'set "ELECTRON_RUN_AS_NODE=1"',
       // A goto, not a parenthesized block: "Program Files (x86)" would close the block early.
@@ -84,7 +86,8 @@ export const renderCliShim = (input: {
     `# ${MARKER}`,
     `export GOAT_CLI_PATH=${shellWord(input.shimPath)}`,
     `home=${shellWord(input.t3Home)}`,
-    'export GOAT_HOME="${GOAT_HOME:-$home}"',
+    // A home set before the GOAT rename keeps winning over the default.
+    'export GOAT_HOME="${GOAT_HOME:-${T3CODE_HOME:-$home}}"', // goat-rename: legacy
     "export ELECTRON_RUN_AS_NODE=1",
     `app=${shellWord(target.kind === "appimage" ? target.appImage : target.executable)}`,
     'if [ ! -x "$app" ]; then',

@@ -9,6 +9,7 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
 import { SshPasswordPromptError } from "./errors.ts";
+import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 export interface SshPasswordRequest {
   readonly destination: string;
@@ -197,7 +198,11 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
     ...baseEnv,
     SSH_ASKPASS: sshAskpass,
     SSH_ASKPASS_REQUIRE: "force",
-    ...(input.authSecret === undefined ? {} : { GOAT_SSH_AUTH_SECRET: input.authSecret ?? "" }),
+    // An older GOAT build sharing the askpass directory may have written a helper that reads
+    // the legacy name.
+    ...(input.authSecret === undefined
+      ? {}
+      : withLegacyEnvNames({ GOAT_SSH_AUTH_SECRET: input.authSecret ?? "" })),
     ...(platform === "win32" || baseEnv.DISPLAY || hostDisplay ? {} : { DISPLAY: "t3code" }),
   };
 });

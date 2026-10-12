@@ -12,6 +12,7 @@ import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
 import { CLI_RELEASE_BASE_URL_ENV } from "@goat/shared/cliRelease";
+import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -38,6 +39,12 @@ const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
 const BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
 const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
 const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
+const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
+/**
+ * Units carry both spellings: the launcher may start a retained server version built
+ * before the GOAT rename, and units installed by those builds name only the legacy one.
+ */
+const bootServiceEnvNames = (name: string) => [name, legacyEnvName(name) ?? name] as const;
 /** File in the logs dir that receives the service's stdout and stderr. `goat triage` points agents at it. */
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 
@@ -59,7 +66,8 @@ function quoteSystemdValue(value: string): string {
  * unescaped the same way `quoteSystemdValue` produced it.
  */
 export function bootServiceBaseDirOf(contents: string): string | undefined {
-  const systemd = /^Environment=GOAT_HOME=(.*)$/m.exec(contents)?.[1];
+  const homeNames = bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).join("|");
+  const systemd = new RegExp(`^Environment=(?:${homeNames})=(.*)$`, "m").exec(contents)?.[1];
   if (systemd !== undefined) {
     const raw = systemd.trim();
     const unquoted =
@@ -68,7 +76,9 @@ export function bootServiceBaseDirOf(contents: string): string | undefined {
         : raw;
     return unquoted.replaceAll("%%", "%");
   }
-  const plist = /<key>GOAT_HOME<\/key>\s*<string>([^<]*)<\/string>/.exec(contents)?.[1];
+  const plist = new RegExp(`<key>(?:${homeNames})</key>\\s*<string>([^<]*)</string>`).exec(
+    contents,
+  )?.[1];
   if (plist !== undefined) {
     return plist.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
   }
@@ -100,8 +110,12 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
     "[Service]",
     "Type=simple",
     "WorkingDirectory=%h",
-    `Environment=GOAT_HOME=${quoteSystemdValue(plan.baseDir)}`,
-    `Environment=${BOOT_SERVICE_UNIT_ENV}=${BOOT_SERVICE_UNIT_FILE}`,
+    ...bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).map(
+      (name) => `Environment=${name}=${quoteSystemdValue(plan.baseDir)}`,
+    ),
+    ...bootServiceEnvNames(BOOT_SERVICE_UNIT_ENV).map(
+      (name) => `Environment=${name}=${BOOT_SERVICE_UNIT_FILE}`,
+    ),
     `ExecStart=${plan.program.map(quoteSystemdValue).join(" ")}`,
     // Let the launcher mark an explicit stop before it signals the server.
     // systemd still SIGKILLs the whole cgroup if graceful shutdown times out.
@@ -168,10 +182,14 @@ export function renderBootServicePlist(
     `  <dict>`,
     `    <key>PATH</key>`,
     `    <string>${escapeXmlText(options.environmentPath)}</string>`,
-    `    <key>GOAT_HOME</key>`,
-    `    <string>${escapeXmlText(plan.baseDir)}</string>`,
-    `    <key>${BOOT_SERVICE_UNIT_ENV}</key>`,
-    `    <string>${BOOT_SERVICE_PLIST_FILE}</string>`,
+    ...bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).flatMap((name) => [
+      `    <key>${name}</key>`,
+      `    <string>${escapeXmlText(plan.baseDir)}</string>`,
+    ]),
+    ...bootServiceEnvNames(BOOT_SERVICE_UNIT_ENV).flatMap((name) => [
+      `    <key>${name}</key>`,
+      `    <string>${BOOT_SERVICE_PLIST_FILE}</string>`,
+    ]),
     `  </dict>`,
     `  <key>WorkingDirectory</key>`,
     `  <string>${escapeXmlText(options.homeDir)}</string>`,
