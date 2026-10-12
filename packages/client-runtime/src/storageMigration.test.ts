@@ -15,6 +15,8 @@ function memory(initial: [string, string][] = []) {
   };
 }
 
+const quotaError = () => new DOMException("storage quota exceeded", "QuotaExceededError");
+
 describe("client storage namespace migration", () => {
   it.each([
     ["goat:theme", "t3code:theme"], // goat-rename: legacy
@@ -111,7 +113,7 @@ describe("migration under pressure", () => {
     const base = memory([["t3code:composer-drafts:v1", "large legacy draft"]]); // goat-rename: legacy
     let quota = 1;
     base.setItem.mockImplementation((key: string, value: string) => {
-      if (base.values.size >= quota && !base.values.has(key)) throw new Error("QuotaExceededError");
+      if (base.values.size >= quota && !base.values.has(key)) throw quotaError();
       base.values.set(key, value);
     });
     const storage = migratingStorage(base);
@@ -121,7 +123,49 @@ describe("migration under pressure", () => {
     expect(base.values.get("goat:composer-drafts:v1")).toBe("edited draft");
     expect(base.values.has("t3code:composer-drafts:v1")).toBe(false); // goat-rename: legacy
     quota = 0;
-    expect(() => storage.setItem("goat:other", "x")).toThrow("QuotaExceededError");
+    expect(() => storage.setItem("goat:other", "x")).toThrow("storage quota exceeded");
+  });
+
+  it("keeps the legacy copy when a write fails for any reason other than quota", () => {
+    const base = memory([["t3code:theme", "old"]]); // goat-rename: legacy
+    const cause = new Error("storage disabled");
+    base.setItem.mockImplementation(() => {
+      throw cause;
+    });
+    const storage = migratingStorage(base);
+    expect(() => storage.setItem("goat:theme", "dark")).toThrow(cause);
+    expect(() => storage.removeItem("goat:theme")).toThrow(cause);
+    expect(base.values.get("t3code:theme")).toBe("old"); // goat-rename: legacy
+    expect(base.removeItem).not.toHaveBeenCalled();
+  });
+
+  it("clears a legacy-only value when the removal marker does not fit", () => {
+    const base = memory([["t3code:composer-drafts:v1", "draft"]]); // goat-rename: legacy
+    base.setItem.mockImplementation(() => {
+      throw quotaError();
+    });
+    const storage = migratingStorage(base);
+    expect(storage.getItem("goat:composer-drafts:v1")).toBe("draft");
+    storage.removeItem("goat:composer-drafts:v1");
+    expect(storage.getItem("goat:composer-drafts:v1")).toBeNull();
+    expect(base.values.size).toBe(0);
+  });
+
+  it("makes room the same way when an async backend rejects over quota", async () => {
+    const values = new Map([["t3code.cloud.relay-token", "legacy token"]]); // goat-rename: legacy
+    const storage = migratingStorage({
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => {
+        if (values.size >= 1 && !values.has(key)) throw quotaError();
+        values.set(key, value);
+      },
+      removeItem: async (key: string) => {
+        values.delete(key);
+      },
+    });
+    await storage.setItem("goat.cloud.relay-token", "new token");
+    expect(values.get("goat.cloud.relay-token")).toBe("new token");
+    expect(values.has("t3code.cloud.relay-token")).toBe(false); // goat-rename: legacy
   });
 
   it("lets a clear that starts after a pending read win", async () => {

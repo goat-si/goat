@@ -15,6 +15,28 @@ type AsyncStorage = Omit<StorageAdapter<Promise<void>>, "getItem"> & {
 };
 const wrappers = new WeakMap<object, StorageAdapter>();
 
+const isQuotaError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "name" in error &&
+  (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
+
+/** Runs `run`, then `next` on its result or `fail` on its error, for sync and async backends alike. */
+const chain = (
+  run: () => unknown,
+  next: (value: unknown) => unknown,
+  fail: (error: unknown) => unknown,
+): unknown => {
+  let result: unknown;
+  try {
+    result = run();
+  } catch (error) {
+    return fail(error);
+  }
+  return result instanceof Promise ? result.then(next, fail) : next(result);
+};
+const same = (value: unknown) => value;
+
 /** Read GOAT first, adopt old values once, and leave the old keys intact for rollback. */
 export function migratingStorage(storage: SyncStorage): SyncStorage;
 export function migratingStorage(storage: AsyncStorage): AsyncStorage;
@@ -57,6 +79,29 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
     }
     return value;
   };
+  // Over quota, the retained legacy copy of a key is what crowds out its current value (a
+  // write used to replace it in place), so that copy alone may go to make room. Any other
+  // failure, or a recovery that cannot complete, surfaces the original write error.
+  const withRoom = (key: string, write: () => unknown, afterDrop: () => unknown) =>
+    chain(write, same, (error) => {
+      const legacy = legacyStorageKey(key);
+      if (legacy === undefined || !isQuotaError(error)) throw error;
+      const original = () => {
+        throw error;
+      };
+      return chain(
+        () => storage.getItem(legacy),
+        (old) =>
+          old === null
+            ? original()
+            : chain(
+                () => storage.removeItem(legacy),
+                () => chain(afterDrop, same, original),
+                original,
+              ),
+        original,
+      );
+    });
   const fallback = (key: string, value: string | null) => {
     if (value !== null)
       return value === REMOVED_STORAGE_VALUE && legacyStorageKey(key) !== undefined ? null : value;
@@ -73,34 +118,27 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
         : fallback(key, current);
     });
   const setItem = (key: string, value: string) =>
-    serialized(key, () => {
-      try {
-        return storage.setItem(key, value);
-      } catch (error) {
-        // Over quota, the retained legacy copy of this key is what crowds out the current
-        // value (a write used to replace it in place): drop that copy and retry once.
-        // When that copy cannot be found or removed, the original write error is the one
-        // callers need to see.
-        const legacy = legacyStorageKey(key);
-        if (legacy === undefined) throw error;
-        try {
-          if (storage.getItem(legacy) === null) throw error;
-          storage.removeItem(legacy);
-        } catch {
-          throw error;
-        }
-        return storage.setItem(key, value);
-      }
-    });
+    serialized(key, () =>
+      withRoom(
+        key,
+        () => storage.setItem(key, value),
+        () => storage.setItem(key, value),
+      ),
+    );
   const wrapper = {
     getItem,
     setItem,
-    // Removing only the new key would resurrect its retained legacy value on reload.
+    // Removing only the new key would resurrect its retained legacy value on reload. When the
+    // marker does not fit, dropping the legacy copy makes the plain removal correct.
     removeItem: (key: string) =>
       serialized(key, () =>
         legacyStorageKey(key) === undefined
           ? storage.removeItem(key)
-          : storage.setItem(key, REMOVED_STORAGE_VALUE),
+          : withRoom(
+              key,
+              () => storage.setItem(key, REMOVED_STORAGE_VALUE),
+              () => storage.removeItem(key),
+            ),
       ),
   };
   wrappers.set(storage, wrapper);
