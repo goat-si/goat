@@ -178,6 +178,7 @@ it("reports truncation past the limit", () => {
 it.effect("reads one row past the limit so a full page is not reported as truncated", () =>
   Effect.gen(function* () {
     const requestedLimits: Array<number> = [];
+    const requestedWatchLimits: Array<number> = [];
     const layer = Catalog.layerWithoutDependencies.pipe(
       Layer.provide(
         Layer.mock(Coordinator.RemoteDispatchCoordinator)({
@@ -188,7 +189,12 @@ it.effect("reads one row past the limit so a full page is not reported as trunca
         }),
       ),
       Layer.provide(
-        Layer.mock(LaunchWatchService.LaunchWatchService)({ listAll: Effect.succeed([]) }),
+        Layer.mock(LaunchWatchService.LaunchWatchService)({
+          listRemote: (limit) => {
+            requestedWatchLimits.push(limit);
+            return Effect.succeed([]);
+          },
+        }),
       ),
     );
     const result = yield* Effect.gen(function* () {
@@ -196,6 +202,7 @@ it.effect("reads one row past the limit so a full page is not reported as trunca
       return yield* catalog.list({ limit: 1 });
     }).pipe(Effect.provide(layer));
     assert.deepStrictEqual(requestedLimits, [2]);
+    assert.deepStrictEqual(requestedWatchLimits, [2]);
     assert.strictEqual(result.launches.length, 1);
     assert.strictEqual(result.truncated, false);
   }),

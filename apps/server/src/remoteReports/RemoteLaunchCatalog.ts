@@ -104,8 +104,8 @@ const make = Effect.gen(function* () {
   const list = Effect.fn("RemoteLaunchCatalog.list")(function* (input: RemoteLaunchesListInput) {
     const limit = input.limit ?? REMOTE_LAUNCHES_DEFAULT_LIMIT;
     // One extra row tells a full page from a truncated one.
-    const [dispatches, allWatches] = yield* Effect.all(
-      [coordinator.listRecent(limit + 1), watches.listAll],
+    const [dispatches, remoteWatches] = yield* Effect.all(
+      [coordinator.listRecent(limit + 1), watches.listRemote(limit + 1)],
       { concurrency: 2 },
     ).pipe(
       Effect.mapError(
@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
           new RemoteLaunchesError({ message: `Could not read remote launches: ${cause.message}` }),
       ),
     );
-    return mergeRemoteLaunches({ dispatches, watches: allWatches, limit });
+    return mergeRemoteLaunches({ dispatches, watches: remoteWatches, limit });
   });
   return RemoteLaunchCatalog.of({ list });
 });
