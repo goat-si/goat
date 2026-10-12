@@ -5,8 +5,9 @@ HTTP server is `layerMcpTransport` in `apps/server/src/mcp/McpHttpServer.ts`: `M
 with `name: "GOAT"`, `path: "/mcp"`, and protocol `McpProtocol.v2025_06_18`. Unauthorized calls
 fail with copy that names a GOAT MCP credential.
 
-`McpHttpServer.layer` merges one toolkit layer per area and provides `LaunchWatchService`,
-`RemoteReportService`, and `RemoteDispatchCoordinator`. Each toolkit is a `tools.ts` that declares
+`McpHttpServer.layer` merges one toolkit layer per area and provides `RemoteReportService` and
+`ThreadResultService`. `apps/server/src/server.ts` provides `LaunchWatchService` and
+`RemoteDispatchCoordinator` once for these tools and the remote-launch catalog. Each toolkit is a `tools.ts` that declares
 `Tool.make` entries and a `handlers.ts` that implements them. Handlers call a service. They do not
 append orchestration events themselves. That write is the [command commit](server.md#command-commit).
 
