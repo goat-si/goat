@@ -37,6 +37,7 @@ import {
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
@@ -57,6 +58,12 @@ const hostThreadDependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
   HostThreadsMcpService.HostThreadsMcpService,
+];
+
+/** Reads that also return a run's structured result. */
+const hostThreadResultDependencies = [
+  ...hostThreadDependencies,
+  ThreadResultService.ThreadResultService,
 ];
 
 const ON_ANOTHER_MACHINE =
@@ -206,13 +213,13 @@ const ThreadListTool = Tool.make("goat_thread_list", {
 
 const ThreadReadTool = Tool.make("goat_thread_read", {
   description:
-    "Read durable state and a paginated timeline from any GOAT thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread's current title." +
+    "Read durable state and a paginated timeline from any GOAT thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state. result is the latest run's structured result: the outcome, summary, tests, and commits its agent reported with goat_thread_report_result, plus the run status, linked pull requests, and branch GOAT already knows; check it instead of parsing chat text. To link a thread for the user, write `[title](t3-thread://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread's current title." +
     ON_ANOTHER_MACHINE,
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies: hostThreadDependencies,
+  dependencies: hostThreadResultDependencies,
 })
   .annotate(Tool.Title, "Read a GOAT thread")
   .annotate(Tool.Readonly, false)
@@ -249,13 +256,13 @@ const ThreadSendTool = Tool.make("goat_thread_send", {
 
 const ThreadWaitTool = Tool.make("goat_thread_wait", {
   description:
-    "Wait for a GOAT thread run to reach a terminal durable state or need user input; pendingRequestIds identifies questions that release the wait with timedOut=false. After you forward a question to the user, pass its id in ignoreRequestIds to keep waiting. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use goat_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result. Use it with host to follow a thread started by goat_ssh_thread_launch instead of polling." +
+    "Wait for a GOAT thread run to reach a terminal durable state or need user input; pendingRequestIds identifies questions that release the wait with timedOut=false. After you forward a question to the user, pass its id in ignoreRequestIds to keep waiting. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use goat_thread_read/list after timedOut=true. Once the run has ended, result carries its structured result, as goat_thread_read describes. Waiting does not acknowledge a delegated result. Use it with host to follow a thread started by goat_ssh_thread_launch instead of polling." +
     ON_ANOTHER_MACHINE,
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies: hostThreadDependencies,
+  dependencies: hostThreadResultDependencies,
 })
   .annotate(Tool.Title, "Wait for a GOAT thread")
   .annotate(Tool.Readonly, true)

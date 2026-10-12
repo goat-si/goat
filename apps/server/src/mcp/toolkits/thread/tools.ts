@@ -22,6 +22,8 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  ThreadResult,
+  ThreadResultReport,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -30,6 +32,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -266,8 +269,26 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadReportResultTool = Tool.make("goat_thread_report_result", {
+  description:
+    "Record the structured result of this thread's current run, so whoever dispatched it can read the outcome from goat_thread_read or goat_thread_wait instead of parsing your messages. Call it once you finish a dispatched task, and again to replace it if the result changes. outcome is succeeded, failed, blocked (you need something you cannot get), or cancelled. Report only facts you checked: pull request URLs you opened or updated, the test command you ran with its counts, and commit SHAs you pushed. Pull requests linked to this thread and its branch are added automatically. Recording a result does not end the run.",
+  parameters: ThreadResultReport,
+  success: ThreadResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ThreadResultService.ThreadResultService,
+  ],
+})
+  .annotate(Tool.Title, "Report this thread's result")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const ThreadToolkit = Toolkit.make(
   ScheduledTaskRunTool,
+  ThreadReportResultTool,
   ThreadSearchTool,
   ThreadForkTool,
   ThreadMergeBackTool,

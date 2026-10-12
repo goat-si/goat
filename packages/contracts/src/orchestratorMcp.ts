@@ -33,6 +33,7 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
+import { ThreadResult } from "./threadResult.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import {
   OrchestrationV2Actor,
@@ -570,6 +571,11 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  /**
+   * The latest run's structured result; null before the thread's first run.
+   * Optional because hosts running an older GOAT do not send it.
+   */
+  result: Schema.optional(Schema.NullOr(ThreadResult)),
 });
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
@@ -610,6 +616,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  /** The waited run's structured result, once that run has ended. */
+  result: Schema.optional(ThreadResult),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
