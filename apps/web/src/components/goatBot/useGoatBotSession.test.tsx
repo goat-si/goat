@@ -39,36 +39,61 @@ const state = vi.hoisted(() => ({
   botArchived: false,
   botDeleted: false,
   workerDeleted: false,
+  archiveLoading: false,
+  archiveError: null as string | null,
+  archiveMissingSnapshot: false,
+  shellReads: vi.fn(),
+  locationReads: vi.fn(),
+  paramsReads: vi.fn(),
+  archiveReads: vi.fn(),
+  archiveRefresh: vi.fn(),
+  unarchive: vi.fn(async () => {}),
 }));
 vi.mock("./goatBotHooks", () => ({
   useGoatBotEnvironments: () => state.environments,
   useLegacyGlobalAgentRoute: () => null,
 }));
 vi.mock("~/state/entities", () => ({
-  useThreadShell: (ref: { threadId: string } | null) =>
-    ref === null ||
-    (ref.threadId === "worker" && state.workerMissing) ||
-    (ref.threadId === "legacy" && state.legacyMissing) ||
-    (ref.threadId === "bot" && state.botMissing)
+  useThreadShell: (ref: { threadId: string } | null) => {
+    state.shellReads(ref);
+    // Like shellReducer/threadShellAtom: archive and delete both drop the active shell.
+    return ref === null ||
+      (ref.threadId === "worker" && (state.workerMissing || state.workerDeleted)) ||
+      (ref.threadId === "legacy" &&
+        (state.legacyMissing || state.legacyArchived || state.legacyDeleted)) ||
+      (ref.threadId === "bot" && (state.botMissing || state.botArchived || state.botDeleted))
       ? null
       : {
           runtime: { activeRunId: state.running },
-          archivedAt:
-            (ref.threadId === "legacy" && state.legacyArchived) ||
-            (ref.threadId === "bot" && state.botArchived)
-              ? at
-              : null,
-          deletedAt:
-            (ref.threadId === "worker" && state.workerDeleted) ||
-            (ref.threadId === "legacy" && state.legacyDeleted) ||
-            (ref.threadId === "bot" && state.botDeleted)
-              ? "2026-10-12T12:03:00.000Z"
-              : null,
-        },
+          archivedAt: null,
+          deletedAt: null,
+        };
+  },
   resolveThreadDetailRef: (ref: unknown) => ref,
   useThreadVisibleTurnItems: () => items,
   useEnvironmentShellsBootstrapped: (environmentId: EnvironmentId) =>
     state.bootstrapByEnvironment[environmentId] ?? state.bootstrapped,
+}));
+vi.mock("~/lib/archivedThreadsState", () => ({
+  useArchivedThreadSnapshots: (environmentIds: ReadonlyArray<EnvironmentId>) => {
+    state.archiveReads(environmentIds);
+    return {
+      snapshots: state.archiveMissingSnapshot
+        ? []
+        : [
+            {
+              environmentId: environmentIds[0],
+              snapshot: { threads: state.botArchived ? [{ id: "bot" }] : [] },
+            },
+          ],
+      isLoading: state.archiveLoading,
+      error: state.archiveError,
+    };
+  },
+  refreshArchivedThreadsForEnvironment: state.archiveRefresh,
+}));
+vi.mock("~/state/use-orchestration-command", () => ({
+  useOrchestrationCommand: () => state.unarchive,
 }));
 vi.mock("~/state/environments", () => ({
   useConnectedEnvironmentIds: () =>
@@ -84,8 +109,14 @@ vi.mock("../WorkspacePageHeader", () => ({
 }));
 // Link target assertions are paired with the real ThreadRouteView worker-branch test.
 vi.mock("@tanstack/react-router", () => ({
-  useLocation: () => "/",
-  useParams: () => ({}),
+  useLocation: () => {
+    state.locationReads();
+    return "/";
+  },
+  useParams: () => {
+    state.paramsReads();
+    return {};
+  },
   Link: ({
     to,
     params,
@@ -296,6 +327,16 @@ beforeEach(() => {
   state.botMissing = false;
   state.botArchived = false;
   state.botDeleted = false;
+  state.archiveLoading = false;
+  state.archiveError = null;
+  state.archiveMissingSnapshot = false;
+  state.shellReads.mockClear();
+  state.locationReads.mockClear();
+  state.paramsReads.mockClear();
+  state.archiveReads.mockClear();
+  state.archiveRefresh.mockClear();
+  state.unarchive.mockReset();
+  state.unarchive.mockImplementation(async () => {});
   items = [];
   permission = true;
   dual = false;
@@ -303,11 +344,14 @@ beforeEach(() => {
   port = {
     // Like ChannelBotRegistry: only an active candidate can cause legacy_active.
     ensureBot: vi.fn(async (_env, input) => {
-      if (input.candidateThreadId && state.running !== null)
+      const candidateRemoved = state.legacyArchived || state.legacyDeleted;
+      if (input.candidateThreadId && !candidateRemoved && state.running !== null)
         throw new ChannelGatewayError({ reason: "legacy_active" });
       return {
         environmentId,
-        threadId: input.candidateThreadId ?? ThreadId.make("bot"),
+        threadId: candidateRemoved
+          ? ThreadId.make("bot")
+          : (input.candidateThreadId ?? ThreadId.make("bot")),
         projectId: ProjectId.make("project"),
       };
     }),
@@ -758,13 +802,21 @@ it("sends an unknown legacy candidate after bootstrap and lets the server inspec
   expect(port.ensureBot).toHaveBeenCalledWith(environmentId, { candidateThreadId: "legacy" });
 });
 
-it.each(["archived", "deleted"])("does not send a known %s legacy candidate", async (kind) => {
-  useGlobalAgentStore.setState({ ref: legacyRef() });
-  state.legacyArchived = kind === "archived";
-  state.legacyDeleted = kind === "deleted";
-  await render();
-  expect(port.ensureBot).toHaveBeenCalledExactlyOnceWith(environmentId, {});
-});
+it.each(["archived", "deleted"])(
+  "lets the server inspect a %s legacy candidate whose active shell is absent",
+  async (kind) => {
+    useGlobalAgentStore.setState({ ref: legacyRef() });
+    state.legacyArchived = kind === "archived";
+    state.legacyDeleted = kind === "deleted";
+    state.running = RunId.make("stale-running");
+    await render();
+    expect(port.ensureBot).toHaveBeenCalledExactlyOnceWith(environmentId, {
+      candidateThreadId: "legacy",
+    });
+    expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
+    expect(textarea().disabled).toBe(false);
+  },
+);
 
 it("retries legacy_active once when the stopped shell arrives after the server response", async () => {
   useGlobalAgentStore.setState({ ref: legacyRef() });
@@ -806,6 +858,10 @@ it("adds no sidebar group or menu with a null port, then renders the enabled row
   await render(false, true);
   expect(container.querySelector("[data-sidebar=group], [data-sidebar=menu]")).toBeNull();
   expect(port.ensureBot).not.toHaveBeenCalled();
+  expect(port.listTasks).not.toHaveBeenCalled();
+  expect(state.shellReads).not.toHaveBeenCalled();
+  expect(state.locationReads).not.toHaveBeenCalled();
+  expect(state.paramsReads).not.toHaveBeenCalled();
   provided = port;
   await render(false, true);
   expect(container.querySelectorAll("[data-sidebar=group]")).toHaveLength(1);
@@ -842,20 +898,44 @@ it("treats a rejected ingest as a final failed message with a reason and no retr
   expect(port.ingest).toHaveBeenCalledTimes(1);
 });
 
-it("offers to unarchive an archived bot instead of a looping link", async () => {
-  state.botArchived = true;
-  await render(false, false, true);
-  expect(container.textContent).toContain("This chat is archived");
-  expect(container.querySelector('a[href="/bot"]')).toBeNull();
-  expect(
-    Array.from(container.querySelectorAll("button")).some(
-      (button) => button.textContent === "Unarchive",
-    ),
-  ).toBe(true);
-  expect(textarea().disabled).toBe(true);
-});
+it.each([false, true])(
+  "offers to unarchive an archived bot from the snapshot (shell previously seen: %s)",
+  async (seen) => {
+    if (seen) await render(false, false, true);
+    state.botArchived = true;
+    await render(false, false, true);
+    expect(container.textContent).toContain("This chat is archived");
+    expect(container.querySelector('a[href="/bot"]')).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("button")).some(
+        (button) => button.textContent === "Unarchive",
+      ),
+    ).toBe(true);
+    expect(textarea().disabled).toBe(true);
+    expect(port.ensureBot).toHaveBeenCalledTimes(1);
+    expect(state.archiveRefresh).toHaveBeenCalledExactlyOnceWith(environmentId);
+    state.unarchive.mockImplementation(async () => {
+      state.botArchived = false;
+    });
+    await act(() =>
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Unarchive")!
+        .click(),
+    );
+    expect(state.unarchive).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { threadId: "bot" },
+    });
+    expect(state.archiveRefresh).toHaveBeenCalledTimes(2);
+    await render(false, false, true);
+    expect(textarea().disabled).toBe(false);
+    expect(port.ensureBot).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("This chat is archived");
+  },
+);
 
 it("asks the server once for a replacement when the confirmed bot was deleted", async () => {
+  await render(false, false, true);
   state.botDeleted = true;
   await render(false, false, true);
   // The server answers with the same deleted thread here, as an older server would.
@@ -865,9 +945,19 @@ it("asks the server once for a replacement when the confirmed bot was deleted", 
   expect(container.textContent).toContain("This chat was deleted");
   expect(container.querySelector('a[href="/bot"]')).toBeNull();
   expect(textarea().disabled).toBe(true);
+  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+  await act(() =>
+    Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Try again")!
+      .click(),
+  );
+  expect(port.ensureBot).toHaveBeenCalledTimes(3);
+  await render(false, false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(3);
 });
 
 it("offers the bot link only when the confirmed bot differs from the removed chat", async () => {
+  await render(false, false, true);
   state.botDeleted = true;
   vi.mocked(port.ensureBot).mockResolvedValue({
     environmentId,
@@ -876,6 +966,115 @@ it("offers the bot link only when the confirmed bot differs from the removed cha
   });
   await render(false, false, true);
   expect(container.querySelector('a[href="/bot"]')?.textContent).toBe("Open GOAT Bot");
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  expect(container.textContent).not.toContain("Couldn't start a new GOAT Bot chat");
+});
+
+it("offers the replacement bot after reconnect even when removal happened while offline", async () => {
+  await render(false, false, true);
+  setConnection(false);
+  state.botDeleted = true;
+  await render(false, false, true);
+  expect(container.querySelector('a[href="/bot"]')).toBeNull();
+  vi.mocked(port.ensureBot).mockResolvedValueOnce({
+    environmentId,
+    threadId: ThreadId.make("replacement"),
+    projectId: ProjectId.make("project"),
+  });
+  setConnection(true);
+  await render(false, false, true);
+  expect(container.querySelector('a[href="/bot"]')?.textContent).toBe("Open GOAT Bot");
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  expect(textarea().disabled).toBe(true);
+});
+
+it.each(["error", "legacy_active"])(
+  "keeps a deleted bot's %s replacement failure visible and allows a manual retry",
+  async (kind) => {
+    await render(false, false, true);
+    vi.mocked(port.ensureBot).mockRejectedValueOnce(
+      kind === "error"
+        ? new Error("replacement unavailable")
+        : new ChannelGatewayError({ reason: "legacy_active" }),
+    );
+    state.botDeleted = true;
+    await render(false, false, true);
+    expect(port.ensureBot).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+    expect(container.textContent).not.toContain("GOAT Bot is starting a new chat.");
+    expect(textarea().disabled).toBe(true);
+    await render(false, false, true);
+    expect(port.ensureBot).toHaveBeenCalledTimes(2);
+    vi.mocked(port.ensureBot).mockResolvedValueOnce({
+      environmentId,
+      threadId: ThreadId.make("replacement"),
+      projectId: ProjectId.make("project"),
+    });
+    await act(() =>
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent === "Try again")!
+        .click(),
+    );
+    expect(port.ensureBot).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('a[href="/bot"]')?.textContent).toBe("Open GOAT Bot");
+  },
+);
+
+it("shows replacement progress only while ensure is pending, then shows failure for the same deleted bot", async () => {
+  await render(false, false, true);
+  const replacement = deferred<Awaited<ReturnType<GoatBotChannelPort["ensureBot"]>>>();
+  vi.mocked(port.ensureBot).mockImplementationOnce(() => replacement.promise);
+  state.botDeleted = true;
+  await render(false, false, true);
+  expect(container.textContent).toContain("GOAT Bot is starting a new chat.");
+  expect(textarea().disabled).toBe(true);
+  await render(false, false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  await act(() =>
+    replacement.resolve({
+      environmentId,
+      threadId: ThreadId.make("bot"),
+      projectId: ProjectId.make("project"),
+    }),
+  );
+  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+});
+
+it.each(["loading", "error", "missing snapshot"])(
+  "waits for an archived snapshot with %s before replacing a missing seen bot",
+  async (kind) => {
+    await render(false, false, true);
+    expect(state.archiveReads).not.toHaveBeenCalled();
+    state.botDeleted = true;
+    state.archiveLoading = kind === "loading";
+    state.archiveError = kind === "error" ? "snapshot unavailable" : null;
+    state.archiveMissingSnapshot = kind === "missing snapshot";
+    await render(false, false, true);
+    expect(port.ensureBot).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("This chat was deleted");
+    state.archiveLoading = false;
+    state.archiveError = null;
+    state.archiveMissingSnapshot = false;
+    await render(false, false, true);
+    expect(port.ensureBot).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("This chat was deleted");
+    expect(state.archiveRefresh).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("does not offer Unarchive without permission or ask for an archived bot replacement", async () => {
+  state.botArchived = true;
+  permission = false;
+  await render(false, false, true);
+  expect(container.textContent).toContain("This chat is archived");
+  expect(
+    Array.from(container.querySelectorAll("button")).some(
+      (button) => button.textContent === "Unarchive",
+    ),
+  ).toBe(false);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  expect(textarea().disabled).toBe(true);
 });
 
 it("keeps a just-confirmed bot awaiting its shell rather than showing removed", async () => {
@@ -884,9 +1083,11 @@ it("keeps a just-confirmed bot awaiting its shell rather than showing removed", 
   expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
   expect(container.textContent).not.toContain("This chat was deleted");
   expect(textarea().disabled).toBe(false);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  expect(state.archiveRefresh).toHaveBeenCalledTimes(1);
   setConnection(false);
   await render(false, false, true);
-  expect(container.textContent).toContain("This chat was deleted");
+  expect(container.textContent).not.toContain("This chat was deleted");
 });
 
 it("remounts the thread permission hook when the port is installed and removed", async () => {

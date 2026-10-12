@@ -1,6 +1,11 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useContext, useEffect, useMemo, useRef } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  refreshArchivedThreadsForEnvironment,
+  useArchivedThreadSnapshots,
+} from "~/lib/archivedThreadsState";
 
 import {
   resolveThreadDetailRef,
@@ -13,7 +18,7 @@ import { threadEnvironment } from "~/state/threads";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { GoatBotChatView } from "./GoatBotChatView";
-import { resolveGoatBotRemoval } from "./goatBotAvailability";
+import { resolveGoatBotRemoval, type GoatBotRemoval } from "./goatBotAvailability";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -36,7 +41,7 @@ export function GoatBotThreadView({
   const port = useContext(GoatBotChannelContext);
   return (
     <GoatBotThreadSession
-      key={port ? "port" : "none"}
+      key={`${environmentId}:${threadId}:${port ? "port" : "none"}`}
       environmentId={environmentId}
       threadId={threadId}
     />
@@ -74,8 +79,16 @@ function GoatBotThreadSession({
   const confirmedHere =
     session.confirmedBot?.environmentId === environmentId &&
     session.confirmedBot.threadId === threadId;
-  const removal = resolveGoatBotRemoval({ shell, bootstrapped, confirmedHere });
+  const [shellSeen, setShellSeen] = useState(shell !== null);
+  const [resolvedRemoval, setRemoval] = useState<GoatBotRemoval>(null);
+  if (shell !== null) {
+    if (!shellSeen) setShellSeen(true);
+    if (resolvedRemoval !== null) setRemoval(null);
+  }
   const canOpenCurrentBot = session.confirmedBot !== null && !confirmedHere;
+  // Keep the resolved removal while ensure is pending or failed, when confirmedHere is false.
+  const removal =
+    shell !== null ? null : bootstrapped && canOpenCurrentBot ? "deleted" : resolvedRemoval;
   // The server starts a new bot when its thread was deleted, so ask once per deleted thread.
   const retryAvailability = session.onRetryAvailability;
   const replacementAskedFor = useRef<string | null>(null);
@@ -86,17 +99,69 @@ function GoatBotThreadSession({
   }, [confirmedHere, removal, retryAvailability, threadId]);
   const unarchive = useOrchestrationCommand(threadEnvironment.unarchive, { reportFailure: false });
   return (
-    <GoatBotChatView
-      {...session}
-      rows={removal === null ? session.rows : NO_PENDING}
-      removal={removal}
-      canOpenCurrentBot={canOpenCurrentBot}
-      onUnarchive={
-        removal === "archived" && session.canOperate
-          ? () => void unarchive({ environmentId, input: { threadId } })
-          : undefined
-      }
-      legacyAgentRoute={legacyAgentRoute}
-    />
+    <>
+      {shell === null && bootstrapped && confirmedHere && removal !== "deleted" ? (
+        <GoatBotRemovalProbe
+          environmentId={environmentId}
+          threadId={threadId}
+          shellSeen={shellSeen}
+          onResolve={setRemoval}
+        />
+      ) : null}
+      <GoatBotChatView
+        {...session}
+        rows={removal === null ? session.rows : NO_PENDING}
+        removal={removal}
+        canOpenCurrentBot={canOpenCurrentBot}
+        onUnarchive={
+          removal === "archived" && session.canOperate
+            ? () =>
+                void unarchive({ environmentId, input: { threadId } }).then(() =>
+                  refreshArchivedThreadsForEnvironment(environmentId),
+                )
+            : undefined
+        }
+        legacyAgentRoute={legacyAgentRoute}
+      />
+    </>
   );
+}
+
+/** Read the archived stream only while a confirmed bot is missing from the active shells. */
+function GoatBotRemovalProbe({
+  environmentId,
+  threadId,
+  shellSeen,
+  onResolve,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly shellSeen: boolean;
+  readonly onResolve: (removal: GoatBotRemoval) => void;
+}) {
+  const { snapshots, isLoading, error } = useArchivedThreadSnapshots([environmentId]);
+  const [refreshed, setRefreshed] = useState(false);
+  useEffect(() => {
+    refreshArchivedThreadsForEnvironment(environmentId);
+    // oxlint-disable-next-line react/set-state-in-effect -- Consume the snapshot only after refreshing its external query.
+    setRefreshed(true);
+  }, [environmentId]);
+  const snapshot = snapshots.find((entry) => entry.environmentId === environmentId)?.snapshot;
+  const archived =
+    !refreshed || isLoading || error !== null || snapshot === undefined
+      ? null
+      : snapshot.threads.some((thread) => thread.id === threadId);
+  useEffect(() => {
+    if (archived === null) return;
+    onResolve(
+      resolveGoatBotRemoval({
+        shell: null,
+        shellSeen,
+        archived,
+        bootstrapped: true,
+        confirmedHere: true,
+      }),
+    );
+  }, [archived, shellSeen, onResolve]);
+  return null;
 }

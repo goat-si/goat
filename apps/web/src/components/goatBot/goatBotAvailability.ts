@@ -92,20 +92,24 @@ export type GoatBotRemoval = "archived" | "deleted" | null;
 
 /**
  * An archived bot is still the bot and comes back by unarchiving it. A deleted one is replaced by
- * the server on the next ensure. A missing shell only counts as deleted once its machine has
- * loaded its threads and the thread is not the bot this connection just confirmed.
+ * the server on the next ensure. Active shells disappear for both removals, so wait for the
+ * archived snapshot before distinguishing them. An unseen shell may still be on its way.
  */
 export function resolveGoatBotRemoval(input: {
-  readonly shell: {
-    readonly archivedAt: string | null;
-    readonly deletedAt?: string | null | undefined;
-  } | null;
+  readonly shell: object | null;
+  readonly shellSeen: boolean;
+  /** null until the archived snapshot has loaded successfully. */
+  readonly archived: boolean | null;
   readonly bootstrapped: boolean;
   readonly confirmedHere: boolean;
 }): GoatBotRemoval {
-  if (input.shell !== null) {
-    if (input.shell.deletedAt != null) return "deleted";
-    return input.shell.archivedAt !== null ? "archived" : null;
-  }
-  return input.bootstrapped && !input.confirmedHere ? "deleted" : null;
+  if (
+    input.shell !== null ||
+    !input.bootstrapped ||
+    !input.confirmedHere ||
+    input.archived === null
+  )
+    return null;
+  if (input.archived) return "archived";
+  return input.shellSeen ? "deleted" : null;
 }

@@ -21,13 +21,13 @@ import { Badge } from "../ui/badge";
 /** GOAT Bot's pinned place at the top of the thread list. */
 export function GoatBotSidebarRow() {
   const port = useContext(GoatBotChannelContext);
-  return <GoatBotSidebarObserver key={port ? "port" : "none"} />;
+  const { enabled } = useGoatBotEnabled();
+  return enabled ? <GoatBotSidebarObserver key={port ? "port" : "none"} /> : null;
 }
 
 function GoatBotSidebarObserver() {
   // Learn the bot's identity even when its route has never been opened.
   useGoatBotSession();
-  const { enabled } = useGoatBotEnabled();
   const count = useGoatBotWaitingCount();
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -37,7 +37,6 @@ function GoatBotSidebarObserver() {
   const handleClick = useCallback(() => {
     if (isMobile) setOpenMobile(false);
   }, [isMobile, setOpenMobile]);
-  if (!enabled) return null;
   return (
     <SidebarGroup className="z-[1]">
       <SidebarMenu>

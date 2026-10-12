@@ -99,6 +99,8 @@ export function GoatBotChatView({
       ) : removal !== null ? (
         <GoatBotRemovedNotice
           removal={removal}
+          availability={availability}
+          onRetryAvailability={onRetryAvailability}
           canOpenCurrentBot={canOpenCurrentBot}
           onUnarchive={onUnarchive}
         />
@@ -125,18 +127,32 @@ export function GoatBotChatView({
 
 function GoatBotRemovedNotice({
   removal,
+  availability,
+  onRetryAvailability,
   canOpenCurrentBot,
   onUnarchive,
 }: {
   readonly removal: Exclude<GoatBotRemoval, null>;
+  readonly availability: GoatBotAvailability;
+  readonly onRetryAvailability: (() => void) | undefined;
   readonly canOpenCurrentBot: boolean;
   readonly onUnarchive: (() => void) | undefined;
 }) {
+  const replacementFailed =
+    removal === "deleted" &&
+    !canOpenCurrentBot &&
+    (availability.kind === "error" ||
+      availability.kind === "legacy_active" ||
+      availability.kind === "ready");
   const description = canOpenCurrentBot
     ? "GOAT Bot keeps going in its current chat."
     : removal === "archived"
       ? "Unarchive it to keep chatting with GOAT Bot here."
-      : "GOAT Bot is starting a new chat.";
+      : replacementFailed
+        ? "Couldn't start a new GOAT Bot chat"
+        : availability.kind === "connecting"
+          ? "GOAT Bot is starting a new chat."
+          : "Reconnect to start a new GOAT Bot chat.";
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
@@ -146,16 +162,22 @@ function GoatBotRemovedNotice({
         </EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {canOpenCurrentBot || onUnarchive !== undefined ? (
+      {canOpenCurrentBot ||
+      onUnarchive !== undefined ||
+      (replacementFailed && onRetryAvailability) ? (
         <EmptyContent>
           <div className="flex justify-center">
             {canOpenCurrentBot ? (
               <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
                 Open GOAT Bot
               </Button>
-            ) : (
+            ) : onUnarchive !== undefined ? (
               <Button size="sm" variant="outline" onClick={onUnarchive}>
                 Unarchive
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={onRetryAvailability}>
+                Try again
               </Button>
             )}
           </div>

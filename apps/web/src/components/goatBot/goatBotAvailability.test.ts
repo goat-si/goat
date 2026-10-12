@@ -138,36 +138,29 @@ describe("environmentSupportsChannelLedger", () => {
 });
 
 describe("resolveGoatBotRemoval", () => {
-  const live = { archivedAt: null, deletedAt: null };
-  it("keeps an archived bot as the bot and marks a deleted one for replacement", () => {
-    expect(resolveGoatBotRemoval({ shell: live, bootstrapped: true, confirmedHere: true })).toBe(
-      null,
+  const missing = {
+    shell: null,
+    shellSeen: true,
+    archived: false,
+    bootstrapped: true,
+    confirmedHere: true,
+  };
+  it("distinguishes archive membership from a seen shell removed from the active store", () => {
+    expect(resolveGoatBotRemoval({ ...missing, shell: {} })).toBe(null);
+    expect(resolveGoatBotRemoval({ ...missing, archived: true })).toBe("archived");
+    expect(resolveGoatBotRemoval({ ...missing, archived: true, shellSeen: false })).toBe(
+      "archived",
     );
-    expect(
-      resolveGoatBotRemoval({
-        shell: { archivedAt: "2026-10-12T00:00:00.000Z", deletedAt: null },
-        bootstrapped: true,
-        confirmedHere: true,
-      }),
-    ).toBe("archived");
-    expect(
-      resolveGoatBotRemoval({
-        shell: { archivedAt: null, deletedAt: "2026-10-12T00:00:00.000Z" },
-        bootstrapped: true,
-        confirmedHere: true,
-      }),
-    ).toBe("deleted");
+    expect(resolveGoatBotRemoval(missing)).toBe("deleted");
   });
 
-  it("waits for the machine's threads and the just-confirmed bot before calling it deleted", () => {
-    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: false, confirmedHere: false })).toBe(
-      null,
-    );
-    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: true, confirmedHere: true })).toBe(
-      null,
-    );
-    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: true, confirmedHere: false })).toBe(
-      "deleted",
-    );
+  it("waits for bootstrap, confirmation and the archived snapshot before resolving removal", () => {
+    expect(resolveGoatBotRemoval({ ...missing, bootstrapped: false })).toBe(null);
+    expect(resolveGoatBotRemoval({ ...missing, confirmedHere: false })).toBe(null);
+    expect(resolveGoatBotRemoval({ ...missing, archived: null })).toBe(null);
+  });
+
+  it("never calls a shell deleted before it has appeared in this mount", () => {
+    expect(resolveGoatBotRemoval({ ...missing, shellSeen: false })).toBe(null);
   });
 });
