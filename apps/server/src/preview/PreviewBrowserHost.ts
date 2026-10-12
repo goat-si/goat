@@ -3,7 +3,7 @@
  * it. Every failure here names that command, so the server log, an agent's tool
  * error, and the viewer all offer the same fix: `sudo goat browser setup`.
  *
- * T3 never turns Chrome's sandbox off by itself. A host that cannot give it one
+ * GOAT never turns Chrome's sandbox off by itself. A host that cannot give it one
  * gets the command instead, and only the operator's explicit
  * `T3CODE_SERVER_BROWSER_SANDBOX=0` launches without it.
  */
@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-/** The subcommand that sets the host up; callers render it, with `sudo`, for how T3 was launched. */
+/** The subcommand that sets the host up; callers render it, with `sudo`, for how GOAT was launched. */
 export const SETUP_SUBCOMMAND = "browser setup";
 
 /** What Chrome prints before aborting when it cannot sandbox itself. */
@@ -29,7 +29,7 @@ const USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_user
 export const APPARMOR_PROFILE_PATH = "/etc/apparmor.d/t3-chrome-headless-shell";
 
 /**
- * Lets T3's headless browser, in any T3 home and at any pinned version, create
+ * Lets GOAT's headless browser, in any GOAT home and at any pinned version, create
  * the user namespace Chrome's sandbox runs in. Modelled on the profile Ubuntu
  * ships for Google Chrome; `unconfined` adds nothing beyond `userns`.
  */
@@ -143,7 +143,7 @@ export const missingLibraries = Effect.fn("PreviewBrowserHost.missingLibraries")
 
 /**
  * Whether Chrome's sandbox will be blocked here: the host restricts user
- * namespaces and T3's AppArmor profile is not installed. Readable without
+ * namespaces and GOAT's AppArmor profile is not installed. Readable without
  * root, so the server checks it at startup.
  */
 export const sandboxBlocked = Effect.gen(function* () {

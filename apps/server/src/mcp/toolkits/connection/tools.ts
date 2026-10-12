@@ -51,7 +51,7 @@ const AddSshTool = Tool.make("goat_connection_add_ssh", {
 const RemoveTool = Tool.make("goat_connection_remove", {
   ...shared,
   description:
-    "Remove a saved connection like Settings → Remove: forget pairing, credentials and cached threads on this device, and stop a server T3 launched over SSH. The local environment and T3 Connect environments are refused.",
+    "Remove a saved connection like Settings → Remove: forget pairing, credentials and cached threads on this device, and stop a server GOAT launched over SSH. The local environment and T3 Connect environments are refused.",
   parameters: Schema.Struct({ environmentId: EnvironmentId }),
   success: Schema.Struct({ removed: SavedConnection }),
 })

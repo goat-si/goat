@@ -55,7 +55,7 @@ import {
 /**
  * Lets an agent in this environment reach another machine over SSH: list the
  * hosts this machine's SSH config knows, browse folders on one, and start a
- * thread in that machine's own T3 environment. The remote keeps owning its
+ * thread in that machine's own GOAT environment. The remote keeps owning its
  * projects, worktrees and threads; this process only launches or reuses the
  * remote server through the shared SSH manager and then calls the remote's
  * own `/mcp` tools as an outside agent with a short-lived session.
@@ -158,7 +158,7 @@ export interface SshLaunchResult {
   readonly notes: ReadonlyArray<string>;
 }
 
-/** One tool call on another machine's T3 server. */
+/** One tool call on another machine's GOAT server. */
 export interface SshHostToolCall {
   readonly host: string;
   readonly tool: string;

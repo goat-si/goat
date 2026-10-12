@@ -71,7 +71,7 @@ export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2
 /**
  * The mode a provider runs a thread in. A mode the provider does not offer
  * (a thread set before it stopped offering it, or a stale client) runs in
- * Supervised rather than having T3 imitate it.
+ * Supervised rather than having GOAT imitate it.
  */
 function providerRuntimeMode(
   runtimeMode: RuntimeMode,

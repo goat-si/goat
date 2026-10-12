@@ -93,7 +93,7 @@ export function xAiPromptCompleteFromSessionUpdate(
 
 /**
  * Grok answers a finished background command in its own turn, tagging every
- * frame with a `task-completed-*` prompt id instead of the one T3 sent.
+ * frame with a `task-completed-*` prompt id instead of the one GOAT sent.
  */
 export function isXAiTaskCompletedWakeNotification(
   notification: EffectAcpSchema.SessionNotification,
@@ -1049,8 +1049,8 @@ export interface XAiExitPlanModeResponse {
 }
 
 /**
- * Client captured the plan for T3's proposed-plan card. Abandon the native
- * Grok plan-approval gate so the turn unblocks; the user implements via T3 UI.
+ * Client captured the plan for GOAT's proposed-plan card. Abandon the native
+ * Grok plan-approval gate so the turn unblocks; the user implements via GOAT UI.
  */
 export function makeXAiExitPlanModeCapturedResponse(feedback?: string): XAiExitPlanModeResponse {
   return {
@@ -1151,7 +1151,7 @@ export function isGrokPlanMarkdownPath(
 
 /**
  * Extract plan markdown from a Grok write/edit tool call targeting plan.md.
- * Used so T3 can show the plan while plan mode is still active (before exit).
+ * Used so GOAT can show the plan while plan mode is still active (before exit).
  */
 export function extractGrokPlanMarkdownFromToolCallData(
   data: Record<string, unknown> | undefined,

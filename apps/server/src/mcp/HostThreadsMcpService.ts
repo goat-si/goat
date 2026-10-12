@@ -38,7 +38,7 @@ import { assertLiveCaller, readCaller } from "./threadAccess.ts";
 /**
  * Routes the thread tools by host. A thread id belongs to the environment that
  * created it, so a thread is named by (host, threadId): an omitted host is
- * this environment, any other is an SSH alias whose own T3 server is called
+ * this environment, any other is an SSH alias whose own GOAT server is called
  * through SshRemoteDispatch as an outside client. That server judges the call
  * again; this side only makes sure the caller asks for no more than it has.
  */
@@ -218,7 +218,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
 
-  /** Only an agent inside a T3 thread owns watches; it is woken in that thread. */
+  /** Only an agent inside a GOAT thread owns watches; it is woken in that thread. */
   const watcherOf = (scope: McpInvocationScope) =>
     scope.thread === undefined
       ? Effect.fail(

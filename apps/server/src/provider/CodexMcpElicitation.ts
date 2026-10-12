@@ -171,7 +171,7 @@ export function describeMcpElicitation(
   };
 }
 
-/** Converts a T3 approval decision into the MCP elicitation wire response. */
+/** Converts a GOAT approval decision into the MCP elicitation wire response. */
 export function toMcpElicitationResponse(
   payload: EffectCodexSchema.McpServerElicitationRequestParams,
   decision: ProviderApprovalDecision,

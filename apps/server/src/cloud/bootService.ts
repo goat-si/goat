@@ -517,7 +517,7 @@ export interface BootServiceStatus {
   readonly current: boolean;
   readonly installedVersion?: string;
   /**
-   * The T3 home the installed unit serves. The unit name is fixed per user,
+   * The GOAT home the installed unit serves. The unit name is fixed per user,
    * so a caller working against another base dir must not treat this service
    * as its own; `goat update --base-dir` learned that by restarting the live
    * server of the machine it ran on.

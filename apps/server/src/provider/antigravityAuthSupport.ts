@@ -252,7 +252,7 @@ function antigravityEnvironment(
 }
 
 /**
- * The agent reads its user-global skills under `GEMINI_HOME`, which T3 points
+ * The agent reads its user-global skills under `GEMINI_HOME`, which GOAT points
  * at the private profile. Link the two skill directories back to the user's
  * real `~/.gemini` so global skills load, while MCP servers, hooks, and
  * credentials stay isolated. Best effort: a link that cannot be made only
@@ -567,7 +567,7 @@ export function makeAntigravityStdoutTransform(
     });
 }
 
-/** Receives native 1.1.1 sign-in URLs and T3 browser-helper URLs without logging stderr. */
+/** Receives native 1.1.1 sign-in URLs and GOAT browser-helper URLs without logging stderr. */
 export function makeAntigravityStderrHandler(
   input: {
     readonly onAuthorizationUrl?: (

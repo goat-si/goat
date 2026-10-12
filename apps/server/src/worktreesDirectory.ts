@@ -4,7 +4,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 /**
  * Directory new worktrees are created under: the `worktreesDirectory`
- * setting (`~` expands to `home`), or `defaultDir` (`<T3 home>/worktrees`)
+ * setting (`~` expands to `home`), or `defaultDir` (`<GOAT home>/worktrees`)
  * when it is empty. Null when
  * the setting is not an absolute path on this machine, such as `D:\worktrees`
  * configured for a Windows server and synced to a Linux one, or when it is a

@@ -1,7 +1,7 @@
 /**
  * SourceControlHost — what a source control provider package may ask of the server it runs in.
  *
- * Providers run inside a T3 server but must not import it. The server provides this one
+ * Providers run inside a GOAT server but must not import it. The server provides this one
  * service; everything a provider needs from its environment (settings, the process runner)
  * goes through it, so a provider package depends only on `@t3tools/source-control-core` and
  * its own API and CLI code. HTTP, the filesystem, and paths come from Effect's platform

@@ -826,7 +826,7 @@ export type RelayEnvironmentStatusValue = typeof RelayEnvironmentStatusValue.Typ
 /**
  * Why an environment is offline, when the relay knows more than "the host
  * did not answer". `tunnel_released`: the relay deleted the environment's
- * idle tunnel, and the host needs a current T3 Code build to get a new one.
+ * idle tunnel, and the host needs a current GOAT build to get a new one.
  */
 const RelayEnvironmentOfflineReason = Schema.Literals(["tunnel_released"]);
 type RelayEnvironmentOfflineReason = typeof RelayEnvironmentOfflineReason.Type;

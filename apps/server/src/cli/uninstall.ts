@@ -29,7 +29,7 @@ export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
 }
 
 /**
- * What `goat uninstall` would remove for one T3 home. Computed before anything
+ * What `goat uninstall` would remove for one GOAT home. Computed before anything
  * is touched so the user sees the whole plan in one place.
  */
 export interface UninstallPlan {

@@ -1,5 +1,5 @@
 /**
- * The T3 MCP credential each thread's provider session should expose to its
+ * The GOAT MCP credential each thread's provider session should expose to its
  * agent. The session manager writes it before a session starts; adapters read
  * it when they build provider launch options.
  *

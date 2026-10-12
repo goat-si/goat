@@ -1052,7 +1052,7 @@ export interface AcpMcpToolCallIdentity {
   readonly input?: Record<string, unknown>;
 }
 
-/** Matches an invocation of T3's `acp-mcp-call` bridge fallback CLI. */
+/** Matches an invocation of GOAT's `acp-mcp-call` bridge fallback CLI. */
 const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)(?:\s+(.+?))?\s*$/u;
 
 function acpMcpFallbackInput(value: string | undefined): Record<string, unknown> | undefined {
@@ -1080,9 +1080,9 @@ function acpMcpFallbackInput(value: string | undefined): Record<string, unknown>
  * shared convention (survey of the 2026-08 registry builds): Kilo and
  * opencode use `goat_<tool>`, claude-acp and qwen `mcp__goat__<tool>`,
  * Amp `mcp__goat__<tool>` (normalization is identical), droid `goat___<tool>`,
- * Copilot `goat-<tool>`, cline appends `: <args json>`. T3 always injects
+ * Copilot `goat-<tool>`, cline appends `: <args json>`. GOAT always injects
  * its server as "goat", and matches are additionally gated on the known
- * T3 tool inventory, so the separator match can stay loose.
+ * GOAT tool inventory, so the separator match can stay loose.
  */
 const T3_MCP_TITLE_CALL =
   /^(?:mcp[-_]{1,2})?goat[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
@@ -1098,7 +1098,7 @@ const T3_MCP_TITLE_SUFFIX_CALL =
 /**
  * glm-acp-agent and Kimi CLI register injected MCP tools under their bare
  * names; Kimi additionally appends ": <raw args json>". Safe only because the
- * match is gated on the known T3 tool inventory.
+ * match is gated on the known GOAT tool inventory.
  */
 const T3_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s|$)/;
 
@@ -1107,7 +1107,7 @@ const T3_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s|$)/;
  *
  * ACP has no typed MCP tool-call item, so agents surface MCP calls in
  * agent-specific shapes: codex-acp tags execute calls with
- * `rawInput.server`/`rawInput.tool`, while agents on T3's terminal fallback
+ * `rawInput.server`/`rawInput.tool`, while agents on GOAT's terminal fallback
  * run the `acp-mcp-call <tool>` CLI through their command or an embedded
  * client terminal. Recovered identity lets the projection render the same
  * branded MCP item that native providers produce.
@@ -1205,8 +1205,8 @@ export function extractMcpToolCallIdentity(
   for (const command of commands) {
     const match = ACP_MCP_FALLBACK_CALL.exec(command);
     if (match?.[1] !== undefined) {
-      // The acp-mcp-call CLI exists only as T3's bridge fallback, so the
-      // server identity is T3's by construction.
+      // The acp-mcp-call CLI exists only as GOAT's bridge fallback, so the
+      // server identity is GOAT's by construction.
       const input = acpMcpFallbackInput(match[2]);
       return { server: "goat", tool: match[1], ...(input === undefined ? {} : { input }) };
     }

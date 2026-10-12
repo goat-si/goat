@@ -536,11 +536,11 @@ function shouldRetainDecodedRecord(
 }
 
 /**
- * T3 Code runs its own agent sessions inside disposable worktrees. Their
+ * GOAT runs its own agent sessions inside disposable worktrees. Their
  * transcripts look exactly like user sessions, but re-importing the app's own
  * sandboxes as projects is never right. Matches this server's configured
  * worktrees directory plus the conventional `.t3/worktrees` layout, which
- * also catches sandboxes from other T3 homes on the same machine. Separators
+ * also catches sandboxes from other GOAT homes on the same machine. Separators
  * are normalized (and, on Windows, case folded) so the prefix match holds
  * there too. Callers check both the recorded spelling and its realpath so a
  * symlink into the worktrees directory cannot bypass the filter.
@@ -627,7 +627,7 @@ export const make = Effect.gen(function* () {
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const baseDir = path.resolve(serverConfig.baseDir);
   const worktreesDir = path.resolve(serverConfig.worktreesDir);
-  // Candidates are compared by realpath, so a symlink in the T3 home path must not hide its sandboxes.
+  // Candidates are compared by realpath, so a symlink in the GOAT home path must not hide its sandboxes.
   const realWorktreesDir = yield* fileSystem
     .realPath(worktreesDir)
     .pipe(Effect.orElseSucceed(() => worktreesDir));

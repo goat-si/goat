@@ -1,6 +1,6 @@
 /**
  * Browser import - pulling cookies from a browser already installed on the
- * machine into a T3 Code browser profile.
+ * machine into a GOAT browser profile.
  *
  * Only cookies are imported. They carry the logged-in sessions, which is what
  * makes an imported profile useful; saved passwords are deliberately out of
@@ -108,7 +108,7 @@ export type BrowserImportSource = typeof BrowserImportSource.Type;
 export const BrowserImportInput = Schema.Struct({
   sourceId: BrowserImportSourceId,
   sourceProfileDirectory: TrimmedNonEmptyString,
-  /** T3 Code profile the cookies are written into. */
+  /** GOAT profile the cookies are written into. */
   targetProfileId: BrowserProfileId,
 });
 export type BrowserImportInput = typeof BrowserImportInput.Type;

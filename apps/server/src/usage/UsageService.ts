@@ -3,7 +3,7 @@
  * buckets.
  *
  * Each built-in driver with a `usage` reader contributes its sources, including
- * work driven outside T3 Code. A `transcripts` reader names JSONL directories
+ * work driven outside GOAT. A `transcripts` reader names JSONL directories
  * that this service streams itself; a `scan` reader reads its own sources.
  *
  * JSONL transcripts are append-only, so parsed records are memoised per file by

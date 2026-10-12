@@ -8,7 +8,7 @@
  * Linux without lsof: reads listening sockets from `/proc/net/tcp{,6}` and
  * finds their processes through `/proc/<pid>/fd`.
  *
- * Only listeners owned by T3 terminal processes and explicitly configured
+ * Only listeners owned by GOAT terminal processes and explicitly configured
  * URLs receive probes. Without listener ownership, only configured URLs do.
  *
  * Listening ports are published only after a bounded HTTP(S) probe finds a
@@ -215,7 +215,7 @@ const parseLsofOutput = (
       const key = `localhost:${portMatch}`;
       const terminal = pid === null ? null : (terminalByProcessId.get(pid) ?? null);
       const existing = seen.get(key);
-      // A port receives probes only when T3 terminals own all of its listeners.
+      // A port receives probes only when GOAT terminals own all of its listeners.
       if (existing) {
         if (terminal === null) seen.set(key, { ...existing, terminal: null });
         continue;

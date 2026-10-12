@@ -1,7 +1,7 @@
 /**
  * ProviderHost — what a provider package may ask of the server it runs in.
  *
- * Drivers and adapters run inside a T3 server but must not import it. The
+ * Drivers and adapters run inside a GOAT server but must not import it. The
  * server provides this one service; everything a provider needs from its
  * environment (directories, server settings, background demand, attachment
  * files) goes through it, so a provider package depends only on
@@ -26,9 +26,9 @@ import type { ProviderCredentialError } from "./errors.ts";
 export interface ProviderHostPaths {
   /** Directory the server was started in; the fallback cwd for sessions without a project. */
   readonly cwd: string;
-  /** T3 home. */
+  /** GOAT home. */
   readonly baseDir: string;
-  /** Server-owned state directory under the T3 home. */
+  /** Server-owned state directory under the GOAT home. */
   readonly stateDir: string;
   /** Scratch space for provider probes and generated helper files. */
   readonly providerStatusCacheDir: string;

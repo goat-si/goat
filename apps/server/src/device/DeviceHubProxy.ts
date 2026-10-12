@@ -4,7 +4,7 @@
  * The hub binds loopback and is never reachable directly: serve-sim exposes a
  * shell-exec route and serve-emu's action routes are unauthenticated, so the
  * only way to a device stream is through this route, which requires an
- * environment session with read scope (operate scope for input and tuning). Reusing the T3
+ * environment session with read scope (operate scope for input and tuning). Reusing the GOAT
  * origin is also what makes remote connections work unchanged — Tailscale and
  * T3 Connect already carry `/api/*` and WebSocket upgrades for the app itself.
  *

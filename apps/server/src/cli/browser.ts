@@ -1,5 +1,5 @@
 /**
- * `goat browser setup` - prepares a Linux host for T3's headless browser, which
+ * `goat browser setup` - prepares a Linux host for GOAT's headless browser, which
  * server browser tabs and HTML render previews share. It is the fix every
  * browser host error names, so it does the whole job in one run:
  *
@@ -53,7 +53,7 @@ const runStep = Effect.fn("browserSetup.runStep")(function* (
 });
 
 /**
- * The T3 home to check. Under `sudo` the process home is root's, so an
+ * The GOAT home to check. Under `sudo` the process home is root's, so an
  * unspecified home falls back to the invoking user's `~/.t3`.
  */
 export const setupBaseDir = Effect.fn("browserSetup.baseDir")(function* (
@@ -83,7 +83,7 @@ const aptOffers = Effect.fn("browserSetup.aptOffers")(function* (name: string) {
   return candidate !== undefined && candidate !== "(none)";
 });
 
-/** The installed browser in this T3 home, if any, to check its libraries. */
+/** The installed browser in this GOAT home, if any, to check its libraries. */
 const installedBrowser = Effect.fn("browserSetup.installedBrowser")(function* (baseDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

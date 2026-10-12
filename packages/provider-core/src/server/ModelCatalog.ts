@@ -1,5 +1,5 @@
 /**
- * ModelCatalog — the model metadata a provider reads from T3's model manifest.
+ * ModelCatalog — the model metadata a provider reads from GOAT's model manifest.
  *
  * The server owns the manifest itself (bundle, remote refresh, disk cache,
  * compatibility policies). A provider only sees its own catalog entry, so a

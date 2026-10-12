@@ -114,7 +114,7 @@ export const GROK_ACP_CANCEL_META = { cancelTrigger: "ctrl_c" } as const;
  * Grok's Auto mode asks the client about an action its classifier blocks only
  * when the client declares a type that can show a prompt; the default
  * (`generic`) gets a silent denial instead. `extension` is the prompting type
- * that keeps the permission options T3 already maps (no always-approve row,
+ * that keeps the permission options GOAT already maps (no always-approve row,
  * no per-command persistent grants).
  */
 export const GROK_ACP_INITIALIZE_META = { clientType: "extension" } as const;
@@ -184,7 +184,7 @@ export const makeGrokAcpRuntime = (
   });
 
 /**
- * T3's built-in Grok slug. It is the CLI's product name, not a model id the ACP accepts,
+ * GOAT's built-in Grok slug. It is the CLI's product name, not a model id the ACP accepts,
  * so selecting it means "use whatever model the Grok session currently runs on".
  */
 export const GROK_DEFAULT_MODEL_SLUG = "grok-build";

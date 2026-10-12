@@ -20,14 +20,14 @@ const ALL_MCP_CAPABILITIES = [
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
-/** A provider session T3 Code launched for one thread. */
+/** A provider session GOAT launched for one thread. */
 export interface McpThreadCaller {
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
 }
 
-/** An agent T3 Code did not launch, signed in through MCP OAuth or an issued client token. */
+/** An agent GOAT did not launch, signed in through MCP OAuth or an issued client token. */
 export interface McpClientCaller {
   readonly sessionId: string;
   readonly label: string;

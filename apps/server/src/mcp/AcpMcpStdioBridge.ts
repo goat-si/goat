@@ -10,11 +10,11 @@ import * as Stream from "effect/Stream";
 import { discardResponseBody, responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
 /**
- * Stdio-to-HTTP bridge for T3's MCP endpoint.
+ * Stdio-to-HTTP bridge for GOAT's MCP endpoint.
  *
  * ACP agents must support stdio MCP servers, while optional http/sse support
  * is unevenly implemented. `t3 acp-mcp-bridge` runs as the stdio MCP server an
- * ACP agent spawns and forwards each JSON-RPC line to T3's authenticated
+ * ACP agent spawns and forwards each JSON-RPC line to GOAT's authenticated
  * streamable-HTTP endpoint: single JSON responses and SSE streams are written
  * back as newline-delimited JSON-RPC, notification acknowledgements (202/204)
  * produce no output, and the `mcp-session-id` / negotiated protocol version

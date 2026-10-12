@@ -84,7 +84,7 @@ const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   );
 
 /**
- * Agents T3 Code launched carry a registry token and must never be sent into
+ * Agents GOAT launched carry a registry token and must never be sent into
  * an OAuth flow when it dies: they cannot open a browser, and a sign-in
  * would mint a credential that outlives their session. Only a request that
  * does not look like a provider token is pointed at the OAuth metadata.

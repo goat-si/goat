@@ -13,9 +13,9 @@ import { EnvironmentId, IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./b
 /** Who saved a connection on the user's behalf. */
 export const ConnectionAddedBy = Schema.Struct({
   kind: Schema.Literal("agent"),
-  /** The thread whose agent called the tool, for an agent T3 launched. */
+  /** The thread whose agent called the tool, for an agent GOAT launched. */
   threadId: Schema.optionalKey(ThreadId),
-  /** The signed-in outside client's label, for an agent T3 did not launch. */
+  /** The signed-in outside client's label, for an agent GOAT did not launch. */
   client: Schema.optionalKey(TrimmedNonEmptyString),
   at: IsoDateTime,
 });

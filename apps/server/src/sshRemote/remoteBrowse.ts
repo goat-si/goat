@@ -1,5 +1,5 @@
 /**
- * The remote half of SSH folder browsing: a POSIX sh script that needs no T3
+ * The remote half of SSH folder browsing: a POSIX sh script that needs no GOAT
  * on the remote, and the parser for its line-oriented output. Each line is a
  * tab-separated record so names never need quoting; names holding a tab or a
  * newline are skipped rather than misread.

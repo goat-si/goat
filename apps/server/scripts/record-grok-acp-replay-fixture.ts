@@ -4,7 +4,7 @@
  * The fixture's own scenario (the same commands and steps the replay test
  * dispatches) runs through the real orchestrator and the real GrokAdapterV2;
  * only the ACP runtime's protocol logger is swapped for a tee. Outbound frames
- * are therefore exactly what T3 sends, and inbound frames exactly what Grok
+ * are therefore exactly what GOAT sends, and inbound frames exactly what Grok
  * answered. Run from apps/server with the Grok CLI on PATH (or T3_GROK_BIN):
  *
  *   node scripts/record-grok-acp-replay-fixture.ts --scenario simple
@@ -48,7 +48,7 @@ const wallClock = Clock.Clock.defaultValue();
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-// Broadcasts T3 never reads: account tier, marketing, and client UI settings.
+// Broadcasts GOAT never reads: account tier, marketing, and client UI settings.
 const DROPPED_INBOUND_METHODS = new Set(["_x.ai/settings/update", "_x.ai/announcements/update"]);
 const HOME_PLACEHOLDER = "/home/grok-replay";
 
@@ -115,7 +115,7 @@ function makeWireTee() {
     };
   };
   // Grok runs its own wake turns (`task-completed-*`, `notifications-*`,
-  // `subagent-completed-*`) after T3's run can already have settled, and its
+  // `subagent-completed-*`) after GOAT's run can already have settled, and its
   // session roster can report idle before them. Grok is done when no session
   // has a queued or running prompt (`x.ai/queue/changed` vs `turn_completed`),
   // no background task still runs (`background_tasks`), and every spawned
@@ -204,7 +204,7 @@ function wireToEntries(wire: ReadonlyArray<WireMessage>): {
     const method = pending.get(String(message.id));
     if (method === undefined) {
       // Grok answers its own internal requests (e.g. id "skills-reload") on the
-      // shared stream; T3's protocol drops those, so replay never sees them.
+      // shared stream; GOAT's protocol drops those, so replay never sees them.
       droppedFrames += 1;
       continue;
     }
@@ -231,8 +231,8 @@ function normalizeOutboundFrame(frame: Record<string, unknown>, runtimeInstructi
   if (params === undefined) return frame;
   switch (frame.method) {
     case "initialize":
-      // Pin what T3 advertises (fs and terminal capabilities decide whether
-      // Grok routes file and shell work through T3, the client type whether
+      // Pin what GOAT advertises (fs and terminal capabilities decide whether
+      // Grok routes file and shell work through GOAT, the client type whether
       // Auto mode asks); the rest is <any>.
       return {
         ...frame,

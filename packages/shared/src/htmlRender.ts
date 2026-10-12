@@ -7,7 +7,7 @@ import {
 
 /**
  * Agent-authored HTML pages ("HTML renders") are self-contained documents an
- * agent publishes into a thread with T3's `html_render` MCP tool. The server
+ * agent publishes into a thread with GOAT's `html_render` MCP tool. The server
  * stores each one as a thread attachment with a small bootstrap injected into
  * its head; clients show it in a sandboxed iframe (web, desktop) or WebView
  * (mobile) and hand it the active theme as CSS custom properties.

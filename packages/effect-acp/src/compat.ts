@@ -8,7 +8,7 @@ type KnownContentBlock<T extends V2.ContentBlock["type"]> = Extract<
   { readonly type: T }
 >;
 
-/** Provider-neutral content accepted by T3 after ACP v1 or v2 negotiation. */
+/** Provider-neutral content accepted by GOAT after ACP v1 or v2 negotiation. */
 export type ContentBlock =
   | KnownContentBlock<"text">
   | KnownContentBlock<"image">
