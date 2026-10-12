@@ -58,9 +58,9 @@ Update the side the notice names, then reconnect.
 
 ## Desktop app updates
 
-The GOAT desktop app follows the nightly channel and downloads each new nightly
-by itself. Once it is downloaded, the app restarts to install it when every
-local server reports that no agent work is running.
+GOAT (Nightly) downloads each new nightly by itself, and GOAT downloads each
+new stable release. Once an update is downloaded, the app restarts to install
+it when every local server reports that no agent work is running.
 
 Choose the behaviour in **Settings → General → Update installation**:
 
