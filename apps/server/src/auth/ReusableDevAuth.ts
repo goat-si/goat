@@ -1,6 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 import { AuthSessionId } from "@goat/contracts";
+import { LEGACY_DEV_SESSION_COOKIE_PREFIX } from "@goat/contracts/legacyT3Names";
 import * as DateTime from "effect/DateTime";
 import * as Redacted from "effect/Redacted";
 
@@ -25,7 +26,8 @@ export function resolveReusableDevAuth(
   return {
     credential: Redacted.value(token),
     sessionId: AuthSessionId.make(`${REUSABLE_DEV_SESSION_PREFIX}${tokenId}`),
-    cookieName: `t3_dev_session_${tokenId}`,
+    cookieName: `goat_dev_session_${tokenId}`,
+    legacyCookieName: `${LEGACY_DEV_SESSION_COOKIE_PREFIX}${tokenId}`,
     matches: (credential: string) =>
       NodeCrypto.timingSafeEqual(hash, NodeCrypto.createHash("sha256").update(credential).digest()),
   };

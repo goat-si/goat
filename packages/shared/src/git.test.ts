@@ -1,4 +1,8 @@
 import { SourceControlProviderKind } from "@goat/contracts";
+import {
+  LEGACY_WORKTREE_BRANCH_PREFIX,
+  LEGACY_WORKTREE_LONG_BRANCH_PREFIX,
+} from "@goat/contracts/legacyT3Names";
 import type { VcsStatusRemoteResult, VcsStatusResult } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -181,6 +185,18 @@ describe("isTemporaryWorktreeBranch", () => {
     ).toBe(true);
   });
 
+  it("writes GOAT names and still recognizes short legacy names", () => {
+    expect(buildTemporaryWorktreeBranchName(() => "deadbeef")).toBe("goat/deadbeef");
+    for (const separator of ["/", "-"]) {
+      expect(
+        isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_BRANCH_PREFIX}${separator}deadbeef`),
+      ).toBe(true);
+      expect(
+        isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_BRANCH_PREFIX}${separator}deadbeef-extra`),
+      ).toBe(false);
+    }
+  });
+
   it("matches generated temporary worktree refs", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/deadbeef`)).toBe(true);
     expect(isTemporaryWorktreeBranch(` ${WORKTREE_BRANCH_PREFIX}/deadbeef `)).toBe(true);
@@ -194,9 +210,13 @@ describe("isTemporaryWorktreeBranch", () => {
   });
 
   it("matches legacy t3code temporary worktree refs", () => {
-    expect(isTemporaryWorktreeBranch("t3code/deadbeef")).toBe(true);
-    expect(isTemporaryWorktreeBranch("t3code-deadbeef")).toBe(true);
-    expect(isTemporaryWorktreeBranch("t3code/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12")).toBe(true);
+    expect(isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/deadbeef`)).toBe(true);
+    expect(isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}-deadbeef`)).toBe(true);
+    expect(
+      isTemporaryWorktreeBranch(
+        `${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12`,
+      ),
+    ).toBe(true);
     expect(
       isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12`),
     ).toBe(false);
@@ -204,9 +224,17 @@ describe("isTemporaryWorktreeBranch", () => {
 
   it("rejects UUID-shaped refs that are not RFC 4122 v4", () => {
     // version nibble is not 4
-    expect(isTemporaryWorktreeBranch("t3code/f4ae4e0e-f971-1d48-b4f2-9cf0aa54ab12")).toBe(false);
+    expect(
+      isTemporaryWorktreeBranch(
+        `${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/f4ae4e0e-f971-1d48-b4f2-9cf0aa54ab12`,
+      ),
+    ).toBe(false);
     // variant nibble is not [89ab]
-    expect(isTemporaryWorktreeBranch("t3code/f4ae4e0e-f971-4d48-c4f2-9cf0aa54ab12")).toBe(false);
+    expect(
+      isTemporaryWorktreeBranch(
+        `${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-c4f2-9cf0aa54ab12`,
+      ),
+    ).toBe(false);
   });
 
   it("matches the flat fallback used when a plain t3 branch exists", () => {
@@ -215,15 +243,17 @@ describe("isTemporaryWorktreeBranch", () => {
     expect(isTemporaryWorktreeBranch(flat)).toBe(true);
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}-deadbeef-extra`)).toBe(false);
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}-feature`)).toBe(false);
-    expect(flattenTemporaryWorktreeBranchName("t3code/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12")).toBe(
-      `${WORKTREE_BRANCH_PREFIX}-f4ae4e0e`,
-    );
-    expect(flattenTemporaryWorktreeBranchName("t3code-deadbeef")).toBe(
-      `${WORKTREE_BRANCH_PREFIX}-deadbeef`,
-    );
-    expect(flattenTemporaryWorktreeBranchName("t3code/deadbeef")).toBe(
-      `${WORKTREE_BRANCH_PREFIX}-deadbeef`,
-    );
+    expect(
+      flattenTemporaryWorktreeBranchName(
+        `${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/f4ae4e0e-f971-4d48-b4f2-9cf0aa54ab12`,
+      ),
+    ).toBe(`${WORKTREE_BRANCH_PREFIX}-f4ae4e0e`);
+    expect(
+      flattenTemporaryWorktreeBranchName(`${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}-deadbeef`),
+    ).toBe(`${WORKTREE_BRANCH_PREFIX}-deadbeef`);
+    expect(
+      flattenTemporaryWorktreeBranchName(`${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/deadbeef`),
+    ).toBe(`${WORKTREE_BRANCH_PREFIX}-deadbeef`);
   });
 
   it("rejects non-temporary refName names", () => {
@@ -350,11 +380,14 @@ describe("resolveAutoFeatureBranchName", () => {
 });
 
 describe("formatGeneratedBranchName", () => {
-  it.each(["t3code", "t3code/"])("joins static prefix %s with one slash", (prefix) => {
-    expect(
-      formatGeneratedBranchName("Add Search", { mode: "static", prefix, instructions: "" }),
-    ).toBe("t3code/add-search");
-  });
+  it.each([LEGACY_WORKTREE_LONG_BRANCH_PREFIX, `${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/`])(
+    "joins static prefix %s with one slash",
+    (prefix) => {
+      expect(
+        formatGeneratedBranchName("Add Search", { mode: "static", prefix, instructions: "" }),
+      ).toBe(`${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}/add-search`);
+    },
+  );
   it("supports an empty prefix and preserves user prefix casing", () => {
     expect(
       formatGeneratedBranchName("Add Search", { mode: "static", prefix: "", instructions: "" }),

@@ -1,7 +1,9 @@
+import { LEGACY_SESSION_COOKIE_NAME } from "@goat/contracts/legacyT3Names";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   deriveAuthClientMetadata,
+  legacyScopedSessionCookieName,
   isRemoteReachableHost,
   resolveSessionCookieName,
 } from "./utils.ts";
@@ -58,6 +60,22 @@ describe("deriveAuthClientMetadata", () => {
 });
 
 describe("session cookie isolation", () => {
+  it.each([
+    { mode: "desktop", port: 3773, host: "127.0.0.1", development: false },
+    { mode: "web", port: 5775, host: "127.0.0.1", development: true },
+    { mode: "web", port: 5775, host: "192.168.1.50", development: false },
+  ] as const)("keeps the legacy cookie scope for $mode on $host", (input) => {
+    const name = resolveSessionCookieName({
+      ...input,
+      instanceKey: "/tmp/instance",
+      environmentId: "environment",
+    });
+    expect(name.startsWith("goat_session_")).toBe(true);
+    expect(legacyScopedSessionCookieName(name)).toBe(
+      `${LEGACY_SESSION_COOKIE_NAME}${name.slice("goat_session".length)}`,
+    );
+  });
+
   it("isolates loopback web servers by port and server state", () => {
     const first = resolveSessionCookieName({
       mode: "web",
@@ -76,8 +94,8 @@ describe("session cookie isolation", () => {
       development: true,
     });
 
-    expect(first).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
-    expect(second).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
+    expect(first).toMatch(/^goat_session_5775_[a-f0-9]{12}$/);
+    expect(second).toMatch(/^goat_session_5775_[a-f0-9]{12}$/);
     expect(first).not.toBe(second);
   });
 
@@ -99,8 +117,8 @@ describe("session cookie isolation", () => {
       development: false,
     });
 
-    expect(first).toMatch(/^t3_session_[a-f0-9]{12}$/);
-    expect(second).toMatch(/^t3_session_[a-f0-9]{12}$/);
+    expect(first).toMatch(/^goat_session_[a-f0-9]{12}$/);
+    expect(second).toMatch(/^goat_session_[a-f0-9]{12}$/);
     expect(first).not.toBe(second);
   });
 
@@ -135,7 +153,7 @@ describe("session cookie isolation", () => {
         environmentId: "environment-one",
         development: true,
       }),
-    ).toBe("t3_session_3773");
+    ).toBe("goat_session_3773");
   });
 
   it("isolates development servers even when they bind a wildcard host", () => {
@@ -148,7 +166,7 @@ describe("session cookie isolation", () => {
         environmentId: "environment-one",
         development: true,
       }),
-    ).toMatch(/^t3_session_5775_[a-f0-9]{12}$/);
+    ).toMatch(/^goat_session_5775_[a-f0-9]{12}$/);
   });
 
   it("classifies loopback aliases separately from remotely reachable hosts", () => {

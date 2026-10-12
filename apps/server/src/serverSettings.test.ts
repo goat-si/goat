@@ -34,6 +34,22 @@ import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
+// goat-rename: legacy-begin
+it.effect("translates a persisted environment theme on load", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    yield* fs.writeFileString(
+      config.settingsPath,
+      JSON.stringify({ defaultTheme: "t3-chat-dark" }),
+    );
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    yield* service.start;
+    assert.strictEqual((yield* service.getSettings).defaultTheme, "goat-chat-dark");
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+// goat-rename: legacy-end
+
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));

@@ -1,3 +1,8 @@
+import {
+  LEGACY_SESSION_COOKIE_NAME,
+  LEGACY_DEV_SESSION_COOKIE_PREFIX,
+} from "@goat/contracts/legacyT3Names";
+import { legacyScopedSessionCookieName } from "./utils.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   authScopeResponse,
@@ -98,6 +103,90 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     }).pipe(Effect.provide(layerEnvironmentAuth())),
   );
 
+  it.effect("authenticates old scoped cookies and keeps revocation authoritative", () =>
+    Effect.gen(function* () {
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const pairing = yield* auth.issuePairingCredential();
+      const exchanged = yield* auth.createBrowserSession(pairing.credential, requestMetadata);
+      const legacyRequest = makeCookieRequest(
+        legacyScopedSessionCookieName(sessions.cookieName),
+        exchanged.sessionToken,
+      );
+      const authenticated = yield* auth.authenticateHttpRequest(legacyRequest);
+      expect((yield* auth.authenticateBrowserSession(legacyRequest)).sessionId).toBe(
+        authenticated.sessionId,
+      );
+      const newRequest = makeCookieRequest(sessions.cookieName, exchanged.sessionToken);
+      expect((yield* auth.authenticateHttpRequest(newRequest)).sessionId).toBe(
+        authenticated.sessionId,
+      );
+      yield* sessions.revoke(authenticated.sessionId);
+      expect((yield* Effect.flip(auth.authenticateHttpRequest(legacyRequest)))._tag).toBe(
+        "ServerAuthInvalidCredentialError",
+      );
+    }).pipe(Effect.provide(layerEnvironmentAuth())),
+  );
+
+  it.effect("accepts the oldest remote cookie and never falls back after revocation", () =>
+    Effect.gen(function* () {
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const pairing = yield* auth.issuePairingCredential();
+      const exchanged = yield* auth.createBrowserSession(pairing.credential, requestMetadata);
+      const legacyRequest = makeCookieRequest(LEGACY_SESSION_COOKIE_NAME, exchanged.sessionToken);
+      const authenticated = yield* auth.authenticateHttpRequest(legacyRequest);
+      expect((yield* auth.authenticateBrowserSession(legacyRequest)).sessionId).toBe(
+        authenticated.sessionId,
+      );
+      const secondPairing = yield* auth.issuePairingCredential();
+      const second = yield* auth.createBrowserSession(secondPairing.credential, requestMetadata);
+      yield* sessions.revoke(authenticated.sessionId);
+      const request = {
+        cookies: {
+          [sessions.cookieName]: exchanged.sessionToken,
+          [legacyScopedSessionCookieName(sessions.cookieName)]: second.sessionToken,
+        },
+        headers: {},
+      } as never;
+      expect((yield* Effect.flip(auth.authenticateHttpRequest(request)))._tag).toBe(
+        "ServerAuthInvalidCredentialError",
+      );
+      expect((yield* Effect.flip(auth.authenticateBrowserSession(request)))._tag).toBe(
+        "ServerAuthInvalidCredentialError",
+      );
+    }).pipe(Effect.provide(layerEnvironmentAuth({ mode: "web", host: "192.168.1.50" }))),
+  );
+
+  it.effect("accepts a legacy reusable dev cookie", () =>
+    Effect.gen(function* () {
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const exchanged = yield* auth.createBrowserSession(
+        "reusable-dev-auth-token-that-is-long-enough",
+        requestMetadata,
+      );
+      const legacyName = exchanged.cookieName!.replace(
+        "goat_dev_session_",
+        LEGACY_DEV_SESSION_COOKIE_PREFIX,
+      );
+      const request = makeCookieRequest(legacyName, exchanged.sessionToken);
+      expect((yield* auth.authenticateHttpRequest(request)).scopes).toEqual(
+        AuthAdministrativeScopes,
+      );
+      expect((yield* auth.authenticateBrowserSession(request)).scopes).toEqual(
+        AuthAdministrativeScopes,
+      );
+    }).pipe(
+      Effect.provide(
+        layerEnvironmentAuth({
+          mode: "web",
+          devUrl: new URL("http://127.0.0.1:5173"),
+          devAuthToken: Redacted.make("reusable-dev-auth-token-that-is-long-enough"),
+        }),
+      ),
+    ),
+  );
+
   it.effect("uses the reusable dev cookie without overriding a normal scoped cookie", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -120,7 +209,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       >[0];
 
       const authenticated = yield* serverAuth.authenticateHttpRequest(request);
-      expect(devExchange.cookieName).toMatch(/^t3_dev_session_/);
+      expect(devExchange.cookieName).toMatch(/^goat_dev_session_/);
       expect(devExchange.expireNormalCookie).toBe(true);
       expect(devExchange.response).toMatchObject(authScopeResponse(AuthAdministrativeScopes));
       expect(authenticated.scopes).toEqual(["orchestration:read"]);
@@ -370,7 +459,7 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       const sessions = yield* SessionStore.SessionStore;
       const bearer = yield* serverAuth.issueSession();
       const verified = yield* serverAuth.authenticateHttpRequest({
-        cookies: { [sessions.legacyCookieName ?? "t3_session"]: "stale" },
+        cookies: { [sessions.legacyCookieName ?? LEGACY_SESSION_COOKIE_NAME]: "stale" },
         headers: { authorization: `Bearer ${bearer.token}` },
       } as never);
 

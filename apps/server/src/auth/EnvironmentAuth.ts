@@ -45,6 +45,7 @@ import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
+import { legacyScopedSessionCookieName } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -672,9 +673,13 @@ export function selectRequestCredential(
   cookieName: string,
   legacyCookieName: string | undefined,
 ) {
-  const cookieToken = request.cookies[cookieName];
+  const cookieToken =
+    request.cookies[cookieName] ?? request.cookies[legacyScopedSessionCookieName(cookieName)];
   if (cookieToken !== undefined) {
-    return { token: cookieToken, source: "cookie" } as const;
+    return {
+      token: cookieToken,
+      source: request.cookies[cookieName] !== undefined ? "cookie" : "legacy-cookie",
+    } as const;
   }
 
   const bearerToken = parseBearerToken(request);
@@ -782,7 +787,9 @@ export const make = Effect.gen(function* () {
       sessions.legacyCookieName,
     );
     const hasAuthorization = request.headers.authorization !== undefined;
-    const devCookieToken = devAuth ? request.cookies[devAuth.cookieName] : undefined;
+    const devCookieToken = devAuth
+      ? (request.cookies[devAuth.cookieName] ?? request.cookies[devAuth.legacyCookieName])
+      : undefined;
     return (
       selectedCredential ??
       (!hasAuthorization && devCookieToken !== undefined

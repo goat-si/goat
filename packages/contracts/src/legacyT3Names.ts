@@ -116,3 +116,24 @@ export const withLegacyEnvNames = <E extends Env>(env: E): E => {
   }
   return result as E;
 };
+
+/** Server-local identifiers accepted from existing browsers and worktrees. */
+export const LEGACY_SESSION_COOKIE_NAME = "t3_session";
+export const LEGACY_DEV_SESSION_COOKIE_PREFIX = "t3_dev_session_";
+export const LEGACY_WORKTREE_BRANCH_PREFIX = "t3";
+export const LEGACY_WORKTREE_LONG_BRANCH_PREFIX = "t3code";
+export const LEGACY_MANAGED_WORKTREE_PATH = "/.t3/worktrees/";
+
+/** Persisted theme ids, including appearance hints from older builds. */
+export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
+  "t3-chat": "goat-chat",
+  "t3-chat-light": "goat-chat-light",
+  "t3-chat-dark": "goat-chat-dark",
+  "t3-code": "goat-code",
+  "t3-code-light": "goat-code-light",
+  "t3-code-dark": "goat-code-dark",
+  "t3-grove": "grove",
+  "t3-ocean": "ocean",
+  "t3-ember": "ember",
+  "t3-iris": "iris",
+};

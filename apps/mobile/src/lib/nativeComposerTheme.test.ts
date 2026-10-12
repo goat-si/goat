@@ -17,7 +17,7 @@ describe("native composer colors", () => {
 
   it("flattens Material You alpha colors over the composer rather than falling back to defaults", () => {
     const theme = createNativeComposerTheme({
-      ...getMobileThemeVariables("t3-code", "light"),
+      ...getMobileThemeVariables("goat-code", "light"),
       "--color-screen": "#ffffffff",
       "--color-composer-surface": "#ffffffff",
       "--color-subtle": "#0000000d",

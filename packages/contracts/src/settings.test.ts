@@ -1028,12 +1028,15 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
 });
 
 describe("branch naming settings", () => {
-  it("defaults existing settings to the t3 static prefix", () => {
+  it("defaults missing settings to the GOAT static prefix", () => {
     expect(decodeServerSettings({})).toMatchObject({
       branchNamingMode: "static",
-      branchNamePrefix: "t3",
+      branchNamePrefix: "goat",
       branchNameInstructions: "",
     });
+  });
+  it("preserves an explicitly saved legacy prefix", () => {
+    expect(decodeServerSettings({ branchNamePrefix: "t3" }).branchNamePrefix).toBe("t3"); // goat-rename: legacy
   });
   it.each(["static", "semantic", "custom"])(
     "round-trips %s and project overrides",

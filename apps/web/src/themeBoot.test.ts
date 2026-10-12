@@ -157,13 +157,13 @@ describe("index.html boot script", () => {
     { name: "no stored preference on a dark OS", storage: {}, prefersDark: true },
     {
       name: "T3 Chat follows a dark OS",
-      storage: { [THEME_STORAGE_KEY]: "t3-chat", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      storage: { [THEME_STORAGE_KEY]: "goat-chat", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
     },
     {
       name: "an explicit global dark mode applies to T3 Chat",
       storage: {
-        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_STORAGE_KEY]: "goat-chat",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "dark",
         [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "false",
       },
@@ -195,8 +195,8 @@ describe("index.html boot script", () => {
       prefersDark: true,
     },
     {
-      name: "legacy t3-chat-dark resolves to dark T3 Chat",
-      storage: { [THEME_STORAGE_KEY]: "t3-chat-dark" },
+      name: "legacy goat-chat-dark resolves to dark T3 Chat",
+      storage: { [THEME_STORAGE_KEY]: "goat-chat-dark" },
       prefersDark: true,
     },
     {
@@ -257,12 +257,20 @@ describe("index.html boot script", () => {
     expect(boot.isDark).toBe(runtimeResolvedAppearance(storage, prefersDark) === "dark");
   });
 
+  // goat-rename: legacy-begin
+  it.each(["t3-chat", "t3-chat-light", "t3-chat-dark"])("boots a saved %s preference", (id) => {
+    const boot = runBootScript({ storage: { [THEME_STORAGE_KEY]: id }, prefersDark: false });
+    expect(boot.themeId).toBe("goat-chat");
+    expect(boot.isDark).toBe(id.endsWith("-dark"));
+  });
+  // goat-rename: legacy-end
+
   it("marks built-in and custom themes on the document element", () => {
     const chat = runBootScript({
-      storage: { [THEME_STORAGE_KEY]: "t3-chat", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
+      storage: { [THEME_STORAGE_KEY]: "goat-chat", [THEME_FOLLOW_SYSTEM_STORAGE_KEY]: "true" },
       prefersDark: true,
     });
-    expect(chat.themeId).toBe("t3-chat");
+    expect(chat.themeId).toBe("goat-chat");
     expect(chat.themeSelected).toBe("true");
     expect(chat.isDark).toBe(true);
 
@@ -368,7 +376,7 @@ describe("index.html boot script", () => {
 
   it("applies the matching half of an automatic mix to the splash", () => {
     const storage = {
-      [THEME_STORAGE_KEY]: "t3-chat",
+      [THEME_STORAGE_KEY]: "goat-chat",
       [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
       "t3code:theme-halves:v1": JSON.stringify({ dark: GROVE_THEME.id }),
     };
@@ -382,7 +390,7 @@ describe("index.html boot script", () => {
 
     const light = runBootScript({ storage, prefersDark: false });
     expect(light.isDark).toBe(false);
-    expect(light.themeId).toBe("t3-chat");
+    expect(light.themeId).toBe("goat-chat");
     expect(light.bootVariables["--boot-background"]).toBe(
       getThemeColorsForMode(GOAT_CHAT_THEME, "light")!.canvas,
     );
@@ -426,10 +434,25 @@ describe("index.html boot script", () => {
     );
   });
 
+  // goat-rename: legacy-begin
+  it("loads a legacy chat variant in an automatic mix", () => {
+    const boot = runBootScript({
+      storage: {
+        [THEME_STORAGE_KEY]: "ocean",
+        [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
+        "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-chat-dark" }),
+      },
+      prefersDark: true,
+    });
+    expect(boot.themeId).toBe("goat-chat");
+    expect(boot.isDark).toBe(true);
+  });
+  // goat-rename: legacy-end
+
   it("resolves a legacy-prefixed mix half onto the renamed theme", () => {
     const boot = runBootScript({
       storage: {
-        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_STORAGE_KEY]: "goat-chat",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
         "t3code:theme-halves:v1": JSON.stringify({ dark: "t3-grove" }),
       },
@@ -445,13 +468,13 @@ describe("index.html boot script", () => {
   it("ignores a mix half that names an unknown theme", () => {
     const boot = runBootScript({
       storage: {
-        [THEME_STORAGE_KEY]: "t3-chat",
+        [THEME_STORAGE_KEY]: "goat-chat",
         [THEME_APPEARANCE_MODE_STORAGE_KEY]: "system",
         "t3code:theme-halves:v1": JSON.stringify({ dark: "gone-theme" }),
       },
       prefersDark: true,
     });
-    expect(boot.themeId).toBe("t3-chat");
+    expect(boot.themeId).toBe("goat-chat");
     expect(boot.isDark).toBe(true);
   });
 

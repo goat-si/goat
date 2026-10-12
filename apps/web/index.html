@@ -51,7 +51,7 @@
         // Keep this small boot-time copy in sync with the built-in palettes so
         // the selected theme is visible before the app has mounted.
         const BUILT_IN_THEME_PALETTES = {
-          "t3-chat": {
+          "goat-chat": {
             light: {
               background: "oklch(0.982446 0.010114 325.653)",
               foreground: "oklch(0.325698 0.116116 325.037)",
@@ -134,16 +134,27 @@
           "system",
           "light",
           "dark",
-          "t3-chat",
+          "goat-chat",
           "grove",
           "ocean",
           "ember",
           "iris",
+          "goat-chat-light",
+          "goat-chat-dark",
+          "goat-code-light",
+          "goat-code-dark",
+          // goat-rename: legacy-begin
+          "t3-chat",
+          "t3-chat-light",
           "t3-chat-dark",
-          "t3-grove",
-          "t3-ocean",
-          "t3-ember",
-          "t3-iris",
+          "t3-code",
+          "t3-code-light",
+          "t3-code-dark",
+          // goat-rename: legacy-end
+          "t3-grove", // goat-rename: legacy
+          "t3-ocean", // goat-rename: legacy
+          "t3-ember", // goat-rename: legacy
+          "t3-iris", // goat-rename: legacy
         ];
         // Update every theme-color meta so any element another layer added
         // carries the resolved color too.
@@ -222,17 +233,30 @@
           // Older builds stored the dark T3 Chat palette as its own theme id
           // and every maintainer theme under a t3- prefix; keep those
           // preferences readable. Mirrors the runtime's legacy alias table.
+          // Inline because this runs before module imports; mirrors shared theme normalization.
+          // goat-rename: legacy-begin
           const LEGACY_THEME_IDS = {
-            "t3-chat-dark": "t3-chat",
+            "t3-chat": "goat-chat",
+            "t3-chat-light": "goat-chat-light",
+            "t3-chat-dark": "goat-chat-dark",
             "t3-grove": "grove",
             "t3-ocean": "ocean",
             "t3-ember": "ember",
             "t3-iris": "iris",
           };
-          const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
-          const themeId =
-            storedTheme === null ? "" : (LEGACY_THEME_IDS[storedTheme] ?? storedTheme);
-          const legacyMode = isLegacyT3ChatDark ? "dark" : null;
+          // goat-rename: legacy-end
+          const normalizeThemePreference = (id) =>
+            Object.hasOwn(LEGACY_THEME_IDS, id) ? LEGACY_THEME_IDS[id] : id;
+          const normalizeThemeId = (id) =>
+            normalizeThemePreference(id).replace(/^(goat-(?:chat|code))-(?:light|dark)$/, "$1");
+          const normalizedTheme = storedTheme === null ? "" : normalizeThemePreference(storedTheme);
+          const themeId = normalizeThemeId(normalizedTheme);
+          const legacyMode =
+            normalizedTheme === "goat-chat-dark"
+              ? "dark"
+              : normalizedTheme === "goat-chat-light"
+                ? "light"
+                : null;
           const builtInModes = BUILT_IN_THEME_MODES[themeId] ?? null;
           const customTheme = builtInModes ? null : findCustomTheme(themeId);
           const themeModes =
@@ -281,7 +305,7 @@
             );
             const candidate = isRecord(halvesRaw) ? halvesRaw[wantedMode] : null;
             if (typeof candidate === "string") {
-              const halfId = LEGACY_THEME_IDS[candidate] ?? candidate;
+              const halfId = normalizeThemeId(candidate);
               const halfBuiltIn = BUILT_IN_THEME_MODES[halfId] ?? null;
               const halfCustom = halfBuiltIn ? null : findCustomTheme(halfId);
               const halfModes =

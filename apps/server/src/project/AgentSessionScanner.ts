@@ -13,6 +13,7 @@
  *
  * @module project/AgentSessionScanner
  */
+import { LEGACY_MANAGED_WORKTREE_PATH } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
 
 import {
@@ -539,7 +540,7 @@ function shouldRetainDecodedRecord(
  * GOAT runs its own agent sessions inside disposable worktrees. Their
  * transcripts look exactly like user sessions, but re-importing the app's own
  * sandboxes as projects is never right. Matches this server's configured
- * worktrees directory plus the conventional `.t3/worktrees` layout, which
+ * worktrees directory plus the conventional `.goat/worktrees` and legacy layouts, which
  * also catches sandboxes from other GOAT homes on the same machine. Separators
  * are normalized (and, on Windows, case folded) so the prefix match holds
  * there too. Callers check both the recorded spelling and its realpath so a
@@ -558,7 +559,8 @@ function isGoatManagedWorktree(
   const normalized = normalizeForWorktreeMatch(candidatePath, caseFold);
   return (
     normalized.startsWith(normalizeForWorktreeMatch(worktreesDir, caseFold)) ||
-    normalized.includes("/.t3/worktrees/")
+    normalized.includes("/.goat/worktrees/") ||
+    normalized.includes(LEGACY_MANAGED_WORKTREE_PATH)
   );
 }
 

@@ -35,7 +35,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
-import { deriveAuthClientMetadata } from "./utils.ts";
+import { legacyScopedSessionCookieName, deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 
 const CREDENTIAL_RESPONSE_HEADERS = {
@@ -323,15 +323,25 @@ export const layer = HttpApiBuilder.group(
                 sameSite: "lax",
               }),
             ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
-            const sessionCookies = result.expireNormalCookie
-              ? yield* Effect.fromResult(
-                  Cookies.expireCookie(selectedCookie, sessions.cookieName, {
+            let sessionCookies = selectedCookie;
+            if (result.expireNormalCookie) {
+              for (const name of [
+                sessions.cookieName,
+                legacyScopedSessionCookieName(sessions.cookieName),
+                sessions.legacyCookieName,
+              ]) {
+                if (name === undefined) continue;
+                sessionCookies = yield* Effect.fromResult(
+                  Cookies.expireCookie(sessionCookies, name, {
                     httpOnly: true,
                     path: "/",
                     sameSite: "lax",
                   }),
-                ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")))
-              : selectedCookie;
+                ).pipe(
+                  Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")),
+                );
+              }
+            }
 
             yield* HttpEffect.appendPreResponseHandler((_request, response) =>
               Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),

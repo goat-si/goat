@@ -18,6 +18,7 @@ import {
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
+import { normalizeThemeId } from "@goat/shared/themePalettes";
 import { MOBILE_THEME_IDS, type MobileThemeId, type MobileThemeMode } from "../lib/mobileTheme";
 import * as MobileDatabase from "./mobile-database";
 import * as MobileSecureStorage from "./mobile-secure-storage";
@@ -199,21 +200,21 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (
     typeof parsed.themeId === "string" &&
-    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.themeId)
+    (MOBILE_THEME_IDS as readonly string[]).includes(normalizeThemeId(parsed.themeId))
   ) {
-    preferences.themeId = parsed.themeId as MobileThemeId;
+    preferences.themeId = normalizeThemeId(parsed.themeId) as MobileThemeId;
   }
   if (
     typeof parsed.lightThemeId === "string" &&
-    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.lightThemeId)
+    (MOBILE_THEME_IDS as readonly string[]).includes(normalizeThemeId(parsed.lightThemeId))
   ) {
-    preferences.lightThemeId = parsed.lightThemeId as MobileThemeId;
+    preferences.lightThemeId = normalizeThemeId(parsed.lightThemeId) as MobileThemeId;
   }
   if (
     typeof parsed.darkThemeId === "string" &&
-    (MOBILE_THEME_IDS as readonly string[]).includes(parsed.darkThemeId)
+    (MOBILE_THEME_IDS as readonly string[]).includes(normalizeThemeId(parsed.darkThemeId))
   ) {
-    preferences.darkThemeId = parsed.darkThemeId as MobileThemeId;
+    preferences.darkThemeId = normalizeThemeId(parsed.darkThemeId) as MobileThemeId;
   }
   if (
     parsed.themeMode === "system" ||

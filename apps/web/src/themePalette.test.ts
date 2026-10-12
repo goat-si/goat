@@ -1085,14 +1085,29 @@ describe("stored theme preferences", () => {
     }
   });
 
-  it("resolves the legacy t3-chat-dark preference to dark T3 Chat", () => {
-    expect(getThemeDefinition("t3-chat-dark")).toBe(GOAT_CHAT_THEME);
-    expect(getThemePreferenceMode("t3-chat-dark")).toBe("dark");
-    expect(resolveThemeAppearance("t3-chat-dark", true, false)).toBe("dark");
-    expect(resolveDesktopTheme("t3-chat-dark", false)).toBe("dark");
-    expect(isKnownThemePreference("t3-chat-dark")).toBe(true);
+  // goat-rename: legacy-begin
+  it("translates old chat selections and preserves their appearance", () => {
+    for (const [legacy, current, appearance] of [
+      ["t3-chat", "goat-chat", "light"],
+      ["t3-chat-light", "goat-chat-light", "light"],
+      ["t3-chat-dark", "goat-chat-dark", "dark"],
+    ]) {
+      expect(canonicalThemePreference(legacy!)).toBe(current);
+      expect(getThemeDefinition(legacy!)).toBe(GOAT_CHAT_THEME);
+      expect(getThemePreferenceMode(current!)).toBe(appearance);
+    }
+  });
+  // goat-rename: legacy-end
+
+  it("resolves the legacy goat-chat-dark preference to dark T3 Chat", () => {
+    expect(getThemeDefinition("goat-chat-dark")).toBe(GOAT_CHAT_THEME);
+    expect(getThemePreferenceMode("goat-chat-dark")).toBe("dark");
+    expect(resolveThemeAppearance("goat-chat-dark", true, false)).toBe("dark");
+    expect(resolveDesktopTheme("goat-chat-dark", false)).toBe("dark");
+    expect(isKnownThemePreference("goat-chat-dark")).toBe(true);
   });
 
+  // goat-rename: legacy-begin
   it("resolves legacy t3-prefixed ids onto the renamed themes", () => {
     for (const [legacy, theme] of [
       ["t3-grove", GROVE_THEME],
@@ -1105,13 +1120,14 @@ describe("stored theme preferences", () => {
       expect(canonicalThemePreference(legacy)).toBe(theme.id);
     }
     // The dark-variant alias keeps its raw form: it still carries a mode hint.
-    expect(canonicalThemePreference("t3-chat-dark")).toBe("t3-chat-dark");
+    expect(canonicalThemePreference("goat-chat-dark")).toBe("goat-chat-dark");
     // A stored mix that predates the rename resolves to the new ids.
     expect(parseThemeHalves(JSON.stringify({ light: "t3-ocean", dark: "t3-grove" }))).toEqual({
       light: OCEAN_THEME.id,
       dark: GROVE_THEME.id,
     });
   });
+  // goat-rename: legacy-end
 
   it("recognizes only preferences the runtime can render", () => {
     for (const preference of ["light", "dark", "system", GOAT_CHAT_THEME.id, GROVE_THEME.id]) {

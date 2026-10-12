@@ -4,6 +4,8 @@ import "culori/css";
 import { converter, parse } from "culori/fn";
 import {
   BUILT_IN_THEMES,
+  normalizeThemeId,
+  normalizeThemePreference,
   EMBER_THEME,
   GROVE_THEME,
   IRIS_THEME,
@@ -23,18 +25,13 @@ import {
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, GOAT_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
-export const GOAT_CHAT_THEME_ID = "t3-chat" as const;
-const GROVE_THEME_ID = "grove" as const;
+export const GOAT_CHAT_THEME_ID = "goat-chat" as const;
 export const OCEAN_THEME_ID = "ocean" as const;
-const EMBER_THEME_ID = "ember" as const;
-const IRIS_THEME_ID = "iris" as const;
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
 export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
 export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
-
-const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
 export const ThemePreference = Schema.String;
 export type ThemePreference = typeof ThemePreference.Type;
@@ -294,38 +291,20 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
   };
 }
 
-// Earlier builds shipped every maintainer theme under a t3- prefix; only the
-// genuinely T3-branded palette keeps it. Stored preferences and mixes with the
-// old ids stay readable through this alias table.
-const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
-  [LEGACY_T3_CHAT_DARK_THEME_ID]: GOAT_CHAT_THEME_ID,
-  "t3-grove": GROVE_THEME_ID,
-  "t3-ocean": OCEAN_THEME_ID,
-  "t3-ember": EMBER_THEME_ID,
-  "t3-iris": IRIS_THEME_ID,
-};
-
-function normalizeThemeId(themeId: string): string {
-  return LEGACY_THEME_ID_ALIASES[themeId] ?? themeId;
-}
-
-/**
- * Map a stored preference onto the id the runtime applies, so selection state
- * matches the theme cards. The legacy dark-variant id stays as-is because it
- * still carries the appearance hint getThemePreferenceMode reads.
- */
+/** Map persisted ids to current ids, preserving explicit appearance variants. */
 export function canonicalThemePreference(theme: string): string {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? theme : normalizeThemeId(theme);
+  return normalizeThemePreference(theme);
 }
 
 function themeIdFromPreference(theme: ThemePreference): string {
   return normalizeThemeId(theme);
 }
 
-// Older builds stored the dark T3 Chat palette as a separate theme. Keep
-// those preferences readable while mapping them to the dark variant.
 function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
+  const normalized = normalizeThemePreference(theme);
+  if (normalized === "goat-chat-dark") return "dark";
+  if (normalized === "goat-chat-light") return "light";
+  return null;
 }
 
 /**

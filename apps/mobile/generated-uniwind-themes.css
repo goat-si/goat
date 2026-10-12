@@ -323,7 +323,7 @@
       --color-clerk-danger: #ff6467;
     }
 
-    @variant t3-chat-light {
+    @variant goat-chat-light {
       --color-screen: #fdf7fd;
       --color-sheet: rgba(253, 247, 253, 0.98);
       --color-sheet-solid: #fdf7fd;
@@ -484,7 +484,7 @@
       --color-clerk-danger: #c10007;
     }
 
-    @variant t3-chat-dark {
+    @variant goat-chat-dark {
       --color-screen: #1f1a24;
       --color-sheet: rgba(31, 26, 36, 0.98);
       --color-sheet-solid: #1f1a24;

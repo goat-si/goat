@@ -1,5 +1,6 @@
 import {
   BUILT_IN_THEMES,
+  normalizeThemeId,
   GOAT_CHAT_THEME,
   GOAT_LIGHT_THEME_COLORS,
   GOAT_DARK_THEME_COLORS,
@@ -34,6 +35,7 @@ export type MobileThemeVariable = keyof ReturnType<typeof createMobileThemeVaria
 export type MobileThemeVariables = Readonly<Record<MobileThemeVariable, string>>;
 
 export function normalizeMobileThemeId(value: unknown): MobileThemeId {
+  value = typeof value === "string" ? normalizeThemeId(value) : value;
   return typeof value === "string" && (MOBILE_THEME_IDS as readonly string[]).includes(value)
     ? (value as MobileThemeId)
     : DEFAULT_MOBILE_THEME_ID;

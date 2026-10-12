@@ -28,6 +28,7 @@ import {
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@goat/contracts";
+import { normalizeThemePreference } from "@goat/shared/themePalettes";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -133,6 +134,7 @@ const normalizeServerSettings = (
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
+    Effect.map((next) => ({ ...next, defaultTheme: normalizeThemePreference(next.defaultTheme) })),
     Effect.map((next) => ({ ...next, ...deriveLegacyProjectOverrides(next) })),
     Effect.mapError(
       (cause) =>
@@ -748,7 +750,10 @@ const make = Effect.gen(function* () {
           });
         }
       } else {
-        settings = decoded.value;
+        settings = {
+          ...decoded.value,
+          defaultTheme: normalizeThemePreference(decoded.value.defaultTheme),
+        };
       }
     }
 

@@ -1,3 +1,7 @@
+import {
+  LEGACY_SESSION_COOKIE_NAME,
+  LEGACY_DEV_SESSION_COOKIE_PREFIX,
+} from "@goat/contracts/legacyT3Names";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthSessionId,
@@ -120,12 +124,18 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           expect(await retiredScopeResponse.json()).toMatchObject({ reason: "invalid_scope" });
 
           const devCookies = devResponse.headers.getSetCookie();
-          const devCookie = devCookies.find((cookie) => cookie.startsWith("t3_dev_session_"));
+          const devCookie = devCookies.find((cookie) => cookie.startsWith("goat_dev_session_"));
           expect(devCookie).toContain("HttpOnly");
           expect(devCookie).toContain(`=${DEV_TOKEN};`);
           expect(devCookies).toContainEqual(
-            expect.stringMatching(/^t3_session_[^=]*=;.*Max-Age=0/),
+            expect.stringMatching(/^goat_session_[^=]*=;.*Max-Age=0/),
           );
+          expect(
+            devCookies.some(
+              (cookie) =>
+                cookie.startsWith(`${LEGACY_SESSION_COOKIE_NAME}_`) && cookie.includes("Max-Age=0"),
+            ),
+          ).toBe(true);
           const devCookieHeader = devCookie?.split(";", 1)[0] ?? "";
           const environmentBSession = await environmentB.handler(
             new Request("http://127.0.0.1/api/auth/session", {
@@ -135,6 +145,19 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           );
           expect(environmentBSession.status).toBe(200);
           expect(await environmentBSession.json()).toMatchObject({ authenticated: true });
+
+          const legacyDevSession = await environmentB.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: {
+                cookie: devCookieHeader.replace(
+                  "goat_dev_session_",
+                  LEGACY_DEV_SESSION_COOKIE_PREFIX,
+                ),
+              },
+            }),
+            requestContext,
+          );
+          expect(await legacyDevSession.json()).toMatchObject({ authenticated: true });
 
           const pairingResponse = await environmentA.handler(
             postJson(
@@ -153,8 +176,19 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           expect(restrictedResponse.status).toBe(200);
           const restrictedCookies = restrictedResponse.headers.getSetCookie();
           expect(restrictedCookies).toHaveLength(1);
-          expect(restrictedCookies[0]).toMatch(/^t3_session_/);
-          expect(restrictedCookies[0]).not.toContain("t3_dev_session_");
+          expect(restrictedCookies[0]).toMatch(/^goat_session_/);
+          expect(restrictedCookies[0]).not.toContain("goat_dev_session_");
+          const legacyCookieHeader = restrictedCookies[0]!
+            .split(";", 1)[0]!
+            .replace("goat_session", LEGACY_SESSION_COOKIE_NAME);
+          const upgradedSession = await environmentA.handler(
+            new Request("http://127.0.0.1/api/auth/session", {
+              headers: { cookie: legacyCookieHeader },
+            }),
+            requestContext,
+          );
+          expect(await upgradedSession.json()).toMatchObject({ authenticated: true });
+          expect(upgradedSession.headers.getSetCookie()[0]).toMatch(/^goat_session_/);
         }),
       ([environmentA, environmentB]) =>
         Effect.promise(() => Promise.all([environmentA.dispose(), environmentB.dispose()])),

@@ -115,6 +115,27 @@ const managedConnection = {
   relayManaged: true,
 } as const;
 
+describe("legacy mobile theme preferences", () => {
+  // goat-rename: legacy-begin
+  it("loads old palette ids from persisted preferences", async () => {
+    mocks.clear();
+    mocks.setPreferencesJson(
+      JSON.stringify({
+        themeId: "t3-code",
+        lightThemeId: "t3-chat-light",
+        darkThemeId: "t3-chat-dark",
+      }),
+      1,
+    );
+    await expect(loadPreferences()).resolves.toEqual({
+      themeId: "goat-code",
+      lightThemeId: "goat-chat",
+      darkThemeId: "goat-chat",
+    });
+  });
+  // goat-rename: legacy-end
+});
+
 describe("mobile connection storage", () => {
   beforeEach(() => {
     mocks.clear();
@@ -200,19 +221,19 @@ describe("mobile connection storage", () => {
     const themes = { lightThemeId: "material-you", darkThemeId: "ocean" } as const;
     await savePreferencesPatch(themes);
     await expect(loadPreferences()).resolves.toEqual(themes);
-    await savePreferencesPatch({ lightThemeId: "t3-chat" });
-    await expect(loadPreferences()).resolves.toEqual({ ...themes, lightThemeId: "t3-chat" });
+    await savePreferencesPatch({ lightThemeId: "goat-chat" });
+    await expect(loadPreferences()).resolves.toEqual({ ...themes, lightThemeId: "goat-chat" });
   });
 
   it.each([true, false])("drops the removed Android layout preference (%s)", async (enabled) => {
     mocks.setPreferencesJson(
       JSON.stringify({
         materialYouStyleLayoutEnabled: enabled,
-        lightThemeId: "t3-chat",
+        lightThemeId: "goat-chat",
       }),
       10,
     );
-    await expect(loadPreferences()).resolves.toEqual({ lightThemeId: "t3-chat" });
+    await expect(loadPreferences()).resolves.toEqual({ lightThemeId: "goat-chat" });
   });
 
   it("drops the removed theme transition preference", async () => {

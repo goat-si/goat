@@ -9,7 +9,14 @@ import * as NodeCrypto from "node:crypto";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 
-const SESSION_COOKIE_NAME = "t3_session";
+import { LEGACY_SESSION_COOKIE_NAME } from "@goat/contracts/legacyT3Names";
+
+const SESSION_COOKIE_NAME = "goat_session";
+
+/** The scoped name issued by builds before the rename, with identical isolation. */
+export function legacyScopedSessionCookieName(cookieName: string): string {
+  return `${LEGACY_SESSION_COOKIE_NAME}${cookieName.slice(SESSION_COOKIE_NAME.length)}`;
+}
 
 /**
  * Cookies are scoped by host but *not* by port, so any two servers that can be
@@ -60,7 +67,7 @@ export function resolveLegacySessionCookieName(input: {
   readonly development: boolean;
 }): string | undefined {
   return input.mode === "web" && !input.development && isRemoteReachableHost(input.host)
-    ? SESSION_COOKIE_NAME
+    ? LEGACY_SESSION_COOKIE_NAME
     : undefined;
 }
 

@@ -993,14 +993,14 @@ it.effect("ProviderSessionManagerV2 records provider session and turn metrics", 
             ),
         );
       assert.isTrue(
-        has("t3_provider_sessions_total", {
+        has("goat_provider_sessions_total", {
           provider: "codex",
           operation: "open",
           outcome: "success",
         }),
       );
       assert.isTrue(
-        has("t3_provider_sessions_total", {
+        has("goat_provider_sessions_total", {
           provider: "codex",
           operation: "release",
           reason: "manual_shutdown",
@@ -1008,16 +1008,16 @@ it.effect("ProviderSessionManagerV2 records provider session and turn metrics", 
         }),
       );
       assert.isTrue(
-        has("t3_provider_turns_total", {
+        has("goat_provider_turns_total", {
           provider: "codex",
           operation: "send",
           modelFamily: "gpt",
           outcome: "success",
         }),
       );
-      assert.isTrue(has("t3_provider_turn_duration", { provider: "codex", operation: "send" }));
+      assert.isTrue(has("goat_provider_turn_duration", { provider: "codex", operation: "send" }));
       assert.isTrue(
-        has("t3_provider_turns_total", {
+        has("goat_provider_turns_total", {
           provider: "codex",
           operation: "interrupt",
           outcome: "success",
