@@ -4,7 +4,9 @@
  * The server decides which thread is the bot; clients only cache the answer. A stopped legacy
  * global agent with no runs is adopted as is. One with history keeps that history and a new bot
  * starts next to it, because runless bot messages sort before old runs and would read out of
- * order. A running legacy agent is left alone and reported as `legacy_active`.
+ * order. A running legacy agent is left alone and reported as `legacy_active`. When the bot
+ * thread itself was deleted, the next call starts a new bot and records it in its place; an
+ * archived bot stays the bot, since unarchiving brings it back.
  *
  * @module ChannelBotRegistry
  */
@@ -70,12 +72,54 @@ const make = Effect.gen(function* () {
       Effect.catch(() => Effect.succeed({ type: "ignore" as const })),
     );
 
+  /** Whether a stored bot thread was deleted. Read failures keep the stored bot. */
+  const wasDeleted = (threadId: ThreadId) =>
+    threads.getThreadRecords(threadId, ["runs"]).pipe(
+      Effect.map((records) => records.thread.deletedAt !== null),
+      Effect.catch(() => Effect.succeed(false)),
+    );
+
+  /** Starts a bot thread in the scratch project. Ids are fixed per owner and replaced thread. */
+  const launchBot = (owner: ChannelConnectionOwner, replacing?: ThreadId) =>
+    Effect.gen(function* () {
+      const environmentId = yield* environment.getEnvironmentId;
+      const scratch = yield* folders.ensureScratchProject.pipe(Effect.mapError(persistence));
+      const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(persistence));
+      const ids = botLaunchIdsFor(owner.ownerId, replacing);
+      // No initial message: the bot thread exists only to hold the conversation and chips.
+      const launched = yield* launches
+        .launch({
+          commandId: ids.commandId,
+          threadId: ids.threadId,
+          projectId: scratch.projectId,
+          title: GOAT_BOT_TITLE,
+          modelSelection: settings.textGenerationModelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          workspaceStrategy: { type: "root" },
+          createdBy: "system",
+          creationSource: "server",
+        })
+        .pipe(
+          Effect.tapError((cause) => Effect.logWarning("GOAT bot launch failed", { cause })),
+          Effect.mapError(persistence),
+        );
+      return { environmentId, projectId: scratch.projectId, threadId: launched.threadId };
+    });
+
   const ensure: ChannelBotRegistry["Service"]["ensure"] = (input, owner) =>
     Effect.gen(function* () {
       const existing = yield* ledger.getBot(owner.ownerId).pipe(Effect.mapError(persistence));
-      if (existing !== undefined) return existing.bot;
-      const environmentId = yield* environment.getEnvironmentId;
       const now = DateTime.formatIso(yield* DateTime.now);
+      if (existing !== undefined) {
+        const previousThreadId = existing.bot.threadId;
+        if (!(yield* wasDeleted(previousThreadId))) return existing.bot;
+        const bot = yield* launchBot(owner, previousThreadId);
+        return yield* ledger
+          .replaceBot({ ownerId: owner.ownerId, previousThreadId, bot, now })
+          .pipe(Effect.mapError(persistence));
+      }
+      const environmentId = yield* environment.getEnvironmentId;
       const candidate =
         input.candidateThreadId === undefined
           ? ({ type: "ignore" } as const)
@@ -96,31 +140,11 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(persistence));
       }
-      const scratch = yield* folders.ensureScratchProject.pipe(Effect.mapError(persistence));
-      const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(persistence));
-      const ids = botLaunchIdsFor(owner.ownerId);
-      // No initial message: the bot thread exists only to hold the conversation and chips.
-      const launched = yield* launches
-        .launch({
-          commandId: ids.commandId,
-          threadId: ids.threadId,
-          projectId: scratch.projectId,
-          title: GOAT_BOT_TITLE,
-          modelSelection: settings.textGenerationModelSelection,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-          workspaceStrategy: { type: "root" },
-          createdBy: "system",
-          creationSource: "server",
-        })
-        .pipe(
-          Effect.tapError((cause) => Effect.logWarning("GOAT bot launch failed", { cause })),
-          Effect.mapError(persistence),
-        );
+      const bot = yield* launchBot(owner);
       return yield* ledger
         .setBotIfAbsent({
           ownerId: owner.ownerId,
-          bot: { environmentId, projectId: scratch.projectId, threadId: launched.threadId },
+          bot,
           ...(candidate.type === "legacy" && input.candidateThreadId !== undefined
             ? { legacyThreadId: input.candidateThreadId }
             : {}),

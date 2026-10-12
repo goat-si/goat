@@ -293,6 +293,16 @@ export class ChannelLedger extends Context.Service<
       readonly legacyThreadId?: ThreadId | undefined;
       readonly now: string;
     }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
+    /**
+     * Replaces the canonical bot if it is still `previousThreadId`, keeping any legacy thread;
+     * returns whichever bot is stored afterwards.
+     */
+    readonly replaceBot: (input: {
+      readonly ownerId: string;
+      readonly previousThreadId: ThreadId;
+      readonly bot: ChannelBotRef;
+      readonly now: string;
+    }) => Effect.Effect<ChannelBotRef, ChannelLedgerError>;
     readonly findIdentity: (input: {
       readonly connectionId: string;
       readonly externalActorId: string;
@@ -1092,6 +1102,32 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(toLedgerError("setBotIfAbsent"))),
+
+    replaceBot: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const key = botKey(input.ownerId);
+            const rows = yield* sql<{ readonly value_json: string }>`
+              SELECT value_json FROM channel_runtime_state WHERE key = ${key}
+            `;
+            const current = rows[0] === undefined ? undefined : decodeBot(rows[0].value_json);
+            if (current === undefined || current.bot.threadId !== input.previousThreadId) {
+              return current?.bot ?? input.bot;
+            }
+            yield* sql`
+              UPDATE channel_runtime_state SET value_json = ${encodeBot({
+                bot: input.bot,
+                ...(current.legacyThreadId === undefined
+                  ? {}
+                  : { legacyThreadId: current.legacyThreadId }),
+              })}, updated_at = ${input.now}
+              WHERE key = ${key}
+            `;
+            return input.bot;
+          }),
+        )
+        .pipe(Effect.mapError(toLedgerError("replaceBot"))),
 
     findIdentity: (input) =>
       sql<IdentityRow>`

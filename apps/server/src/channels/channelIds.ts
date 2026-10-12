@@ -90,10 +90,14 @@ export const timelineIdsFor = (recordKey: string, revision: string) => ({
   commandId: CommandId.make(stableId("channel-record", [recordKey, revision])),
 });
 
-export const botLaunchIdsFor = (ownerId: string) => ({
-  commandId: CommandId.make(stableId("channel-bot-launch", [ownerId])),
-  threadId: ThreadId.make(stableId("channel-bot", [ownerId])),
-});
+/** The owner's bot, or the bot that replaces a deleted one: every caller lands on one thread. */
+export const botLaunchIdsFor = (ownerId: string, replacing?: ThreadId) => {
+  const parts = replacing === undefined ? [ownerId] : [ownerId, replacing];
+  return {
+    commandId: CommandId.make(stableId("channel-bot-launch", parts)),
+    threadId: ThreadId.make(stableId("channel-bot", parts)),
+  };
+};
 
 /** What makes two inputs under one idempotency key the same input. */
 export const contentHashFor = (message: ChannelInboundMessage) =>

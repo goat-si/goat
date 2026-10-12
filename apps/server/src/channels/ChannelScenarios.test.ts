@@ -23,6 +23,8 @@ import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "../orchestration-v2/ThreadMessageIntake.ts";
+import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
@@ -142,6 +144,38 @@ describe("GOAT bot boundary (scenario 6)", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+  it.effect("starts a new bot after the bot thread is deleted and keeps it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
+      // An archived bot is still the bot; unarchiving brings it back.
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("archive-goat-bot"),
+        threadId: botThreadId,
+      });
+      assert.strictEqual((yield* bots.ensure({}, owner)).threadId, botThreadId);
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("delete-goat-bot"),
+        threadId: botThreadId,
+      });
+      const replaced = yield* bots.ensure({}, owner);
+      assert.notStrictEqual(replaced.threadId, botThreadId);
+      assert.strictEqual(replaced.environmentId, environmentId);
+      assert.strictEqual((yield* bots.ensure({}, owner)).threadId, replaced.threadId);
+      assert.isTrue(yield* directory.isBotThread(replaced.threadId));
+      assert.isFalse(yield* directory.isBotThread(botThreadId));
+      assert.strictEqual(
+        harness.world.launches.filter((launch) => launch.threadId === replaced.threadId).length,
+        1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
     "records bot input and replies without any provider run, and refuses coding turns",
     () => {
