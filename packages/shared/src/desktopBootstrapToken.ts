@@ -1,4 +1,7 @@
-import { LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX } from "@goat/contracts/legacyT3Names";
+import {
+  GOAT_DESKTOP_BOOTSTRAP_HMAC_PREFIX,
+  LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX,
+} from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac or timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 
@@ -20,10 +23,14 @@ function windowIndex(nowMs: number): number {
   return Math.floor(nowMs / DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS);
 }
 
-function deriveToken(secret: string, window: number): string {
-  return NodeCrypto.createHmac("sha256", secret)
-    .update(`${LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX}${window}`)
-    .digest("hex");
+// Tokens are issued with the legacy prefix so older backends accept them; a later build that
+// issues GOAT-prefixed tokens is accepted here already.
+function deriveToken(
+  secret: string,
+  window: number,
+  prefix: string = LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX,
+): string {
+  return NodeCrypto.createHmac("sha256", secret).update(`${prefix}${window}`).digest("hex");
 }
 
 /** The token the desktop hands out at `nowMs`. */
@@ -39,8 +46,12 @@ export function isValidDesktopBootstrapToken(
 ): boolean {
   const presented = Buffer.from(token);
   const current = windowIndex(nowMs);
-  return [current - 1, current, current + 1].some((window) => {
-    const expected = Buffer.from(deriveToken(secret, window));
-    return expected.length === presented.length && NodeCrypto.timingSafeEqual(expected, presented);
-  });
+  return [LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX, GOAT_DESKTOP_BOOTSTRAP_HMAC_PREFIX].some((prefix) =>
+    [current - 1, current, current + 1].some((window) => {
+      const expected = Buffer.from(deriveToken(secret, window, prefix));
+      return (
+        expected.length === presented.length && NodeCrypto.timingSafeEqual(expected, presented)
+      );
+    }),
+  );
 }
