@@ -1004,4 +1004,7 @@ export const make = Effect.gen(function* () {
   return LaunchWatchService.of({ register, rearm, unwatch, list, listAll });
 });
 
-export const layer = Layer.effect(LaunchWatchService, make);
+export const layerWithoutDependencies = Layer.effect(LaunchWatchService, make);
+
+/** Provide this value everywhere: the memo map then builds a single watch store. */
+export const layer = layerWithoutDependencies.pipe(Layer.provide(CompletionWebhook.layer));

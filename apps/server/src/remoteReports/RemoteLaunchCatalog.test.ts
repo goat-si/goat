@@ -58,6 +58,7 @@ const watch = (
     projectId: input.host === null ? ProjectId.make("project") : null,
     title: input.title ?? null,
     incarnation: "incarnation",
+    notifyWebhook: false,
     now: ms(input.updatedAt),
   }),
   ...overrides,

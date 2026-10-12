@@ -51,7 +51,6 @@ import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
-import * as CompletionWebhook from "./completionWebhook.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -1021,7 +1020,7 @@ export const layer = Layer.mergeAll(
 ).pipe(
   // One launch-watch store for the launch, send and watch tools, following
   // threads with the same dispatch they use.
-  Layer.provide(LaunchWatchService.layer.pipe(Layer.provide(CompletionWebhook.layer))),
+  Layer.provide(LaunchWatchService.layer),
   // One report service for the launch binding and the report tools, so a
   // report wakes the origin's waiting collector.
   Layer.provide(RemoteReportService.layer),

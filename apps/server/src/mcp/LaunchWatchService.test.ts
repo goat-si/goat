@@ -159,7 +159,7 @@ const dispatchIn = (world: World, command: OrchestrationV2ServerCommand) =>
   });
 
 const layerFor = (world: World, baseDir: string) =>
-  LaunchWatchService.layer.pipe(
+  LaunchWatchService.layerWithoutDependencies.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
