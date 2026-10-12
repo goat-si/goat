@@ -171,9 +171,12 @@ Code install in `~/.t3`.
 
 The first launch uploads GOAT's server from this computer, so it takes longer
 than later ones. When this computer does not already have the server for your
-GOAT version, it downloads it with the GitHub CLI, so sign in with
-`gh auth login` on this computer first. If the download is not available, the
-connection fails with an error that names the release it looked for.
+GOAT version, it downloads it from the public GOAT releases and checks it
+against the published checksums. If that release is not published yet or the
+download fails on the network, GOAT tries the GitHub CLI when it is signed in
+(`gh auth login`). A download that does not match the published checksums is
+refused. If neither source works, the connection fails with an error that names
+the release it looked for.
 Provider CLIs must be on the `PATH` of a non-interactive login shell there;
 check with:
 
@@ -181,9 +184,19 @@ check with:
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
-If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that GOAT launched; a server that was already
-running is left alone.
+After an app update, GOAT moves the host's server to the app's version when no
+agent work is running there. This applies to servers it launched and to servers
+left by older GOAT builds. If the old server still works with the app, GOAT
+keeps using it and replaces it once it is idle. If it does not, the connection
+waits and says the server will be replaced when its current work finishes. GOAT
+retries in the background in both cases. GOAT never replaces a server that is
+newer than the app; update the app instead. If GOAT cannot confirm that it
+launched a server, it leaves it running and the error names the process to stop
+before you reconnect. When two computers update the same host at once, the
+second retries after the first finishes. If an interrupted update left the host
+locked, the error names the file to remove after you check that no other GOAT
+app is updating it. Removing the connection stops a server that GOAT launched; a
+server that was already running is left alone.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).
