@@ -89,17 +89,17 @@ to check out.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.
 
-| Driver kind | Module |
-| --- | --- |
-| `codex` | `apps/server/src/provider/Drivers/CodexDriver.ts` |
-| `claudeAgent` | `apps/server/src/provider/Drivers/ClaudeDriver.ts` |
-| `cursor` | `packages/provider-cursor/src/server/driver.ts` |
-| `grok` | `packages/provider-grok/src/server/driver.ts` |
-| `opencode` | `packages/provider-opencode/src/server/driver.ts` |
+| Driver kind   | Module                                                  |
+| ------------- | ------------------------------------------------------- |
+| `codex`       | `apps/server/src/provider/Drivers/CodexDriver.ts`       |
+| `claudeAgent` | `apps/server/src/provider/Drivers/ClaudeDriver.ts`      |
+| `cursor`      | `packages/provider-cursor/src/server/driver.ts`         |
+| `grok`        | `packages/provider-grok/src/server/driver.ts`           |
+| `opencode`    | `packages/provider-opencode/src/server/driver.ts`       |
 | `antigravity` | `apps/server/src/provider/Drivers/AntigravityDriver.ts` |
-| `pi` | `packages/provider-pi/src/server/driver.ts` |
-| `muse` | `packages/provider-muse/src/server/driver.ts` |
-| `acpRegistry` | `packages/provider-acp-registry/src/server/driver.ts` |
+| `pi`          | `packages/provider-pi/src/server/driver.ts`             |
+| `muse`        | `packages/provider-muse/src/server/driver.ts`           |
+| `acpRegistry` | `packages/provider-acp-registry/src/server/driver.ts`   |
 
 `BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2` in
 `apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts` lists the v2 turn adapters for

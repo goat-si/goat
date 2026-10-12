@@ -18,12 +18,12 @@ The directories under `apps/server/src/mcp/toolkits/` are `attachment`, `channel
 
 Names are not one prefix.
 
-| Prefix or name | Examples | Defined in |
-| --- | --- | --- |
-| `goat_*` | `goat_thread_launch`, `goat_project_list`, `goat_thread_send`, `goat_ssh_host_list` | `apps/server/src/mcp/toolkits/project/tools.ts`, `apps/server/src/mcp/toolkits/orchestrator/tools.ts`, `apps/server/src/mcp/toolkits/ssh/tools.ts` |
-| unprefixed orchestrator tools | `orchestrator_capabilities`, `delegate_task`, `schedule_task` | `apps/server/src/mcp/toolkits/orchestrator/tools.ts` |
-| `channel_*` | `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report` | `CHANNEL_MCP_TOOL_NAMES` in `packages/contracts/src/channelGateway.ts` |
-| `preview_*` | `preview_status`, `preview_snapshot`, `preview_click` | `apps/server/src/mcp/toolkits/preview/tools.ts` |
+| Prefix or name                | Examples                                                                                              | Defined in                                                                                                                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goat_*`                      | `goat_thread_launch`, `goat_project_list`, `goat_thread_send`, `goat_ssh_host_list`                   | `apps/server/src/mcp/toolkits/project/tools.ts`, `apps/server/src/mcp/toolkits/orchestrator/tools.ts`, `apps/server/src/mcp/toolkits/ssh/tools.ts` |
+| unprefixed orchestrator tools | `orchestrator_capabilities`, `delegate_task`, `schedule_task`                                         | `apps/server/src/mcp/toolkits/orchestrator/tools.ts`                                                                                               |
+| `channel_*`                   | `channel_ingest`, `channel_input_get`, `channel_task_get`, `channel_task_list`, `channel_task_report` | `CHANNEL_MCP_TOOL_NAMES` in `packages/contracts/src/channelGateway.ts`                                                                             |
+| `preview_*`                   | `preview_status`, `preview_snapshot`, `preview_click`                                                 | `apps/server/src/mcp/toolkits/preview/tools.ts`                                                                                                    |
 
 `schedule_task` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion

@@ -11,14 +11,14 @@ the same struct.
 
 Representative modules:
 
-| Module | What it defines |
-| --- | --- |
-| `packages/contracts/src/orchestrationV2.ts` | `OrchestrationV2Command` and the dispatch result schemas |
-| `packages/contracts/src/rpc.ts` | `WS_METHODS` and the RPC definitions, built with `Rpc.make` |
-| `packages/contracts/src/settings.ts` | `ServerSettings`, including `GoatBotHomeClaim` |
-| `packages/contracts/src/channelCommon.ts` | `ChannelKind` (`goat`, `slack`, `mcp`) and the channel ids |
-| `packages/contracts/src/channelGateway.ts` | Inbound channel messages and `CHANNEL_MCP_TOOL_NAMES` |
-| `packages/contracts/src/ipc.ts` | Desktop IPC, including `DesktopDiscoveredSshHost` |
+| Module                                      | What it defines                                             |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `packages/contracts/src/orchestrationV2.ts` | `OrchestrationV2Command` and the dispatch result schemas    |
+| `packages/contracts/src/rpc.ts`             | `WS_METHODS` and the RPC definitions, built with `Rpc.make` |
+| `packages/contracts/src/settings.ts`        | `ServerSettings`, including `GoatBotHomeClaim`              |
+| `packages/contracts/src/channelCommon.ts`   | `ChannelKind` (`goat`, `slack`, `mcp`) and the channel ids  |
+| `packages/contracts/src/channelGateway.ts`  | Inbound channel messages and `CHANNEL_MCP_TOOL_NAMES`       |
+| `packages/contracts/src/ipc.ts`             | Desktop IPC, including `DesktopDiscoveredSshHost`           |
 
 The [command commit](server.md#command-commit) persists values decoded with these schemas.
 Replay has to keep decoding events that were written by older servers. Compatibility belongs in

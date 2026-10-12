@@ -10,11 +10,11 @@ app uses. See [`client-runtime.md`](client-runtime.md).
 `apps/mobile/app.config.ts` is the Expo config. `slug` is `"goat"`. Names, URL schemes, and store
 ids come from `MOBILE_APP_IDENTITY` in `packages/shared/src/mobileAppIdentity.ts`:
 
-| Variant | App name | Scheme | iOS and Android id |
-| --- | --- | --- | --- |
-| production | GOAT | `goat` | `si.goat.mobile` |
-| development | GOAT Dev | `goat-dev` | `si.goat.mobile.dev` |
-| preview | GOAT Preview | `goat-preview` | `si.goat.mobile.preview` |
+| Variant     | App name     | Scheme         | iOS and Android id       |
+| ----------- | ------------ | -------------- | ------------------------ |
+| production  | GOAT         | `goat`         | `si.goat.mobile`         |
+| development | GOAT Dev     | `goat-dev`     | `si.goat.mobile.dev`     |
+| preview     | GOAT Preview | `goat-preview` | `si.goat.mobile.preview` |
 
 GOAT Bot on this surface is `apps/mobile/src/features/goat-bot/GoatBotScreen.tsx`. The screen reads
 `GoatBotRow` values from `@t3tools/client-runtime/goatBot` and sends through

@@ -15,15 +15,15 @@ equivalent to `T3CODE_HOME`. There is no `GOAT_HOME` environment variable on thi
 `<baseDir>/userdata`, or under `<baseDir>/dev` when a dev URL is set and the base directory was
 not explicit. The derived paths include:
 
-| Path under the state directory | Role |
-| --- | --- |
-| `statev2.sqlite` | Orchestration and other server SQLite state (`dbPath`) |
-| `settings.json` | Server settings (`settingsPath`) |
-| `keybindings.json` | Keybindings |
-| `secrets/` | Secret material |
-| `attachments/` | Attachment bytes |
-| `logs/` | Server and provider logs |
-| `server-runtime.json` | Runtime identity for an already-running server |
+| Path under the state directory | Role                                                   |
+| ------------------------------ | ------------------------------------------------------ |
+| `statev2.sqlite`               | Orchestration and other server SQLite state (`dbPath`) |
+| `settings.json`                | Server settings (`settingsPath`)                       |
+| `keybindings.json`             | Keybindings                                            |
+| `secrets/`                     | Secret material                                        |
+| `attachments/`                 | Attachment bytes                                       |
+| `logs/`                        | Server and provider logs                               |
+| `server-runtime.json`          | Runtime identity for an already-running server         |
 
 `apps/server/src/serverSettings.ts` reads and writes `settingsPath`. The schema those files follow
 is `ServerSettings` in `packages/contracts/src/settings.ts`, including `goatBotHome`.
@@ -38,7 +38,7 @@ uses `goat-desktop`, `goat-desktop-dev`, and `goat-desktop-nightly`.
 On an SSH host, the launch scripts in `packages/ssh/src/tunnel.ts` set
 `DEFAULT_SERVER_HOME="$HOME/.goat"`. Runtime archives land under
 `$HOME/.goat/runtime/goat/versions/`. That remote home is the host's server base directory. It is
-not the local CLI default. Host *lists* still come from the user's OpenSSH files under `~/.ssh`,
+not the local CLI default. Host _lists_ still come from the user's OpenSSH files under `~/.ssh`,
 which [`ssh.md`](ssh.md) covers.
 
 A linked git worktree gets its own directory. `resolveWorktreeT3Home` in

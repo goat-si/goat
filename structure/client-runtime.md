@@ -8,22 +8,22 @@ Connection state, RPC session setup, and environment-scoped commands stay here.
 `packages/client-runtime/package.json` exports subpaths, not one barrel. The directories under
 `packages/client-runtime/src/` and what they own:
 
-| Directory | Role |
-| --- | --- |
-| `rpc/` | WebSocket RPC session (`RpcSession` in `packages/client-runtime/src/rpc/session.ts`) |
-| `connection/` | Connection registry, driver, and pairing onboarding |
-| `state/` | Effect Atom state for threads, shell, and server config. Mutations go through `createEnvironmentRpcCommand` |
-| `environment/` | Environment descriptor and endpoint identity |
-| `authorization/` | Remote-environment authorization and token storage |
-| `operations/` | Shared project and command operations |
-| `platform/` | Capabilities, persistence, and the orchestration cache the apps supply |
-| `goatBot/` | Timeline rows, send queue, ensure, and home-claim resolution shared by web and mobile |
-| `relay/` | Managed relay client state |
-| `preview/` | Preview stream paths |
-| `device/` | Device hub access and streams |
-| `voice-input/` | Voice input controller |
-| `work-log/` | Work-log presentation helpers |
-| `mcpApps/` | MCP Apps host surface |
+| Directory        | Role                                                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------------------------------- |
+| `rpc/`           | WebSocket RPC session (`RpcSession` in `packages/client-runtime/src/rpc/session.ts`)                        |
+| `connection/`    | Connection registry, driver, and pairing onboarding                                                         |
+| `state/`         | Effect Atom state for threads, shell, and server config. Mutations go through `createEnvironmentRpcCommand` |
+| `environment/`   | Environment descriptor and endpoint identity                                                                |
+| `authorization/` | Remote-environment authorization and token storage                                                          |
+| `operations/`    | Shared project and command operations                                                                       |
+| `platform/`      | Capabilities, persistence, and the orchestration cache the apps supply                                      |
+| `goatBot/`       | Timeline rows, send queue, ensure, and home-claim resolution shared by web and mobile                       |
+| `relay/`         | Managed relay client state                                                                                  |
+| `preview/`       | Preview stream paths                                                                                        |
+| `device/`        | Device hub access and streams                                                                               |
+| `voice-input/`   | Voice input controller                                                                                      |
+| `work-log/`      | Work-log presentation helpers                                                                               |
+| `mcpApps/`       | MCP Apps host surface                                                                                       |
 
 `packages/client-runtime/src/goatBot/index.ts` re-exports rows, readers, ensure, and the send
 queue. Home resolution stays on its own export, `packages/client-runtime/src/goatBot/home.ts`

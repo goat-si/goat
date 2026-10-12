@@ -364,12 +364,7 @@
           "document": "settings-and-storage.md",
           "anchor": "state-roots"
         },
-        "dependents": [
-          "overview.md",
-          "server.md",
-          "desktop.md",
-          "ssh.md"
-        ]
+        "dependents": ["overview.md", "server.md", "desktop.md", "ssh.md"]
       }
     ]
   },
