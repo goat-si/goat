@@ -217,6 +217,7 @@ export const LEGACY_WSL_SERVER_TREE_MARKER = "t3code-wsl-server-tree.json";
 /** Client storage namespaces used before the GOAT rename. */
 export const legacyStorageKey = (key: string): string | undefined => {
   if (key === "goat:chatgpt-sharing-welcome:v1") return "t3:chatgpt-sharing-welcome:v1";
+  if (key === "goat.backgroundActivity.clientId") return "t3.backgroundActivity.clientId";
   if (key.startsWith("goat:")) return `t3code:${key.slice(5)}`;
   if (key.startsWith("goat.")) return `t3code.${key.slice(5)}`;
   return undefined;
@@ -231,6 +232,7 @@ export const LEGACY_MOBILE_DATABASE_NAME = "t3code-client.db";
 /** Canonicalize enumerated browser keys before reading through the migration adapter. */
 export const goatStorageKey = (key: string): string => {
   if (key === "t3:chatgpt-sharing-welcome:v1") return "goat:chatgpt-sharing-welcome:v1";
+  if (key === "t3.backgroundActivity.clientId") return "goat.backgroundActivity.clientId";
   if (key.startsWith("t3code:")) return `goat:${key.slice(7)}`;
   if (key.startsWith("t3code.")) return `goat.${key.slice(7)}`;
   return key;

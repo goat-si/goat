@@ -22,6 +22,7 @@ describe("client storage namespace migration", () => {
     ["goat:theme", "t3code:theme"], // goat-rename: legacy
     ["goat.preferences", "t3code.preferences"], // goat-rename: legacy
     ["goat:chatgpt-sharing-welcome:v1", "t3:chatgpt-sharing-welcome:v1"], // goat-rename: legacy
+    ["goat.backgroundActivity.clientId", "t3.backgroundActivity.clientId"], // goat-rename: legacy
   ])("adopts %s once and retains its old value", (key, legacy) => {
     const base = memory([[legacy, "old"]]);
     const storage = migratingStorage(base);
