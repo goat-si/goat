@@ -40,6 +40,8 @@ interface FakeCodexInput {
   forbidArg?: string;
   stdinMustContain?: string;
   stdinMustNotContain?: string;
+  /** Fail if `CODEX_HOME` holds an AGENTS.md, then rotate its auth.json as a token refresh would. */
+  refreshAuth?: "in-place" | "replace";
 }
 
 // The stub walks argv the way the shell script it replaced did: `--image`,
@@ -56,6 +58,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     forbidArg: input.forbidArg ?? null,
     stdinMustContain: input.stdinMustContain ?? null,
     stdinMustNotContain: input.stdinMustNotContain ?? null,
+    refreshAuth: input.refreshAuth ?? null,
     stderr: input.stderr ?? null,
     output: input.output,
     exitCode: input.exitCode ?? 0,
@@ -122,6 +125,17 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "}",
         "if (check.stdinMustNotContain !== null && stdinContent.includes(check.stdinMustNotContain)) {",
         '  fail("stdin contained forbidden content", 4);',
+        "}",
+        "if (check.refreshAuth !== null) {",
+        "  const home = process.env.CODEX_HOME;",
+        '  if (NodeFS.existsSync(home + "/AGENTS.md")) fail("user AGENTS.md is visible", 10);',
+        '  const auth = NodeFS.readFileSync(home + "/auth.json", "utf8");',
+        '  const rotated = auth.replace("refresh-1", "refresh-2");',
+        '  if (check.refreshAuth === "in-place") NodeFS.writeFileSync(home + "/auth.json", rotated);',
+        "  else {",
+        '    NodeFS.writeFileSync(home + "/auth.json.tmp", rotated);',
+        '    NodeFS.renameSync(home + "/auth.json.tmp", home + "/auth.json");',
+        "  }",
         "}",
         'if (check.stderr !== null) process.stderr.write(check.stderr + "\\n");',
         'if (outputPath !== null) NodeFS.writeFileSync(outputPath, check.output + "\\n");',
@@ -862,5 +876,34 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
           expect(error.operation).toBe("generateChannelReception");
         }),
     ),
+  );
+
+  it.effect.each(["in-place", "replace"] as const)(
+    "hides the user's AGENTS.md and keeps a %s token refresh in the user's auth.json",
+    (refreshAuth) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-user-home-" });
+        yield* fs.writeFileString(path.join(userHome, "AGENTS.md"), "Reply in Korean.");
+        yield* fs.writeFileString(path.join(userHome, "auth.json"), '{"refresh":"refresh-1"}');
+        yield* withFakeCodexEnv(
+          { output: receptionOutput, refreshAuth, environment: { CODEX_HOME: userHome } },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const generate = textGeneration.generateChannelReception;
+              if (generate === undefined) return yield* Effect.die("reception missing");
+              yield* generate({
+                cwd: process.cwd(),
+                input: receptionInput,
+                modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+              });
+            }),
+        );
+        expect(yield* fs.readFileString(path.join(userHome, "auth.json"))).toBe(
+          '{"refresh":"refresh-2"}',
+        );
+        expect(yield* fs.readFileString(path.join(userHome, "AGENTS.md"))).toBe("Reply in Korean.");
+      }).pipe(Effect.scoped),
   );
 });

@@ -94,6 +94,50 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       .remove(path.dirname(filePath), { recursive: true })
       .pipe(Effect.catch(() => Effect.void));
 
+  /**
+   * Reception gets a Codex home of its own, because `--ignore-user-config` still loads the user's
+   * global AGENTS.md from `CODEX_HOME`. Its only file is a symlink to the user's auth.json. Codex
+   * rewrites auth.json in place, so a token refresh lands in the user's file through the link. If a
+   * Codex build ever replaces the link with a file of its own, the finalizer copies that file back,
+   * so the user never keeps a refresh token the refresh already rotated away. When the link cannot
+   * be made, reception falls back to the user's home.
+   */
+  const makeReceptionCodexHome = Effect.fn("makeReceptionCodexHome")(function* (
+    operation: string,
+    userHome: string,
+  ) {
+    const receptionHome = yield* fileSystem
+      .makeTempDirectoryScoped({ prefix: "t3code-codex-reception-home-" })
+      .pipe(
+        Effect.mapError((cause) =>
+          normalizeCliError("codex", operation, cause, "Failed to create reception Codex home"),
+        ),
+      );
+    const userAuth = path.join(userHome, "auth.json");
+    const receptionAuth = path.join(receptionHome, "auth.json");
+    if (!(yield* fileSystem.exists(userAuth).pipe(Effect.orElseSucceed(() => false)))) {
+      return receptionHome;
+    }
+    const linked = yield* fileSystem.symlink(userAuth, receptionAuth).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (!linked) return userHome;
+    yield* Effect.addFinalizer(() =>
+      fileSystem.readLink(receptionAuth).pipe(
+        Effect.matchEffect({
+          onSuccess: () => Effect.void,
+          onFailure: () =>
+            fileSystem
+              .readFile(receptionAuth)
+              .pipe(Effect.flatMap((auth) => fileSystem.writeFile(userAuth, auth))),
+        }),
+        Effect.ignore,
+      ),
+    );
+    return receptionHome;
+  });
+
   // Deliberately unscoped: text generation runs from background fibers whose
   // ambient scope may already be closed (a closed scope reaps the temp
   // directory the moment it is created). Each allocation removes its own
@@ -224,6 +268,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
               ),
             )
         : cwd;
+      const homeDirectory = yield* HostProcess.HomeDirectory;
+      const configuredHome = effectiveConfig.homePath
+        ? expandHomePath(effectiveConfig.homePath, homeDirectory)
+        : undefined;
+      const codexHome = isChannelReception
+        ? yield* makeReceptionCodexHome(
+            operation,
+            configuredHome ?? effectiveEnvironment.CODEX_HOME ?? path.join(homeDirectory, ".codex"),
+          )
+        : configuredHome;
       const launchArgs = resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
       const reasoningEffort =
         getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
@@ -255,14 +309,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         env: {
           ...effectiveEnvironment,
-          ...(effectiveConfig.homePath
-            ? {
-                CODEX_HOME: expandHomePath(
-                  effectiveConfig.homePath,
-                  yield* HostProcess.HomeDirectory,
-                ),
-              }
-            : {}),
+          ...(codexHome ? { CODEX_HOME: codexHome } : {}),
         },
         cwd: workingDirectory,
         shell: spawnCommand.shell,
