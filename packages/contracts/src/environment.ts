@@ -224,6 +224,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server stores the cluster's GOAT Bot home claim (`goatBotHome` setting) and refuses the bot
       when the claim names another environment. Clients write claims only to servers with this. */
   goatBotHome: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.getBotStatus`. Older servers leave clients paging `listTasks`. */
+  goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */
   slackChannel: Schema.optionalKey(Schema.Boolean),
 });

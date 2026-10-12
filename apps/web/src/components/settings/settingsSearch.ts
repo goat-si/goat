@@ -208,6 +208,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "standing-instructions",
+    title: "Standing instructions",
+    to: "/settings/general",
+    scope: "project-defaults",
+    searchTerms: [
+      "dispatch launch launched threads agents orchestrator preamble policy prompt rules subagents hotl",
+    ],
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

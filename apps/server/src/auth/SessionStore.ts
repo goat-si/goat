@@ -418,6 +418,11 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
+    /**
+     * Records that a connectionless client (an MCP bearer token) just used its
+     * session, as `lastConnectedAt`. Writes at most once a minute per session.
+     */
+    readonly markUsed: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly recordClientConnection: (
       sessionId: AuthSessionId,
       client: {
@@ -430,6 +435,7 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
+const MARK_USED_INTERVAL_MS = 60_000;
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const SessionClaims = Schema.Struct({
@@ -497,6 +503,7 @@ export const make = Effect.gen(function* () {
   const authSessions = yield* AuthSessions.AuthSessionRepository;
   const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
   const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
+  const lastUsedWritesRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
   const cookieInput = {
     mode: serverConfig.mode,
@@ -606,6 +613,38 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.withSpan("SessionStore.markConnected"),
+    );
+
+  const markUsed: SessionStore["Service"]["markUsed"] = (sessionId) =>
+    DateTime.now.pipe(
+      Effect.flatMap((now) =>
+        Ref.modify(lastUsedWritesRef, (current) => {
+          const previous = current.get(sessionId);
+          const at = now.epochMilliseconds;
+          if (previous !== undefined && at - previous < MARK_USED_INTERVAL_MS) {
+            return [undefined, current] as const;
+          }
+          const next = new Map(current);
+          next.set(sessionId, at);
+          return [now, next] as const;
+        }),
+      ),
+      Effect.flatMap((lastConnectedAt) =>
+        lastConnectedAt === undefined
+          ? Effect.void
+          : authSessions.setLastConnectedAt({ sessionId, lastConnectedAt }).pipe(
+              Effect.flatMap(() => loadActiveSession(sessionId)),
+              Effect.flatMap((session) =>
+                Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
+              ),
+            ),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logError("Failed to record session use.").pipe(
+          Effect.annotateLogs({ sessionId, cause }),
+        ),
+      ),
+      Effect.withSpan("SessionStore.markUsed"),
     );
 
   // Best-effort: connection metadata must never block or fail a connect.
@@ -1094,6 +1133,7 @@ export const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     markConnected,
+    markUsed,
     markDisconnected,
     recordClientConnection,
   });

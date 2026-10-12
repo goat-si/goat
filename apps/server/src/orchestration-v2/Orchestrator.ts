@@ -7862,15 +7862,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
-      if (
-        command.respondedBy !== undefined &&
-        command.respondedBy.type !== "user" &&
-        runtimeRequest.kind !== "user_input"
-      )
+      // Agents never answer approvals. A client responder only comes from the
+      // MCP layer, which requires `orchestration:approve` before sending one.
+      if (command.respondedBy?.type === "agent" && runtimeRequest.kind !== "user_input")
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: "Only the user can answer approval requests.",
+          cause: "Only the user or an approved MCP client can answer approval requests.",
         });
       if (runtimeRequest.responseCapability.type === "not_resumable") {
         return yield* new OrchestratorDispatchError({
@@ -7958,6 +7956,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: {
             ...approvalTurnItem,
+            ...(approvalTurnItem.type === "approval_request" &&
+            command.respondedBy?.type === "client" &&
+            command.decision !== undefined
+              ? {
+                  title: `${command.decision === "decline" ? "Declined" : "Approved"} by ${describeUserInputResponder({ respondedBy: command.respondedBy })}`,
+                }
+              : {}),
             ...(approvalTurnItem.type === "user_input_request" && command.answers !== undefined
               ? {
                   questionAnswer: {

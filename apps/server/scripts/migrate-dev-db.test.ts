@@ -88,6 +88,17 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
           'full-access', 'default', 'user', 'user', '2026-08-01', '2026-08-01', 'never', 0)`;
       yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at)
         VALUES ('session-1', 'user', '[]', 'pairing', '2026-08-01', '2027-08-01')`;
+      // A generated column on a row with no thread. SELECT * cannot copy this
+      // table; the flag must be recomputed, and the row must not mark a family live.
+      yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
+        (provider_thread_id, provider, status, updated_at, payload_json)
+        VALUES (
+          'roster-active',
+          'codex',
+          'idle',
+          '2026-08-01',
+          '{"pendingBackgroundTasks":[{"taskId":"background"}]}'
+        )`;
     }),
   );
   return databasePath;
@@ -123,7 +134,24 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
               (SELECT COUNT(*) FROM auth_sessions) AS auth,
               (SELECT COUNT(*) FROM scheduled_tasks) AS tasks,
               (SELECT COUNT(*) FROM orchestration_v2_projection_context_transfers) AS transfers`;
-          return { threads, events, sessions, leftovers };
+          const [roster] = yield* sql<{ has_pending_background_work: number }>`
+            SELECT has_pending_background_work
+            FROM orchestration_v2_projection_provider_threads
+            WHERE provider_thread_id = 'roster-active'`;
+          yield* sql`UPDATE orchestration_v2_projection_provider_threads
+            SET payload_json = '{}' WHERE provider_thread_id = 'roster-active'`;
+          const [cleared] = yield* sql<{ has_pending_background_work: number }>`
+            SELECT has_pending_background_work
+            FROM orchestration_v2_projection_provider_threads
+            WHERE provider_thread_id = 'roster-active'`;
+          return {
+            threads,
+            events,
+            sessions,
+            leftovers,
+            pending: roster?.has_pending_background_work,
+            cleared: cleared?.has_pending_background_work,
+          };
         }),
       );
       assert.deepStrictEqual(
@@ -139,6 +167,8 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         ["session-shared"],
       );
       assert.deepStrictEqual(kept.leftovers, { auth: 0, tasks: 0, transfers: 0 });
+      assert.equal(kept.pending, 1);
+      assert.equal(kept.cleared, 0);
     }),
   );
 
@@ -274,6 +304,74 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       ).pipe(Effect.flip);
       assert.equal(error._tag, "MigrateDevDbSourceIsDestinationError");
       assert.equal(yield* fs.exists(leftoverSnapshot), true);
+    }),
+  );
+
+  it.effect("reads ~/.goat first and falls back to ~/.t3", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const goatDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-goat-" });
+      const t3Dir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-t3-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-home-dest-" });
+      const goatSource = yield* createFixtureSource(goatDir);
+      const t3Source = yield* createFixtureSource(t3Dir);
+      yield* withDatabase(
+        goatSource,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE projection_projects SET title = 'From Goat' WHERE project_id = 'project-kept'`;
+        }),
+      );
+      yield* withDatabase(
+        t3Source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE projection_projects SET title = 'From T3' WHERE project_id = 'project-kept'`;
+        }),
+      );
+
+      const fromGoat = yield* runMigrateDevDb(
+        { baseDir: destDir, projects: 1, threadsPerProject: 1 },
+        { sourceHomes: [goatDir, t3Dir] },
+      );
+      assert.equal(fromGoat.projects[0]?.title, "From Goat");
+
+      yield* fs.remove(goatSource);
+      const fallbackDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-dev-db-home-fallback-",
+      });
+      const fromT3 = yield* runMigrateDevDb(
+        { baseDir: fallbackDir, projects: 1, threadsPerProject: 1 },
+        { sourceHomes: [goatDir, t3Dir] },
+      );
+      assert.equal(fromT3.projects[0]?.title, "From T3");
+
+      const missingGoat = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-no-goat-" });
+      const missingT3 = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-no-t3-" });
+      const missing = yield* runMigrateDevDb(
+        { baseDir: destDir, projects: 1, threadsPerProject: 1 },
+        { sourceHomes: [missingGoat, missingT3] },
+      ).pipe(Effect.flip);
+      assert.equal(missing._tag, "MigrateDevDbSourceMissingError");
+      if (missing._tag === "MigrateDevDbSourceMissingError") {
+        assert.equal(missing.sourcePath, path.join(missingGoat, "userdata", "statev2.sqlite"));
+      }
+    }),
+  );
+
+  it.effect("refuses to rebuild a source home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const goatDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-protect-goat-" });
+      const t3Dir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-protect-t3-" });
+      const source = yield* createFixtureSource(t3Dir);
+
+      const error = yield* runMigrateDevDb(
+        { baseDir: goatDir, source, projects: 1, threadsPerProject: 1 },
+        { sourceHomes: [goatDir, t3Dir] },
+      ).pipe(Effect.flip);
+      assert.equal(error._tag, "MigrateDevDbSharedHomeError");
     }),
   );
 

@@ -19,7 +19,13 @@ export type GoatBotBotTone = "reply" | "status" | "result" | "question" | "failu
 export type GoatBotCardTone = "neutral" | "active" | "attention" | "success" | "danger";
 
 export type GoatBotCardTarget =
-  | { readonly kind: "thread"; readonly environmentId: EnvironmentId; readonly threadId: ThreadId }
+  | {
+      readonly kind: "thread";
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      /** The SSH alias of the machine running remote work; absent for this machine. */
+      readonly host?: string;
+    }
   | { readonly kind: "none"; readonly label: string };
 
 export interface GoatBotTaskCard {
@@ -30,7 +36,10 @@ export interface GoatBotTaskCard {
   readonly title: string;
   readonly statusLabel: string;
   readonly tone: GoatBotCardTone;
-  /** The requester, prefixed by the originating channel for requests made elsewhere. */
+  /**
+   * The requester, prefixed by the originating channel for requests made elsewhere and followed
+   * by the machine that runs remote work.
+   */
   readonly sourceLabel: string | null;
   readonly summary: string | null;
   /** Something waiting on a person, such as "2 questions". */

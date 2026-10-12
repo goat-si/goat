@@ -128,21 +128,32 @@ it.effect("offers a Scratch folder under the data dir when it is outside a check
   ),
 );
 
-it.effect("offers nothing when the data dir sits inside a Git checkout", () =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const checkout = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-scratch-repo-" });
-    yield* git(checkout, ["init", "--quiet"]);
-    const baseDir = path.join(checkout, ".t3");
-    yield* fileSystem.makeDirectory(baseDir);
-    yield* Effect.gen(function* () {
-      const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
-      assert.isTrue(Option.isNone(yield* scratch.scratchRoot));
-      const failure = yield* Effect.flip(scratch.ensureScratchProject);
-      assert.equal(failure._tag, "ScratchUnavailableError");
-    }).pipe(Effect.provide(layer(baseDir)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+it.effect(
+  "offers no Scratch, only a GOAT bot project, when the data dir sits inside a checkout",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const checkout = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-scratch-repo-" });
+      yield* git(checkout, ["init", "--quiet"]);
+      const baseDir = path.join(checkout, ".t3");
+      yield* fileSystem.makeDirectory(baseDir);
+      yield* Effect.gen(function* () {
+        const scratch = yield* ManagedProjectFolders.ManagedProjectFolders;
+        assert.isTrue(Option.isNone(yield* scratch.scratchRoot));
+        const failure = yield* Effect.flip(scratch.ensureScratchProject);
+        assert.equal(failure._tag, "ScratchUnavailableError");
+
+        // The GOAT bot still gets a project of its own beside the data dir's other folders.
+        const projects = yield* ProjectService.ProjectService;
+        const bot = yield* scratch.ensureBotProject;
+        assert.deepEqual(yield* scratch.ensureBotProject, bot);
+        const project = Option.getOrThrow(yield* projects.getById(bot.projectId));
+        assert.equal(project.workspaceRoot, path.resolve(baseDir, "goat-bot"));
+        assert.equal(project.title, "GOAT bot");
+        assert.isTrue(yield* fileSystem.exists(project.workspaceRoot));
+      }).pipe(Effect.provide(layer(baseDir)));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("creates one Scratch project, even for concurrent first requests", () =>
@@ -160,6 +171,8 @@ it.effect("creates one Scratch project, even for concurrent first requests", () 
         new Set(racers.map((result) => result.projectId)),
         new Set([again.projectId]),
       );
+      // Where Scratch is offered, the GOAT bot lives in it.
+      assert.deepEqual(yield* scratch.ensureBotProject, again);
 
       const snapshot = yield* projects.snapshot;
       const root = yield* requireRoot;

@@ -1,15 +1,20 @@
 import {
   AuthAdministrativeScopes,
+  AuthOrchestrationApproveScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   AuthSessionId,
   AuthStandardClientScopes,
   RuntimeMode,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
 import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
+import * as CliError from "effect/cli/CliError";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 
@@ -255,7 +260,105 @@ const sessionCommand = Command.make("session").pipe(
   Command.withSubcommands([sessionIssueCommand, sessionListCommand, sessionRevokeCommand]),
 );
 
+/** The subject `/mcp` admits from outside a thread; see EnvironmentAuth. */
+const MCP_CLIENT_SUBJECT = "mcp-client";
+const MCP_CLIENT_TOKEN_TTL = Duration.days(90);
+
+const clientCreateCommand = Command.make("create", {
+  ...authLocationFlags,
+  name: Flag.String("name").pipe(
+    Flag.withDescription("Label shown in Settings → Connections and on answers it records."),
+  ),
+  scopes: Flag.Literals("scope", [
+    AuthOrchestrationReadScope,
+    AuthOrchestrationOperateScope,
+    AuthOrchestrationApproveScope,
+  ]).pipe(
+    Flag.withDescription(
+      `Repeat for multiple scopes; replaces the default ${AuthOrchestrationReadScope}, ${AuthOrchestrationOperateScope}. ${AuthOrchestrationApproveScope} lets the client accept or decline approvals and needs ${AuthOrchestrationOperateScope}.`,
+    ),
+    Flag.atLeast(0),
+    Flag.map((scopes) => [
+      ...new Set(
+        scopes.length > 0 ? scopes : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+      ),
+    ]),
+  ),
+  ttl: Flag.String("ttl").pipe(
+    Flag.withSchema(DurationFromString),
+    Flag.withDescription("Token lifetime, for example `30d`. Defaults to 90 days."),
+    Flag.optional,
+  ),
+  runtimeModeCeiling: runtimeModeCeilingFlag,
+  tokenOnly: tokenOnlyFlag,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Issue a long-lived, revocable MCP client token for an outside orchestrator.",
+  ),
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      if (
+        flags.scopes.includes(AuthOrchestrationApproveScope) &&
+        !flags.scopes.includes(AuthOrchestrationOperateScope)
+      ) {
+        return yield* new CliError.UserError({
+          cause: flags.scopes,
+          userMessage: `${AuthOrchestrationApproveScope} needs ${AuthOrchestrationOperateScope}.`,
+        });
+      }
+      return yield* runWithEnvironmentAuth(
+        flags,
+        (environmentAuth) =>
+          Effect.gen(function* () {
+            const issued = yield* environmentAuth.issueSession({
+              subject: MCP_CLIENT_SUBJECT,
+              scopes: flags.scopes,
+              label: flags.name,
+              ttl: Option.getOrElse(flags.ttl, () => MCP_CLIENT_TOKEN_TTL),
+              ...(Option.isSome(flags.runtimeModeCeiling)
+                ? { runtimeModeCeiling: flags.runtimeModeCeiling.value }
+                : {}),
+            });
+            yield* Console.log(
+              formatIssuedSession(issued, { json: flags.json, tokenOnly: flags.tokenOnly }),
+            );
+          }),
+        { quietLogs: flags.json || flags.tokenOnly },
+      );
+    }),
+  ),
+);
+
+const clientListCommand = Command.make("list", {
+  ...authLocationFlags,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("List MCP client tokens without revealing them."),
+  Command.withHandler((flags) =>
+    runWithEnvironmentAuth(
+      flags,
+      (environmentAuth) =>
+        Effect.gen(function* () {
+          const sessions = yield* environmentAuth.listSessions();
+          yield* Console.log(
+            formatSessionList(
+              sessions.filter((session) => session.subject === MCP_CLIENT_SUBJECT),
+              { json: flags.json },
+            ),
+          );
+        }),
+      { quietLogs: flags.json },
+    ),
+  ),
+);
+
+const clientCommand = Command.make("client").pipe(
+  Command.withDescription("Manage long-lived MCP client tokens for outside orchestrators."),
+  Command.withSubcommands([clientCreateCommand, clientListCommand, sessionRevokeCommand]),
+);
+
 export const authCommand = Command.make("auth").pipe(
   Command.withDescription("Manage the local auth control plane for headless deployments."),
-  Command.withSubcommands([pairingCommand, sessionCommand]),
+  Command.withSubcommands([pairingCommand, sessionCommand, clientCommand]),
 );

@@ -136,6 +136,11 @@ export type SshLaunchInput = SshDispatchDestination & {
    * whose goat_thread_launch declares launchedBy; older remotes refuse unknown arguments.
    */
   readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
+  /**
+   * False asks the remote not to put its standing instructions in front of
+   * message. Forwarded only to a remote whose goat_thread_launch declares it.
+   */
+  readonly standingInstructions?: boolean | undefined;
 };
 
 export interface SshLaunchResult {
@@ -162,6 +167,12 @@ export interface SshHostToolCall {
   readonly timeoutMs: number;
   /** Writes need a remote that applies the session's runtime-mode ceiling. */
   readonly writes: boolean;
+  /**
+   * The caller holds `orchestration:approve`, so the remote session asks for
+   * it too. If the remote cannot grant it, the call fails; it never falls back
+   * to a session with fewer permissions.
+   */
+  readonly approvals?: boolean;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -220,6 +231,12 @@ export class SshRemoteDispatch extends Context.Service<
 const decodeRemoteIdentity = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
+
+const sessionKey = (
+  target: DesktopSshEnvironmentTarget,
+  ceiling: RuntimeMode,
+  approvals: boolean,
+) => `${targetConnectionKey(target)}\u0000${ceiling}${approvals ? "\u0000approvals" : ""}`;
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
@@ -527,18 +544,30 @@ const make = Effect.gen(function* () {
   const sessionFor = Effect.fn("SshRemoteDispatch.sessionFor")(function* (
     target: DesktopSshEnvironmentTarget,
     ceiling: RuntimeMode,
+    approvals = false,
   ) {
-    const key = `${targetConnectionKey(target)}\u0000${ceiling}`;
+    const key = sessionKey(target, ceiling, approvals);
     const now = yield* Clock.currentTimeMillis;
     const cached = sessions.get(key);
     if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
+    // A session that may answer approvals is never swapped for a narrower one.
     const issued = yield* withRuntime(
       manager.issueMcpClientSession(target, {
-        label: `GOAT SSH dispatch (${ceiling})`,
+        label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
         ttl: SESSION_TTL,
         runtimeModeCeiling: ceiling,
+        ...(approvals ? { approvals: true } : {}),
       }),
-    ).pipe(sshFailed(target.alias));
+    ).pipe(
+      approvals
+        ? Effect.mapError((error) =>
+            failure(
+              "remote_refused",
+              `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
+            ),
+          )
+        : sshFailed(target.alias),
+    );
     const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
     const session = {
       token: issued.token,
@@ -552,8 +581,9 @@ const make = Effect.gen(function* () {
 
   /**
    * The arguments the remote's goat_thread_launch declares, or null when the listing
-   * failed. Only a listing that declares report is cached; a failure or an older remote
-   * is asked again on the next launch, so an upgrade takes effect without a new session.
+   * failed. Only a listing that declares report and standingInstructions is cached; a
+   * failure or an older remote is asked again on the next launch, so an upgrade takes
+   * effect without a new session.
    */
   const remoteLaunchArguments = Effect.fn("SshRemoteDispatch.remoteLaunchArguments")(
     function* (remote: {
@@ -577,7 +607,8 @@ const make = Effect.gen(function* () {
       const declared = new Set(
         listed.value.find((tool) => tool.name === "goat_thread_launch")?.argumentNames ?? [],
       );
-      if (declared.has("report")) launchArguments.set(key, declared);
+      if (declared.has("report") && declared.has("standingInstructions"))
+        launchArguments.set(key, declared);
       return declared;
     },
   );
@@ -615,7 +646,7 @@ const make = Effect.gen(function* () {
         }
         if (describe(error).includes("HTTP 401")) {
           // Revoked or expired on the remote: forget it so the next call issues a fresh one.
-          sessions.delete(`${targetConnectionKey(input.target)}\u0000${input.ceiling}`);
+          sessions.delete(sessionKey(input.target, input.ceiling, false));
           return failure(
             "remote_refused",
             `${input.target.alias} rejected this machine's GOAT session; call the tool again to sign in anew.`,
@@ -1085,11 +1116,19 @@ const make = Effect.gen(function* () {
     }
 
     const declared =
-      input.launchedBy === undefined && input.report === undefined
+      input.launchedBy === undefined &&
+      input.report === undefined &&
+      input.standingInstructions !== false
         ? null
         : yield* remoteLaunchArguments(remote);
     const forwardLaunchedBy =
       input.launchedBy !== undefined && declared?.has("launchedBy") === true;
+    const forwardStandingOptOut =
+      input.standingInstructions === false && declared?.has("standingInstructions") === true;
+    if (input.standingInstructions === false && !forwardStandingOptOut)
+      notes.push(
+        `GOAT on ${target.alias} could not be asked to skip its standing instructions; if it has any, they were put in front of message.`,
+      );
     // A remote whose goat_thread_launch declares arguments but not report would drop the
     // binding and leave its agent told to report. An unknown or schemaless listing still
     // sends it, and a remote that refuses it is relaunched without it by the coordinator.
@@ -1137,6 +1176,7 @@ const make = Effect.gen(function* () {
               : {}),
             ...(attachments.length === 0 ? {} : { attachments }),
             ...(forwardReport ? { report: input.report } : {}),
+            ...(forwardStandingOptOut ? { standingInstructions: false } : {}),
           },
         });
       const rawLaunched = yield* launch(forwardLaunchedBy).pipe(
@@ -1235,7 +1275,9 @@ const make = Effect.gen(function* () {
 
     const attempt = (retried: boolean): Effect.Effect<unknown, SshRemoteDispatchError | E, R> =>
       Effect.gen(function* () {
-        const session = yield* sessionFor(target, ceiling).pipe(unavailable(target.alias));
+        const session = yield* sessionFor(target, ceiling, call.approvals === true).pipe(
+          unavailable(target.alias),
+        );
         if (call.writes && !session.ceilingApplied) {
           return yield* failure(
             "remote_refused",
@@ -1269,7 +1311,7 @@ const make = Effect.gen(function* () {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) {
             // Revoked or expired on the remote: issue a fresh session once.
-            sessions.delete(`${targetConnectionKey(target)}\u0000${ceiling}`);
+            sessions.delete(sessionKey(target, ceiling, call.approvals === true));
             return retried
               ? Effect.fail(
                   failure(

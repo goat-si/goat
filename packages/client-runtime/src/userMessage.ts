@@ -3,24 +3,48 @@ import {
   type OrchestrationV2CreationSource,
   ScheduledTaskId,
 } from "@t3tools/contracts";
+import {
+  splitStandingInstructions,
+  type StandingInstructionsBlock,
+} from "@t3tools/shared/standingInstructions";
 
 const LEGACY_AUTOMATION_PREFIX = /^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n/;
 const LEGACY_AUTOMATION_MESSAGE_ID = /^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$/;
 
-/**
- * Text and sender label for a user-role message. Older scheduled messages
- * stored their attribution in the prompt itself.
- */
-export function resolveUserMessagePresentation(message: {
+interface PresentedUserMessage {
   readonly id?: string;
   readonly role: string;
   readonly text: string;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId;
-}): {
+}
+
+/**
+ * Text and sender label for a user-role message. Older scheduled messages
+ * stored their attribution in the prompt itself. A thread an agent launched
+ * carries the standing instructions GOAT put in front of its first message;
+ * they come back separately so clients can show them collapsed.
+ */
+export function resolveUserMessagePresentation(message: PresentedUserMessage): {
   readonly text: string;
   /** Who sent a user-role message the user did not type. */
+  readonly attribution: "automation" | "agent" | "t3code" | null;
+  readonly scheduledTaskId: ScheduledTaskId | undefined;
+  readonly standingInstructions: StandingInstructionsBlock | null;
+} {
+  const split =
+    message.role === "user" && message.createdBy === "agent"
+      ? splitStandingInstructions(message.text)
+      : { block: null, text: message.text };
+  return {
+    ...resolveSender({ ...message, text: split.text }),
+    standingInstructions: split.block,
+  };
+}
+
+function resolveSender(message: PresentedUserMessage): {
+  readonly text: string;
   readonly attribution: "automation" | "agent" | "t3code" | null;
   readonly scheduledTaskId: ScheduledTaskId | undefined;
 } {

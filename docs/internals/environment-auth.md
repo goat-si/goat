@@ -49,6 +49,17 @@ above its ceiling. Inside MCP the credential sets the limits and tool
 parameters only pick targets; see
 [threadAccess](../../apps/server/src/mcp/threadAccess.ts).
 
+`goat auth client create` issues the same `mcp-client` session directly for
+long-running orchestrators. Only this path can add `orchestration:approve`,
+which lets the client answer provider approvals over MCP. OAuth never grants
+it: one approval click must not also hand over approvals. Agents inside a
+thread never get it either, so a provider cannot approve its own escalation.
+The orchestrator decider accepts an approval from a `client` responder and
+refuses one from an `agent`, so the MCP layer must check the scope before it
+sends a `client` responder. When the client reaches a thread on an SSH host,
+the launching environment asks that host for a session with the scope only if
+its own caller holds it.
+
 Issuer and resource URLs come from the request's Host and
 `X-Forwarded-Proto`, so one server answers over loopback, Tailscale Serve and a
 T3 Connect tunnel. A proxy that rewrites Host or drops the protocol header

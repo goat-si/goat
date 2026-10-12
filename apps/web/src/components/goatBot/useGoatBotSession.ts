@@ -26,6 +26,7 @@ import { randomUUID } from "~/lib/utils";
 import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
 import {
   goatBotHomeReadBack,
+  goatBotSupportUnknown,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
@@ -153,7 +154,10 @@ export function goatBotEnabled(
   port: GoatBotChannelPort | null,
   environment: GoatBotEnvironmentInput | null,
 ): boolean {
-  return port !== null && environment?.supportsChannelLedger === true;
+  return (
+    port !== null &&
+    (environment?.supportsChannelLedger === true || goatBotSupportUnknown(environment))
+  );
 }
 
 export function useGoatBotEnabled() {
@@ -252,6 +256,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     if (
       !homeReady ||
       !enabled ||
+      !current.capability ||
       !bootstrapped ||
       !current.connected ||
       !port ||

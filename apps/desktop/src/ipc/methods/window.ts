@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopBackendConfiguration from "../../backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
+import * as DesktopHeadlessServer from "../../backend/DesktopHeadlessServer.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
@@ -155,6 +156,8 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
             : {}),
       });
     }
+    const headless = yield* (yield* DesktopHeadlessServer.DesktopHeadlessServer).bootstrap;
+    if (Option.isSome(headless)) bootstraps.push(headless.value);
     return bootstraps;
   }),
 });

@@ -409,10 +409,11 @@ const loadPrimaryConnectionRegistration = Effect.fn(
 const loadSecondaryConnectionRegistration = Effect.fn(
   "web.connectionPlatform.loadSecondaryConnectionRegistration",
 )(function* (entry: DesktopEnvironmentBootstrap) {
+  const bootstrapToken = entry.bootstrapToken;
   if (
     entry.httpBaseUrl === null ||
     entry.wsBaseUrl === null ||
-    entry.bootstrapToken === undefined
+    (bootstrapToken === undefined && entry.accessToken === undefined)
   ) {
     return yield* new ConnectionTransientError({
       reason: "endpoint-unavailable",
@@ -427,12 +428,18 @@ const loadSecondaryConnectionRegistration = Effect.fn(
   const issuedAtEpochMs = yield* Clock.currentTimeMillis;
   // The desktop seed grant is administrative so the primary window can manage
   // access; a secondary backend session only needs to operate its environment.
-  const access = yield* bootstrapRemoteBearerSession({
-    httpBaseUrl,
-    credential: entry.bootstrapToken,
-    scopes: AuthStandardClientScopes,
-    clientMetadata: clientMetadata(),
-  }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  const access =
+    bootstrapToken === undefined
+      ? {
+          access_token: entry.accessToken ?? "",
+          expires_in: secondsUntil(entry.accessTokenExpiresAt, issuedAtEpochMs),
+        }
+      : yield* bootstrapRemoteBearerSession({
+          httpBaseUrl,
+          credential: bootstrapToken,
+          scopes: AuthStandardClientScopes,
+          clientMetadata: clientMetadata(),
+        }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Keep the desktop pool's stable backend id in the connection id. The
   // descriptor environment id still scopes projects and RPC state, while the
   // backend id lets desktop-only operations (notably the WSL folder picker)
@@ -469,6 +476,14 @@ const loadSecondaryConnectionRegistration = Effect.fn(
 const PLATFORM_POLL_INTERVAL = "3 seconds";
 const SECONDARY_BEARER_REFRESH_SKEW_MS = 5_000;
 
+/** Seconds from `nowEpochMs` to an ISO expiry; zero when it is missing or past. */
+export function secondsUntil(expiresAt: string | undefined, nowEpochMs: number): number {
+  const expiresAtEpochMs = expiresAt === undefined ? Number.NaN : Date.parse(expiresAt);
+  return Number.isFinite(expiresAtEpochMs)
+    ? Math.max(0, Math.floor((expiresAtEpochMs - nowEpochMs) / 1_000))
+    : 0;
+}
+
 export function secondaryBearerExpiresAtEpochMs(
   issuedAtEpochMs: number,
   expiresInSeconds: number,
@@ -492,7 +507,7 @@ interface CachedPlatformRegistration {
   readonly registration: PlatformConnectionRegistration;
   readonly expiresAtEpochMs?: number;
   readonly refreshAtEpochMs?: number;
-  /** The bootstrap token a desktop-local bearer was exchanged for. */
+  /** The bootstrap token a desktop-local bearer was exchanged for, or that bearer itself. */
   readonly bootstrapToken?: string;
 }
 
@@ -690,14 +705,15 @@ const layerPlatformConnectionSource = Layer.effect(
           // session (its removal also clears the environment's drafts). The
           // token only decides whether a rejected exchange is retried.
           const endpointSignature = `${bootstrap.httpBaseUrl}|${bootstrap.wsBaseUrl}`;
-          const signature = `${endpointSignature}|${bootstrap.bootstrapToken ?? ""}`;
+          const credential = bootstrap.bootstrapToken ?? bootstrap.accessToken;
+          const signature = `${endpointSignature}|${credential ?? ""}`;
           const cached = previous.get(bootstrap.id);
           // A new token from the desktop means something changed (rotation, a
           // restarted backend): exchange it rather than reusing a bearer that
           // may be dead. The old bearer stays registered if that exchange fails.
           if (
             cached !== undefined &&
-            cached.bootstrapToken === bootstrap.bootstrapToken &&
+            cached.bootstrapToken === credential &&
             canReuseCachedPlatformRegistration(cached, endpointSignature, nowEpochMs)
           ) {
             next.set(bootstrap.id, cached);
@@ -751,9 +767,7 @@ const layerPlatformConnectionSource = Layer.effect(
           if (Option.isSome(built)) {
             const cacheEntry = {
               signature: endpointSignature,
-              ...(bootstrap.bootstrapToken === undefined
-                ? {}
-                : { bootstrapToken: bootstrap.bootstrapToken }),
+              ...(credential === undefined ? {} : { bootstrapToken: credential }),
               ...built.value,
             };
             next.set(bootstrap.id, cacheEntry);

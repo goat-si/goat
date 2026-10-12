@@ -79,6 +79,7 @@ import Migration0062 from "./Migrations/062_RemoteReports.ts";
 import Migration0063 from "./Migrations/063_RemoteDispatches.ts";
 import Migration0064 from "./Migrations/064_ChannelLedger.ts";
 import Migration0065 from "./Migrations/065_RemoteDispatchQuestions.ts";
+import Migration0066 from "./Migrations/066_ThreadRunResults.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -158,6 +159,7 @@ export const migrationEntries = [
   [63, "RemoteDispatches", Migration0063],
   [64, "ChannelLedger", Migration0064],
   [65, "RemoteDispatchQuestions", Migration0065],
+  [66, "ThreadRunResults", Migration0066],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

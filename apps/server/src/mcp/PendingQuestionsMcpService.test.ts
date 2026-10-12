@@ -53,6 +53,10 @@ const outside: McpInvocationScope = {
   thread: undefined,
   client: { sessionId: "client", label: "SSH", access: "full-access" },
 };
+const approver: McpInvocationScope = {
+  ...outside,
+  client: { sessionId: "approver", label: "Grok Bot", access: "full-access", approvals: true },
+};
 const reason = "The existing API meets the requirement.";
 const foreign: UserInputRespondedBy = {
   type: "agent",
@@ -97,6 +101,25 @@ const questionProjection = (id = targetId, rid = requestId): OrchestrationV2Thre
   };
   return { ...projection, runtimeRequests: [request], turnItems: [item] };
 };
+const approvalProjection = (): OrchestrationV2ThreadProjection => {
+  const projection = questionProjection();
+  const request = projection.runtimeRequests[0]!;
+  const item = projection.turnItems[0]!;
+  return {
+    ...projection,
+    runtimeRequests: [{ ...request, kind: "command" }],
+    turnItems: [
+      {
+        ...item,
+        type: "approval_request",
+        requestId,
+        requestKind: "command",
+        prompt: "hostname",
+      } as OrchestrationV2TurnItem,
+    ],
+  };
+};
+const decideInput = { threadId: targetId, requestId, reason, decision: "accept" as const };
 const remoteQuestion = (env = "remote", rid = "question") => ({
   host: null,
   environmentId: env,
@@ -550,6 +573,99 @@ describe("PendingQuestionsMcpService", () => {
       );
       expect(approval.result).toMatchObject({ failure: { code: "invalid_request" } });
       expect(approval.commands).toEqual([]);
+    }),
+  );
+  it.effect("lets only an approve-scoped client see and decide approvals", () =>
+    Effect.gen(function* () {
+      const records = [approvalProjection()];
+      const listed = yield* runService({ records }, (service) =>
+        service.list(approver, { threadId: targetId }),
+      );
+      expect(listed.result).toMatchObject({
+        success: { requestIds: [], approvalRequestIds: [requestId] },
+      });
+      const hidden = yield* runService({ records }, (service) =>
+        service.list(outside, { threadId: targetId }),
+      );
+      expect(hidden.result._tag).toBe("Success");
+      if (hidden.result._tag === "Success")
+        expect(hidden.result.success).not.toHaveProperty("approvalRequestIds");
+
+      const read = yield* runService({ records }, (service) =>
+        service.read(approver, { threadId: targetId, requestId }),
+      );
+      expect(read.result).toMatchObject({
+        success: { questions: [], approval: { kind: "command", prompt: "hostname" } },
+      });
+      const unread = yield* runService({ records }, (service) =>
+        service.read(outside, { threadId: targetId, requestId }),
+      );
+      expect(unread.result).toMatchObject({ failure: { code: "invalid_request" } });
+
+      const decided = yield* runService({ records }, (service) =>
+        service.respond(approver, decideInput),
+      );
+      expect(decided.result).toMatchObject({ success: { sequence: 7 } });
+      expect(decided.commands).toHaveLength(1);
+      expect(decided.commands[0]).toMatchObject({
+        type: "runtime-request.respond",
+        decision: "accept",
+        respondedBy: { type: "client", label: "Grok Bot", reason },
+      });
+      expect(decided.commands[0]).not.toHaveProperty("answers");
+
+      for (const caller of [outside, scope]) {
+        const refused = yield* runService({ records }, (service) =>
+          service.respond(caller, decideInput),
+        );
+        expect(refused.result).toMatchObject({ failure: { code: "capability_denied" } });
+        expect(refused.commands).toEqual([]);
+      }
+      const both = yield* runService({ records }, (service) =>
+        service.respond(approver, { ...decideInput, answers }),
+      );
+      expect(both.result).toMatchObject({ failure: { code: "invalid_request" } });
+      const answeredApproval = yield* runService({ records }, (service) =>
+        service.respond(approver, respondInput),
+      );
+      expect(answeredApproval.result).toMatchObject({ failure: { code: "invalid_request" } });
+      const decidedQuestion = yield* runService({}, (service) =>
+        service.respond(approver, decideInput),
+      );
+      expect(decidedQuestion.result).toMatchObject({ failure: { code: "invalid_request" } });
+      expect([both, answeredApproval, decidedQuestion].flatMap((run) => run.commands)).toEqual([]);
+    }),
+  );
+  it.effect("asks hosts for an approval session and relays the deciding client", () =>
+    Effect.gen(function* () {
+      const remote = yield* runService({}, (service) =>
+        service.respond(approver, { ...decideInput, host: "box" }),
+      );
+      expect(remote.result).toMatchObject({ success: { host: "box", sequence: 7 } });
+      expect(remote.calls[0]).toMatchObject({
+        approvals: true,
+        writes: true,
+        arguments: {
+          ...decideInput,
+          respondedBy: { type: "client", label: "Grok Bot", reason },
+        },
+      });
+      const listed = yield* runService(
+        { hostCall: () => Effect.succeed({ requestIds: [] }) },
+        (service) => service.list(approver, { host: "box", threadId: targetId }),
+      );
+      expect(listed.calls[0]?.approvals).toBe(true);
+      const plain = yield* runService(
+        { hostCall: () => Effect.succeed({ requestIds: [] }) },
+        (service) => service.list(outside, { host: "box", threadId: targetId }),
+      );
+      expect(plain.calls[0]).not.toHaveProperty("approvals");
+
+      const relayed = { type: "client" as const, label: "Grok Bot", reason };
+      const received = yield* runService({ records: [approvalProjection()] }, (service) =>
+        service.respond(approver, { ...decideInput, respondedBy: relayed }),
+      );
+      expect(received.commands[0]).toMatchObject({ respondedBy: relayed });
     }),
   );
   it.effect("preserves host failures and rejects malformed results", () =>

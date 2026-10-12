@@ -11,6 +11,7 @@ import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
+import type { StandingInstructionsBlock } from "@t3tools/shared/standingInstructions";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   type OrchestrationMessageContext,
@@ -1509,6 +1510,37 @@ function AgentMessageAttribution(props: {
   );
 }
 
+/** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
+function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View className="gap-1">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={open ? "Hide standing instructions" : "Show standing instructions"}
+        hitSlop={4}
+        onPress={() => setOpen((value) => !value)}
+        className="flex-row items-center gap-1"
+      >
+        <SymbolView
+          name={open ? "chevron.down" : "chevron.right"}
+          size={10}
+          tintColorClassName="accent-foreground-muted"
+          type="monochrome"
+        />
+        <Text className="font-t3-medium text-2xs text-foreground-muted">Standing instructions</Text>
+        <Text className="text-2xs text-foreground-muted opacity-70">{props.block.version}</Text>
+      </Pressable>
+      {open ? (
+        <Text selectable className="text-xs text-foreground-muted">
+          {props.block.text}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function renderFeedEntry(
   info: { item: PendingThreadFeedEntry; index: number },
   props: Pick<
@@ -1807,7 +1839,10 @@ function renderFeedEntry(
                 })}
               </View>
             ) : null}
-            {message.text.trim().length > 0 ? (
+            {presentation.standingInstructions ? (
+              <StandingInstructionsRow block={presentation.standingInstructions} />
+            ) : null}
+            {presentation.text.trim().length > 0 ? (
               <MarkdownImageAvailableWidthContext
                 value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
               >
