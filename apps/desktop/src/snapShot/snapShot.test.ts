@@ -709,7 +709,7 @@ describe("isWaylandSession", () => {
           const { createServer } = await import("node:net");
           const { tmpdir } = await import("node:os");
           const { join } = await import("node:path");
-          const runtimeDirectory = await mkdtemp(join(tmpdir(), "t3-wayland-"));
+          const runtimeDirectory = await mkdtemp(join(tmpdir(), "goat-wayland-"));
           const socketPath = join(runtimeDirectory, "wayland-0");
           const server = createServer();
           try {

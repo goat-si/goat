@@ -75,7 +75,7 @@ const layerScannerTest = (input: ScannerTestInput) =>
         }),
         ServerConfig.layerTest(
           input.claudeHomePath,
-          input.configBaseDir ?? { prefix: "t3code-scanner-config-" },
+          input.configBaseDir ?? { prefix: "goat-scanner-config-" },
         ),
         layerProjectStore(input.importedWorkspaceRoots ?? []),
       ),

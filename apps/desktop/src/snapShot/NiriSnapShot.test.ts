@@ -41,7 +41,7 @@ let version: string;
 const send = (socket: NodeNet.Socket, value: unknown) => socket.write(`${JSON.stringify(value)}\n`);
 
 beforeEach(async () => {
-  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-niri-test-"));
+  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-niri-test-"));
   socketPath = NodePath.join(directory, "ipc");
   sockets = new Set();
   events = [];

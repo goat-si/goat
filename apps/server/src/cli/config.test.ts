@@ -104,7 +104,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
     const fs = yield* FileSystem.FileSystem;
-    const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
+    const filePath = yield* fs.makeTempFileScoped({ prefix: "goat-bootstrap-", suffix: ".ndjson" });
     const encoded = yield* encodeDesktopBootstrap(payload);
     yield* fs.writeFileString(filePath, `${encoded}\n`);
     return yield* Effect.acquireRelease(
@@ -126,7 +126,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-preflight-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-preflight-" });
       for (const [name, pid, mode, rejectRunningServer] of [
         ["stale", 2_147_483_647, "web", true],
         ["desktop", process.pid, "desktop", true],
@@ -172,7 +172,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   it.effect("enables a trimmed reusable auth token only for web dev mode", () =>
     Effect.gen(function* () {
       const baseDir = yield* FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-cli-dev-auth-" })),
+        Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "goat-cli-dev-auth-" })),
       );
       const flags = {
         mode: Option.some("web" as const),
@@ -216,7 +216,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const secret = "short-secret";
       const baseDir = yield* FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-cli-dev-auth-invalid-" })),
+        Effect.flatMap((fs) =>
+          fs.makeTempDirectoryScoped({ prefix: "goat-cli-dev-auth-invalid-" }),
+        ),
       );
       const flags = {
         mode: Option.some("web" as const),
@@ -602,7 +604,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   it.effect("carries the desktop's shell environment handoff only when the envelope sets it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-shell-env-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-shell-env-" });
       const resolveWith = Effect.fn(function* (overrides: Partial<DesktopBackendBootstrapValue>) {
         const fd = yield* openBootstrapFd(makeDesktopBootstrap(overrides));
         return yield* resolveServerConfig(
@@ -633,7 +635,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-dirs-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-dirs-" });
       const customCwd = path.join(baseDir, "nested", "project");
 
       const resolved = yield* resolveServerConfig(
@@ -759,7 +761,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-settings-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-settings-" });
       const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(
@@ -830,7 +832,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-otel-off-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-otel-off-" });
       const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(
@@ -881,7 +883,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-otel-on-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-otel-on-" });
       const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(
@@ -1178,7 +1180,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const baseDir = yield* fs.makeTempDirectoryScoped({
-          prefix: "t3-cli-config-otel-precedence-",
+          prefix: "goat-cli-config-otel-precedence-",
         });
         const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
         yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
@@ -1249,7 +1251,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const baseDir = yield* fs.makeTempDirectoryScoped({
-          prefix: "t3-cli-config-otel-off-",
+          prefix: "goat-cli-config-otel-off-",
         });
         const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
         yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });

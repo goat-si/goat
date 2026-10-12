@@ -105,7 +105,7 @@ export function makeReplayServerConfig(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const baseDir = yield* fs.makeTempDirectory({
-      prefix: `t3-orchestration-v2-codex-${scenario}-`,
+      prefix: `goat-orchestration-v2-codex-${scenario}-`,
     });
     const stateDir = path.join(baseDir, "userdata");
     const logsDir = path.join(stateDir, "logs");

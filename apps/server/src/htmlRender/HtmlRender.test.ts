@@ -49,7 +49,7 @@ const layerHtmlRender = (
         }),
       ),
     ),
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-html-render-" })),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-html-render-" })),
     Layer.provideMerge(NodeServices.layer),
   );
 const layerTest = layerHtmlRender();
@@ -62,7 +62,7 @@ describe("HtmlRender", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const htmlRender = yield* HtmlRender.HtmlRender;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-images-" });
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-html-images-" });
       const png = path.join(directory, "shot.png");
       const svg = path.join(directory, "logo.svg");
       yield* fileSystem.writeFile(png, PNG_BYTES);
@@ -102,7 +102,7 @@ describe("HtmlRender", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const htmlRender = yield* HtmlRender.HtmlRender;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-images-" });
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-html-images-" });
       const svg = path.join(directory, "styled.svg");
       const source = [
         '<?xml version="1.0"?>',
@@ -123,7 +123,7 @@ describe("HtmlRender", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const htmlRender = yield* HtmlRender.HtmlRender;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-images-" });
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-html-images-" });
       const folder = path.join(directory, "folder.png");
       yield* fileSystem.makeDirectory(folder);
       const missing = path.join(directory, "missing.jpg");
@@ -301,7 +301,9 @@ describe("HtmlRender", () => {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const htmlRender = yield* HtmlRender.HtmlRender;
-          const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-files-" });
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "goat-html-files-",
+          });
           const secret = path.join(directory, "secret.js");
           yield* fileSystem.writeFileString(secret, 'window.secret = "abc123";');
           const secretUrl = NodeURL.pathToFileURL(secret).href;

@@ -33,7 +33,7 @@ const startServer = Effect.fn("OpenCode2ClientLive.startServer")(function* (bina
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode2-live-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode2-live-" });
   const directory = path.join(root, "work");
   yield* fs.makeDirectory(directory);
   // Non-ASCII on purpose: OpenCode decodes Basic credentials as UTF-8.

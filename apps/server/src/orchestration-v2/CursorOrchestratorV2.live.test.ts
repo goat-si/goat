@@ -52,7 +52,7 @@ const layerPlatformTest = Layer.merge(
 );
 
 const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-cursor-v2-live-",
+  prefix: "goat-cursor-v2-live-",
 });
 
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(

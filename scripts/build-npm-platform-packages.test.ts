@@ -48,7 +48,7 @@ const run = Effect.fn("test.run")(function* (
 const makeFakeArchives = Effect.fn("test.makeFakeArchives")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-npm-packages-test-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-npm-packages-test-" });
   const archivesDir = path.join(root, "archives");
   yield* fs.makeDirectory(archivesDir);
   for (const key of KEYS) {

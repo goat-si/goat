@@ -591,7 +591,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   );
 
   const stem = cliArchiveStem(input.version, input.platform, input.arch);
-  const stageRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-archive-" });
+  const stageRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-archive-" });
   const contentDir = path.join(stageRoot, stem);
   yield* fs.makeDirectory(contentDir, { recursive: true });
 

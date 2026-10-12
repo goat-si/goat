@@ -220,7 +220,7 @@ export async function captureKdeWindow(
   if (state.status !== "ready")
     throw new Error(`${state.message} Open Settings → SnapShots to continue setup.`);
   const { executable } = kdeCapturePaths(paths);
-  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-kde-capture-"));
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-kde-capture-"));
   let retained = false;
   const cleanup = () => NodeFSP.rm(directory, { recursive: true, force: true });
   try {

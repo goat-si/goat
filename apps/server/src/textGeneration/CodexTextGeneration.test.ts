@@ -25,7 +25,7 @@ const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
 );
 
 const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3code-codex-text-generation-test-",
+  prefix: "goat-codex-text-generation-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
 interface FakeCodexInput {
@@ -157,7 +157,7 @@ function withFakeCodexEnv<A, E, R>(
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
+    const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
     const config = decodeCodexSettings({ binaryPath: codexPath, launchArgs: input.launchArgs });
     const textGeneration = yield* makeCodexTextGeneration(
@@ -884,7 +884,7 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-user-home-" });
+        const userHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-user-home-" });
         yield* fs.writeFileString(path.join(userHome, "AGENTS.md"), "Reply in Korean.");
         yield* fs.writeFileString(path.join(userHome, "auth.json"), '{"refresh":"refresh-1"}');
         yield* withFakeCodexEnv(

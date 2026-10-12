@@ -14,7 +14,7 @@ describe.skipIf(hostPlatform !== "linux")("bundled libsecret helper", () => {
   let directory;
   let executable;
   beforeAll(() => {
-    directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-browser-secret-test-"));
+    directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-browser-secret-test-"));
     executable = NodePath.join(directory, "t3-browser-secret");
     const root = NodeURL.fileURLToPath(new URL("../../../native/browser-secret/", import.meta.url));
     const flags = NodeChildProcess.execFileSync(

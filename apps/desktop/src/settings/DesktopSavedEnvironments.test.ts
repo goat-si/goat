@@ -149,7 +149,7 @@ const withSavedEnvironments = <A, E, R>(
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-desktop-saved-environments-test-",
+      prefix: "goat-desktop-saved-environments-test-",
     });
     return yield* effect.pipe(Effect.provide(layer(baseDir, options)));
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
@@ -337,7 +337,7 @@ describe("DesktopSavedEnvironments", () => {
       const path = yield* Path.Path;
       const baseFileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* baseFileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-saved-environments-test-",
+        prefix: "goat-desktop-saved-environments-test-",
       });
       const registryPath = path.join(baseDir, "userdata", "saved-environments.json");
       const permissionError = PlatformError.systemError({

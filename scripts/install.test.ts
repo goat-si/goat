@@ -13,7 +13,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer term
   it.each([false, true])(
     "preserves download and install behavior (HTTP failure: %s)",
     async (fail) => {
-      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-install-progress-"));
+      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-install-progress-"));
       const version = "1.2.3";
       const stem = `goat-${version}-linux-${HostProcess.Architecture.defaultValue()}`;
       const archiveName = `${stem}.tar.gz`;

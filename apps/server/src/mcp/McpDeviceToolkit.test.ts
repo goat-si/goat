@@ -120,7 +120,7 @@ const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(layerDeviceServiceMock),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" })),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" })),
   Layer.provide(NodeServices.layer),
 );
 
@@ -198,7 +198,7 @@ it.effect("rejects unavailable agent access before booting or opening a device",
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerUnavailable),
         Layer.provide(
-          ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" }),
+          ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" }),
         ),
         Layer.provide(NodeServices.layer),
       ),

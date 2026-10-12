@@ -8,7 +8,7 @@ import { assert, it } from "@effect/vitest";
 it.each([false, true])(
   "persists an enabled cache before forced exit (disabled: %s)",
   async (disabled) => {
-    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-compile-cache-"));
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-compile-cache-"));
     try {
       const cacheDirectory = NodePath.join(directory, "cache");
       const child = NodeChildProcess.spawnSync(

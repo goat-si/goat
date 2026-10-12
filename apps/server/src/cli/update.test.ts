@@ -23,7 +23,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
       const oldExe = path.join(root, "runtime/goat/versions/1.0.0/goat");
       const newExe = path.join(root, "runtime/goat/versions/2.0.0/goat");
       const launcher = path.join(root, "bin/goat");
@@ -49,7 +49,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
       const newExe = path.join(root, "runtime/goat/versions/2.0.0/goat");
       const copy = path.join(root, "copy/goat");
       const foreign = path.join(root, "foreign/goat");
@@ -83,7 +83,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
       const launcher = path.join(root, "bin/goat");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.writeFileString(launcher, "");

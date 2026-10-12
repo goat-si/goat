@@ -196,10 +196,10 @@ describe("VcsStatusBroadcaster", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const realDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-vcs-auto-pull-real-",
+          prefix: "goat-vcs-auto-pull-real-",
         });
         const linkParent = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-vcs-auto-pull-link-",
+          prefix: "goat-vcs-auto-pull-link-",
         });
         configuredWorkspaceRoot = path.join(linkParent, "repo-link");
         yield* fileSystem.symlink(realDir, configuredWorkspaceRoot);
@@ -575,10 +575,10 @@ describe("VcsStatusBroadcaster", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const realDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-vcs-status-real-",
+          prefix: "goat-vcs-status-real-",
         });
         const linkParent = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-vcs-status-link-",
+          prefix: "goat-vcs-status-link-",
         });
         const linkDir = path.join(linkParent, "repo-link");
         yield* fileSystem.symlink(realDir, linkDir);

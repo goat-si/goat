@@ -201,7 +201,7 @@ it.effect.each([
 it.effect("serves a tab's download only to an authorized session", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const path = `${yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-" })}/file`;
+    const path = `${yield* fs.makeTempDirectoryScoped({ prefix: "goat-download-" })}/file`;
     yield* fs.writeFileString(path, "report contents");
     const requests: Array<unknown> = [];
     const browser = ServerBrowser.ServerBrowser.of({

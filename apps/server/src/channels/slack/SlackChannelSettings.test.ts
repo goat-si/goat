@@ -144,7 +144,7 @@ const withServer = <A, E>(
 
 const tempBaseDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  return yield* fs.makeTempDirectoryScoped({ prefix: "t3-slack-settings-test-" });
+  return yield* fs.makeTempDirectoryScoped({ prefix: "goat-slack-settings-test-" });
 }).pipe(Effect.provide(NodeServices.layer));
 
 const reason = (error: SlackChannelSettingsError) => error.reason;

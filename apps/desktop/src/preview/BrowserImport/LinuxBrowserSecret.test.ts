@@ -14,7 +14,9 @@ it.layer(NodeServices.layer)("Linux browser secret path", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-browser-secret-path-" });
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-browser-secret-path-",
+      });
       const resourcesPath = path.join(root, "install", "resources");
       const native = path.join(
         root,

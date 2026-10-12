@@ -33,7 +33,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const fixture = yield* fs.makeTempDirectoryScoped({ prefix: "t3-runner-" });
+        const fixture = yield* fs.makeTempDirectoryScoped({ prefix: "goat-runner-" });
         const bin = path.join(fixture, "bin");
         const cliPath = path.join(fixture, "installed cli.mjs");
         yield* fs.makeDirectory(bin);
@@ -146,7 +146,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-          const fixture = yield* fs.makeTempDirectoryScoped({ prefix: "t3-stop-" });
+          const fixture = yield* fs.makeTempDirectoryScoped({ prefix: "goat-stop-" });
           const home = path.join(fixture, "home");
           const baseDir = path.join(home, ".goat");
           const stateDir = path.join(baseDir, "ssh-launch", REMOTE_RUNTIME_STATE_KEY);

@@ -797,7 +797,7 @@ describe("CodexAdapterV2 process spawning", () => {
         Effect.provide(
           Layer.mergeAll(
             CodexAdapterV2.layerAppServerClientFactory,
-            ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-binary-home-" }),
+            ServerConfig.layerTest(process.cwd(), { prefix: "goat-codex-binary-home-" }),
           ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -4505,7 +4505,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stop-workspace-" });
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-bg-stop-workspace-" });
         const localTranscript = yield* decodeReplayTranscriptJson(
           (yield* encodeReplayTranscriptJson(transcript)).replaceAll(
             yield* encodeStringJson("/workspace"),
@@ -4637,7 +4637,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stale-workspace-" });
+        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-bg-stale-workspace-" });
         const staleTranscript = makeCodexReplayTranscript({
           scenario: "codex-bg-stop-untracked",
           entries: [

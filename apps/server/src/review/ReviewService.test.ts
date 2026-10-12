@@ -70,9 +70,9 @@ describe("ReviewService", () => {
   it.effect("rejects diff preview cwd outside the configured workspace roots", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-outside-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
       const detectCalls: Array<{ readonly cwd: string }> = [];
 
       const error = yield* Effect.gen(function* () {
@@ -93,9 +93,9 @@ describe("ReviewService", () => {
   it.effect("attributes file-content workspace violations to the file-content operation", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-outside-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
       const detectCalls: Array<{ readonly cwd: string }> = [];
 
       const error = yield* Effect.gen(function* () {
@@ -126,10 +126,10 @@ describe("ReviewService", () => {
   it.effect("allows previous custom worktree locations but never a filesystem root", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
-      const previous = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-old-worktrees-" });
-      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-outside-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
+      const previous = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-old-worktrees-" });
+      const outsideRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-outside-" });
 
       const result = yield* Effect.gen(function* () {
         const review = yield* ReviewService.ReviewService;
@@ -161,10 +161,10 @@ describe("ReviewService", () => {
   it.effect("allows registered project roots outside the server cwd", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
       // Stands in for a project on another drive than the server's home cwd.
-      const projectRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-project-" });
+      const projectRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-project-" });
       const projectChild = `${projectRoot}/packages/app`;
       yield* fs.makeDirectory(projectChild, { recursive: true });
       const sibling = `${projectRoot}-sibling`;
@@ -193,8 +193,8 @@ describe("ReviewService", () => {
   it.effect("allows diff preview cwd inside the configured workspace root", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
       const detectCalls: Array<{ readonly cwd: string }> = [];
 
       const result = yield* Effect.gen(function* () {
@@ -211,8 +211,8 @@ describe("ReviewService", () => {
   it.effect("preserves unexpected path-resolution failures", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-workspace-" });
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-workspace-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-review-base-" });
       const invalidCwd = `${workspaceRoot}\0invalid`;
       const detectCalls: Array<{ readonly cwd: string }> = [];
 

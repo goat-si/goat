@@ -10,7 +10,7 @@ import { expect, it } from "vite-plus/test";
 it.skipIf(NodeOS.platform() !== "darwin")(
   "registers and reads native permissions concurrently without corrupting the registry",
   () => {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-permissions-test-"));
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-permissions-test-"));
     try {
       const require = NodeModule.createRequire(import.meta.url);
       const core = NodePath.dirname(

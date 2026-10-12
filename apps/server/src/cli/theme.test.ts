@@ -25,7 +25,7 @@ const runCli = (args: ReadonlyArray<string>) =>
     Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
   );
 
-const makeBaseDir = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-theme-cli-"));
+const makeBaseDir = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-theme-cli-"));
 
 const settingsPathFor = (baseDir: string) => NodePath.join(baseDir, "userdata", "settings.json");
 

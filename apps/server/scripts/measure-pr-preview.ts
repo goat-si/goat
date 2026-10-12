@@ -52,7 +52,7 @@ const sourceControlHost = ServerSourceControlHost.layer.pipe(
   Layer.provide(GitVcsDriver.layer),
   Layer.provide(ServerSettings.layerTest()),
   // A scratch state directory, so nothing here touches a real GOAT home.
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-measure-pr-preview-" })),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-measure-pr-preview-" })),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
 );

@@ -19,7 +19,7 @@ it.layer(NodeServices.layer)("writeHeapSnapshot", (it) => {
   it.effect("removes the partial file when the write fails", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const logsDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-heap-snapshot-test-" });
+      const logsDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-heap-snapshot-test-" });
       let partialPath: string | undefined;
       vi.mocked(NodeV8.writeHeapSnapshot).mockImplementationOnce((path) => {
         partialPath = path;

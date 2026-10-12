@@ -184,7 +184,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-consent-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-device-consent-" });
       const host = yield* LocalDeviceHost.make().pipe(
         Effect.provide(Layer.mergeAll(ServerConfig.layerTest(baseDir, baseDir), NetService.layer)),
         Effect.provideService(HostProcess.Environment, { HOME: baseDir, PATH: "" }),

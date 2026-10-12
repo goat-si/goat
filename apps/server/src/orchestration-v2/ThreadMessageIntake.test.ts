@@ -33,7 +33,7 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { dispatchCommand, sendToThread } from "./ThreadMessageIntake.ts";
 
 const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-question-intake-",
+  prefix: "goat-question-intake-",
 }).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(ServerSettings.layerTest()));
 
 const layerFailingDispatch = (captured: OrchestrationV2ServerCommand[]) =>

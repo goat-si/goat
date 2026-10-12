@@ -63,7 +63,7 @@ const withFakeSystemd = <A, E>(
   }) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
-    const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-agent-scope-"));
+    const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-agent-scope-"));
     for (const name of ["systemd-run", "systemctl", "agent"]) {
       NodeFS.writeFileSync(NodePath.join(bin, name), "", { mode: 0o755 });
     }

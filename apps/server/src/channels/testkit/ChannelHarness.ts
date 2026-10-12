@@ -335,7 +335,9 @@ export function makeHarness(
     }),
     layerSettings,
   ).pipe(
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-channel-scenarios-" })),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-channel-scenarios-" }),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
 

@@ -24,7 +24,7 @@ const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../provider/testFixtures/grok-text-mock-agent.mjs");
 
 const layerGrokTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3code-grok-text-generation-test-",
+  prefix: "goat-grok-text-generation-test-",
 }).pipe(Layer.provideMerge(NodeServices.layer));
 
 function makeAcpGrokWrapper(dir: string, env: Record<string, string>): string {
@@ -44,7 +44,7 @@ function withFakeAcpGrok<A, E, R>(
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
-    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-grok-text-acp-"));
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-grok-text-acp-"));
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });

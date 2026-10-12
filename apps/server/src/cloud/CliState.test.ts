@@ -33,7 +33,7 @@ const layerTest = () =>
   ServerSecretStore.layer.pipe(
     Layer.provide(
       ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-cloud-cli-state-test-",
+        prefix: "goat-cloud-cli-state-test-",
       }),
     ),
   );

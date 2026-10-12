@@ -134,7 +134,7 @@ function makeRegistry(input: {
           cliEnv: () => Effect.succeed({}),
         }),
         ServerConfig.layerTest(process.cwd(), {
-          prefix: "t3-source-control-registry-test-",
+          prefix: "goat-source-control-registry-test-",
         }).pipe(Layer.provide(NodeServices.layer)),
       ),
     ),

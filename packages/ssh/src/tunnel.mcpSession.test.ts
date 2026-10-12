@@ -34,7 +34,7 @@ describe("remote MCP session script", () => {
 
   beforeEach(() => {
     home = NodeFS.realpathSync(
-      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-mcp-session-")),
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-mcp-session-")),
     );
     const stateDirectory = NodePath.join(home, ".goat", "ssh-launch", stateKey);
     NodeFS.mkdirSync(stateDirectory, { recursive: true });

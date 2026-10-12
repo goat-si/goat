@@ -158,7 +158,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-test-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-test-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const state = {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -174,7 +174,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-restart-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-restart-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const restartPending = path.join(root, "runtime", SERVICE_RESTART_PENDING_FILE);
       yield* writeFakeRuntime(
@@ -218,7 +218,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-stop-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-stop-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       yield* writeFakeRuntime(
         fs,
@@ -249,7 +249,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-flow-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-flow-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
@@ -302,7 +302,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-rollback-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-rollback-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
@@ -356,7 +356,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-db-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-db-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       const original = "database before migration";
@@ -421,7 +421,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-foreign-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-foreign-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
@@ -464,7 +464,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-busy-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-busy-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
@@ -504,7 +504,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-pending-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-pending-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       const lockDir = path.dirname(databasePath);
@@ -561,7 +561,7 @@ if (context.update?.status === "pending") {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-recopy-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-recopy-" });
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       const lockDir = path.dirname(databasePath);

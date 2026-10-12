@@ -988,7 +988,7 @@ describe("runtime preparation", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-retained-preparation-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-retained-preparation-" });
       const stateKey = REMOTE_RUNTIME_STATE_KEY;
       const state = `${root}/.goat/ssh-launch/${stateKey}`;
       const retainedVersion = mode === "invalid" ? "01.2.3" : "1.2.2-preview.20260910.1";
@@ -1143,7 +1143,7 @@ else exit 2; fi
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-managed-preparation-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-managed-preparation-" });
       const runtime = `${root}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
       const state = `${root}/.goat/ssh-launch/${REMOTE_RUNTIME_STATE_KEY}`;
       yield* fs.makeDirectory(runtime, { recursive: true });
@@ -1681,7 +1681,7 @@ describe("archive runner script", () => {
   it.effect.skipIf(windowsHost)("fails on an uploaded archive checksum mismatch", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-upload-bad-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-upload-bad-" });
       yield* makeMirror(root);
       const platform = hostPlatform === "darwin" ? "darwin" : "linux";
       const arch = hostArch === "arm64" ? "arm64" : "x64";
@@ -1709,7 +1709,7 @@ describe("archive runner script", () => {
   it.effect.skipIf(windowsHost)("installs once when two uploads race", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-upload-race-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-upload-race-" });
       yield* makeMirror(root);
       const platform = hostPlatform === "darwin" ? "darwin" : "linux";
       const arch = hostArch === "arm64" ? "arm64" : "x64";
@@ -1742,7 +1742,7 @@ describe("archive runner script", () => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-archive-runner-" });
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-archive-runner-" });
         const releaseBaseUrl = yield* makeMirror(root);
         const runner = `${root}/run-t3.sh`;
         yield* fs.writeFileString(

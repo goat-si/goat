@@ -17,7 +17,7 @@ const branch = { name: "feature/a", current: false, isDefault: false, worktreePa
 const environmentId = EnvironmentId.make("branch-test-environment");
 
 beforeEach(async () => {
-  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-branch-selection-"));
+  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-branch-selection-"));
   cwd = NodePath.join(directory, "project");
   await exec("git", ["init", "-b", "main", cwd]);
   await git("config", "user.name", "Branch test");

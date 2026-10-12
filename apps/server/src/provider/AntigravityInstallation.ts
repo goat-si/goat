@@ -350,7 +350,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     Effect.fn("AntigravityInstallation.validate")(
       function* (executable: AntigravityExecutable, expectedVersion: string) {
         const profileDirectory = yield* fs.makeTempDirectoryScoped({
-          prefix: "t3-antigravity-validate-",
+          prefix: "goat-antigravity-validate-",
         });
         const profile = yield* prepareAntigravityProfile({
           profileDirectory,

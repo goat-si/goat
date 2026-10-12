@@ -92,7 +92,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const batches: Array<ReadonlyArray<{ readonly uuid: string }>> = [];
       const layerRuntime = AnalyticsService.layer.pipe(
         Layer.provideMerge(
-          ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
+          ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-retry-" }),
         ),
         Layer.provide(
           ConfigProvider.layer(
@@ -134,7 +134,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedBatchRequest> = [];
       const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-telemetry-base-",
+        prefix: "goat-telemetry-base-",
       });
 
       const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
@@ -236,7 +236,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     Effect.gen(function* () {
       const capturedPaths: Array<string> = [];
       const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-telemetry-disabled-",
+        prefix: "goat-telemetry-disabled-",
       });
       const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
       const layerConfig = ConfigProvider.layer(

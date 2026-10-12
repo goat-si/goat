@@ -103,7 +103,7 @@ const getDefaultSshAskpassDirectory = Effect.fn("ssh/auth.getDefaultSshAskpassDi
   function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const parentDirectory = yield* fs.makeTempDirectory({ prefix: "t3code-ssh-runtime-" });
+    const parentDirectory = yield* fs.makeTempDirectory({ prefix: "goat-ssh-runtime-" });
     return path.join(parentDirectory, SSH_ASKPASS_DIR_NAME);
   },
 );

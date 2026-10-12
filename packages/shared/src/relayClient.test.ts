@@ -167,7 +167,9 @@ describe("RelayClient", () => {
   it.effect("cancels a contended install without removing the other installer's lock", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cloudflared-test-" });
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-cloudflared-test-",
+      });
       const directory = `${baseDir}/tools/cloudflared/${RelayClient.CLOUDFLARED_VERSION}/linux-x64`;
       const lockPath = `${directory}/cloudflared.lock`;
       yield* fileSystem.makeDirectory(directory, { recursive: true });
@@ -206,7 +208,9 @@ describe("RelayClient", () => {
   it.effect("releases the install lock when a download is cancelled", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cloudflared-test-" });
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-cloudflared-test-",
+      });
       const lockPath = `${baseDir}/tools/cloudflared/${RelayClient.CLOUDFLARED_VERSION}/linux-x64/cloudflared.lock`;
       const downloading = yield* Deferred.make<void>();
       const manager = yield* RelayClient.makeCloudflaredRelayClient({ baseDir });
@@ -237,7 +241,9 @@ describe("RelayClient", () => {
   it.effect.skipIf(windowsHost)("releases a lock acquired while installation is cancelled", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-cloudflared-test-" });
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-cloudflared-test-",
+      });
       const lockPath = `${baseDir}/tools/cloudflared/${RelayClient.CLOUDFLARED_VERSION}/linux-x64/cloudflared.lock`;
       const acquired = yield* Deferred.make<void>();
       const completeWrite = yield* Deferred.make<void>();
@@ -297,7 +303,7 @@ describe("RelayClient", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-cloudflared-test-",
+          prefix: "goat-cloudflared-test-",
         });
         const overridePath = `${baseDir}/override-cloudflared`;
         yield* fileSystem.writeFileString(overridePath, "override");
@@ -340,7 +346,7 @@ describe("RelayClient", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-cloudflared-test-",
+          prefix: "goat-cloudflared-test-",
         });
         const bytes = new TextEncoder().encode("test-cloudflared-binary");
         const manager = yield* RelayClient.makeCloudflaredRelayClient({
@@ -397,7 +403,7 @@ describe("RelayClient", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const manager = yield* RelayClient.makeCloudflaredRelayClient({
         baseDir,
@@ -435,7 +441,7 @@ describe("RelayClient", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const manager = yield* RelayClient.makeCloudflaredRelayClient({
         baseDir,
@@ -473,7 +479,7 @@ describe("RelayClient", () => {
       return Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-cloudflared-test-",
+          prefix: "goat-cloudflared-test-",
         });
         const binDir = `${baseDir}/bin`;
         const executablePath = `${binDir}/cloudflared`;
@@ -519,7 +525,7 @@ describe("RelayClient", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-cloudflared-test-",
+          prefix: "goat-cloudflared-test-",
         });
         return yield* body(baseDir);
       }).pipe(
@@ -693,7 +699,7 @@ describe("RelayClient", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const { locked, renames, firstAttempt } = yield* makeLockedRenames(fileSystem, {
         rename,
@@ -727,7 +733,7 @@ describe("RelayClient", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const { locked, renames, firstAttempt } = yield* makeLockedRenames(fileSystem, {
         rename,
@@ -758,7 +764,7 @@ describe("RelayClient", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const { locked, renames } = yield* makeLockedRenames(fileSystem, {
         rename: "staging",
@@ -782,7 +788,7 @@ describe("RelayClient", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-cloudflared-test-",
+        prefix: "goat-cloudflared-test-",
       });
       const manager = yield* RelayClient.makeCloudflaredRelayClient({
         baseDir,

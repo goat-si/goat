@@ -2131,7 +2131,7 @@ describe("AcpAdapterV2", () => {
       const failed = yield* Effect.scoped(
         Effect.gen(function* () {
           const commandPidPath = yield* fileSystem.makeTempFileScoped({
-            prefix: "t3-acp-forced-failure-command-",
+            prefix: "goat-acp-forced-failure-command-",
           });
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
@@ -2248,7 +2248,7 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
-        prefix: "t3-acp-provider-exit-command-",
+        prefix: "goat-acp-provider-exit-command-",
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
@@ -2646,7 +2646,7 @@ describe("AcpAdapterV2", () => {
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
         const workspace = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-acp-no-client-fs-",
+          prefix: "goat-acp-no-client-fs-",
         });
         const probePath = path.join(workspace, "planted.txt");
         const probeLogPath = path.join(workspace, "fs-probe.jsonl");
@@ -12448,7 +12448,7 @@ describe("AcpAdapterV2", () => {
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
-        prefix: "t3-acp-failed-teardown-command-",
+        prefix: "goat-acp-failed-teardown-command-",
       });
       const residualCallbackDir = yield* fileSystem.makeTempDirectoryScoped();
       const residualCallbackResponseLogPath = path.join(residualCallbackDir, "responses.log");
@@ -13456,7 +13456,7 @@ describe("AcpAdapterV2", () => {
       );
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
-        prefix: "t3-acp-direct-stop-command-",
+        prefix: "goat-acp-direct-stop-command-",
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),
@@ -13876,7 +13876,7 @@ describe("AcpAdapterV2", () => {
       );
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const commandPidPath = yield* fileSystem.makeTempFileScoped({
-        prefix: "t3-acp-restart-active-command-",
+        prefix: "goat-acp-restart-active-command-",
       });
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => cleanupPublishedDetachedFixture(commandPidPath)),

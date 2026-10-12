@@ -63,17 +63,19 @@ export const cascadeRebaseStack = Effect.fn("cascadeRebaseStack")(function* (inp
   const { token } = yield* api.credential(input.host);
   const first = input.layers[0];
   if (first === undefined) return 0;
-  const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-stack-rebase-" }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new GitHubStackRebaseGitError({
-          step: "preparing",
-          number: first.number,
-          completed: 0,
-          cause,
-        }),
-    ),
-  );
+  const directory = yield* fileSystem
+    .makeTempDirectoryScoped({ prefix: "goat-stack-rebase-" })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitHubStackRebaseGitError({
+            step: "preparing",
+            number: first.number,
+            completed: 0,
+            cause,
+          }),
+      ),
+    );
   // The token rides in a header for this process only: never in the URL, argv, or git config.
   const remote = input.remote ?? remoteUrl(input.host, input.repository);
   const authorization = `AUTHORIZATION: basic ${Base64.encode(`x-access-token:${Redacted.value(token)}`)}`;

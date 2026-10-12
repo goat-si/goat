@@ -9,7 +9,7 @@ import { safariPermissionCheck } from "./SafariPermission.ts";
 it.effect("detects Safari access becoming available without reading or importing cookies", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-safari-access-" });
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-safari-access-" });
     const directory = `${home}/Library/Containers/com.apple.Safari/Data/Library/Cookies`;
     yield* fs.makeDirectory(directory, { recursive: true });
     const jar = `${directory}/Cookies.binarycookies`;
@@ -45,7 +45,7 @@ it.effect("detects Safari access becoming available without reading or importing
 it.effect("recognizes access when cookies exist only in a named Safari profile", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-safari-named-access-" });
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-safari-named-access-" });
     const check = yield* safariPermissionCheck.pipe(
       Effect.provideService(HostProcess.Environment, { HOME: home }),
       Effect.provideService(HostProcess.Platform, "darwin"),

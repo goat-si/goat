@@ -27,7 +27,7 @@ const hasDbus =
   NodeChildProcess.spawnSync("gdbus", ["help"]).status === 0;
 
 it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", async () => {
-  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-private-dbus-"));
+  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-private-dbus-"));
   let daemon: NodeChildProcess.ChildProcess | undefined;
   let server: MessageBus | undefined;
   const clients: LinuxCaptureConnection[] = [];

@@ -51,7 +51,7 @@ const layerPlatformTest = Layer.merge(
 );
 
 const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-grok-v2-live-",
+  prefix: "goat-grok-v2-live-",
 });
 
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(

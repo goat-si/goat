@@ -216,7 +216,7 @@ it.layer(layerTest)("OpenCodeRuntime inventory", (it) => {
       const hostEnvironment = yield* HostProcess.Environment;
       const executablePath = yield* HostProcess.ExecutablePath;
       const hostPlatform = yield* HostProcess.Platform;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-inventory-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-inventory-" });
       const isWindows = hostPlatform === "win32";
       const binaryPath = path.join(tempDir, isWindows ? "opencode.cmd" : "opencode");
       const scriptPath = path.join(tempDir, "opencode.mjs");

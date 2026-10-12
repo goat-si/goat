@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as ServerConfig from "../config.ts";
 import { appendUserInputAttachmentPaths } from "./userInputAttachments.ts";
 
-const layer = ServerConfig.layerTest(process.cwd(), { prefix: "t3-answer-paths-" }).pipe(
+const layer = ServerConfig.layerTest(process.cwd(), { prefix: "goat-answer-paths-" }).pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 const attachment = {

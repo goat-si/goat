@@ -26,7 +26,7 @@ const setup = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const base = yield* fileSystem.realPath(
-    yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-files-" }),
+    yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-antigravity-files-" }),
   );
   const workspace = path.join(base, "workspace");
   const outside = path.join(base, "outside");

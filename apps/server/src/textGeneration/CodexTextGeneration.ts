@@ -107,7 +107,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     userHome: string,
   ) {
     const receptionHome = yield* fileSystem
-      .makeTempDirectoryScoped({ prefix: "t3code-codex-reception-home-" })
+      .makeTempDirectoryScoped({ prefix: "goat-codex-reception-home-" })
       .pipe(
         Effect.mapError((cause) =>
           normalizeCliError("codex", operation, cause, "Failed to create reception Codex home"),
@@ -256,7 +256,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       // Reception runs in an empty directory so nothing in a checkout reaches the model.
       const workingDirectory = isChannelReception
         ? yield* fileSystem
-            .makeTempDirectoryScoped({ prefix: "t3code-codex-reception-" })
+            .makeTempDirectoryScoped({ prefix: "goat-codex-reception-" })
             .pipe(
               Effect.mapError((cause) =>
                 normalizeCliError(

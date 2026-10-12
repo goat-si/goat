@@ -25,7 +25,7 @@ const layerTest = Layer.empty.pipe(
 const makeTempDir = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   return yield* fileSystem.makeTempDirectoryScoped({
-    prefix: "t3code-project-favicon-",
+    prefix: "goat-project-favicon-",
   });
 });
 

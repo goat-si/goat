@@ -56,7 +56,7 @@ const checkWith = (
       const config = yield* ServerConfig.ServerConfig;
       return ServerConfig.make({ ...config, ...overrides });
     }),
-  ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-otlp-check-" })));
+  ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-otlp-check-" })));
   const layer = OtlpEndpointCheck.layer.pipe(
     Layer.provide(httpClientLayer ?? Layer.succeed(HttpClient.HttpClient, httpClient)),
     Layer.provide(configLayer),

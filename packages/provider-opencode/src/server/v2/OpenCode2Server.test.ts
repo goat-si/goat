@@ -218,7 +218,7 @@ describe("OpenCode2Server spawned server", () => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const platform = yield* HostProcess.Platform;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode2-fake-" });
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode2-fake-" });
         const isWindows = platform === "win32";
         const binaryPath = path.join(directory, isWindows ? "opencode.cmd" : "opencode");
         const scriptPath = path.join(directory, "opencode.mjs");

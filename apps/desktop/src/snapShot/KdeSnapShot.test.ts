@@ -36,7 +36,7 @@ const window = {
 };
 
 beforeEach(async () => {
-  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-kde-test-"));
+  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-kde-test-"));
   paths = {
     bundle: NodePath.join(directory, "bundled-helper"),
     dataHome: NodePath.join(directory, "user data"),

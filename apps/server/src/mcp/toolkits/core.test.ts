@@ -415,7 +415,7 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
       McpHttpServer.layerHtmlToolkit.pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(PreviewBrowser.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-html-render-" })),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-html-render-" })),
         Layer.provide(NodeServices.layer),
         // The preview browser is not installed in a fresh home, so nothing downloads.
         Layer.provide(FetchHttpClient.layer),
@@ -1064,7 +1064,7 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(ServerSecretStore.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-attachment-" })),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
         Layer.provide(NodeServices.layer),
       ),
     ),

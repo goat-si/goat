@@ -19,7 +19,7 @@ const config = {
 const json = JSON.stringify(config, null, 2);
 
 function runStep(stdout, exitCode = 0) {
-  const runnerTemp = mkdtempSync(join(tmpdir(), "t3-relay-state-test-"));
+  const runnerTemp = mkdtempSync(join(tmpdir(), "goat-relay-state-test-"));
   try {
     const result = spawnSync(
       "bash",

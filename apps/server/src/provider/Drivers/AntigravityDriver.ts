@@ -273,7 +273,7 @@ export const AntigravityDriver: ProviderDriver<
         input: Pick<AntigravityAcpRuntimeInput, "onAuthorizationUrl">,
       ) {
         const cwd = yield* fileSystem
-          .makeTempDirectoryScoped({ prefix: "t3-antigravity-setup-" })
+          .makeTempDirectoryScoped({ prefix: "goat-antigravity-setup-" })
           .pipe(
             Effect.mapError(
               () =>

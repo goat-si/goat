@@ -141,7 +141,7 @@ const runRestart = Effect.fn("runRestart")(function* (input: {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const tempDir = yield* Effect.acquireRelease(
-    fs.makeTempDirectory({ prefix: "t3-orchestration-v2-restart-note-" }),
+    fs.makeTempDirectory({ prefix: "goat-orchestration-v2-restart-note-" }),
     (directory) => fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
   );
   const materialized = yield* materializeFixtureInput({

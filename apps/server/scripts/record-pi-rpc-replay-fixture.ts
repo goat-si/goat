@@ -235,7 +235,7 @@ const record = Effect.gen(function* () {
     path.join(workspace, ".pi", "settings.json"),
     encodeJson(WORKSPACE_PI_SETTINGS),
   );
-  const sessionDir = yield* fs.makeTempDirectory({ prefix: `t3-pi-record-sessions-` });
+  const sessionDir = yield* fs.makeTempDirectory({ prefix: `goat-pi-record-sessions-` });
   yield* Effect.addFinalizer(() =>
     Effect.all([
       fs.remove(workspace, { recursive: true, force: true }),

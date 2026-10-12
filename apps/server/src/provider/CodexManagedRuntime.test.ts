@@ -216,7 +216,7 @@ it.effect.each(
       Effect.scoped,
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), {
-          prefix: "t3-managed-runtime-",
+          prefix: "goat-managed-runtime-",
         }).pipe(Layer.provideMerge(NodeServices.layer)),
       ),
     ),

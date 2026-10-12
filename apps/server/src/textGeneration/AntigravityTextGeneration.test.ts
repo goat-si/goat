@@ -61,7 +61,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-test-" });
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-antigravity-text-test-" });
   const profileDirectory = path.join(root, "profile");
   const projectDirectory = path.join(root, "project");
   const conversations = path.join(profileDirectory, "antigravity-acp", "conversations");

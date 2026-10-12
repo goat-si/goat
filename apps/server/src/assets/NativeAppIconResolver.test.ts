@@ -40,7 +40,7 @@ describe("resolveNativeAppIcon", () => {
       }),
     );
     const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-      prefix: "t3-native-app-icon-test-",
+      prefix: "goat-native-app-icon-test-",
     });
     const layerDependencies = Layer.mergeAll(
       layerConfig,

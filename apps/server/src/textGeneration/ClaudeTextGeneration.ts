@@ -186,7 +186,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const workingDirectory =
         operation === "generateThreadTitle" || operation === "generateChannelReception"
           ? yield* fileSystem
-              .makeTempDirectoryScoped({ prefix: "t3code-claude-title-" })
+              .makeTempDirectoryScoped({ prefix: "goat-claude-title-" })
               .pipe(
                 Effect.mapError((cause) =>
                   normalizeCliError("claude", operation, cause, "Failed to create title directory"),

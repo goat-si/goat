@@ -84,7 +84,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
   it.effect("advertises the Slack channel in the assembled server descriptor", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-slack-channel-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-slack-channel-" });
       const descriptor = yield* ServerEnvironment.ServerEnvironment.use(
         (environment) => environment.getDescriptor,
       ).pipe(Effect.provide(layerServerEnvironment(baseDir)));
@@ -143,7 +143,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
       const crypto = yield* Crypto.Crypto;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-concurrent-test-",
+        prefix: "goat-server-environment-concurrent-test-",
       });
       const serverConfig = yield* makeServerConfig(baseDir);
       yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
@@ -209,7 +209,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-test-",
+        prefix: "goat-server-environment-test-",
       });
 
       const first = yield* Effect.gen(function* () {
@@ -245,7 +245,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-publish-test-",
+        prefix: "goat-server-environment-publish-test-",
       });
       const layerTest = Layer.mergeAll(
         ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
@@ -291,7 +291,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-desktop-update-test-",
+        prefix: "goat-server-environment-desktop-update-test-",
       });
       const serverConfig = yield* makeServerConfig(baseDir);
       yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
@@ -332,7 +332,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-error-test-",
+        prefix: "goat-server-environment-error-test-",
       });
       const serverConfig = yield* makeServerConfig(baseDir);
       const environmentIdPath = serverConfig.environmentIdPath;

@@ -2230,7 +2230,7 @@ it.effect("creates a strong provider-thread mapping for an imported native sessi
 
 it.effect("shared intake preserves durable attachment bytes after a lost launch result", () => {
   const harness = makeHarness();
-  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-message-intake-" }).pipe(
+  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "goat-message-intake-" }).pipe(
     Layer.provideMerge(NodeServices.layer),
   );
   return Effect.gen(function* () {
@@ -2754,7 +2754,7 @@ it.effect("records launcher before preparation and preserves it on receipt repla
       Effect.provide(
         Layer.merge(
           harness.layer,
-          ServerConfig.layerTest(process.cwd(), { prefix: "t3-foundation-intake-" }).pipe(
+          ServerConfig.layerTest(process.cwd(), { prefix: "goat-foundation-intake-" }).pipe(
             Layer.provideMerge(NodeServices.layer),
           ),
         ),
@@ -2783,7 +2783,7 @@ it.effect.each([
 
 it.effect("replays an accepted send after the project disables the instance", () => {
   const harness = makeHarness();
-  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-send-retry-" }).pipe(
+  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "goat-send-retry-" }).pipe(
     Layer.provideMerge(NodeServices.layer),
   );
   return Effect.gen(function* () {
@@ -2831,7 +2831,7 @@ it.effect("replays an accepted send after the project disables the instance", ()
 
 it.effect("replays an accepted message.dispatch after the project disables the instance", () => {
   const harness = makeHarness();
-  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-dispatch-retry-" }).pipe(
+  const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "goat-dispatch-retry-" }).pipe(
     Layer.provideMerge(NodeServices.layer),
   );
   return Effect.gen(function* () {

@@ -74,7 +74,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const scratch = yield* fs.makeTempDirectory({ prefix: "t3-cli-smoke-" });
+  const scratch = yield* fs.makeTempDirectory({ prefix: "goat-cli-smoke-" });
   // Windows can keep goat.exe locked (EBUSY) for a moment after the server
   // exits. A leftover scratch directory on a CI runner is harmless, so
   // cleanup retries briefly and never fails a smoke test that passed.

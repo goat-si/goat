@@ -49,7 +49,7 @@ describe("remote folder browsing over POSIX sh", () => {
   beforeAll(() => {
     // Canonicalize macOS's /var -> /private/var alias before making path assertions.
     home = NodeFS.realpathSync(
-      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-remote-browse-")),
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-remote-browse-")),
     );
     repo = NodePath.join(home, "repo");
     worktree = NodePath.join(home, "linked worktree");

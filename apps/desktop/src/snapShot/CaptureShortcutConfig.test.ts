@@ -23,7 +23,7 @@ const appId = "com.t3tools.T3Code";
 const install = { operation: "install", chooseFile: false } as const;
 const target = () => ({ desktop: "niri" as const, path, appId });
 beforeEach(async () => {
-  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-capture-config-"));
+  directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-capture-config-"));
   path = NodePath.join(directory, "config.kdl");
   await NodeFSP.writeFile(path, "binds {\n    Mod+Q { quit; }\n}\n", { mode: 0o640 });
   tools.validateNiri.mockReset().mockResolvedValue(undefined);

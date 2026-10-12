@@ -37,7 +37,7 @@ async function createFixture(): Promise<{
   readonly dependencyRoot: string;
   readonly root: string;
 }> {
-  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3code-licenses-"));
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-licenses-"));
   tempDirectories.push(root);
   const appManifest = NodePath.join(root, "package.json");
   const dependencyRoot = NodePath.join(root, "node_modules", "demo-dependency");

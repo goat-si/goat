@@ -131,7 +131,9 @@ const layerPlatformTest = Layer.merge(
     resolveLink: () => Effect.die("unused title link"),
   }),
 );
-const layerServerConfig = ServerConfig.layerTest(`${ROOT}/work`, { prefix: "t3-opencode2-live-" });
+const layerServerConfig = ServerConfig.layerTest(`${ROOT}/work`, {
+  prefix: "goat-opencode2-live-",
+});
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProcess.layer),
   Layer.provide(layerServerConfig),

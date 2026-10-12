@@ -43,7 +43,7 @@ it.effect.each([
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-v2-restore-" });
+    const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-v2-restore-" });
     const cwd = path.join(parent, "worktree");
     const nested = path.join(cwd, "nested");
     const sibling = path.join(parent, "worktree2");

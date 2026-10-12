@@ -23,7 +23,7 @@ describe("ResourceMonitorBinary", () => {
       });
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const binaryPath = `${baseDir}/t3-resource-monitor.exe`;
       yield* fileSystem.writeFileString(binaryPath, "binary");
@@ -46,7 +46,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const binaryPath = `${baseDir}/t3-resource-monitor`;
       yield* fileSystem.writeFileString(binaryPath, "binary");
@@ -70,7 +70,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const binaryPath = `${baseDir}/custom-resource-monitor`;
       yield* fileSystem.writeFileString(binaryPath, "binary");
@@ -93,7 +93,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const binaryPath = `${baseDir}/t3-resource-monitor`;
       yield* fileSystem.writeFileString(binaryPath, "binary");
@@ -119,7 +119,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
 
       const service = yield* ResourceMonitorBinary.make().pipe(
@@ -141,7 +141,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const service = yield* ResourceMonitorBinary.make().pipe(
         Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
@@ -159,7 +159,7 @@ describe("ResourceMonitorBinary", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
+        prefix: "goat-resource-monitor-binary-",
       });
       const service = yield* ResourceMonitorBinary.make().pipe(
         Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),

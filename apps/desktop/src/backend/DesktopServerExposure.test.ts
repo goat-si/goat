@@ -130,7 +130,7 @@ const withHarness = <A, E, R>(
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-desktop-server-exposure-test-",
+      prefix: "goat-desktop-server-exposure-test-",
     });
     return yield* effect.pipe(
       Effect.provide(

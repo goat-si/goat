@@ -66,7 +66,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-workspaces-" });
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-workspaces-" });
         const configDir = path.join(tempDir, "claude-home");
         const workspaces = [path.join(tempDir, "one"), path.join(tempDir, "two")];
         for (const cwd of workspaces) {
@@ -159,7 +159,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-workspace-retry-" });
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-workspace-retry-" });
       const skillDir = path.join(cwd, ".claude", "skills", "existing-skill");
       yield* fs.makeDirectory(skillDir, { recursive: true });
       yield* fs.writeFileString(
@@ -240,7 +240,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-probe-sdk-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-probe-sdk-" });
       const executablePath = yield* path.fromFileUrl(
         new URL("./testing/ClaudeCapabilitiesProbe.fixture.mjs", import.meta.url),
       );
@@ -249,7 +249,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       // Windows a directory that is still some process's cwd cannot be
       // removed. Keep the workspace outside the scoped directory and let it
       // go with a retrying removal once the child has gone.
-      const workspaceCwd = yield* fs.makeTempDirectory({ prefix: "t3-claude-probe-cwd-" });
+      const workspaceCwd = yield* fs.makeTempDirectory({ prefix: "goat-claude-probe-cwd-" });
       // Node's own retry rather than an Effect schedule: it.effect runs on a
       // TestClock, so a scheduled retry would wait for time nobody advances.
       // If the child still holds the directory after that, an empty temp

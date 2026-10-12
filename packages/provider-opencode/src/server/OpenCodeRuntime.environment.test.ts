@@ -167,7 +167,7 @@ describe("OpenCode server output", () => {
         const environment = yield* HostProcess.Environment;
         const executablePath = yield* HostProcess.ExecutablePath;
         const platform = yield* HostProcess.Platform;
-        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-output-" });
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-output-" });
         const isWindows = platform === "win32";
         const binaryPath = path.join(tempDir, isWindows ? "opencode.cmd" : "opencode");
         const scriptPath = path.join(tempDir, "opencode.mjs");

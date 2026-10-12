@@ -88,7 +88,7 @@ const layerPlatformTest = Layer.merge(
 );
 
 const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-orchestration-v2-runtime-layer-",
+  prefix: "goat-orchestration-v2-runtime-layer-",
 });
 
 const modelSelection = {

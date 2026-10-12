@@ -117,7 +117,7 @@ function runChecked(command, args) {
 }
 
 function installElectronRuntime(electronDir, version) {
-  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-"));
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-electron-"));
   const zipPath = NodePath.join(tempDir, `electron-v${version}-${hostPlatform}-${hostArch}.zip`);
 
   try {

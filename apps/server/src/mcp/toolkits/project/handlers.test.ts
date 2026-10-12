@@ -146,7 +146,7 @@ const launchFromThread = (params: {
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
       NodeServices.layer,
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-link-" }).pipe(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-source-link-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -459,7 +459,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
       NodeServices.layer,
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-scratch-launch-" }).pipe(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-scratch-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -565,7 +565,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
       NodeServices.layer,
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-named-project-" }).pipe(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-named-project-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     );
@@ -673,7 +673,7 @@ const clientLaunchHarness = (input: {
     Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(VcsProcess.layer),
     Layer.provideMerge(
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-client-launch-" }).pipe(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-client-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     ),
@@ -730,7 +730,7 @@ it.effect("a launch binds only an existing checkout that is one of the project's
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-launch-worktree-" });
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-launch-worktree-" });
     const repo = path.join(root, "repo");
     const worktree = path.join(root, "feature");
     const outside = path.join(root, "outside");
@@ -918,7 +918,7 @@ it.effect("lists and reads another machine's projects through that machine's own
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
       NodeServices.layer,
-      ServerConfig.layerTest(process.cwd(), { prefix: "t3-host-projects-" }).pipe(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-host-projects-" }).pipe(
         Layer.provide(NodeServices.layer),
       ),
     );

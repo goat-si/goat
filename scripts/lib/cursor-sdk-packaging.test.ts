@@ -66,7 +66,7 @@ async function stagePackage(name: string, from: string, destination: string): Pr
 }
 
 it("loads packaged Cursor catalog chunks without credentials or checkout dependencies", async () => {
-  const scratch = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-cursor-package-"));
+  const scratch = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cursor-package-"));
   try {
     // Missing staged dependencies must not resolve from a developer's /tmp tree.
     for (let parent = NodePath.dirname(scratch); ; parent = NodePath.dirname(parent)) {

@@ -24,7 +24,7 @@ import {
 } from "./AttachmentClaims.ts";
 
 const layerTest = Layer.mergeAll(NodeServices.layer).pipe(
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-attachment-claims-" })),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-attachment-claims-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 
