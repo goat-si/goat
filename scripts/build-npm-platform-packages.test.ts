@@ -117,7 +117,7 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       // Platform packages in CLI_ARCHIVE_PLATFORM_KEYS order, launcher last.
       assert.deepStrictEqual(
         outputs.map((output) => output.name),
-        ["@goat/cli-darwin-arm64", "@goat/cli-linux-x64", "t3"],
+        ["@goat/cli-darwin-arm64", "@goat/cli-linux-x64", "goat"],
       );
       for (const output of outputs) {
         assert.isTrue(yield* fs.exists(output.tarball), output.tarball);
@@ -165,24 +165,24 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       assert.deepStrictEqual(darwinManifest.os, ["darwin"]);
       assert.deepStrictEqual(darwinManifest.cpu, ["arm64"]);
 
-      const launcherDir = path.join(fixture.outputDir, "t3");
+      const launcherDir = path.join(fixture.outputDir, "goat");
       const launcherManifest = yield* decodeManifest(
         yield* fs.readFileString(path.join(launcherDir, "package.json")),
       );
-      assert.equal(launcherManifest.name, "t3");
+      assert.equal(launcherManifest.name, "goat");
       assert.equal(launcherManifest.version, VERSION);
-      assert.deepStrictEqual(launcherManifest.bin, { goat: "./bin/t3.js", t3: "./bin/t3.js" });
+      assert.deepStrictEqual(launcherManifest.bin, { goat: "./bin/goat.js", t3: "./bin/goat.js" });
       assert.deepStrictEqual(launcherManifest.files, ["bin", "dist"]);
       assert.deepStrictEqual(launcherManifest.optionalDependencies, {
         "@goat/cli-darwin-arm64": VERSION,
         "@goat/cli-linux-x64": VERSION,
       });
       assert.isUndefined(launcherManifest.engines);
-      assert.isTrue(yield* fs.exists(path.join(launcherDir, "bin/t3.js")));
+      assert.isTrue(yield* fs.exists(path.join(launcherDir, "bin/goat.js")));
 
       // The scratch dirs must not be left behind next to the packages.
       const outputEntries = yield* fs.readDirectory(fixture.outputDir);
-      assert.deepStrictEqual(outputEntries.sort(), ["@t3code", "t3", "t3.tgz"]);
+      assert.deepStrictEqual(outputEntries.sort(), ["@goat", "goat", "goat.tgz"]);
 
       // The tarball is what gets published: it must carry node_modules (which
       // `npm publish <dir>` would strip) under npm's `package/` root, with the
@@ -207,10 +207,14 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       const hostArch = yield* HostProcess.Architecture;
       const env = { ...process.env, NODE_PATH: fixture.outputDir } as Record<string, string>;
       if (KEYS.some((key) => key === `${hostPlatform}-${hostArch}`)) {
-        const passthrough = yield* run(process.execPath, ["bin/t3.js", "serve", "--port", "1234"], {
-          cwd: launcherDir,
-          env,
-        });
+        const passthrough = yield* run(
+          process.execPath,
+          ["bin/goat.js", "serve", "--port", "1234"],
+          {
+            cwd: launcherDir,
+            env,
+          },
+        );
         assert.equal(
           passthrough.stdout.trim(),
           `stub ${hostPlatform}-${hostArch} serve --port 1234`,
@@ -223,7 +227,7 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
         yield* fs.makeDirectory(installedLauncher);
         const unpack = yield* run(
           "tar",
-          ["-xf", path.join(fixture.outputDir, "t3.tgz"), "-C", installedLauncher],
+          ["-xf", path.join(fixture.outputDir, "goat.tgz"), "-C", installedLauncher],
           {
             cwd: fixture.root,
           },
@@ -248,7 +252,7 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
         assert.equal(legacy.exitCode, 7);
       }
 
-      const unsupported = yield* run(process.execPath, ["bin/t3.js", "--version"], {
+      const unsupported = yield* run(process.execPath, ["bin/goat.js", "--version"], {
         cwd: launcherDir,
         env: { ...env, NODE_PATH: path.join(fixture.root, "nowhere") },
       });

@@ -195,17 +195,17 @@ const publishCmd = Command.make(
       // npm runs with cwd set to the packages dir below, so tarball paths are
       // resolved once here rather than joined twice.
       const packagesDir = path.resolve(config.packagesDir);
-      const scopeDir = path.join(packagesDir, "@t3code");
-      const launcherTarball = path.join(packagesDir, "t3.tgz");
+      const scopeDir = path.join(packagesDir, "@goat");
+      const launcherTarball = path.join(packagesDir, "goat.tgz");
       const platformTarballs = (yield* fs
         .readDirectory(scopeDir)
         .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => [])))
-        .filter((entry) => entry.startsWith("t3-") && entry.endsWith(".tgz"))
+        .filter((entry) => entry.startsWith("cli-") && entry.endsWith(".tgz"))
         .sort()
         .map((entry) => path.join(scopeDir, entry));
       if (platformTarballs.length === 0) {
         return yield* new ServerCliBuildAssetMissingError({
-          assetPath: path.join(scopeDir, "t3-<platform>.tgz"),
+          assetPath: path.join(scopeDir, "cli-<platform>.tgz"),
         });
       }
       if (!(yield* fs.exists(launcherTarball))) {

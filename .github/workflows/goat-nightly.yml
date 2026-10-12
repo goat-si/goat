@@ -191,7 +191,7 @@ jobs:
           run-install: false
 
       - name: Install bundle dependencies
-        run: vp install --filter=t3... --filter=@goat/web... --filter=@goat/desktop... --filter=@goat/scripts...
+        run: vp install --filter=goat... --filter=@goat/web... --filter=@goat/desktop... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -275,7 +275,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=t3... --filter=@goat/scripts...
+        run: vp install --filter=goat... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -391,7 +391,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=@goat/desktop... --filter=t3... --filter=@goat/scripts...
+        run: vp install --filter=@goat/desktop... --filter=goat... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -522,7 +522,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=@goat/desktop... --filter=t3... --filter=@goat/scripts...
+        run: vp install --filter=@goat/desktop... --filter=goat... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"

@@ -584,7 +584,10 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
     builtExecutable,
     `Run \`node apps/server/scripts/cli.ts build-exe --target ${targetKey}\` first.`,
   );
-  yield* requireInput(path.join(webClient, "index.html"), "Run `vp run --filter t3 build` first.");
+  yield* requireInput(
+    path.join(webClient, "index.html"),
+    "Run `vp run --filter goat build` first.",
+  );
   yield* requireInput(
     resourceMonitorDir,
     "Build the resource monitor or pass --resource-monitor-dir.",

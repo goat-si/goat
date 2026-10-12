@@ -245,9 +245,9 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         .makeTempDirectoryScoped()
         .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
       const prefix = path.join(root, "bunx-tools");
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
-      const launcher = path.join(packageRoot, "bin/t3.js");
-      const entry = path.join(packageRoot, "node_modules/@goat/cli-linux-x64/t3");
+      const packageRoot = path.join(prefix, "lib/node_modules/goat");
+      const launcher = path.join(packageRoot, "bin/goat.js");
+      const entry = path.join(packageRoot, "node_modules/@goat/cli-linux-x64/goat");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
@@ -255,9 +255,9 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"t3":"./bin/t3.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
+        '{"name":"goat","version":"0.0.45","bin":{"goat":"./bin/goat.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
       );
-      yield* fs.symlink(launcher, path.join(prefix, "bin/t3"));
+      yield* fs.symlink(launcher, path.join(prefix, "bin/goat"));
       const resolve = resolveServerInstallation.pipe(
         Effect.provideService(HostProcess.ExecutablePath, entry),
         Effect.provideService(HostProcess.IsExecutable, true),
@@ -283,8 +283,8 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const prefix = yield* fs
         .makeTempDirectoryScoped()
         .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const packageRoot = path.join(prefix, "lib/node_modules/t3");
-      const launcher = path.join(packageRoot, "bin/t3.js");
+      const packageRoot = path.join(prefix, "lib/node_modules/goat");
+      const launcher = path.join(packageRoot, "bin/goat.js");
       const entry = path.join(packageRoot, "node_modules/@goat/cli-linux-x64/goat");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
@@ -293,7 +293,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"goat":"./bin/t3.js","t3":"./bin/t3.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
+        '{"name":"goat","version":"0.0.45","bin":{"goat":"./bin/goat.js","t3":"./bin/goat.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
       );
       yield* fs.writeFileString(
         path.join(path.dirname(entry), "package.json"),

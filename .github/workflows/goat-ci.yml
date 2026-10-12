@@ -129,7 +129,7 @@ jobs:
 
       - name: Test server
         if: matrix.task == 'test-server'
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
+        run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
 
       # Upstream merges must not bring back 0.0.x or split the four release manifests.
       - name: Check release version

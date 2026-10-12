@@ -46,7 +46,10 @@ const InstallManifest = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
   bin: Schema.optionalKey(
-    Schema.Struct({ goat: Schema.optionalKey(Schema.String), t3: Schema.String }),
+    Schema.Struct({
+      goat: Schema.optionalKey(Schema.String),
+      t3: Schema.optionalKey(Schema.String),
+    }),
   ),
   optionalDependencies: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
@@ -61,8 +64,9 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const executablePath = yield* HostProcess.ExecutablePath;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(executable ? executablePath : (args[1] ?? ""));
+  // `t3`, `bin/t3.js` and `@t3code/t3-*` are launchers built before the GOAT rename. goat-rename: legacy
   const match =
-    /^(.*)\/lib\/node_modules\/t3\/(?:dist\/bin\.mjs|bin\/t3\.js|node_modules\/@t3code\/t3-[^/]+\/(?:goat|t3))$/.exec(
+    /^(.*)\/lib\/node_modules\/(goat|t3)\/(?:dist\/bin\.mjs|bin\/(?:goat|t3)\.js|node_modules\/@(?:goat\/cli|t3code\/t3)-[^/]+\/(?:goat|t3))$/.exec(
       entry,
     );
   if (!match) {
@@ -82,13 +86,15 @@ export const resolveServerInstallation = Effect.gen(function* () {
   )
     return null;
 
-  const packageRoot = path.join(prefix, "lib/node_modules/t3");
+  const packageName = match[2] ?? "goat";
+  const packageRoot = path.join(prefix, "lib/node_modules", packageName);
   const manifest = yield* fs
     .readFileString(path.join(packageRoot, "package.json"))
     .pipe(Effect.flatMap(decodeInstallManifest));
-  if (manifest.name !== "t3" || !manifest.bin) return null;
+  if (manifest.name !== packageName || !manifest.bin) return null;
   const binName = manifest.bin.goat === undefined ? "t3" : "goat";
   const binScript = manifest.bin.goat ?? manifest.bin.t3;
+  if (binScript === undefined) return null;
   const bin = yield* fs.realPath(path.join(packageRoot, binScript));
   const globalBin = yield* fs.realPath(path.join(prefix, "bin", binName));
   if (globalBin !== bin) return null;
@@ -97,7 +103,7 @@ export const resolveServerInstallation = Effect.gen(function* () {
       .readFileString(path.join(path.dirname(entry), "package.json"))
       .pipe(Effect.flatMap(decodeInstallManifest));
     if (
-      binScript !== "./bin/t3.js" ||
+      (binScript !== "./bin/goat.js" && binScript !== "./bin/t3.js") ||
       manifest.optionalDependencies?.[nativeManifest.name] !== nativeManifest.version ||
       nativeManifest.version !== manifest.version
     )

@@ -102,7 +102,7 @@ export async function buildDevRuntimeArchive(input: {
     const monitor = NodePath.join(staging, "resource-monitor", key);
     await NodeFSP.mkdir(monitor, { recursive: true });
     // Server build task depends on @goat/web#build and stages dist/client.
-    await run(vp, ["run", "--filter", "t3", "build"]);
+    await run(vp, ["run", "--filter", "goat", "build"]);
     await run(vp, [
       "exec",
       "node",
