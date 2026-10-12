@@ -223,6 +223,11 @@ async function restoreDatabaseBackup(
       }
     }
     await syncDirectory(NodePath.dirname(pending.dbPath));
+    // A completed copy goes back to the ownership check if the launcher
+    // crashes before recording the rollback, so a server that writes after
+    // this point is never overwritten by a second copy.
+    await NodeFSP.rm(NodePath.join(backupDir, RESTORE_MARKER), { force: true });
+    await syncDirectory(backupDir);
     return "restored";
   } finally {
     lock.release();
@@ -685,6 +690,7 @@ export class Launcher {
     if (restore === "busy") {
       // Another server owns the userdata. Starting the previous version would
       // skip the restore, so retry until the lock frees up.
+      this.#clearTimer();
       this.#timer = setTimeout(
         () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
         RESTORE_RETRY_MS,

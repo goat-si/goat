@@ -135,6 +135,28 @@ describe("AntigravityClientFiles", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("refuses a workspace root that is swapped for a symlink around each check", () =>
+    Effect.gen(function* () {
+      const { fileSystem, path, workspace, outside, write } = yield* setup;
+      const held = `${workspace}-held`;
+      yield* fileSystem.writeFileString(path.join(outside, "victim.txt"), "keep");
+      const error = yield* write(path.join(workspace, "victim.txt"), "no", {
+        restore: Effect.gen(function* () {
+          if (!(yield* fileSystem.exists(held))) return;
+          yield* fileSystem.remove(workspace);
+          yield* fileSystem.rename(held, workspace);
+        }),
+        swap: Effect.gen(function* () {
+          if (yield* fileSystem.exists(held)) return;
+          yield* fileSystem.rename(workspace, held);
+          yield* fileSystem.symlink(outside, workspace);
+        }),
+      }).pipe(Effect.flip);
+      expect(error.message).toContain("outside the session workspace");
+      expect(yield* fileSystem.readFileString(path.join(outside, "victim.txt"))).toBe("keep");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("refuses a missing directory that appears as a symlink around each check", () =>
     Effect.gen(function* () {
       const { fileSystem, path, workspace, outside, write } = yield* setup;

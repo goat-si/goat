@@ -140,7 +140,11 @@ const writeFakeRuntime = (
   Effect.gen(function* () {
     const entryPath = path.join(versionDir, "goat");
     yield* fs.makeDirectory(versionDir, { recursive: true });
-    yield* fs.writeFileString(entryPath, `#!${process.execPath}\n${childSource}`);
+    // Fixtures import TypeScript, which Node 22 runs only behind this flag.
+    yield* fs.writeFileString(
+      entryPath,
+      `#!${process.execPath} --experimental-strip-types\n${childSource}`,
+    );
     yield* fs.chmod(entryPath, 0o755);
     yield* fs.writeFileString(
       path.join(versionDir, ".install-complete"),
@@ -551,6 +555,51 @@ if (context.update?.status === "pending") {
       );
       assert.equal(yield* fs.readFileString(databasePath), "before trial");
       assert.isFalse(yield* fs.exists(backupDir));
+    }),
+  );
+  it.effect("recovers a finished restore without copying over a later server's writes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-recopy-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      const lockDir = path.dirname(databasePath);
+      const backupDir = path.join(root, "runtime", "db-backup", "update-1");
+      yield* fs.makeDirectory(lockDir, { recursive: true });
+      yield* fs.makeDirectory(backupDir, { recursive: true });
+      yield* fs.writeFileString(path.join(backupDir, "database"), "before trial");
+      const backup = tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1");
+      assert.isDefined(backup);
+      backup.release();
+      yield* fs.writeFileString(path.join(backupDir, "owner-generation"), `${backup.generation}\n`);
+      // The launcher finished the copy and crashed before recording it; a
+      // desktop server then took the data and wrote.
+      yield* fs.writeFileString(path.join(backupDir, ".rollback-pending"), "");
+      tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1")?.release();
+      tryAcquireServerOwnerLock(lockDir, "desktop")?.release();
+      yield* fs.writeFileString(databasePath, "desktop write after restore");
+      yield* writeUpdateRuntimes(fs, path, root, databasePath, "  process.exit(1);");
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+          update: {
+            id: "update-1",
+            fromVersion: "1.0.0",
+            targetVersion: "1.1.0",
+            dbPath: databasePath,
+            status: "pending",
+          },
+        }),
+      );
+
+      const state = yield* runUntilActiveExits(root, statePath);
+      assert.equal(
+        state.update?.status === "failed" ? state.update.reason : undefined,
+        "rollback-interrupted;db-kept-for-other-server",
+      );
+      assert.equal(yield* fs.readFileString(databasePath), "desktop write after restore");
     }),
   );
 });
