@@ -304,3 +304,18 @@ describe("wp9 final safety boundaries", () => {
     ).toEqual([]);
   });
 });
+
+describe("test residue stays useful after fixture classification", () => {
+  it("reports new internal identifiers even in tests", () => {
+    expect(
+      findResidue("apps/server/src/new.test.ts", "const t3NewFeature = 1;", KEEP_RULES),
+    ).toHaveLength(1);
+    expect(
+      findResidue(
+        "apps/server/src/new.test.ts",
+        'const repository = "t3tools/t3code";',
+        KEEP_RULES,
+      ),
+    ).toEqual([]);
+  });
+});

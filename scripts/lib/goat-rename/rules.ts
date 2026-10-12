@@ -709,7 +709,8 @@ export const KEEP_RULES: readonly KeepRule[] = [
 
   {
     id: "test-fixture-values",
-    pattern: /[A-Za-z0-9_]*[Tt]3[A-Za-z0-9_]*(?:[-.:/][A-Za-z0-9_-]+)*/g,
+    pattern:
+      /\b(?:[Tt]3(?:code|Code|Tools|tools|dotgg)?(?:[-.:/][A-Za-z0-9_-]+)*|T3B|_t3_unknown|__t3Xss|t3code_codex_(?:missing|first|second)_|t3coderelay[-A-Za-z0-9]*|t3Source|fromT3|missingT3|t3chat-[A-Za-z0-9-]+|host3|project3|bt3kw2qpn)\b|mcp__t3(?:code|-code)__|(?:[Tt]3)_|(?<=\.mount_)[Tt]3[A-Za-z0-9]*|\burn%3At3%3A/g,
     scope: isTest,
     reason:
       "Opaque test fixture paths, mock process/app/repository identities and historical release URLs; these are input samples, not product identifiers.",
