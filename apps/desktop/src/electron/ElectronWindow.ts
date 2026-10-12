@@ -2,7 +2,7 @@
 
 import * as NodePath from "node:path";
 
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -125,7 +125,7 @@ export class ElectronWindow extends Context.Service<
       sync: (window: Electron.BrowserWindow) => Effect.Effect<void, E, R>,
     ) => Effect.Effect<void, E, R>;
   }
->()("@t3tools/desktop/electron/ElectronWindow") {}
+>()("@goat/desktop/electron/ElectronWindow") {}
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {

@@ -12,13 +12,10 @@ import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
 import type { ThreadMoveDestination } from "./threadOrder";
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3tools/contracts";
-import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import type { EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
+import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@goat/contracts";
+import { canSnooze, resolveSnoozePresets } from "@goat/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Alert, Pressable, useWindowDimensions, View } from "react-native";

@@ -1,5 +1,5 @@
-import { resolveGoatBotHome, type GoatBotHomeTarget } from "@t3tools/client-runtime/goatBot/home";
-import { EnvironmentId, compareGoatBotHomeClaims } from "@t3tools/contracts";
+import { resolveGoatBotHome, type GoatBotHomeTarget } from "@goat/client-runtime/goatBot/home";
+import { EnvironmentId, compareGoatBotHomeClaims } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   planMobileGoatBotHomeChange,

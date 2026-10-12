@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
+import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
+import { T3_MCP_TOOL_NAMES } from "@goat/shared/t3McpToolPresentation";
 
 import {
   commandDetailRepeatsCommand,

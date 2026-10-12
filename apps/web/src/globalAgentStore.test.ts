@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { createJSONStorage } from "zustand/middleware";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 

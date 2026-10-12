@@ -4,7 +4,7 @@ import {
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
   EnvironmentHttpApi,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";

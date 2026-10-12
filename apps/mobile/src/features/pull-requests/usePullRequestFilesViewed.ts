@@ -1,7 +1,7 @@
 import { usePullRequestConnected } from "./usePullRequestConnected";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { PullRequestDetail } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { PullRequestDetail } from "@goat/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";

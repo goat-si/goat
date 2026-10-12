@@ -1,5 +1,5 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
+import { resolveThreadReferenceCopyTarget } from "@goat/shared/threadReference";
 import {
   createContext,
   use,

@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId, TurnItemId } from "@goat/contracts";
 import {
   makeMcpAppHost,
   McpAppHostRefusal,
@@ -8,8 +8,8 @@ import {
   type McpAppDisplayMode,
   type McpAppHost,
   type McpAppHostContext,
-} from "@t3tools/client-runtime/mcp-apps";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/mcp-apps";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   clampMcpAppHeight,
   MCP_APP_DEFAULT_HEIGHT,
@@ -17,7 +17,7 @@ import {
   mcpAppAllowAttribute,
   mcpAppFileName,
   type McpAppReference,
-} from "@t3tools/shared/mcpApp";
+} from "@goat/shared/mcpApp";
 import { Minimize2Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";

@@ -15,8 +15,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as GitHubApi from "./GitHubApi.ts";
 import * as GitHubCredentials from "./GitHubCredentials.ts";
 import * as GitHubQuota from "./GitHubQuota.ts";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
-import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
+import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import { KnownWorkflowRuns } from "./gitHubConditionalChecks.ts";
 

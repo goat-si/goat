@@ -1,4 +1,4 @@
-import type { PullRequestReviewGuideNote } from "@t3tools/contracts";
+import type { PullRequestReviewGuideNote } from "@goat/contracts";
 
 import { cn } from "~/lib/utils";
 

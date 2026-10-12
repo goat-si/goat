@@ -1,4 +1,4 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { OrchestratorMcpFailure } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";

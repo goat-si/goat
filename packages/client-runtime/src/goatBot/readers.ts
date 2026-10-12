@@ -3,7 +3,7 @@ import type {
   ChannelMessageKind,
   ChannelTaskChip,
   ChannelTaskStatus,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import type {
   GoatBotBotTone,

@@ -3,8 +3,8 @@ import {
   ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION,
   StoredOrchestrationThreadSnapshot,
   Persistence,
-} from "@t3tools/client-runtime/platform";
-import { type EnvironmentId, ServerConfig, VcsListRefsResult } from "@t3tools/contracts";
+} from "@goat/client-runtime/platform";
+import { type EnvironmentId, ServerConfig, VcsListRefsResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";

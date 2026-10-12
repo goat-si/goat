@@ -4,7 +4,7 @@ import {
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/reactivity";

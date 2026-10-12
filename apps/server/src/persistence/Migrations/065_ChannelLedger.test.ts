@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import ChannelLedgerMigration from "./065_ChannelLedger.ts";

@@ -1,5 +1,5 @@
-import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
-import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
+import { cliReleaseChannelOf } from "@goat/shared/cliRelease";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";

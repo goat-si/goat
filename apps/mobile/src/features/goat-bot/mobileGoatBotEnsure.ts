@@ -2,8 +2,8 @@ import {
   settleGoatBotEnsure,
   type GoatBotEnsureMachine,
   type GoatBotEnsureResult,
-} from "@t3tools/client-runtime/goatBot";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/goatBot";
+import type { EnvironmentId } from "@goat/contracts";
 
 export interface MobileGoatBotEnsureDestination {
   readonly environmentId: EnvironmentId | null;

@@ -1,5 +1,5 @@
-import type { ProviderDriverKind, ProviderOptionDescriptor } from "@t3tools/contracts";
-import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
+import type { ProviderDriverKind, ProviderOptionDescriptor } from "@goat/contracts";
+import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { ZapIcon } from "lucide-react";
 import { UltrafastIcon } from "../Icons";
 import { cn } from "~/lib/utils";

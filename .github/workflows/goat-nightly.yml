@@ -119,7 +119,7 @@ jobs:
 
       - name: Install script dependencies
         if: steps.resolve.outputs.skip == 'false'
-        run: vp install --filter=@t3tools/scripts...
+        run: vp install --filter=@goat/scripts...
 
       # A nightly is a prerelease of the package version, so once that version
       # ships as stable, nightlies must wait for the next version bump.
@@ -191,7 +191,7 @@ jobs:
           run-install: false
 
       - name: Install bundle dependencies
-        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+        run: vp install --filter=t3... --filter=@goat/web... --filter=@goat/desktop... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -275,7 +275,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=t3... --filter=@t3tools/scripts...
+        run: vp install --filter=t3... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -391,7 +391,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+        run: vp install --filter=@goat/desktop... --filter=t3... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -522,7 +522,7 @@ jobs:
           run-install: false
 
       - name: Install dependencies
-        run: vp install --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+        run: vp install --filter=@goat/desktop... --filter=t3... --filter=@goat/scripts...
 
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
@@ -639,7 +639,7 @@ jobs:
           run-install: false
 
       - name: Install script dependencies
-        run: vp install --filter=@t3tools/scripts...
+        run: vp install --filter=@goat/scripts...
 
       - name: Download desktop assets
         uses: actions/download-artifact@v4
@@ -733,7 +733,7 @@ jobs:
           run-install: false
 
       - name: Install script dependencies
-        run: vp install --filter=@t3tools/scripts...
+        run: vp install --filter=@goat/scripts...
 
       - name: Download release assets
         uses: actions/download-artifact@v4

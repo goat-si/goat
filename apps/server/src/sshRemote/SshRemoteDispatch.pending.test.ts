@@ -1,8 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it, vi } from "@effect/vitest";
-import * as SshConfig from "@t3tools/ssh/config";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+import * as SshConfig from "@goat/ssh/config";
+import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient } from "effect/http";

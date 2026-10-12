@@ -1,5 +1,5 @@
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
-import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
+import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 

@@ -1,10 +1,10 @@
-import type { EnvironmentId, ScopedProjectRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedProjectRef } from "@goat/contracts";
 import {
   buildProjectGroups,
   derivePhysicalProjectKey,
   type ProjectGroupingSettings,
 } from "./logicalProject";
-import { resolveScratchProjectScopeKey } from "@t3tools/client-runtime/state/project-grouping";
+import { resolveScratchProjectScopeKey } from "@goat/client-runtime/state/project-grouping";
 import type { Project } from "./types";
 
 export type EnvironmentPresence = "local-only" | "remote-only" | "mixed";

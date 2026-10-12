@@ -9,7 +9,7 @@ import {
   AuthSourceControlWriteScope,
   AuthOrchestrationOperateScope,
   type SshWorkspaceFetchBackInput,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { assert, it } from "@effect/vitest";
@@ -17,8 +17,8 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   type ServerConfig,
   type ServerConfigStreamEvent,
-} from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";

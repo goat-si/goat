@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { SshWorkspaceLaunchInput } from "@t3tools/contracts";
+import { SshWorkspaceLaunchInput } from "@goat/contracts";
 import {
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
@@ -20,7 +20,7 @@ import {
   AuthTerminalOperateScope,
   WS_METHODS,
   WsRpcGroup,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

@@ -1,4 +1,4 @@
-import { type RunId } from "@t3tools/contracts";
+import { type RunId } from "@goat/contracts";
 import { type MouseEvent, memo, useCallback, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import {

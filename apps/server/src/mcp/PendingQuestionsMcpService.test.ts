@@ -14,7 +14,7 @@ import {
   type OrchestrationV2TurnItem,
   type OrchestrationV2ServerCommand,
   type UserInputRespondedBy,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { EnvironmentId, type GoatBotHomeClaim } from "@t3tools/contracts";
+import { EnvironmentId, type GoatBotHomeClaim } from "@goat/contracts";
 import { act, StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";

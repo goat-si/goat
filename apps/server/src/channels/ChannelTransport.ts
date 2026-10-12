@@ -12,7 +12,7 @@ import type {
   ChannelGatewayError,
   ChannelKind,
   ChannelOutboundMessage,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -38,7 +38,7 @@ export class ChannelTransportRegistry extends Context.Service<
     readonly register: (transport: ChannelTransport) => Effect.Effect<void, never, Scope.Scope>;
     readonly resolve: (kind: ChannelKind) => Effect.Effect<Option.Option<ChannelTransport>>;
   }
->()("t3/channels/ChannelTransport/ChannelTransportRegistry") {}
+>()("goat/channels/ChannelTransport/ChannelTransportRegistry") {}
 
 const makeRegistry = Effect.gen(function* () {
   const transports = yield* Ref.make(new Map<ChannelKind, ChannelTransport>());

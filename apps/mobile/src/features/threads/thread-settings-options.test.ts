@@ -1,4 +1,4 @@
-import type { ProviderOptionDescriptor } from "@t3tools/contracts";
+import type { ProviderOptionDescriptor } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { runtimeModeChoicesForSupportedModes, selectableChoices } from "./thread-settings-options";

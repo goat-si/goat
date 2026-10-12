@@ -1,5 +1,5 @@
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 // Execute the generated remote script without contacting SSH or a release server.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";

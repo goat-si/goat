@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 
 /** Null follows all environments, including ones connected after the menu opened. */
 export function toggleUsageEnvironment(

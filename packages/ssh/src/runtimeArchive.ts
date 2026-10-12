@@ -2,7 +2,7 @@ import {
   cliArchiveFileName,
   parseChecksums,
   type CliArchivePlatformKey,
-} from "@t3tools/shared/cliRelease";
+} from "@goat/shared/cliRelease";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";

@@ -1,9 +1,9 @@
-import type { ResolvedKeybindingsConfig, ScopedThreadRef } from "@t3tools/contracts";
+import type { ResolvedKeybindingsConfig, ScopedThreadRef } from "@goat/contracts";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
   parseKeybindingShortcut,
-} from "@t3tools/shared/keybindings";
+} from "@goat/shared/keybindings";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { act, type ReactNode } from "react";

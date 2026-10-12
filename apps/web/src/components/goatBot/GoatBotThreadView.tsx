@@ -1,5 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -19,7 +19,7 @@ import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
 import { toastManager } from "../ui/toast";
 import { GoatBotChatView } from "./GoatBotChatView";
-import { resolveGoatBotRemoval, type GoatBotRemoval } from "@t3tools/client-runtime/goatBot";
+import { resolveGoatBotRemoval, type GoatBotRemoval } from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotSession } from "./useGoatBotSession";

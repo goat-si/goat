@@ -19,7 +19,7 @@ import requireSuppressionReason from "./rules/require-suppression-reason.ts";
 
 export default definePlugin({
   meta: {
-    name: "t3code",
+    name: "goat",
   },
   rules: {
     "namespace-node-imports": namespaceNodeImports,

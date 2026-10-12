@@ -1,4 +1,4 @@
-import { AuthAdministrativeScopes, AuthStandardClientScopes } from "@t3tools/contracts";
+import { AuthAdministrativeScopes, AuthStandardClientScopes } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
@@ -10,7 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
   currentDesktopBootstrapToken,
-} from "@t3tools/shared/desktopBootstrapToken";
+} from "@goat/shared/desktopBootstrapToken";
 
 import * as ServerConfig from "../config.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";

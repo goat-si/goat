@@ -3,7 +3,7 @@
  *
  * Providers run inside a GOAT server but must not import it. The server provides this one
  * service; everything a provider needs from its environment (settings, the process runner)
- * goes through it, so a provider package depends only on `@t3tools/source-control-core` and
+ * goes through it, so a provider package depends only on `@goat/source-control-core` and
  * its own API and CLI code. HTTP, the filesystem, and paths come from Effect's platform
  * services directly.
  *
@@ -20,7 +20,7 @@ import type {
   VcsListRemotesResult,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -123,4 +123,4 @@ export class SourceControlHost extends Context.Service<
       ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;
     };
   }
->()("@t3tools/source-control-core/server/SourceControlHost") {}
+>()("@goat/source-control-core/server/SourceControlHost") {}

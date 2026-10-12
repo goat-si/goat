@@ -1,5 +1,5 @@
-import type { ThreadId } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import type { ThreadId } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   clampHtmlRenderHeight,
   HTML_RENDER_COLUMN_WIDTH,
@@ -10,12 +10,12 @@ import {
   htmlRenderThemeFragment,
   injectHtmlRenderBootstrap,
   type HtmlRenderReference,
-} from "@t3tools/shared/htmlRender";
+} from "@goat/shared/htmlRender";
 import {
   T3_CODE_DARK_THEME_COLORS,
   T3_CODE_LIGHT_THEME_COLORS,
   type ThemeAppearance,
-} from "@t3tools/shared/themePalettes";
+} from "@goat/shared/themePalettes";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -124,7 +124,7 @@ export class HtmlRender extends Context.Service<
       | HeadlessChrome.HtmlRenderBrowserError
     >;
   }
->()("t3/htmlRender/HtmlRender") {}
+>()("goat/htmlRender/HtmlRender") {}
 
 const IMAGE_MIME_TYPES: Record<string, string> = {
   png: "image/png",

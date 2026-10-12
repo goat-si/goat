@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
@@ -64,7 +64,7 @@ vi.mock("../state/entities", () => ({
 }));
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { BranchToolbar } from "./BranchToolbar";
 
@@ -326,7 +326,7 @@ it.each([
   },
 );
 
-import { SshConnectionProfile } from "@t3tools/client-runtime/connection";
+import { SshConnectionProfile } from "@goat/client-runtime/connection";
 import type { SavedSshWorktreeOption } from "../lib/sshWorktree";
 const sshOption: SavedSshWorktreeOption = {
   destination: { connectionId: "saved", environmentId: EnvironmentId.make("ssh") },

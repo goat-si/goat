@@ -19,7 +19,7 @@ import {
   type ProviderReplayEntry,
   type RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
@@ -29,16 +29,16 @@ import {
   OPENCODE2_HTTP_PROTOCOL,
   OpenCode2OrchestratorReplayHarness,
 } from "./Adapters/OpenCode2AdapterV2.testkit.ts";
-import { OPENCODE_PROVIDER } from "@t3tools/provider-opencode/testing";
+import { OPENCODE_PROVIDER } from "@goat/provider-opencode/testing";
 import { provideDeterministicTestRuntime } from "./testkit/DeterministicRuntime.ts";
 import type { OrchestratorV2ScenarioStep } from "./testkit/OrchestratorScenario.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "./testkit/ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import {
   decodeProviderReplayNdjson,
   readProviderReplayTranscript,
-} from "@t3tools/provider-testing/replayTranscript";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+} from "@goat/provider-testing/replayTranscript";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 /** Held until the scenario releases it, so the turn is still running meanwhile. */

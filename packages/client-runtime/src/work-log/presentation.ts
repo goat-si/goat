@@ -7,25 +7,25 @@ import {
   type ToolActivityIcon,
   type OrchestrationV2TurnItem,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   resolveT3McpToolDefinition,
   type T3McpToolDefinition,
   type T3McpToolSummaryAction,
-} from "@t3tools/shared/t3McpToolPresentation";
-import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
-import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
-import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { formatTokens } from "@t3tools/shared/usageFormat";
-import { classifyToolActivity } from "@t3tools/shared/toolActivity";
-import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
+} from "@goat/shared/t3McpToolPresentation";
+import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
+import { resolveMediaSource } from "@goat/client-runtime/media-source";
+import { parseChangeRequestUrl } from "@goat/shared/changeRequestUrl";
+import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
+import { formatTokens } from "@goat/shared/usageFormat";
+import { classifyToolActivity } from "@goat/shared/toolActivity";
+import { toolOutputIndicatesFailure } from "@goat/shared/toolOutput";
 
 import {
   summarizeT3ToolCalls,
   t3ToolResultIndicatesFailure,
   type T3ToolSummaryCall,
-} from "@t3tools/client-runtime/t3ToolSummary";
+} from "@goat/client-runtime/t3ToolSummary";
 
 export type WorkLogToolLifecycleStatus = RuntimeItemStatus | "stopped" | "idle";
 
@@ -63,7 +63,7 @@ export function contextCompactionLabel(
 }
 
 export interface WorkLogPresentationEntry {
-  readonly questionAnswer?: import("@t3tools/contracts").UserInputAttachmentAnswerPayload;
+  readonly questionAnswer?: import("@goat/contracts").UserInputAttachmentAnswerPayload;
   readonly id: string;
   readonly createdAt: string;
   readonly label: string;

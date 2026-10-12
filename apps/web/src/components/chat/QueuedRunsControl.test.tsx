@@ -6,11 +6,11 @@ const state = vi.hoisted(() => ({
   workflow: null as unknown,
 }));
 
-vi.mock("@t3tools/client-runtime/environment", () => ({
+vi.mock("@goat/client-runtime/environment", () => ({
   scopeThreadRef: () => ({}) as never,
 }));
 
-vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
+vi.mock("@goat/client-runtime/state/thread-workflows", () => ({
   deriveThreadQueueWorkflowState: () => state.workflow,
 }));
 

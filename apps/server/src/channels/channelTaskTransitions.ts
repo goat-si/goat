@@ -1,4 +1,4 @@
-import type { ChannelTask, ChannelTaskEvent, ChannelTaskStatus } from "@t3tools/contracts";
+import type { ChannelTask, ChannelTaskEvent, ChannelTaskStatus } from "@goat/contracts";
 
 /**
  * The task state machine. Every ledger write that moves a task goes through

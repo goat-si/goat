@@ -7,7 +7,7 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { fromYaml } from "@t3tools/shared/schemaYaml";
+import { fromYaml } from "@goat/shared/schemaYaml";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {

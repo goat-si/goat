@@ -19,7 +19,7 @@ export class ChannelWake extends Context.Service<
     /** Waits for the next signal and clears any that piled up meanwhile. */
     readonly next: Effect.Effect<void>;
   }
->()("t3/channels/ChannelWake") {}
+>()("goat/channels/ChannelWake") {}
 
 const make = Effect.gen(function* () {
   const signals = yield* Queue.sliding<void>(1);

@@ -1,6 +1,6 @@
 import type { CSSProperties, SVGProps } from "react";
 
-import type { ProviderIcon } from "@t3tools/provider-core/client";
+import type { ProviderIcon } from "@goat/provider-core/client";
 
 import { cn } from "~/lib/utils";
 

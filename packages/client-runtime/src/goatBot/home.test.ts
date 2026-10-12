@@ -1,4 +1,4 @@
-import { EnvironmentId, compareGoatBotHomeClaims, type GoatBotHomeClaim } from "@t3tools/contracts";
+import { EnvironmentId, compareGoatBotHomeClaims, type GoatBotHomeClaim } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {

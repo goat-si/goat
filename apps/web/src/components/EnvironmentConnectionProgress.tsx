@@ -1,7 +1,7 @@
 import {
   connectionProgressLabel,
   type EnvironmentConnectionPresentation,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import { useEffect, useState } from "react";
 
 /**

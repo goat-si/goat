@@ -1,7 +1,7 @@
 import {
   environmentSupportsChannelLedger,
   type GoatBotEnvironmentInput,
-} from "@t3tools/client-runtime/goatBot";
+} from "@goat/client-runtime/goatBot";
 
 import type { EnvironmentPresentation } from "../../state/environments";
 

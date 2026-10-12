@@ -25,12 +25,12 @@ import {
   FILL_PREVIEW_VIEWPORT,
   PreviewSessionLookupError,
   type PreviewSessionSnapshot,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   isPreviewUrlNormalizationError,
   newPreviewTabId,
   normalizePreviewUrl,
-} from "@t3tools/shared/preview";
+} from "@goat/shared/preview";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -40,7 +40,7 @@ import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { PreviewControlRequiredError } from "@t3tools/contracts";
+import { PreviewControlRequiredError } from "@goat/contracts";
 
 export class PreviewManager extends Context.Service<
   PreviewManager,
@@ -78,7 +78,7 @@ export class PreviewManager extends Context.Service<
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
   }
->()("t3/preview/Manager/PreviewManager") {}
+>()("goat/preview/Manager/PreviewManager") {}
 
 interface PreviewSessionState {
   readonly threadId: string;

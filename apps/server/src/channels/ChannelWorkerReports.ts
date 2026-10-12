@@ -19,7 +19,7 @@ import {
   type ChannelTaskReportInput,
   type OrchestrationV2Run,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -56,7 +56,7 @@ export class ChannelWorkerReports extends Context.Service<
       callerThreadId: ThreadId | undefined,
     ) => Effect.Effect<void, ChannelGatewayError>;
   }
->()("t3/channels/ChannelWorkerReports") {}
+>()("goat/channels/ChannelWorkerReports") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

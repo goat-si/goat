@@ -12,4 +12,4 @@ export {
   type ProjectGroupingSettings,
   type ProjectGroup,
   type ProjectGroupMember,
-} from "@t3tools/client-runtime/state/project-grouping";
+} from "@goat/client-runtime/state/project-grouping";

@@ -3,7 +3,7 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
   addProjectRemoteSourceLabel,
   parseAddProjectRemoteSource,
-} from "@t3tools/client-runtime/operations/projects";
+} from "@goat/client-runtime/operations/projects";
 
 import { AddProjectRepositoryScreen } from "./AddProjectScreen";
 

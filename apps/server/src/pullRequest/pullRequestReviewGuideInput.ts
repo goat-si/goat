@@ -1,5 +1,5 @@
-import type { PullRequestActivity, PullRequestDetail } from "@t3tools/contracts";
-import type { ReviewGuideGenerationInput } from "@t3tools/provider-core/server/textGeneration";
+import type { PullRequestActivity, PullRequestDetail } from "@goat/contracts";
+import type { ReviewGuideGenerationInput } from "@goat/provider-core/server/textGeneration";
 
 /** Longest a settled remark is quoted. The guide needs what was raised, not the argument. */
 const SETTLED_REMARK_CHARS = 200;

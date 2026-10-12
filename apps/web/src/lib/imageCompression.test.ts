@@ -11,7 +11,7 @@ import {
   prepareImageForAttachment,
 } from "./imageCompression";
 
-import type { SnapShotSource } from "@t3tools/contracts";
+import type { SnapShotSource } from "@goat/contracts";
 import { hydrateImagesFromPersisted } from "../composerDraftStore";
 import { resizeSnapShotSource } from "./snapShotSource";
 

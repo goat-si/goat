@@ -17,13 +17,13 @@ import {
   type RemoteReportBindingInput,
   type RuntimeMode,
   type SshLaunchWorkspace,
-} from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
-import { targetConnectionKey } from "@t3tools/ssh/command";
-import * as SshAuth from "@t3tools/ssh/auth";
-import { discoverSshHosts } from "@t3tools/ssh/config";
-import { SshPasswordPromptError } from "@t3tools/ssh/errors";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+} from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
+import { targetConnectionKey } from "@goat/ssh/command";
+import * as SshAuth from "@goat/ssh/auth";
+import { discoverSshHosts } from "@goat/ssh/config";
+import { SshPasswordPromptError } from "@goat/ssh/errors";
+import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -226,7 +226,7 @@ export class SshRemoteDispatch extends Context.Service<
     /** Hosts this process holds an SSH tunnel to, sorted. */
     readonly connectedHosts: Effect.Effect<ReadonlyArray<string>>;
   }
->()("t3/sshRemote/SshRemoteDispatch") {}
+>()("goat/sshRemote/SshRemoteDispatch") {}
 
 const decodeRemoteIdentity = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),

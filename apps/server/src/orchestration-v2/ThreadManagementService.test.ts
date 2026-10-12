@@ -1,5 +1,5 @@
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
-import type { OrchestrationV2ServerCommand } from "@t3tools/contracts";
+import type { OrchestrationV2ServerCommand } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -20,7 +20,7 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -39,7 +39,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, type DispatchModeRefusal } from "./DispatchModeLimit.ts";

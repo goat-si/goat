@@ -1,4 +1,4 @@
-import { videoMimeType } from "@t3tools/shared/video";
+import { videoMimeType } from "@goat/shared/video";
 
 import type { FileBackedComposerAttachment } from "./composerImages";
 import { resolveOwnedComposerAttachmentFileUri } from "./composerAttachmentFiles";

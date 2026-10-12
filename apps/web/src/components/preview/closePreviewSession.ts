@@ -1,10 +1,10 @@
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PreviewCloseInput,
   PreviewSessionSnapshot,
   ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import { useClosedViewStore } from "~/closedViewStore";
 import { beginPreviewSessionClose, cancelPreviewSessionClose } from "~/previewStateStore";

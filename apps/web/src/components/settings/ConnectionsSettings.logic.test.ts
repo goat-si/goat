@@ -1,4 +1,4 @@
-import type { AdvertisedEndpoint, DesktopWslState } from "@t3tools/contracts";
+import type { AdvertisedEndpoint, DesktopWslState } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,

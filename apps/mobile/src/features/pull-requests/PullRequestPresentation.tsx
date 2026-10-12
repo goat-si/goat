@@ -1,4 +1,4 @@
-import type { PullRequestActor } from "@t3tools/contracts";
+import type { PullRequestActor } from "@goat/contracts";
 import { Image } from "expo-image";
 import { ActivityIndicator, View } from "react-native";
 

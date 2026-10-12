@@ -1,6 +1,6 @@
-import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { ChannelBotRef } from "@t3tools/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import type { ChannelBotRef } from "@goat/contracts";
 
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
 import type { GlobalAgentRef } from "../../globalAgentStore";

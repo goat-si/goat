@@ -170,7 +170,7 @@ export function AgentActivity(
   // Any registered scheme variant routes back to this app; taps are delivered
   // to the widget's containing app, so the prod scheme is safe for all builds.
   // The "widget" function runs in its own JS context and cannot read module
-  // imports, so this repeats PRODUCTION_SCHEME from @t3tools/shared/mobileAppIdentity.
+  // imports, so this repeats PRODUCTION_SCHEME from @goat/shared/mobileAppIdentity.
   const deepLinkRow = attentionRow ?? row0;
   const deepLink =
     deepLinkRow && deepLinkRow.deepLink.startsWith("/") && !deepLinkRow.deepLink.startsWith("//")

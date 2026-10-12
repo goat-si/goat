@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { converter } from "culori/fn";
-import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
+import { BUILT_IN_THEMES } from "@goat/shared/themePalettes";
 
 import {
   applyThemeColorPreview,

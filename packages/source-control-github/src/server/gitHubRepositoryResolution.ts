@@ -1,8 +1,8 @@
-import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import { normalizeGitRemoteUrl } from "@goat/shared/git";
 import {
   detectSourceControlProviderFromRemoteUrl,
   isSshRemoteUrl,
-} from "@t3tools/shared/sourceControl";
+} from "@goat/shared/sourceControl";
 
 /** A repository on a GitHub host: the API it is read through, and its owner and name. */
 export interface GitHubRepositoryLocator {

@@ -2,8 +2,8 @@
 import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AsyncResult } from "effect/reactivity";
-import { EnvironmentId, ProjectId, ThreadId, AuthSettingsWriteScope } from "@t3tools/contracts";
-import type { GoatBotEnvironmentInput } from "@t3tools/client-runtime/goatBot";
+import { EnvironmentId, ProjectId, ThreadId, AuthSettingsWriteScope } from "@goat/contracts";
+import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -18,7 +18,7 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => harness.preferences ?? AsyncResult.initial(),
 }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "claim" }));
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({ runAtomCommand: harness.run }));
+vi.mock("@goat/client-runtime/state/runtime", () => ({ runAtomCommand: harness.run }));
 vi.mock("../../state/preferences", () => ({ mobilePreferencesAtom: {} }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: "registry" }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { updateSettings: "updateSettings" } }));

@@ -1,10 +1,10 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   EnvironmentId,
   OrchestrationV2ThreadLauncher,
   OrchestrationV2ThreadShell,
   ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 export function isLaunchedFromThread(
   shell: Pick<OrchestrationV2ThreadShell, "launchedBy"> & { environmentId: EnvironmentId },

@@ -1,4 +1,4 @@
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import Migration0063 from "../persistence/Migrations/064_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/066_RemoteDispatchQuestions.ts";
@@ -32,7 +32,7 @@ import {
   ServerSettingsError,
   ThreadId,
   TurnItemId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
@@ -48,8 +48,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";

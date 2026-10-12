@@ -1,5 +1,5 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 

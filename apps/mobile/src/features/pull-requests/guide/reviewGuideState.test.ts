@@ -3,7 +3,7 @@ import {
   IsoDateTime,
   ProviderInstanceId,
   type PullRequestReviewGuideResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { guideNoticeState, reviewGuideState } from "./reviewGuideState";
 
 const guide: NonNullable<PullRequestReviewGuideResult["guide"]> = {

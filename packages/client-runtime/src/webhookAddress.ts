@@ -1,5 +1,5 @@
-import type { ScheduledTaskWebhookEndpoint } from "@t3tools/contracts";
-import { isLocalLoopbackHost } from "@t3tools/shared/hostClassification";
+import type { ScheduledTaskWebhookEndpoint } from "@goat/contracts";
+import { isLocalLoopbackHost } from "@goat/shared/hostClassification";
 
 /**
  * Where a sender can call a webhook task, as a client shows it. With T3

@@ -1,5 +1,5 @@
-import type { AssetResource, ChatFileAttachment, EnvironmentId } from "@t3tools/contracts";
-import { videoMimeType } from "@t3tools/shared/video";
+import type { AssetResource, ChatFileAttachment, EnvironmentId } from "@goat/contracts";
+import { videoMimeType } from "@goat/shared/video";
 
 import type { DraftComposerFileAttachment } from "./composerImages";
 import type { MediaActionsSource } from "./mediaActionsSource";

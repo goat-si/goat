@@ -1,6 +1,6 @@
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { PullRequestDetail, PullRequestMergeMethod } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { PullRequestDetail, PullRequestMergeMethod } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, View } from "react-native";

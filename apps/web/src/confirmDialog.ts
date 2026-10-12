@@ -1,4 +1,4 @@
-import type { ConfirmDialogOptions, ConfirmDialogVariant } from "@t3tools/contracts";
+import type { ConfirmDialogOptions, ConfirmDialogVariant } from "@goat/contracts";
 
 export type ConfirmDialogState =
   | { readonly status: "idle" }

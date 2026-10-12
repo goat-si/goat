@@ -1,6 +1,6 @@
 import * as NodeModule from "node:module";
-import { EMPTY_TERMINAL_BUFFER_STATE } from "@t3tools/client-runtime/state/terminal";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EMPTY_TERMINAL_BUFFER_STATE } from "@goat/client-runtime/state/terminal";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { act, createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 

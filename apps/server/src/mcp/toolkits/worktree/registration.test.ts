@@ -11,10 +11,10 @@ import * as ServerConfig from "../../../config.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Schema from "effect/Schema";
 import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 

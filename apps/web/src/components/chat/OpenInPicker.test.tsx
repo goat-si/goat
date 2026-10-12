@@ -1,5 +1,5 @@
-import { AuthOrchestrationOperateScope, EnvironmentId, type EditorId } from "@t3tools/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import { AuthOrchestrationOperateScope, EnvironmentId, type EditorId } from "@goat/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { AsyncResult } from "effect/reactivity";
 import { cloneElement, useState, type ReactElement, type ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";

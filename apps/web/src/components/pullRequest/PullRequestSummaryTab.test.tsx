@@ -1,5 +1,5 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
-import { EnvironmentId, ProjectId, type PullRequestDetailView } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
+import { EnvironmentId, ProjectId, type PullRequestDetailView } from "@goat/contracts";
 import { act, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";

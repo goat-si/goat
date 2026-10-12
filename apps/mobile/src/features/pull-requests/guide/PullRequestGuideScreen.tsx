@@ -9,7 +9,7 @@ import {
   letterStopNotes,
   stepTourPosition,
   stopFilePaths,
-} from "@t3tools/client-runtime/review-guide-tour";
+} from "@goat/client-runtime/review-guide-tour";
 import { SymbolView } from "../../../components/AppSymbol";
 import { GuideOutline } from "./GuideOutline";
 import { AppText as Text } from "../../../components/AppText";

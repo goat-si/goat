@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { RunId, ThreadId, type OrchestrationV2Run } from "@t3tools/contracts";
+import { RunId, ThreadId, type OrchestrationV2Run } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 

@@ -5,7 +5,7 @@ import {
   AuthTerminalReadScope,
   type DesktopBridge,
   type DesktopWslState,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 /**
  * Operating terminals without being able to list them leaves a client

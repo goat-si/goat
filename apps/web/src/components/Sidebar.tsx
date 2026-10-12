@@ -1,4 +1,4 @@
-import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
+import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
@@ -11,9 +11,9 @@ import {
 import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
+import { resolveThreadCurrentPullRequestLink } from "@goat/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -31,33 +31,33 @@ import {
   canSnooze,
   effectiveSnoozed,
   threadWokeAt,
-} from "@t3tools/client-runtime/state/thread-settled";
+} from "@goat/client-runtime/state/thread-settled";
 import {
   resolveSettledThreadTimestamp,
   sortSettledThreads,
-} from "@t3tools/client-runtime/state/thread-sort";
+} from "@goat/client-runtime/state/thread-sort";
 import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
-} from "@t3tools/client-runtime/state/thread-search";
+} from "@goat/client-runtime/state/thread-search";
 import {
   threadRuntimeCanArchive,
   type EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/models";
+} from "@goat/client-runtime/state/models";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
-} from "@t3tools/client-runtime/environment";
+} from "@goat/client-runtime/environment";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentMachineKind,
   type ScopedThreadRef,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+import type { TimestampFormat } from "@goat/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -109,7 +109,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import {
   resolveShortcutCommand,
@@ -185,7 +185,7 @@ import {
 } from "../threadRoutes";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import {
@@ -2216,11 +2216,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     </>
                   ) : null}
                   {shortDeviceName ? (
-                    // oxlint-disable t3code/no-native-title-tooltip -- The approved device abbreviation keeps the full label in a native title.
+                    // oxlint-disable goat/no-native-title-tooltip -- The approved device abbreviation keeps the full label in a native title.
                     <span className="min-w-0 truncate" title={props.environmentLabel ?? undefined}>
                       {shortDeviceName}
                     </span>
-                  ) : // oxlint-enable t3code/no-native-title-tooltip
+                  ) : // oxlint-enable goat/no-native-title-tooltip
                   null}
                 </span>
               </span>

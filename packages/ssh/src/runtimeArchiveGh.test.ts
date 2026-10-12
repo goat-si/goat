@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, beforeEach, describe, it, vi } from "@effect/vitest";
-import { CLI_RELEASE_REPOSITORY, cliArchiveFileName } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASE_REPOSITORY, cliArchiveFileName } from "@goat/shared/cliRelease";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

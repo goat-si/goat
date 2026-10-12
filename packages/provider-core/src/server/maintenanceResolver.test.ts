@@ -5,8 +5,8 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -32,7 +32,7 @@ import {
   resolveProviderMaintenanceCapabilitiesEffect,
   type ProviderMaintenanceCapabilities,
 } from "./maintenanceResolver.ts";
-import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+import { symlinksSupported } from "@goat/shared/testing/symlinks";
 
 const driver = (value: string) => ProviderDriverKind.make(value);
 // These write `#!/bin/sh` stubs and evaluate them with darwin/linux path

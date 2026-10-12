@@ -7,7 +7,7 @@
  *
  * @module SlackChannelAdapter
  */
-import { ChannelGatewayError, type ChannelDeliveryErrorCode } from "@t3tools/contracts";
+import { ChannelGatewayError, type ChannelDeliveryErrorCode } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

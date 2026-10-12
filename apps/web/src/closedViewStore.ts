@@ -1,10 +1,10 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
 import {
   ChatFileAttachment,
   INCOGNITO_BROWSER_PROFILE_ID,
   PreviewSessionSnapshot,
   ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";

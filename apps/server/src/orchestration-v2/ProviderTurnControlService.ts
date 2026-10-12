@@ -1,4 +1,4 @@
-import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
   MessageId,
   type NodeId,
@@ -7,7 +7,7 @@ import {
   ProviderTurnId,
   RunAttemptId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -70,7 +70,7 @@ export interface ProviderTurnControlServiceV2Shape {
 export class ProviderTurnControlServiceV2 extends Context.Service<
   ProviderTurnControlServiceV2,
   ProviderTurnControlServiceV2Shape
->()("t3/orchestration-v2/ProviderTurnControlService/ProviderTurnControlServiceV2") {}
+>()("goat/orchestration-v2/ProviderTurnControlService/ProviderTurnControlServiceV2") {}
 
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { MessageId, RunId, type ReviewDiffPreviewSource } from "@t3tools/contracts";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+import { MessageId, RunId, type ReviewDiffPreviewSource } from "@goat/contracts";
+import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 
 import {
   applyReviewDiffMetadata,

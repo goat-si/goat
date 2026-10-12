@@ -2,8 +2,8 @@ import type {
   ConnectionCatalogEntry,
   EnvironmentConnectionPhase,
   EnvironmentPresentation,
-} from "@t3tools/client-runtime/connection";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/connection";
+import type { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { isDesktopLocalConnectionTarget, isWslConnectionTarget } from "../connection/desktopLocal";

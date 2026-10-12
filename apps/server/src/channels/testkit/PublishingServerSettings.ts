@@ -1,5 +1,5 @@
-import type { ServerSettings as Settings } from "@t3tools/contracts";
-import type { DeepPartial } from "@t3tools/shared/Struct";
+import type { ServerSettings as Settings } from "@goat/contracts";
+import type { DeepPartial } from "@goat/shared/Struct";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";

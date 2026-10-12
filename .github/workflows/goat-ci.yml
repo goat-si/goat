@@ -83,7 +83,7 @@ jobs:
 
       - name: Ensure Electron runtime is installed
         if: matrix.task == 'check' || matrix.task == 'typecheck' || matrix.task == 'test' || matrix.task == 'test-desktop' || matrix.task == 'build'
-        run: vp run --filter @t3tools/desktop ensure:electron
+        run: vp run --filter @goat/desktop ensure:electron
 
       - name: Check
         if: matrix.task == 'check'
@@ -98,24 +98,24 @@ jobs:
       - name: Test
         if: matrix.task == 'test'
         run: |
-          vp run --filter @t3tools/ssh test
-          vp run --filter @t3tools/web test
+          vp run --filter @goat/ssh test
+          vp run --filter @goat/web test
 
       - name: Test desktop
         if: matrix.task == 'test-desktop'
-        run: vp run --filter @t3tools/desktop test
+        run: vp run --filter @goat/desktop test
 
       - name: Test contracts
         if: matrix.task == 'test-contracts'
-        run: vp run --filter @t3tools/contracts test
+        run: vp run --filter @goat/contracts test
 
       - name: Test client runtime
         if: matrix.task == 'test-client-runtime'
-        run: vp run --filter @t3tools/client-runtime test
+        run: vp run --filter @goat/client-runtime test
 
       - name: Test shared
         if: matrix.task == 'test-shared'
-        run: vp run --filter @t3tools/shared test
+        run: vp run --filter @goat/shared test
 
       # Advisory until GOAT_SCREENSHOT_GATE is "enforce". The script reads the live
       # PR, so re-running only this job picks up a new screenshot or waiver label.

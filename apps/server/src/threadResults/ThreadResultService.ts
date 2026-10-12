@@ -6,7 +6,7 @@ import {
   type ThreadResult,
   type ThreadResultPullRequest,
   ThreadResultReport,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -105,7 +105,7 @@ export class ThreadResultService extends Context.Service<
       runId?: RunId | null,
     ) => Effect.Effect<ThreadResult | null, ThreadResultError>;
   }
->()("t3/threadResults/ThreadResultService") {}
+>()("goat/threadResults/ThreadResultService") {}
 
 const ReportRow = Schema.Struct({
   reportJson: Schema.fromJsonString(ThreadResultReport),

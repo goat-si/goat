@@ -1,4 +1,4 @@
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { pullRequestSyncKey } from "./pullRequestSyncKey.ts";

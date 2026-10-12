@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({

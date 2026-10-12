@@ -22,8 +22,8 @@ import {
   injectMcpAppCookieBootstrap,
   injectMcpAppThemeBootstrap,
   MCP_APP_MAX_HTML_BYTES,
-} from "@t3tools/shared/mcpApp";
-import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
+} from "@goat/shared/mcpApp";
+import { ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts";
 
 import * as ServerConfig from "./config.ts";
 
@@ -843,7 +843,7 @@ describe("SSH activity HTTP", () => {
       const Etag = await import("effect/http/Etag");
       const HttpApi = await import("effect/http-api/HttpApi");
       const HttpApiBuilder = await import("effect/http-api/HttpApiBuilder");
-      const { EnvironmentHttpApi, EnvironmentId } = await import("@t3tools/contracts");
+      const { EnvironmentHttpApi, EnvironmentId } = await import("@goat/contracts");
       const ServerEnvironment = await import("./environment/ServerEnvironment.ts");
       const Sqlite = await import("./persistence/Sqlite.ts");
       const layerApp = HttpApiBuilder.layer(
@@ -907,7 +907,7 @@ it.effect("serves SSH activity to a real IPv4-mapped loopback peer", () =>
     const HttpApiBuilder = yield* Effect.promise(() => import("effect/http-api/HttpApiBuilder"));
     const { HttpServer, HttpServerRequest } = yield* Effect.promise(() => import("effect/http"));
     const { EnvironmentHttpApi, EnvironmentId } = yield* Effect.promise(
-      () => import("@t3tools/contracts"),
+      () => import("@goat/contracts"),
     );
     const ServerEnvironment = yield* Effect.promise(
       () => import("./environment/ServerEnvironment.ts"),

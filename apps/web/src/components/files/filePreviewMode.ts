@@ -1,5 +1,5 @@
-import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@t3tools/contracts";
-import { isAbsolutePath, workspaceRelativeFilePath } from "@t3tools/shared/path";
+import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@goat/contracts";
+import { isAbsolutePath, workspaceRelativeFilePath } from "@goat/shared/path";
 
 /** Resolve workspace links before choosing between the explorer and a file preview. */
 export function resolveFilePreviewPath(path: string | null, cwd: string): string | null {

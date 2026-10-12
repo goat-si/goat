@@ -8,8 +8,8 @@ import type {
   OrchestrationV2Subagent,
   OrchestrationV2SubagentWorkflow,
   OrchestrationV2TurnItem,
-} from "@t3tools/contracts";
-import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+} from "@goat/contracts";
+import { isOrchestrationV2WorkActive } from "@goat/contracts";
 
 export type RuntimeSubagentStatus =
   | "pending"

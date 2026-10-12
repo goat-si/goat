@@ -1,9 +1,9 @@
 import {
   formatSubagentDisplayTitle,
   subagentDetailPreview,
-} from "@t3tools/client-runtime/state/subagent-display";
-import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
-import type { OrchestrationV2Subagent } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/subagent-display";
+import { isActiveSubagentStatus } from "@goat/client-runtime/state/subagentRuntime";
+import type { OrchestrationV2Subagent } from "@goat/contracts";
 
 const PROMPT_TITLE_LIMIT = 80;
 

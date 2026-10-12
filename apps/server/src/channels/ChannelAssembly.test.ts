@@ -5,7 +5,7 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProjectId, ProviderInstanceId, type SlackChannelDefaultTarget } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, type SlackChannelDefaultTarget } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

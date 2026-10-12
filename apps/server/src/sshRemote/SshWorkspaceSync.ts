@@ -9,7 +9,7 @@ import {
   type SshWorkspaceFetchBackResult,
   type SshWorkspaceStage,
   type SshWorkspaceCode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -42,7 +42,7 @@ export class SshWorkspaceSync extends Context.Service<
       input: SshWorkspaceFetchBackInput,
     ) => Effect.Effect<SshWorkspaceFetchBackResult, SshWorkspaceError>;
   }
->()("t3/sshRemote/SshWorkspaceSync") {}
+>()("goat/sshRemote/SshWorkspaceSync") {}
 
 const make = Effect.gen(function* () {
   const projects = yield* Projects.ProjectService;

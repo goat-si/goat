@@ -3,10 +3,10 @@ import {
   type EnvironmentId,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import { projectScriptMenuLabel } from "@t3tools/shared/projectScripts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
+import { projectScriptMenuLabel } from "@goat/shared/projectScripts";
 import { ChevronDownIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 

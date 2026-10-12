@@ -7,7 +7,7 @@ import {
   AuthOrchestrationOperateScope,
   type AuthEnvironmentScope,
   type EnvironmentId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 

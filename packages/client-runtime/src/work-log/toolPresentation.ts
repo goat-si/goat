@@ -1,10 +1,10 @@
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
 import type {
   ToolActivityIcon,
   ToolActivityNativeAppReference,
   ToolActivitySource,
   ToolActivitySurface,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 export interface ExtractedToolActivityPresentation {
   readonly viewedImagePath?: string;

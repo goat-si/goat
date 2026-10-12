@@ -24,8 +24,8 @@ import type {
   ProjectSearchContentsInput,
   ProjectSearchContentsResult,
   ProjectSearchEntriesResult,
-} from "@t3tools/contracts";
-import { isProjectFaviconPath } from "@t3tools/shared/projectFavicon";
+} from "@goat/contracts";
+import { isProjectFaviconPath } from "@goat/shared/projectFavicon";
 
 // fff-node stays external to the CLI bundle because it dlopens a native
 // library. A static `import` of an external package is a hard error inside a
@@ -125,7 +125,7 @@ export class WorkspaceSearchIndex extends Context.Service<
       WorkspaceSearchIndexRefreshFailed | WorkspaceSearchIndexScanTimedOut
     >;
   }
->()("t3/workspace/WorkspaceSearchIndex") {}
+>()("goat/workspace/WorkspaceSearchIndex") {}
 
 function toPosixPath(input: string): string {
   return input.replaceAll("\\", "/");
@@ -581,7 +581,7 @@ export const layer = (key: string) => {
 };
 
 export class WorkspaceSearchIndexMap extends LayerMap.Service<WorkspaceSearchIndexMap>()(
-  "t3/workspace/WorkspaceSearchIndexMap",
+  "goat/workspace/WorkspaceSearchIndexMap",
   {
     lookup: layer,
     idleTimeToLive: WORKSPACE_INDEX_IDLE_TTL,

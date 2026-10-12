@@ -9,7 +9,7 @@ import type {
   ProviderTurnId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 

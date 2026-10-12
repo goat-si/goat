@@ -3,7 +3,7 @@ import { ConnectionTraceId } from "./ConnectionTraceId";
 import {
   type EnvironmentConnectionPhase,
   type EnvironmentConnectionPresentation,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import { SymbolView } from "../../components/AppSymbol";
 import { Pressable, View } from "react-native";
 

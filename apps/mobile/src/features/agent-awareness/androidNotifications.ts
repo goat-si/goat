@@ -2,7 +2,7 @@ import Constants from "expo-constants";
 import { requireOptionalNativeModule } from "expo";
 import { Linking, Platform } from "react-native";
 
-import { PRODUCTION_SCHEME } from "@t3tools/shared/mobileAppIdentity";
+import { PRODUCTION_SCHEME } from "@goat/shared/mobileAppIdentity";
 
 interface AndroidAgentNotifications {
   configure(deviceId: string, userId: string, scheme: string, ongoingEnabled: boolean): void;

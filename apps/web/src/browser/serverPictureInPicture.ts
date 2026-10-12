@@ -2,8 +2,8 @@ import {
   createPreviewFramePainter,
   createPreviewStreamClient,
   type PreviewStreamClient,
-} from "@t3tools/client-runtime/preview/server-browser-stream";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/preview/server-browser-stream";
+import type { EnvironmentId } from "@goat/contracts";
 import { useSyncExternalStore } from "react";
 
 import { readPreviewStreamAccess } from "~/state/previewStream";

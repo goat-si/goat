@@ -1,7 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
-import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, PullRequestAction } from "@t3tools/contracts";
+import { executeAtomQuery, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { EnvironmentId, PullRequestAction } from "@goat/contracts";
 import * as Clipboard from "expo-clipboard";
 import { Atom } from "effect/reactivity";
 import { use, useCallback, useMemo, useRef, useState } from "react";

@@ -13,7 +13,7 @@ import type {
   CommandId,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 export type ChannelIngressCaller =
   | { readonly type: "rpc"; readonly clientId?: string }

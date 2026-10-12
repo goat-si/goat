@@ -2,7 +2,7 @@ import {
   WS_METHODS,
   type ConnectionCatalogOperation,
   type ConnectionCatalogResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Stream from "effect/Stream";

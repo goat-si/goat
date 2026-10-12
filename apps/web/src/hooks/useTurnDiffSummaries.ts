@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { deriveThreadCheckpointSummaries } from "@t3tools/client-runtime/state/thread-checkpoints";
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import { deriveThreadCheckpointSummaries } from "@goat/client-runtime/state/thread-checkpoints";
+import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
 import { inferCheckpointTurnCountByRunId } from "../session-logic";
 import type { TurnDiffSummary } from "../types";
 

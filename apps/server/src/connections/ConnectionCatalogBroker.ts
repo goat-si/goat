@@ -3,7 +3,7 @@ import type {
   ConnectionCatalogHostResponse,
   ConnectionCatalogOperation,
   ConnectionCatalogResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -59,7 +59,7 @@ export class ConnectionCatalogBroker extends Context.Service<
       timeoutMs: number,
     ) => Effect.Effect<ConnectionCatalogResult, BrokerError>;
   }
->()("t3/connections/ConnectionCatalogBroker") {}
+>()("goat/connections/ConnectionCatalogBroker") {}
 
 const make = Effect.gen(function* () {
   const lock = yield* Semaphore.make(1);

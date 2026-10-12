@@ -1,4 +1,4 @@
-import type { DesktopSystemWakeEvent } from "@t3tools/contracts";
+import type { DesktopSystemWakeEvent } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

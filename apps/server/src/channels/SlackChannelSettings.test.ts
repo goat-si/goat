@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { SlackChannelConnectionId } from "@t3tools/contracts";
+import { SlackChannelConnectionId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 

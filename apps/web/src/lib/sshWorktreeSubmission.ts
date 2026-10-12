@@ -2,15 +2,15 @@ import {
   EnvironmentAuthorizationError,
   SshWorkspaceError,
   type SshWorkspaceCode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   EnvironmentId,
   ScopedThreadRef,
   SshWorkspaceLaunchInput,
   SshWorkspaceLaunchResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 type LaunchInput = SshWorkspaceLaunchInput;
 type LaunchResult = SshWorkspaceLaunchResult;

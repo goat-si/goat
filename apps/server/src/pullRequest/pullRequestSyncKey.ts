@@ -4,9 +4,9 @@ import {
   type RepositoryIdentity,
   SourceControlProviderKind,
   type ThreadPullRequestKey,
-} from "@t3tools/contracts";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
-import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
+} from "@goat/contracts";
+import { sourceControlRepositorySelector } from "@goat/shared/sourceControl";
+import { normalizeThreadPullRequestKey } from "@goat/shared/threadPullRequests";
 
 /** Convert checkout-scoped references to the host-level identity used by linked threads. */
 export function pullRequestSyncKey(

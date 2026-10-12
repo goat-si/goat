@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { RunId, ThreadId } from "@t3tools/contracts";
+import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 

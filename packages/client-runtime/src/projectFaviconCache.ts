@@ -1,10 +1,10 @@
-import { EnvironmentId } from "@t3tools/contracts";
-import { mediaMimeType } from "@t3tools/shared/filePreview";
+import { EnvironmentId } from "@goat/contracts";
+import { mediaMimeType } from "@goat/shared/filePreview";
 import {
   getProjectFaviconCacheKey,
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
-} from "@t3tools/shared/projectFavicon";
+} from "@goat/shared/projectFavicon";
 import * as Base64 from "effect/encoding/Base64";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";

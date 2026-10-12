@@ -2,8 +2,8 @@ import {
   canonicalRepositoryKey,
   isSshRemoteUrl,
   sourceControlRepositorySelector,
-} from "@t3tools/shared/sourceControl";
-import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
+} from "@goat/shared/sourceControl";
+import { normalizeGitRemoteUrl } from "@goat/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -74,23 +74,23 @@ import {
   type SourceControlProviderInfo,
   SourceControlProviderKind,
   type ThreadPullRequestKey,
-} from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+} from "@goat/contracts";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { detectSourceControlProviderFromRemoteUrl } from "@goat/shared/sourceControl";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import {
   type ProviderChangeRequest,
   type ProviderListCursor,
   type ProviderChangeRequestWatchFingerprint,
   type PullRequestProviderApi,
   PullRequestProviderError,
-} from "@t3tools/source-control-core/server/PullRequestProvider";
+} from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as ViewedFiles from "./pullRequestViewedFiles.ts";
@@ -325,7 +325,7 @@ export class PullRequestService extends Context.Service<
       options?: { readonly notifyReaders?: boolean },
     ) => Effect.Effect<void>;
   }
->()("t3/pullRequest/PullRequestService") {}
+>()("goat/pullRequest/PullRequestService") {}
 
 /** What a verdict is called when refusing it, so the sentence reads as an action. */
 const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {

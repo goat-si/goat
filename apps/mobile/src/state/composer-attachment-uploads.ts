@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type EnvironmentId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { useEffect, useRef } from "react";
 

@@ -1,15 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The write helper runs as a separate Node process.
 import * as NodeChildProcess from "node:child_process";
 
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveNodeExecutable } from "@goat/shared/nodeRuntime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
 
 /**
  * Workspace file access requested through the ACP client `fs` capability.

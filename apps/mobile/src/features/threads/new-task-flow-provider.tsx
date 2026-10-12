@@ -1,4 +1,4 @@
-import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
+import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { environmentSession } from "../../state/session";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -12,7 +12,7 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -22,10 +22,10 @@ import {
   repositoryGroupingKeyOf,
   T3_PROJECT_FILE_NAME,
   ThreadId,
-} from "@t3tools/contracts";
-import { sanitizeNewRefName } from "@t3tools/shared/git";
-import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+} from "@goat/contracts";
+import { sanitizeNewRefName } from "@goat/shared/git";
+import { resolveNewThreadEnvMode, resolveProjectSettings } from "@goat/shared/projectSettings";
+import { parseT3ProjectFile } from "@goat/shared/t3ProjectFile";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
@@ -95,14 +95,14 @@ import {
   useRemoteConnectionStatus,
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
-import { availableScratchWorkspaceRoot } from "@t3tools/client-runtime/operations/projects";
+import { availableScratchWorkspaceRoot } from "@goat/client-runtime/operations/projects";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
+} from "@goat/client-runtime/state/runtime";
+import { isScratchProject } from "@goat/client-runtime/state/projects";
+import { EnvironmentProject } from "@goat/client-runtime/state/shell";
+import { type VcsRef } from "@goat/client-runtime/state/vcs";
 import {
   buildHomeProjectScopes,
   sortHomeProjectScopes,

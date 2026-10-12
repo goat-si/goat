@@ -15,7 +15,7 @@ import {
   type ChannelIngestResult,
   type ChannelTask,
   type OrchestrationV2ProjectedTurnItem,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { act, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -28,7 +28,7 @@ const state = vi.hoisted(() => ({
     supportsChannelLedger: boolean;
     primary: boolean;
     label?: string;
-    homeTarget?: import("@t3tools/client-runtime/goatBot/home").GoatBotHomeTarget;
+    homeTarget?: import("@goat/client-runtime/goatBot/home").GoatBotHomeTarget;
     settingsSnapshot?: object | null;
   }>,
   running: null as RunId | null,

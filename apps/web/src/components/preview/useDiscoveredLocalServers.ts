@@ -1,8 +1,8 @@
-import type { DiscoveredLocalServer } from "@t3tools/contracts";
-import { isLoopbackHost } from "@t3tools/shared/preview";
+import type { DiscoveredLocalServer } from "@goat/contracts";
+import { isLoopbackHost } from "@goat/shared/preview";
 import { useMemo } from "react";
 
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
 import { useDiscoveredPortsState } from "~/portDiscoveryState";
 

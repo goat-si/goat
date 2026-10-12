@@ -1,6 +1,6 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { resolveMobileMarkdownMediaSource } from "../../lib/markdownMediaSource";
-import { getBrowseDirectoryPath } from "@t3tools/client-runtime/state/projects";
+import { getBrowseDirectoryPath } from "@goat/client-runtime/state/projects";
 import { useCallback, useMemo, useState } from "react";
 import { RefreshControl, ScrollView, View } from "react-native";
 

@@ -3,9 +3,9 @@ import {
   connectionCatalogDisplayUrl,
   hasRelayRoute,
   type EnvironmentPresentation as BaseEnvironmentPresentation,
-} from "@t3tools/client-runtime/connection";
-import { Discovery } from "@t3tools/client-runtime/relay";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/connection";
+import { Discovery } from "@goat/client-runtime/relay";
+import type { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { useMemo } from "react";
 

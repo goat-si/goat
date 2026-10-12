@@ -1,6 +1,6 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -31,7 +31,7 @@ import {
   ProviderTurnId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -55,7 +55,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -69,7 +69,7 @@ import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryServic
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
-import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -78,7 +78,7 @@ import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const layerPlatformTest = Layer.merge(
   NodeServices.layer,
@@ -487,7 +487,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
 
 const seedFoundationQuestion = Effect.fn("runtimeTest.seedFoundationQuestion")(function* (
   name: string,
-  requestOverrides: Partial<import("@t3tools/contracts").OrchestrationV2RuntimeRequest> = {},
+  requestOverrides: Partial<import("@goat/contracts").OrchestrationV2RuntimeRequest> = {},
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const eventSink = yield* EventSink.EventSinkV2;
@@ -1736,8 +1736,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           },
         ],
       });
-      const captured =
-        yield* Deferred.make<import("@t3tools/contracts").ProviderUserInputAnswers>();
+      const captured = yield* Deferred.make<import("@goat/contracts").ProviderUserInputAnswers>();
       const command = {
         type: "runtime-request.respond" as const,
         commandId: CommandId.make("foundation-live-answer"),

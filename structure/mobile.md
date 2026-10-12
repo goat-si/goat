@@ -4,7 +4,7 @@
 Navigation: `apps/mobile/src/App.tsx` builds `createStaticNavigation(RootStack)`, and
 `apps/mobile/src/Stack.tsx` is that stack. Pairing and saved environments are screens under
 `apps/mobile/src/features/connection/`, using `apps/mobile/src/features/connection/pairing.ts`.
-The connection commands go through `@t3tools/client-runtime/connection`, the same package the web
+The connection commands go through `@goat/client-runtime/connection`, the same package the web
 app uses. See [`client-runtime.md`](client-runtime.md).
 
 `apps/mobile/app.config.ts` is the Expo config. `slug` is `"goat"`. Names, URL schemes, and store
@@ -17,7 +17,7 @@ ids come from `MOBILE_APP_IDENTITY` in `packages/shared/src/mobileAppIdentity.ts
 | preview     | GOAT Preview | `goat-preview` | `si.goat.mobile.preview` |
 
 GOAT Bot on this surface is `apps/mobile/src/features/goat-bot/GoatBotScreen.tsx`. The screen reads
-`GoatBotRow` values from `@t3tools/client-runtime/goatBot` and sends through
+`GoatBotRow` values from `@goat/client-runtime/goatBot` and sends through
 `useMobileGoatBotSession`. Home remembers thread mode versus bot mode in
 `apps/mobile/src/features/goat-bot/goatBotHomeMode.ts`. The bot's server, and the rule that worker
 threads are separate from the bot transcript, are [`channels.md`](channels.md).

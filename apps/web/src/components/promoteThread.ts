@@ -1,5 +1,5 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 

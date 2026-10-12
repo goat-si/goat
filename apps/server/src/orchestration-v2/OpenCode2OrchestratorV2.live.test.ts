@@ -33,7 +33,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -54,12 +54,12 @@ import * as CodexInstallation from "../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ProviderInstanceRegistryHydration from "../provider/ProviderInstanceRegistryHydration.ts";
-import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-import * as OpenCode2Client from "@t3tools/provider-opencode/server/v2/OpenCode2Client";
-import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
-import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as OpenCode2Client from "@goat/provider-opencode/server/v2/OpenCode2Client";
+import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -68,8 +68,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ProviderTurnStartServiceTestkit from "./ProviderTurnStartService.testkit.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";

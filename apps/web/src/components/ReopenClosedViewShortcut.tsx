@@ -1,10 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  scopeProjectRef,
-  scopedThreadKey,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopeProjectRef, scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
+import type { ScopedThreadRef } from "@goat/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
 

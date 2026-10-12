@@ -2,7 +2,7 @@ import {
   connectionRoutes,
   routeEntry,
   type ConnectionCatalogEntry,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import { savedSshWorktreeOptions } from "~/lib/sshWorktree";
 import type {
   EnvironmentId,
@@ -12,10 +12,10 @@ import type {
   GitRunStackedActionResult,
   GitStackedAction,
   VcsStatusResult,
-} from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import type { ChangeRequestTerminology } from "@t3tools/client-runtime/source-control-clients";
+} from "@goat/contracts";
+import { isTemporaryWorktreeBranch } from "@goat/shared/git";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -495,7 +495,7 @@ export function resolveLiveThreadBranchUpdate(input: {
 }
 
 // Re-export from shared for backwards compatibility in this module's exports
-export { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
+export { resolveAutoFeatureBranchName } from "@goat/shared/git";
 
 export function isManagedSshProjectRoot(workspaceRoot: string): boolean {
   const segments = workspaceRoot.split("/").filter(Boolean);

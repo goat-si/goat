@@ -11,9 +11,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/cli";
-import { ExecutionEnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
-import { compareSemverVersions } from "@t3tools/shared/semver";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ExecutionEnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { compareSemverVersions } from "@goat/shared/semver";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import packageJson from "../../package.json" with { type: "json" };
 

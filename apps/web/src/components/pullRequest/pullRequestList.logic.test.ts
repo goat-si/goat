@@ -1,10 +1,10 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import type {
   EnvironmentId,
   ProjectId,
   PullRequestAction,
   PullRequestListEntry,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

@@ -1,4 +1,4 @@
-import { STANDING_INSTRUCTIONS_MAX_CHARS, type ServerSettingsPatch } from "@t3tools/contracts";
+import { STANDING_INSTRUCTIONS_MAX_CHARS, type ServerSettingsPatch } from "@goat/contracts";
 import { useRef } from "react";
 import { View } from "react-native";
 

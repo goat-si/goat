@@ -1,5 +1,5 @@
-import { connectionRoutes, type ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
-import type { EnvironmentId, ThreadContextRecord } from "@t3tools/contracts";
+import { connectionRoutes, type ConnectionCatalogEntry } from "@goat/client-runtime/connection";
+import type { EnvironmentId, ThreadContextRecord } from "@goat/contracts";
 import * as Option from "effect/Option";
 
 /**

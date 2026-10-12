@@ -1,4 +1,4 @@
-import type { DeviceToolVersions } from "@t3tools/contracts";
+import type { DeviceToolVersions } from "@goat/contracts";
 /**
  * Pinned installs of the two external tools device support is built on.
  *

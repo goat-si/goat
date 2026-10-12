@@ -7,7 +7,7 @@ import {
   ServerProviderResetCredits,
   ServerProviderUsageWindow,
   UsageProviderKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   elapsedShare,
@@ -16,7 +16,7 @@ import {
   type LimitPace,
   paceOf,
   remainingPercent,
-} from "@t3tools/shared/usageLimits";
+} from "@goat/shared/usageLimits";
 import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
 

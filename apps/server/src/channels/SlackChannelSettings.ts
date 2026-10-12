@@ -14,8 +14,8 @@ import type {
   SlackChannelSettingsError,
   SlackChannelSettings as SlackChannelSettingsSnapshot,
   SlackChannelStatusEvent,
-} from "@t3tools/contracts";
-import { SlackChannelSettingsError as SettingsError } from "@t3tools/contracts";
+} from "@goat/contracts";
+import { SlackChannelSettingsError as SettingsError } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -48,7 +48,7 @@ export class SlackChannelSettings extends Context.Service<
       connectionId: string,
     ) => Effect.Effect<Option.Option<SlackChannelDefaultTarget>, SlackChannelSettingsError>;
   }
->()("t3/channels/SlackChannelSettings") {}
+>()("goat/channels/SlackChannelSettings") {}
 
 /**
  * Slack switched off: every call says Slack is unavailable, and no default target exists. It

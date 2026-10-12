@@ -1,4 +1,4 @@
-import type { PreviewSessionSnapshot } from "@t3tools/contracts";
+import type { PreviewSessionSnapshot } from "@goat/contracts";
 
 /** The tab the agent touched last, the default when nothing is selected. */
 export function latestBrowserTab(tabs: ReadonlyArray<PreviewSessionSnapshot>) {

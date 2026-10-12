@@ -10,14 +10,14 @@ import {
   syncGoatBotEnsure,
   type GoatBotEnsureMachine,
   type GoatBotSendQueue,
-} from "@t3tools/client-runtime/goatBot";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/client-runtime/goatBot";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   ChannelBotRef,
   ChannelGatewayError,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useContext, useEffect, useMemo } from "react";
 import { create } from "zustand";
 
@@ -31,7 +31,7 @@ import {
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "@t3tools/client-runtime/goatBot";
+} from "@goat/client-runtime/goatBot";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 

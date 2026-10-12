@@ -4,14 +4,14 @@ import type {
   VcsRef,
   ProjectId,
   WorktreeSubmodules,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { sanitizeNewRefName } from "@t3tools/shared/git";
+import { sanitizeNewRefName } from "@goat/shared/git";
 export {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   sanitizeNewRefName,
-} from "@t3tools/shared/git";
+} from "@goat/shared/git";
 
 export interface EnvironmentOption {
   environmentId: EnvironmentId;

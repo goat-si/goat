@@ -13,7 +13,7 @@ import {
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { presentAsChrome } from "./ServerBrowserContexts.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";

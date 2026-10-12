@@ -7,7 +7,7 @@ import type {
   ChannelListTasksInput,
   ChannelListTasksResult,
   EnvironmentId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { createContext } from "react";
 
 /**

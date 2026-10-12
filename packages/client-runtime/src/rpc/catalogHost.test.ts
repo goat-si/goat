@@ -3,7 +3,7 @@ import {
   EnvironmentId,
   WS_METHODS,
   type ConnectionCatalogHostResponse,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

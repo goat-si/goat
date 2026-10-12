@@ -1,10 +1,10 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   OrchestrationDispatchCommandError,
   ProjectId,
   SourceControlRepositoryError,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

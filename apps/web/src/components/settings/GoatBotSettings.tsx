@@ -1,5 +1,5 @@
 // @effect-diagnostics cryptoRandomUUID:off - browser home claims use the platform UUID source.
-import { newGoatBotHomeClaim } from "@t3tools/client-runtime/goatBot/home";
+import { newGoatBotHomeClaim } from "@goat/client-runtime/goatBot/home";
 import { useState } from "react";
 
 import { useGoatBotHomeSettings } from "../goatBot/useGoatBotHome";

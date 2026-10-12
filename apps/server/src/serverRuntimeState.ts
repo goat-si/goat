@@ -4,9 +4,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import packageJson from "../package.json" with { type: "json" };
 import type * as ServerConfig from "./config.ts";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess.ts";

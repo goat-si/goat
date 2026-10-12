@@ -1,9 +1,6 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import type {
-  ConnectionCatalogEntry,
-  SshConnectionProfile,
-} from "@t3tools/client-runtime/connection";
-import { connectionRoutes, sshTargetKey } from "@t3tools/client-runtime/connection";
+import type { EnvironmentId } from "@goat/contracts";
+import type { ConnectionCatalogEntry, SshConnectionProfile } from "@goat/client-runtime/connection";
+import { connectionRoutes, sshTargetKey } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
 import type { DraftSshDestination } from "../composerDraftStore";
 

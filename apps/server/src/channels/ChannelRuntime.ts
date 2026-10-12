@@ -13,7 +13,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the owner token only needs a random UUID.
 import * as NodeCrypto from "node:crypto";
 
-import type { ChannelInputId } from "@t3tools/contracts";
+import type { ChannelInputId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -52,7 +52,7 @@ export class ChannelRuntime extends Context.Service<
     readonly recover: Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     readonly ownerToken: string;
   }
->()("t3/channels/ChannelRuntime") {}
+>()("goat/channels/ChannelRuntime") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

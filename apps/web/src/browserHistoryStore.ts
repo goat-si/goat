@@ -1,10 +1,10 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
+import type { ScopedThreadRef } from "@goat/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
 
-import { normalizePreviewUrl } from "@t3tools/shared/preview";
+import { normalizePreviewUrl } from "@goat/shared/preview";
 import { readPreparedConnection } from "~/state/session";
 
 import { isLocalLoopbackHost, normalizeHostname } from "./browser/browserTargetResolver";

@@ -8,11 +8,11 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { cliArchiveFileName, cliArchivePlatformKey } from "@t3tools/shared/cliRelease";
+import { cliArchiveFileName, cliArchivePlatformKey } from "@goat/shared/cliRelease";
 import { buildDevRuntimeArchive, resolveRuntimeArchiveHome } from "./dev-runtime-archive.ts";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import { vi } from "vite-plus/test";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),

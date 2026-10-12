@@ -11,8 +11,8 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2StoredEvent,
-} from "@t3tools/contracts";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+} from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";

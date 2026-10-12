@@ -1,22 +1,22 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { availableScratchWorkspaceRoot } from "@t3tools/client-runtime/operations/projects";
+import { availableScratchWorkspaceRoot } from "@goat/client-runtime/operations/projects";
 import {
   findPromptLinkProject,
   findPromptLinkPullRequestThread,
   resolvePromptLinkModelSelection,
-} from "@t3tools/client-runtime/prompt-links";
+} from "@goat/client-runtime/prompt-links";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
+import type { EnvironmentId } from "@goat/contracts";
 import {
   parseNewThreadLink,
   type LinkedPrompt,
   type PromptLinkPullRequest,
   type PromptLinkRepository,
-} from "@t3tools/shared/promptLinks";
+} from "@goat/shared/promptLinks";
 import { useEffect, useEffectEvent, useRef } from "react";
 import { Alert } from "react-native";
 

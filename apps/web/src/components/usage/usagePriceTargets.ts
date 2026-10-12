@@ -1,8 +1,4 @@
-import type {
-  EnvironmentId,
-  ServerSettingsPatch,
-  UsageModelPriceOverride,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ServerSettingsPatch, UsageModelPriceOverride } from "@goat/contracts";
 
 export interface UsagePriceTarget {
   readonly environmentId: EnvironmentId;

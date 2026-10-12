@@ -2,8 +2,8 @@ import {
   scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
-} from "@t3tools/client-runtime/environment";
-import type { DesktopPreviewFavicon, ScopedProjectRef, ScopedThreadRef } from "@t3tools/contracts";
+} from "@goat/client-runtime/environment";
+import type { DesktopPreviewFavicon, ScopedProjectRef, ScopedThreadRef } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { useMemo } from "react";
 import { create } from "zustand";

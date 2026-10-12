@@ -6,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   archiveMemberProblems,
   assembleRelease,
@@ -149,8 +149,8 @@ describe("release payload helpers", () => {
     ] as const)
       expect(exposureProblems(name, content, [])).toEqual([]);
     // GOAT workspace packages are GOAT sources wherever they are installed.
-    expect(exposureProblems("app.asar!/node_modules/@t3tools/shared/src/x.ts", "", [])).toEqual([
-      "app.asar!/node_modules/@t3tools/shared/src/x.ts: original source",
+    expect(exposureProblems("app.asar!/node_modules/@goat/shared/src/x.ts", "", [])).toEqual([
+      "app.asar!/node_modules/@goat/shared/src/x.ts: original source",
     ]);
     expect(
       exposureProblems("x.js", "C:\\Users\\runneradmin\\work\\x", ["C:\\Users\\runneradmin"]),

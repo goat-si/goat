@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { CommandId, RuntimeRequestId } from "@t3tools/contracts";
+import { CommandId, RuntimeRequestId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { OrchestratorQuestionAlreadyAnsweredError } from "./Orchestrator.ts";
 import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";

@@ -14,7 +14,7 @@ import {
   type ProviderInstanceId,
   type PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
@@ -136,7 +136,7 @@ export class MobilePreferencesStore extends Context.Service<
       transform: (current: Preferences) => Partial<Preferences>,
     ) => Effect.Effect<Preferences, MobilePreferencesSaveError>;
   }
->()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
+>()("@goat/mobile/persistence/MobilePreferencesStore") {}
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {

@@ -1,7 +1,7 @@
-import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
+import type { ProviderDriverKind, ServerProvider } from "@goat/contracts";
 
-import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
-import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
+import type { ProviderInstance } from "@goat/provider-core/server/driver";
+import type { ServerProviderDraft } from "@goat/provider-core/server/snapshotProbe";
 
 /**
  * Stamp instance identity onto a `ServerProvider` snapshot produced by the

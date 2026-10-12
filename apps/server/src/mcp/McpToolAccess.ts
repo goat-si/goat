@@ -3,7 +3,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
@@ -34,7 +34,7 @@ import {
  * Both constructors demand this. Their private constructors only stop the type
  * checker; this also stops `Reflect.construct` and friends at runtime.
  */
-const builtHere: unique symbol = Symbol("t3/mcp/McpToolAccess/builtHere");
+const builtHere: unique symbol = Symbol("goat/mcp/McpToolAccess/builtHere");
 
 const refuseOutsideConstruction = (token: symbol) => {
   if (token !== builtHere) {
@@ -68,7 +68,7 @@ let handlersLayer: <Tools extends Record<string, Tool.Any>, EX, RX>(
  * without a decision here does not compile. Both are nominal classes, so a
  * handler or layer cannot pass for one by copying its fields. Effect's own
  * registration functions accept any handler, so the
- * `t3code/no-raw-mcp-registration` lint rule keeps Effect's `McpServer` inside
+ * `goat/no-raw-mcp-registration` lint rule keeps Effect's `McpServer` inside
  * McpHttpServer.
  *
  * Parameters choose the target; the caller sets the limits: a thread caller

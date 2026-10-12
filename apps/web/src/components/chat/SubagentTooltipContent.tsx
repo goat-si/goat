@@ -6,12 +6,12 @@ import type {
   ProviderDriverKind,
   ProviderInstanceId,
   OrchestrationV2Subagent,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   resolveSubagentMetadata,
   subagentDetailPreview,
-} from "@t3tools/client-runtime/state/subagent-display";
-import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@t3tools/shared/model";
+} from "@goat/client-runtime/state/subagent-display";
+import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@goat/shared/model";
 import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import type { ReactNode } from "react";
 import {

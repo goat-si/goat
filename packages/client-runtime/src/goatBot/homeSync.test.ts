@@ -1,4 +1,4 @@
-import { EnvironmentId, type GoatBotHomeClaim } from "@t3tools/contracts";
+import { EnvironmentId, type GoatBotHomeClaim } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 import { resolveGoatBotHome, type GoatBotHomeTarget } from "./home.ts";

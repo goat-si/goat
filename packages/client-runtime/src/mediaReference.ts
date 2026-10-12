@@ -1,6 +1,6 @@
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { isWindowsAbsolutePath } from "@goat/shared/path";
 
-import { safeDecodeURIComponent } from "@t3tools/shared/markdownLinks";
+import { safeDecodeURIComponent } from "@goat/shared/markdownLinks";
 
 /** The authored media location, never the temporary URL used to load its bytes. */
 export type MediaReference =

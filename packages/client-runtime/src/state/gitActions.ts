@@ -1,8 +1,4 @@
-import type {
-  GitRunStackedActionInput,
-  GitStackedAction,
-  VcsStatusResult,
-} from "@t3tools/contracts";
+import type { GitRunStackedActionInput, GitStackedAction, VcsStatusResult } from "@goat/contracts";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 

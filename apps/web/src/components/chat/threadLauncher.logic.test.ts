@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ThreadId, type OrchestrationV2ThreadLauncher } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
+import { EnvironmentId, ThreadId, type OrchestrationV2ThreadLauncher } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   describeThreadLauncher,

@@ -9,8 +9,8 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import * as GitHubChangeRequestTemplate from "@t3tools/source-control-github/server/gitHubChangeRequestTemplate";
-import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+import * as GitHubChangeRequestTemplate from "@goat/source-control-github/server/gitHubChangeRequestTemplate";
+import { symlinksSupported } from "@goat/shared/testing/symlinks";
 
 const SINGLE_TEMPLATE_PATHS = [
   ".github/pull_request_template.md",

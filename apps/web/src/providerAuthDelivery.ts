@@ -1,4 +1,4 @@
-import { readCodexAuthDelivery } from "@t3tools/shared/codexAuthHandoff";
+import { readCodexAuthDelivery } from "@goat/shared/codexAuthHandoff";
 
 let pending: ReturnType<typeof readCodexAuthDelivery>;
 

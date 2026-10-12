@@ -1,6 +1,6 @@
 # Web
 
-`apps/web` (`@t3tools/web`) is the React client. `apps/web/package.json` runs it with Vite+
+`apps/web` (`@goat/web`) is the React client. `apps/web/package.json` runs it with Vite+
 (`vp dev`, `vp build`). `apps/web/vite.config.ts` registers TanStack Router, React, and Tailwind.
 In single-origin dev the Vite server proxies `/api` and `/ws` (and the rest of the dev proxy
 table) to the local server, so the bundle does not bake in an origin.
@@ -10,7 +10,7 @@ Routes live under `apps/web/src/routes/`. Pairing is `apps/web/src/routes/pair.t
 `apps/web/src/environments/primary/auth.ts`.
 
 The socket is not implemented in the web app. `apps/web/src/connection/runtime.ts` wires
-`@t3tools/client-runtime/connection`, and `packages/client-runtime/src/rpc/session.ts` opens the
+`@goat/client-runtime/connection`, and `packages/client-runtime/src/rpc/session.ts` opens the
 WebSocket RPC session. `apps/web/src/lib/runtime.ts` supplies the browser socket constructor.
 
 `apps/web/src/branding.ts` sets `APP_BASE_NAME` to `"GOAT"` unless the desktop preload injected a

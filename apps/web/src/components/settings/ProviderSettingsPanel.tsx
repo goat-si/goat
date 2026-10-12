@@ -4,15 +4,15 @@ import {
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useEnvironmentScope, readEnvironmentScope } from "../../state/session";
 import { useAtomValue } from "@effect/atom-react";
-import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
-import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { connectionStatusTitle } from "@goat/client-runtime/connection";
+import { safeErrorLogAttributes } from "@goat/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
@@ -25,12 +25,12 @@ import {
   resolveEnvironmentMachineKind,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
-} from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+} from "@goat/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import {
   getBackgroundActivityPresetSettings,
   resolveServerBackgroundActivitySettings,
-} from "@t3tools/shared/backgroundActivitySettings";
+} from "@goat/shared/backgroundActivitySettings";
 import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";

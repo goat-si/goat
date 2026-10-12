@@ -2,29 +2,26 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   resolveProjectProviderInstanceEnabled,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { readEnvironmentScope } from "../../state/session";
 import type {
   EnvironmentId,
   ProjectId,
   ScheduledTask,
   ScheduledTaskUpsertInput,
-} from "@t3tools/contracts";
-import {
-  MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
-  resolveEnvironmentMachineKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
+import { MAX_WEBHOOK_DELIVERY_AGE_MINUTES, resolveEnvironmentMachineKind } from "@goat/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   DEFAULT_WEBHOOK_PROMPT,
   parseMaxDeliveryAge,
-} from "@t3tools/client-runtime/scheduled-task-webhook";
+} from "@goat/client-runtime/scheduled-task-webhook";
 import {
   useCallback,
   useEffect,
@@ -50,7 +47,7 @@ import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import { ThemedSwitch } from "../../components/ThemedSwitch";
-import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
+import { webhookAddress } from "@goat/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";

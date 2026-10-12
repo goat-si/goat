@@ -3,14 +3,14 @@ import {
   SourceControlProviderKind,
   ThreadId,
   type VcsStatusResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   SshConnectionTarget,
   SshConnectionProfile,
   BearerConnectionTarget,
   PrimaryConnectionTarget,
   type ConnectionCatalogEntry,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
 import { assert, describe, it } from "vite-plus/test";
 import {

@@ -4,8 +4,8 @@ import {
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
-} from "@t3tools/contracts";
-import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime/rpc";
+} from "@goat/contracts";
+import { makeEnvironmentHttpApiClient } from "@goat/client-runtime/rpc";
 import {
   RelayCloudEnvironmentHealthProofPayload,
   RelayEnvironmentHealthResponse,
@@ -17,7 +17,7 @@ import {
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
   type RelayManagedEndpoint,
-} from "@t3tools/contracts/relay";
+} from "@goat/contracts/relay";
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
@@ -26,8 +26,8 @@ import {
   RELAY_MINT_RESPONSE_TYP,
   signRelayJwt,
   verifyRelayJwt,
-} from "@t3tools/shared/relayJwt";
-import { stableStringify } from "@t3tools/shared/relaySigning";
+} from "@goat/shared/relayJwt";
+import { stableStringify } from "@goat/shared/relaySigning";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";

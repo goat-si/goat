@@ -28,7 +28,7 @@ import {
   type ChannelReplyAddress,
   type ChannelRequester,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -91,7 +91,7 @@ export class ChannelGateway extends Context.Service<
       message: ChannelOutboundMessage,
     ) => Effect.Effect<ChannelDeliveryReceipt, ChannelGatewayError>;
   }
->()("t3/channels/ChannelGateway") {}
+>()("goat/channels/ChannelGateway") {}
 
 const RUNTIME_MODE_ORDER: ReadonlyArray<RuntimeMode> = [
   "approval-required",

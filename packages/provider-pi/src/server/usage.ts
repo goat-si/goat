@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
   parseTimestampMs,
   tokenCount,
@@ -12,8 +12,8 @@ import {
   type ProviderUsageReader,
   type TranscriptUsageFormat,
   type UsageRecord,
-} from "@t3tools/provider-core/server/usage";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+} from "@goat/provider-core/server/usage";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type { PiSettings } from "../settings.ts";
 
 const PiScanState = Schema.Struct({ sessionId: Schema.mutableKey(Schema.String) });

@@ -1,12 +1,9 @@
-import {
-  BearerConnectionTarget,
-  PrimaryConnectionTarget,
-} from "@t3tools/client-runtime/connection";
+import { BearerConnectionTarget, PrimaryConnectionTarget } from "@goat/client-runtime/connection";
 import {
   type DesktopEnvironmentBootstrap,
   EnvironmentId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

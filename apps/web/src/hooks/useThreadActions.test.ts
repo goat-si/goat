@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {

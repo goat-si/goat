@@ -11,7 +11,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { DEVELOPMENT_ICON_OVERRIDES } from "../../../scripts/lib/brand-assets.ts";
 import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-executable-imports.ts";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   ServerCliBuildAssetMissingError,
   ServerCliCommandExitError,
@@ -171,7 +171,7 @@ const buildExeCmd = Command.make(
 
 /**
  * Publishes the tarballs scripts/build-npm-platform-packages.ts produced:
- * every `@t3code/t3-<platform>.tgz` first, `t3.tgz` (the launcher) last, so
+ * every `@goat/cli-<platform>.tgz` first, `t3.tgz` (the launcher) last, so
  * the launcher is never installable before the executables it depends on.
  * Tarballs rather than directories because `npm publish <dir>` strips the
  * `node_modules/` the executable loads its native addons from.
@@ -234,7 +234,7 @@ const publishCmd = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Publish the @t3code/t3-<platform> tarballs and then the t3 launcher to npm.",
+    "Publish the @goat/cli-<platform> tarballs and then the t3 launcher to npm.",
   ),
 );
 

@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { STANDING_INSTRUCTIONS_MAX_CHARS } from "@t3tools/contracts";
+import { STANDING_INSTRUCTIONS_MAX_CHARS } from "@goat/contracts";
 
 import { Textarea } from "../ui/textarea";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";

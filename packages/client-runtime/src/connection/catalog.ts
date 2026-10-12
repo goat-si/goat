@@ -2,7 +2,7 @@ import {
   ConnectionAddedBy,
   DesktopSshEnvironmentTargetSchema,
   EnvironmentId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 

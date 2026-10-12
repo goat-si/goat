@@ -1,4 +1,4 @@
-import type { ServerConfig } from "@t3tools/contracts";
+import type { ServerConfig } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveEnvironmentIconPickerLock } from "./EnvironmentIconPicker";

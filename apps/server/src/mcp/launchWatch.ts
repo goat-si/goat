@@ -7,7 +7,7 @@ import {
   RunId,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 

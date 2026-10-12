@@ -12,7 +12,7 @@ import {
   type T3ProjectFile,
   type ThreadEnvMode,
   type WorktreeCleanupRules,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { normalizeProjectPathForComparison } from "./path.ts";
 import { fallbackTextGenerationModelSelection } from "./serverSettings.ts";
 

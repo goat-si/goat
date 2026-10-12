@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
-import { PullRequestReviewGuide, ThreadPullRequestKey } from "@t3tools/contracts";
+import { PullRequestReviewGuide, ThreadPullRequestKey } from "@goat/contracts";
 
 import {
   PersistenceDecodeError,
@@ -33,7 +33,7 @@ export class PullRequestReviewGuideRepository extends Context.Service<
       guide: PullRequestReviewGuide,
     ) => Effect.Effect<void, PullRequestReviewGuideRepositoryError>;
   }
->()("t3/persistence/PullRequestReviewGuides/PullRequestReviewGuideRepository") {}
+>()("goat/persistence/PullRequestReviewGuides/PullRequestReviewGuideRepository") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

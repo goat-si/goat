@@ -22,7 +22,7 @@ import {
   MessageId,
   ThreadId,
   TurnItemId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 const digest = (parts: ReadonlyArray<string>) =>
   NodeCrypto.createHash("sha256").update(parts.join("\u0000")).digest("base64url").slice(0, 32);

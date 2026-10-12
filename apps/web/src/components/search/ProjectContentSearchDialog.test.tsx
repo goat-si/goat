@@ -1,5 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { AuthFilesystemReadScope, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { AuthFilesystemReadScope, EnvironmentId, ThreadId } from "@goat/contracts";
 import type { ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";

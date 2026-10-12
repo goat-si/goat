@@ -4,11 +4,11 @@ import {
   EnvironmentId,
   MessageId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   formatAssistantCitationHref,
   parseAssistantCitationHref,
-} from "@t3tools/shared/assistantCitations";
+} from "@goat/shared/assistantCitations";
 
 import {
   type AssistantTextSelector,

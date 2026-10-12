@@ -1,4 +1,4 @@
-import type { ChannelBotRef, EnvironmentId } from "@t3tools/contracts";
+import type { ChannelBotRef, EnvironmentId } from "@goat/contracts";
 import { useEffect } from "react";
 import { create } from "zustand";
 

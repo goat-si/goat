@@ -16,7 +16,7 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
@@ -32,12 +32,12 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
-import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
-import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
+import type * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 
 import {
   advanceOpenCodePromptAdmission,
@@ -52,7 +52,7 @@ import {
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
-import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const OPEN_CODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({

@@ -3,7 +3,7 @@ import type {
   ServerProvider,
   UsageSummary,
   UsageSummaryInput,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import type { AtomRegistry } from "effect/reactivity";
 

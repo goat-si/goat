@@ -14,16 +14,16 @@ import {
   AuthStandardClientScopes,
   ExecutionEnvironmentDescriptor,
   PortSchema,
-} from "@t3tools/contracts";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
-import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+} from "@goat/contracts";
+import { resolveWorktreeT3Home } from "@goat/shared/devHome";
+import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import {
   buildTailscaleHttpsBaseUrl,
   DEFAULT_TAILSCALE_SERVE_PORT,
   ensureTailscaleServe,
   readTailscaleStatus,
-} from "@t3tools/tailscale";
+} from "@goat/tailscale";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";

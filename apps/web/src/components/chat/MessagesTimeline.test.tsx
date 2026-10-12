@@ -8,7 +8,7 @@ import {
   ProjectId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   act,
   createRef,

@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Drives the real Windows installer against a local release fixture.
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";

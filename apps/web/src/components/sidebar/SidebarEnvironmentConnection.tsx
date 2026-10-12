@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 
 import { cn } from "~/lib/utils";
 import { useEnvironment } from "../../state/environments";

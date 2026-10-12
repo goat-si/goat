@@ -1,7 +1,7 @@
-import { ScheduledTaskId } from "@t3tools/contracts";
+import { ScheduledTaskId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { prependStandingInstructions } from "@t3tools/shared/standingInstructions";
+import { prependStandingInstructions } from "@goat/shared/standingInstructions";
 
 import { resolveUserMessagePresentation } from "./userMessage.ts";
 

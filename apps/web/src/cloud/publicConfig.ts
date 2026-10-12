@@ -1,5 +1,5 @@
-import { relayClerkTokenOptions } from "@t3tools/shared/relayAuth";
-import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
+import { relayClerkTokenOptions } from "@goat/shared/relayAuth";
+import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
 import * as Schema from "effect/Schema";
 
 export class CloudPublicConfigMissingError extends Schema.TaggedError<CloudPublicConfigMissingError>()(

@@ -26,8 +26,8 @@ import {
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
   type RuntimeMode,
-} from "@t3tools/contracts";
-import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
+} from "@goat/contracts";
+import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -592,7 +592,7 @@ export class EnvironmentAuth extends Context.Service<
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
   }
->()("t3/auth/EnvironmentAuth") {}
+>()("goat/auth/EnvironmentAuth") {}
 
 type BootstrapExchangeResult = {
   readonly response: AuthBrowserSessionResult;

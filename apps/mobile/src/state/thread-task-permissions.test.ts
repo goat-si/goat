@@ -1,6 +1,6 @@
-import { AuthOrchestrationOperateScope, RuntimeRequestId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, RuntimeRequestId } from "@goat/contracts";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
-import type { PendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import type { PendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 

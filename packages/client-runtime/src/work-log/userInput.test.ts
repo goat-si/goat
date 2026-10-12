@@ -4,7 +4,7 @@ import {
   ThreadId,
   EnvironmentId,
   type UserInputAttachmentAnswerPayload,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { getQuestionTextPreview, getQuestionAnswerAttribution } from "./userInput.ts";
 
 function answer(

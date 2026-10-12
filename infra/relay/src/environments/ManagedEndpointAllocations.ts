@@ -1,4 +1,4 @@
-import type { RelayManagedEndpoint, RelayManagedEndpointOrigin } from "@t3tools/contracts/relay";
+import type { RelayManagedEndpoint, RelayManagedEndpointOrigin } from "@goat/contracts/relay";
 import { and, eq, exists, inArray, isNull, sql } from "drizzle-orm";
 import { QueryBuilder } from "drizzle-orm/pg-core";
 import * as Context from "effect/Context";

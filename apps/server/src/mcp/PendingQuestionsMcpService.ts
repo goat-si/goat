@@ -13,7 +13,7 @@ import {
   type OrchestratorMcpLaunchedQuestion,
   type UserInputRespondedBy,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -77,7 +77,7 @@ export class PendingQuestionsMcpService extends Context.Service<
       input: OrchestratorMcpPendingRequestRespondInput,
     ) => Effect.Effect<OrchestratorMcpPendingRequestRespondResult, OrchestratorMcpFailure>;
   }
->()("t3/mcp/PendingQuestionsMcpService") {}
+>()("goat/mcp/PendingQuestionsMcpService") {}
 
 const withoutHost = <T extends { readonly host?: unknown }>(input: T): Omit<T, "host"> => {
   const { host: _host, ...rest } = input;

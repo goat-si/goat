@@ -12,8 +12,8 @@ import {
   type OrchestrationV2TurnItem,
   type RuntimeRequestId,
   type ThreadId,
-} from "@t3tools/contracts";
-import * as KeyedLock from "@t3tools/shared/KeyedLock";
+} from "@goat/contracts";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -132,7 +132,7 @@ export class QuestionEscalationService extends Context.Service<
     readonly handleStoredEvent: (stored: OrchestrationV2StoredEvent) => Effect.Effect<void>;
     readonly sweep: Effect.Effect<void>;
   }
->()("t3/orchestration-v2/QuestionEscalationService") {}
+>()("goat/orchestration-v2/QuestionEscalationService") {}
 
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;

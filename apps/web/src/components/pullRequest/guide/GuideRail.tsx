@@ -1,10 +1,10 @@
-import type { PullRequestReviewGuideStop } from "@t3tools/contracts";
+import type { PullRequestReviewGuideStop } from "@goat/contracts";
 import { CheckIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../../ui/badge";
-import { stopSubline } from "@t3tools/client-runtime/review-guide-tour";
+import { stopSubline } from "@goat/client-runtime/review-guide-tour";
 
 /**
  * The tour's table of contents: where the reader is and which stops they have read past. A stop

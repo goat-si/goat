@@ -1,5 +1,5 @@
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
-import { OrchestratorMcpFailure, RunId, ThreadId } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, RunId, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 

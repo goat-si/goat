@@ -17,7 +17,7 @@ import {
   type ChannelOutboundMessage,
   type ChannelTimelineRecord,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -38,7 +38,7 @@ export class ChannelBotTimeline extends Context.Service<
       readonly revision: string;
     }) => Effect.Effect<number, ChannelGatewayError>;
   }
->()("t3/channels/ChannelBotTimeline") {}
+>()("goat/channels/ChannelBotTimeline") {}
 
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;

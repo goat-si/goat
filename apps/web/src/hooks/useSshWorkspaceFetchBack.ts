@@ -3,13 +3,13 @@ import {
   EnvironmentAuthorizationError,
   SshWorkspaceError,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { sshWorkspaceErrorCopy } from "~/lib/sshWorktreeSubmission";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { Atom } from "effect/reactivity";
 import { useCallback } from "react";
 import { environmentCatalog } from "~/connection/catalog";

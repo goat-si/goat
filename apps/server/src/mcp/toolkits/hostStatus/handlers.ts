@@ -1,4 +1,4 @@
-import type { GoatHostStatusInput } from "@t3tools/contracts";
+import type { GoatHostStatusInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";

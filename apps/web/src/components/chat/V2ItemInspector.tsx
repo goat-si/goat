@@ -3,15 +3,15 @@ import type {
   OrchestrationV2ProjectedTurnItem,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   toolCallLines,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
   turnItemOutputImages,
   turnItemOutputText,
-} from "@t3tools/client-runtime/work-log/item-detail";
-import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+} from "@goat/client-runtime/work-log/item-detail";
+import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
 import { memo, Suspense, use, useMemo } from "react";
 

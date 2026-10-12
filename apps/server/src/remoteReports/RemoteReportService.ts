@@ -15,7 +15,7 @@ import {
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
   REMOTE_REPORT_SUMMARY_MAX_CHARS,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -135,7 +135,7 @@ export class RemoteReportService extends Context.Service<
       input: RemoteOriginReportsWaitInput,
     ) => Effect.Effect<RemoteOriginReportsWaitResult, RemoteReportError>;
   }
->()("t3/remoteReports/RemoteReportService") {}
+>()("goat/remoteReports/RemoteReportService") {}
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const orchestrator = yield* Orchestrator.OrchestratorV2;

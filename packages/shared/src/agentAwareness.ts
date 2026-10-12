@@ -1,9 +1,4 @@
-import type {
-  EnvironmentId,
-  OrchestrationV2ThreadShell,
-  Project,
-  ThreadId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2ThreadShell, Project, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { backgroundWorkHoldsCompletion } from "./orchestrationV2PendingBackgroundWork.ts";

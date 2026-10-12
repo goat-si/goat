@@ -1,8 +1,8 @@
-import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
-import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
+import { filterComposerPullRequestMatches } from "@goat/shared/composerPullRequestMatches";
+import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
 import { environmentSession } from "./session";
 import { useEnvironmentPresentation } from "./presentation";
-import type { VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
+import type { VcsRefTarget } from "@goat/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
@@ -10,15 +10,15 @@ import type {
   ThreadId,
   VcsListRefsResult,
   VcsRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   type EnvironmentThreadSearchMatch,
-} from "@t3tools/client-runtime/state/thread-search";
+} from "@goat/client-runtime/state/thread-search";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
-import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
+import { turnItemDetailRevision } from "@goat/client-runtime/work-log/item-detail";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";

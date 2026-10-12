@@ -16,9 +16,9 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
  * Until the detail arrives — or where pull requests are not supported at all — the row renders
  * from the linked snapshot or branch summary, or just the link when status is unavailable.
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId, ProjectId, PullRequestRef } from "@t3tools/contracts";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
+import type { EnvironmentId, ProjectId, PullRequestRef } from "@goat/contracts";
+import { sourceControlRepositorySelector } from "@goat/shared/sourceControl";
 import {
   ArrowUpRightIcon,
   EyeIcon,

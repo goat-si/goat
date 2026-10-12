@@ -1,4 +1,4 @@
-import { type TerminalSummary, WS_METHODS } from "@t3tools/contracts";
+import { type TerminalSummary, WS_METHODS } from "@goat/contracts";
 import * as Stream from "effect/Stream";
 import { Atom } from "effect/reactivity";
 

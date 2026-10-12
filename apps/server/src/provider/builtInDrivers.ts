@@ -20,22 +20,16 @@
  *
  * @module provider/builtInDrivers
  */
-import {
-  AcpRegistryDriver,
-  type AcpRegistryDriverEnv,
-} from "@t3tools/provider-acp-registry/server";
+import { AcpRegistryDriver, type AcpRegistryDriverEnv } from "@goat/provider-acp-registry/server";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { CursorDriver, type CursorDriverEnv } from "@t3tools/provider-cursor/server";
-import { GrokDriver, type GrokDriverEnv } from "@t3tools/provider-grok/server";
-import { OpenCodeDriver, type OpenCodeDriverEnv } from "@t3tools/provider-opencode/server";
-import { MuseDriver, type MuseDriverEnv } from "@t3tools/provider-muse/server";
-import { PiDriver, type PiDriverEnv } from "@t3tools/provider-pi/server";
-import type {
-  AnyProviderDriver,
-  ProviderUsageReaderEnv,
-} from "@t3tools/provider-core/server/driver";
+import { CursorDriver, type CursorDriverEnv } from "@goat/provider-cursor/server";
+import { GrokDriver, type GrokDriverEnv } from "@goat/provider-grok/server";
+import { OpenCodeDriver, type OpenCodeDriverEnv } from "@goat/provider-opencode/server";
+import { MuseDriver, type MuseDriverEnv } from "@goat/provider-muse/server";
+import { PiDriver, type PiDriverEnv } from "@goat/provider-pi/server";
+import type { AnyProviderDriver, ProviderUsageReaderEnv } from "@goat/provider-core/server/driver";
 
 /**
  * Union of infrastructure services required to construct any built-in

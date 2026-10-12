@@ -3,7 +3,7 @@ import {
   AuthRelayWriteScope,
   EnvironmentId,
   type EnvironmentCloudLinkStateResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { act, useLayoutEffect } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";

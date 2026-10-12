@@ -42,7 +42,7 @@ import {
   RunId,
   type RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -325,7 +325,7 @@ export class ChannelRemoteWorkers extends Context.Service<
     /** Starts an observer for every running remote task that has none. Returns how many. */
     readonly ensure: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
   }
->()("t3/channels/ChannelRemoteWorkers") {}
+>()("goat/channels/ChannelRemoteWorkers") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

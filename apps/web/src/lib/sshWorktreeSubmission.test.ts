@@ -11,8 +11,8 @@ import {
   AuthSourceControlWriteScope,
   type SshWorkspaceLaunchInput,
   type SshWorkspaceLaunchResult,
-} from "@t3tools/contracts";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { snapshotDraftContent, isDraftContentUnchanged } from "../components/ChatView.logic";
 import {
@@ -21,7 +21,7 @@ import {
   sshWorktreeErrorFeedback,
   type SshWorktreeSubmissionPorts,
 } from "./sshWorktreeSubmission";
-import { createModelSelection } from "@t3tools/shared/model";
+import { createModelSelection } from "@goat/shared/model";
 const local = EnvironmentId.make("local"),
   remote = EnvironmentId.make("remote");
 const id = DraftId.make("captured"),

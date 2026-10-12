@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -15,7 +15,7 @@ export class EnvironmentQueryStore extends Context.Reference<{
     key: string,
     payload: string,
   ) => Effect.Effect<void>;
-} | null>("@t3tools/client-runtime/EnvironmentQueryStore", {
+} | null>("@goat/client-runtime/EnvironmentQueryStore", {
   defaultValue: () => null,
 }) {}
 

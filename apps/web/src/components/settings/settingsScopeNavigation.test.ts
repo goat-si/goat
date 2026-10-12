@@ -1,4 +1,4 @@
-import { EnvironmentId, ProviderInstanceId, ScheduledTaskId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ScheduledTaskId } from "@goat/contracts";
 import {
   createMemoryHistory,
   createRootRoute,

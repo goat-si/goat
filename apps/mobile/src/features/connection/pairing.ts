@@ -1,5 +1,5 @@
-import { APP_SCHEMES } from "@t3tools/shared/mobileAppIdentity";
-import { readHostedPairingRequest } from "@t3tools/shared/remote";
+import { APP_SCHEMES } from "@goat/shared/mobileAppIdentity";
+import { readHostedPairingRequest } from "@goat/shared/remote";
 import * as Schema from "effect/Schema";
 
 /** App-link protocols whose `pair` URL wraps a pairing URL; T3 Code's are kept for older QR codes. */

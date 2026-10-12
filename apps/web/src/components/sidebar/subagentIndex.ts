@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { parseScopedThreadKey } from "@goat/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { useMemo } from "react";
 import { Atom } from "effect/reactivity";
 

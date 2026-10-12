@@ -10,7 +10,7 @@
  *
  * @module ChannelDeliveryWorker
  */
-import type { ChannelGatewayError } from "@t3tools/contracts";
+import type { ChannelGatewayError } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -58,7 +58,7 @@ export class ChannelDeliveryWorker extends Context.Service<
     /** Sends every due row once. Returns how many rows it handled. */
     readonly deliverDue: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
   }
->()("t3/channels/ChannelDeliveryWorker") {}
+>()("goat/channels/ChannelDeliveryWorker") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

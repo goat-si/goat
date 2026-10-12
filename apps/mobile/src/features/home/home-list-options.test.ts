@@ -1,5 +1,5 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@goat/contracts";
 import { AtomRegistry } from "effect/reactivity";
 import { act, createElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";

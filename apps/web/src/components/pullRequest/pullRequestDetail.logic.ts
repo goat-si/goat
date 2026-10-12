@@ -1,4 +1,4 @@
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import * as Schema from "effect/Schema";
 
 import {
@@ -26,13 +26,13 @@ import {
   type ThreadLinkedPullRequest,
   type ThreadPullRequestLink,
   type VcsRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   legacyThreadPullRequestKey,
   resolveThreadCurrentPullRequestLink,
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+} from "@goat/shared/threadPullRequests";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 import { reviewCommentContextId } from "~/lib/composerContextRecords";

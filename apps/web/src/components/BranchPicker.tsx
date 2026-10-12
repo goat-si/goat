@@ -1,4 +1,4 @@
-import type { VcsRef } from "@t3tools/contracts";
+import type { VcsRef } from "@goat/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   useCallback,

@@ -15,11 +15,11 @@ import * as Schema from "effect/Schema";
 import {
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
-} from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+} from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";

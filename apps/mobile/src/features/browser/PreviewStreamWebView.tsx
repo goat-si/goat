@@ -1,4 +1,4 @@
-import previewStreamScript from "@t3tools/mobile-preview-stream";
+import previewStreamScript from "@goat/mobile-preview-stream";
 import {
   previewStreamControlLabel,
   previewStreamHostSetupMessage,
@@ -6,8 +6,8 @@ import {
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   type PreviewStreamInput,
-} from "@t3tools/client-runtime/preview/server-browser-stream";
-import type { EnvironmentId, PreviewStreamHostSetup } from "@t3tools/contracts";
+} from "@goat/client-runtime/preview/server-browser-stream";
+import type { EnvironmentId, PreviewStreamHostSetup } from "@goat/contracts";
 import {
   useEffect,
   useEffectEvent,

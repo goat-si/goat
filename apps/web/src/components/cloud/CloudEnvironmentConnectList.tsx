@@ -1,24 +1,24 @@
-import { findErrorTraceId } from "@t3tools/client-runtime/errors";
+import { findErrorTraceId } from "@goat/client-runtime/errors";
 import {
   type EnvironmentConnectionPresentation,
   RelayConnectionRegistration,
   RelayConnectionTarget,
   orchestrationProtocolCompatibilityError,
-} from "@t3tools/client-runtime/connection";
-import { relayOfflineReasonMessage } from "@t3tools/client-runtime/relay";
+} from "@goat/client-runtime/connection";
+import { relayOfflineReasonMessage } from "@goat/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   type EnvironmentId,
   resolveEnvironmentMachineKind,
   type ServerConfig,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,
-} from "@t3tools/contracts/relay";
+} from "@goat/contracts/relay";
 import * as Option from "effect/Option";
 import { type ReactNode, useCallback, useEffect, useEffectEvent, useState } from "react";
 

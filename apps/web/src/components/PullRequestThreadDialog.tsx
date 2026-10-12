@@ -1,12 +1,8 @@
-import {
-  AuthOrchestrationOperateScope,
-  type EnvironmentId,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type EnvironmentId, type ThreadId } from "@goat/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 

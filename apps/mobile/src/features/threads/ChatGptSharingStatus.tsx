@@ -1,5 +1,5 @@
-import type { ServerProvider } from "@t3tools/contracts";
-import { CHATGPT_USAGE_URL, usesChatGptSharing } from "@t3tools/shared/usageLimits";
+import type { ServerProvider } from "@goat/contracts";
+import { CHATGPT_USAGE_URL, usesChatGptSharing } from "@goat/shared/usageLimits";
 import { Alert, Linking, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";

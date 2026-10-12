@@ -5,12 +5,7 @@
  * server only honors when its `shellRevealInFileManager` config flag is set,
  * so both actions work for every client and connection mode.
  */
-import {
-  EDITORS,
-  type ContextMenuItem,
-  type EditorId,
-  type EnvironmentId,
-} from "@t3tools/contracts";
+import { EDITORS, type ContextMenuItem, type EditorId, type EnvironmentId } from "@goat/contracts";
 import { useCallback, useMemo } from "react";
 
 import { resolveDiffPathForWorkspace } from "./diffFileActions";
@@ -22,7 +17,7 @@ import { readLocalApi } from "./localApi";
 import { serverEnvironment } from "./state/server";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
-import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
 

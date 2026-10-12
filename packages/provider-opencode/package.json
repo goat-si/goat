@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/provider-opencode",
+  "name": "@goat/provider-opencode",
   "private": true,
   "type": "module",
   "exports": {
@@ -49,19 +49,19 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
+    "@goat/contracts": "workspace:*",
+    "@goat/provider-core": "workspace:*",
+    "@goat/shared": "workspace:*",
     "@opencode-ai/sdk": "^1.3.15",
     "@opencode/client": "2.0.23",
     "@opencode/protocol": "2.0.23",
     "@opencode/schema": "2.0.23",
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/provider-core": "workspace:*",
-    "@t3tools/shared": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
-    "@t3tools/provider-testing": "workspace:*",
+    "@goat/provider-testing": "workspace:*",
     "@types/node": "catalog:",
     "vite-plus": "catalog:"
   }

@@ -8,8 +8,8 @@ import {
   ThreadId,
   type ServerProvider,
   type ServerProviderUsageLimits,
-} from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

@@ -1,9 +1,5 @@
-import {
-  DEFAULT_SERVER_SETTINGS,
-  ProviderDriverKind,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
-import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
+import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@goat/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -27,7 +23,7 @@ import {
   resolveEnvironmentIdentificationMode,
 } from "./useSettings";
 import { resolveSidebarViewIsProjects } from "../components/Sidebar.logic";
-import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 
 beforeEach(() => {
   persistenceMocks.getClientSettings.mockReset().mockResolvedValue(null);

@@ -4,7 +4,7 @@
  *
  * @module provider-cursor/settings
  */
-import { CustomModelSetting, makeProviderSettingsSchema, TrimmedString } from "@t3tools/contracts";
+import { CustomModelSetting, makeProviderSettingsSchema, TrimmedString } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 

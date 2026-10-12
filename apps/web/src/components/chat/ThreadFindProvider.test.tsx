@@ -1,11 +1,7 @@
 import { act, createRef, useContext, useState } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import {
-  EnvironmentId,
-  ThreadId,
-  type OrchestrationV2SearchThreadResult,
-} from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type OrchestrationV2SearchThreadResult } from "@goat/contracts";
 import {
   ThreadFind,
   ThreadFindProvider,

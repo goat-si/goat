@@ -1,8 +1,5 @@
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {

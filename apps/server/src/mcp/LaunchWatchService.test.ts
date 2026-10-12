@@ -8,7 +8,7 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";

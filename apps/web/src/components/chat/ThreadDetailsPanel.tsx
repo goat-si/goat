@@ -4,7 +4,7 @@ import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import type { DraftId } from "../../composerDraftStore";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";

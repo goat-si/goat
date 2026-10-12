@@ -1,4 +1,4 @@
-import { listLoginShellCandidates } from "@t3tools/shared/shell";
+import { listLoginShellCandidates } from "@goat/shared/shell";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -66,7 +66,7 @@ export class DesktopShellEnvironment extends Context.Service<
   {
     readonly installIntoProcess: Effect.Effect<void>;
   }
->()("@t3tools/desktop/shell/DesktopShellEnvironment") {}
+>()("@goat/desktop/shell/DesktopShellEnvironment") {}
 
 const LOGIN_SHELL_ENV_NAMES = [
   "PATH",

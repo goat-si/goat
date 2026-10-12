@@ -34,7 +34,7 @@ import {
   type ChannelTaskStatus,
   RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -371,7 +371,7 @@ export class ChannelLedger extends Context.Service<
       readonly externalActorId: string;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
   }
->()("t3/channels/ChannelLedger") {}
+>()("goat/channels/ChannelLedger") {}
 
 const BotState = Schema.Struct({
   bot: ChannelBotRef,

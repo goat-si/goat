@@ -6,7 +6,7 @@ import {
   type ProviderOptionSelection,
   type ScopedThreadRef,
   type ServerProviderModel,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   applyClaudePromptEffortPrefix,
   buildProviderOptionSelectionsFromDescriptors,
@@ -15,7 +15,7 @@ import {
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
-} from "@t3tools/shared/model";
+} from "@goat/shared/model";
 import { memo, useCallback, useRef } from "react";
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import { BrainIcon, ChevronRightIcon } from "lucide-react";

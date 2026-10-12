@@ -5,21 +5,21 @@ import type {
   OrchestrationV2TurnItem,
   Project,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   RelayApi,
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
-} from "@t3tools/contracts/relay";
-import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
-import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
+} from "@goat/contracts/relay";
+import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
+import { turnItemUpdateCanEndBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
+import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
+import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import {
   normalizeRelayIssuer,
   RELAY_ACTIVITY_PUBLISH_TYP,
   signRelayJwt,
-} from "@t3tools/shared/relayJwt";
+} from "@goat/shared/relayJwt";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -60,7 +60,7 @@ export class AgentAwarenessRelay extends Context.Service<
     readonly requestCatchUp: () => Effect.Effect<void>;
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
->()("t3/relay/AgentAwarenessRelay") {}
+>()("goat/relay/AgentAwarenessRelay") {}
 
 function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;

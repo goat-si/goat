@@ -1,4 +1,4 @@
-import type { OrchestrationV2ThreadProjection, ScopedThreadRef } from "@t3tools/contracts";
+import type { OrchestrationV2ThreadProjection, ScopedThreadRef } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 

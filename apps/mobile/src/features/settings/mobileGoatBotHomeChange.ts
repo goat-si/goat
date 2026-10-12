@@ -1,9 +1,9 @@
-import { newGoatBotHomeClaim, type GoatBotHomeTarget } from "@t3tools/client-runtime/goatBot/home";
+import { newGoatBotHomeClaim, type GoatBotHomeTarget } from "@goat/client-runtime/goatBot/home";
 import {
   compareGoatBotHomeClaims,
   type EnvironmentId,
   type GoatBotHomeClaim,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 /** Keep the latest issued clock even when only part of the cluster accepted it. */
 export function planMobileGoatBotHomeChange(input: {

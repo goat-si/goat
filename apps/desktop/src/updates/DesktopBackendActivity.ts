@@ -1,4 +1,4 @@
-import { SshServerActivity } from "@t3tools/contracts";
+import { SshServerActivity } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -18,7 +18,7 @@ export class DesktopBackendActivity extends Context.Service<
       readonly unchanged: Effect.Effect<boolean>;
     }>;
   }
->()("@t3tools/desktop/updates/DesktopBackendActivity") {}
+>()("@goat/desktop/updates/DesktopBackendActivity") {}
 
 const make = Effect.gen(function* () {
   const pool = yield* DesktopBackendPool.DesktopBackendPool;

@@ -18,8 +18,8 @@ import {
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
-} from "@t3tools/contracts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+} from "@goat/contracts";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -61,7 +61,7 @@ export class ChannelDispatcher extends Context.Service<
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
   }
->()("t3/channels/ChannelDispatcher") {}
+>()("goat/channels/ChannelDispatcher") {}
 
 /** What the worker thread is told besides the instruction itself. */
 const workerInstruction = (task: ChannelTask) =>

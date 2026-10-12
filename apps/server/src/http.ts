@@ -6,10 +6,10 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
   EnvironmentHttpForbiddenError,
-} from "@t3tools/contracts";
-import { isDevProxiedPath } from "@t3tools/shared/devProxy";
-import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
-import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+} from "@goat/contracts";
+import { isDevProxiedPath } from "@goat/shared/devProxy";
+import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@goat/shared/mcpApp";
+import { decodeOtlpTraceRecords } from "@goat/shared/observability";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

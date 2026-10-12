@@ -11,7 +11,7 @@ import {
   type EnvironmentCloudLinkStateResult,
   type EnvironmentCloudPreferencesRequest,
   type EnvironmentCloudRelayConfigResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   RelayCloudEnvironmentHealthProofPayload,
   type RelayCloudEnvironmentHealthRequest,
@@ -33,8 +33,8 @@ import {
   RelayManagedEndpointRecoveryResponse,
   type RelayManagedEndpointRuntimeConfig,
   RelayOkResponse,
-} from "@t3tools/contracts/relay";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
+} from "@goat/contracts/relay";
+import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
@@ -45,8 +45,8 @@ import {
   RELAY_MINT_RESPONSE_TYP,
   signRelayJwt,
   verifyRelayJwt,
-} from "@t3tools/shared/relayJwt";
-import { isSecureRelayUrl } from "@t3tools/shared/relayUrl";
+} from "@goat/shared/relayJwt";
+import { isSecureRelayUrl } from "@goat/shared/relayUrl";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -563,7 +563,7 @@ export class CloudLink extends Context.Service<
       | HttpClientError.HttpClientError
     >;
   }
->()("t3/cloud/CloudLink") {}
+>()("goat/cloud/CloudLink") {}
 
 const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;

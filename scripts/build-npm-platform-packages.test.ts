@@ -1,4 +1,4 @@
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -117,17 +117,17 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       // Platform packages in CLI_ARCHIVE_PLATFORM_KEYS order, launcher last.
       assert.deepStrictEqual(
         outputs.map((output) => output.name),
-        ["@t3code/t3-darwin-arm64", "@t3code/t3-linux-x64", "t3"],
+        ["@goat/cli-darwin-arm64", "@goat/cli-linux-x64", "t3"],
       );
       for (const output of outputs) {
         assert.isTrue(yield* fs.exists(output.tarball), output.tarball);
       }
 
-      const linuxDir = path.join(fixture.outputDir, "@t3code/t3-linux-x64");
+      const linuxDir = path.join(fixture.outputDir, "@goat/cli-linux-x64");
       const linuxManifest = yield* decodeManifest(
         yield* fs.readFileString(path.join(linuxDir, "package.json")),
       );
-      assert.equal(linuxManifest.name, "@t3code/t3-linux-x64");
+      assert.equal(linuxManifest.name, "@goat/cli-linux-x64");
       assert.equal(linuxManifest.version, VERSION);
       assert.deepStrictEqual(linuxManifest.os, ["linux"]);
       assert.deepStrictEqual(linuxManifest.cpu, ["x64"]);
@@ -152,14 +152,14 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       // A root README, or npm would display a bundled dependency's.
       assert.include(
         yield* fs.readFileString(path.join(linuxDir, "README.md")),
-        "# @t3code/t3-linux-x64",
+        "# @goat/cli-linux-x64",
       );
       assert.isTrue(yield* fs.exists(path.join(linuxDir, "node_modules/node-pty")));
       assert.equal(Number((yield* fs.stat(path.join(linuxDir, "goat"))).mode) & 0o111, 0o111);
 
       const darwinManifest = yield* decodeManifest(
         yield* fs.readFileString(
-          path.join(fixture.outputDir, "@t3code/t3-darwin-arm64/package.json"),
+          path.join(fixture.outputDir, "@goat/cli-darwin-arm64/package.json"),
         ),
       );
       assert.deepStrictEqual(darwinManifest.os, ["darwin"]);
@@ -174,8 +174,8 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       assert.deepStrictEqual(launcherManifest.bin, { goat: "./bin/t3.js", t3: "./bin/t3.js" });
       assert.deepStrictEqual(launcherManifest.files, ["bin", "dist"]);
       assert.deepStrictEqual(launcherManifest.optionalDependencies, {
-        "@t3code/t3-darwin-arm64": VERSION,
-        "@t3code/t3-linux-x64": VERSION,
+        "@goat/cli-darwin-arm64": VERSION,
+        "@goat/cli-linux-x64": VERSION,
       });
       assert.isUndefined(launcherManifest.engines);
       assert.isTrue(yield* fs.exists(path.join(launcherDir, "bin/t3.js")));
@@ -189,7 +189,7 @@ it.layer(NodeServices.layer)("build-npm-platform-packages", (it) => {
       // executable bit intact.
       const listing = yield* run(
         "tar",
-        ["-tzvf", path.join(fixture.outputDir, "@t3code/t3-linux-x64.tgz")],
+        ["-tzvf", path.join(fixture.outputDir, "@goat/cli-linux-x64.tgz")],
         { cwd: fixture.outputDir },
       );
       assert.equal(listing.exitCode, 0, listing.stderr);

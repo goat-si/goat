@@ -32,7 +32,7 @@ import {
   NATIVE_SOURCE_CONTENT_WIDTH,
   nativeSourceRowId,
 } from "./nativeSourceFileAdapter";
-import { SourceText } from "@t3tools/mobile-source-text";
+import { SourceText } from "@goat/mobile-source-text";
 
 import { boundedSelectableSourceTokens, prepareSourceFileDocument } from "./source-file-document";
 import { sourceHighlightAtom } from "./sourceHighlightingState";

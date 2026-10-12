@@ -27,14 +27,14 @@ import {
   type ReviewDiffFileStat,
   type ReviewDiffPreviewSource,
   type VcsRef,
-} from "@t3tools/contracts";
-import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { compactTraceAttributes } from "@t3tools/shared/observability";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
-import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
+} from "@goat/contracts";
+import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@goat/shared/git";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { compactTraceAttributes } from "@goat/shared/observability";
+import { decodeJsonResult } from "@goat/shared/schemaJson";
+import { resolveSpawnCommand } from "@goat/shared/shell";
+import { parseT3ProjectFile } from "@goat/shared/t3ProjectFile";
+import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";

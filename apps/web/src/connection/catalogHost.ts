@@ -3,8 +3,8 @@ import {
   ConnectionOnboarding,
   EnvironmentRegistry,
   handleConnectionCatalogOperation,
-} from "@t3tools/client-runtime/connection";
-import { serveConnectionCatalog } from "@t3tools/client-runtime/rpc";
+} from "@goat/client-runtime/connection";
+import { serveConnectionCatalog } from "@goat/client-runtime/rpc";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";

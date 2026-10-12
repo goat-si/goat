@@ -8,7 +8,7 @@ import {
   type ServerProviderResetCredits,
   type ServerProviderUsageWindow,
   type UsageProviderKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   elapsedShare,
   formatDuration,
@@ -16,9 +16,9 @@ import {
   limitsNotice,
   paceOf,
   remainingPercent,
-} from "@t3tools/shared/usageLimits";
+} from "@goat/shared/usageLimits";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
-import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
+import { refreshUsageLimits } from "@goat/client-runtime/state/usage";
 import { Alert, Linking, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";

@@ -1,7 +1,7 @@
 import {
   DesktopUpdateInstallPolicySchema,
   DesktopUpdatePendingRecordSchema,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";

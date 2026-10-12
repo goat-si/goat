@@ -9,8 +9,8 @@ import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
-import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 
 import * as ServerConfig from "./config.ts";
 import * as ServerLogger from "./serverLogger.ts";

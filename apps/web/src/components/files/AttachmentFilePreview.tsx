@@ -1,8 +1,8 @@
-import { filePreviewDelimiter } from "@t3tools/shared/delimitedPreview";
-import type { EnvironmentId } from "@t3tools/contracts";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
-import { readFilePreviewResponse } from "@t3tools/client-runtime/file-preview";
-import { filePreviewKind, FILE_TEXT_PREVIEW_MAX_BYTES } from "@t3tools/shared/filePreview";
+import { filePreviewDelimiter } from "@goat/shared/delimitedPreview";
+import type { EnvironmentId } from "@goat/contracts";
+import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
+import { readFilePreviewResponse } from "@goat/client-runtime/file-preview";
+import { filePreviewKind, FILE_TEXT_PREVIEW_MAX_BYTES } from "@goat/shared/filePreview";
 import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -265,7 +265,7 @@ export function AttachmentFilePreview(props: {
       />
     </div>
   ) : kind === "image" ? (
-    // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
+    // oxlint-disable-next-line goat/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
       <img
         src={url}

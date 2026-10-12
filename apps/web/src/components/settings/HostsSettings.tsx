@@ -3,8 +3,8 @@ import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
-} from "@t3tools/contracts";
-import { limitsNotice } from "@t3tools/shared/usageLimits";
+} from "@goat/contracts";
+import { limitsNotice } from "@goat/shared/usageLimits";
 import { useContext } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";

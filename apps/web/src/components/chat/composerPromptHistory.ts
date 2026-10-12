@@ -1,7 +1,7 @@
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
-} from "@t3tools/shared/composerContextReferences";
+} from "@goat/shared/composerContextReferences";
 import { PLAN_IMPLEMENTATION_PROMPT_PREFIX } from "../../proposedPlan";
 
 /**

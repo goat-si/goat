@@ -21,7 +21,7 @@ import {
   type SlackChannelConfigureInput,
   type SlackChannelSettings as SlackChannelSettingsSnapshot,
   type SlackChannelSettingsErrorReason,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";

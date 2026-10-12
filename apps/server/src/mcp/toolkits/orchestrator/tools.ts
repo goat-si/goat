@@ -34,7 +34,7 @@ import {
   OrchestratorMcpThreadWatchResult,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
 

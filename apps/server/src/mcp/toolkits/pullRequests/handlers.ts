@@ -1,7 +1,4 @@
-import {
-  threadPullRequestsOf,
-  threadPullRequestKeysEqual,
-} from "@t3tools/shared/threadPullRequests";
+import { threadPullRequestsOf, threadPullRequestKeysEqual } from "@goat/shared/threadPullRequests";
 import {
   CommandId,
   pullRequestHostOf,
@@ -10,15 +7,15 @@ import {
   type SourceControlProviderKind,
   type ThreadId,
   type ThreadPullRequestLink,
-} from "@t3tools/contracts";
-import { changeRequestUrlFor, parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+} from "@goat/contracts";
+import { changeRequestUrlFor, parseChangeRequestUrl } from "@goat/shared/changeRequestUrl";
+import { sourceControlRepositorySelector } from "@goat/shared/sourceControl";
 import {
   normalizeThreadPullRequestKey,
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+} from "@goat/shared/threadPullRequests";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";

@@ -1,5 +1,5 @@
-import type { GoatBotEnvironmentInput } from "@t3tools/client-runtime/goatBot";
-import type { ChannelBotRef, GoatBotHomeClaim } from "@t3tools/contracts";
+import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
+import type { ChannelBotRef, GoatBotHomeClaim } from "@goat/contracts";
 
 export type MobileHomeMode = "thread" | "bot";
 

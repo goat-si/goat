@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { TerminalSummary } from "@t3tools/contracts";
-import { DEFAULT_TERMINAL_ID, TerminalOpenInput } from "@t3tools/contracts";
+import type { TerminalSummary } from "@goat/contracts";
+import { DEFAULT_TERMINAL_ID, TerminalOpenInput } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 import { getTerminalLabel, nextTerminalId, resolveTerminalSessionLabel } from "./terminalLabels.ts";

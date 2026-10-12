@@ -39,15 +39,15 @@ import {
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
-} from "@t3tools/contracts";
-import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
-import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import { AgentScope } from "@t3tools/shared/AgentScope";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { mergePathEntries } from "@t3tools/shared/shell";
+} from "@goat/contracts";
+import { makeKeyedCoalescingWorker } from "@goat/shared/KeyedCoalescingWorker";
+import * as KeyedLock from "@goat/shared/KeyedLock";
+import { AgentScope } from "@goat/shared/AgentScope";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { mergePathEntries } from "@goat/shared/shell";
 
-import { acpRegistryManagedBinaryDirectories } from "@t3tools/provider-acp-registry/server";
-import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import { acpRegistryManagedBinaryDirectories } from "@goat/provider-acp-registry/server";
+import { getTerminalLabel } from "@goat/shared/terminalLabels";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -64,7 +64,7 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ServerConfig from "../config.ts";
-import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
@@ -74,11 +74,11 @@ import {
   terminalRestartsTotal,
   terminalSessionsTotal,
 } from "../observability/Metrics.ts";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
-import * as PtyAdapter from "@t3tools/shared/PtyAdapter";
+import * as PtyAdapter from "@goat/shared/PtyAdapter";
 
 export {
   TerminalCwdError,
@@ -238,7 +238,7 @@ export class TerminalManager extends Context.Service<
       listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>,
     ) => Effect.Effect<() => void>;
   }
->()("t3/terminal/Manager/TerminalManager") {}
+>()("goat/terminal/Manager/TerminalManager") {}
 
 interface TerminalSubprocessInspectResult {
   readonly hasRunningSubprocess: boolean;

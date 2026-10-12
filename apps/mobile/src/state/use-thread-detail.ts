@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { PendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
-import type { EnvironmentThread } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId, OrchestrationV2ThreadProjection, ThreadId } from "@t3tools/contracts";
+import type { PendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
+import type { EnvironmentThread } from "@goat/client-runtime/state/shell";
+import type { EnvironmentId, OrchestrationV2ThreadProjection, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 
 import { environmentThreadDetails, useEnvironmentThread } from "./threads";

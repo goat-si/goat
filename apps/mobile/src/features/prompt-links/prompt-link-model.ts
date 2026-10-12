@@ -1,4 +1,4 @@
-import type { PromptLinkRepository } from "@t3tools/shared/promptLinks";
+import type { PromptLinkRepository } from "@goat/shared/promptLinks";
 
 /** The query keys a prompt link adds to the `new` and thread routes. */
 export const PROMPT_LINK_PARAM_KEYS = ["prompt", "repo", "pr", "provider", "model"] as const;

@@ -1,4 +1,4 @@
-import { ChannelGatewayError, type EnvironmentId, type GoatBotHomeClaim } from "@t3tools/contracts";
+import { ChannelGatewayError, type EnvironmentId, type GoatBotHomeClaim } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -15,7 +15,7 @@ export const isGoatBotHome = (
 export class ChannelBotHome extends Context.Service<
   ChannelBotHome,
   { readonly requireHome: Effect.Effect<void, ChannelGatewayError> }
->()("t3/channels/ChannelBotHome") {}
+>()("goat/channels/ChannelBotHome") {}
 
 const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;

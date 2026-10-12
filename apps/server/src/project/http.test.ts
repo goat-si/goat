@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import {

@@ -6,8 +6,8 @@ import {
   SshConnectionProfile,
   SshConnectionTarget,
   type ConnectionCatalogEntry,
-} from "@t3tools/client-runtime/connection";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+} from "@goat/client-runtime/connection";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 

@@ -6,10 +6,10 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import type { DesktopAppActivationRequest } from "@t3tools/contracts";
-import { resolveDesktopAppControlAddress } from "@t3tools/shared/desktopAppControl";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as NetService from "@t3tools/shared/Net";
+import type { DesktopAppActivationRequest } from "@goat/contracts";
+import { resolveDesktopAppControlAddress } from "@goat/shared/desktopAppControl";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

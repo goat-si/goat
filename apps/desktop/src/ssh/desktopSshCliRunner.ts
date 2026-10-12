@@ -1,5 +1,5 @@
 import * as Option from "effect/Option";
-import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
+import type { RemoteT3RunnerOptions } from "@goat/ssh/tunnel";
 
 import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 

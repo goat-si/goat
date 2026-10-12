@@ -1,4 +1,4 @@
-import { type DeviceToolVersions, WS_METHODS } from "@t3tools/contracts";
+import { type DeviceToolVersions, WS_METHODS } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";

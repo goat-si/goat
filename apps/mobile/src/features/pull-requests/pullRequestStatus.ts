@@ -3,7 +3,7 @@ import type {
   PullRequestCheck,
   PullRequestDetail,
   PullRequestListEntry,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type { AppSymbolName } from "../../components/AppSymbol";
 
 const STATES = {

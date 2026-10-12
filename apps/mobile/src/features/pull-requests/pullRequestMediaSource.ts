@@ -1,5 +1,5 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
+import type { EnvironmentId } from "@goat/contracts";
+import { githubMediaFetchUrl } from "@goat/shared/githubMedia";
 import type { FilePreviewItem } from "../../components/FilePreviewModal.types";
 
 export interface PullRequestMediaLocation {

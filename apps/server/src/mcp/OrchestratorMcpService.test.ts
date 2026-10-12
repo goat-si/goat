@@ -19,7 +19,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type ServerProvider,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -50,7 +50,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 describe("OrchestratorMcpService", () => {
   it.effect("retries terminal acknowledgement with a fresh command id", () =>
@@ -2114,9 +2114,9 @@ describe("OrchestratorMcpService provider resolution", () => {
             const createdCommands = yield* Ref.get(dispatched);
             assert.lengthOf(createdCommands, 4);
             const firstCreate =
-              createdCommands[0] as import("@t3tools/contracts").OrchestrationV2Command;
+              createdCommands[0] as import("@goat/contracts").OrchestrationV2Command;
             const repeatedCreate =
-              createdCommands[2] as import("@t3tools/contracts").OrchestrationV2Command;
+              createdCommands[2] as import("@goat/contracts").OrchestrationV2Command;
             assert.equal(firstCreate.type, "thread.create");
             if (firstCreate.type === "thread.create")
               assert.deepEqual(firstCreate.launchedBy, {

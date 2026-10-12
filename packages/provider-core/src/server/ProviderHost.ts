@@ -5,7 +5,7 @@
  * server provides this one service; everything a provider needs from its
  * environment (directories, server settings, background demand, attachment
  * files) goes through it, so a provider package depends only on
- * `@t3tools/provider-core` and its own protocol code.
+ * `@goat/provider-core` and its own protocol code.
  *
  * @module provider-core/server/host
  */
@@ -14,7 +14,7 @@ import type {
   ChatAttachment,
   ServerSettings,
   ServerSettingsError,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -73,4 +73,4 @@ export class ProviderHost extends Context.Service<
       bindingId: string,
     ) => Effect.Effect<ProviderCredentials>;
   }
->()("@t3tools/provider-core/server/ProviderHost") {}
+>()("@goat/provider-core/server/ProviderHost") {}

@@ -1,8 +1,8 @@
 import {
   formatProviderSubagentStatus,
   type ProviderSubagentStatus,
-} from "@t3tools/client-runtime/state/thread-execution";
-import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/thread-execution";
+import { isOrchestrationV2WorkActive } from "@goat/contracts";
 import { ArrowUpLeftIcon } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 

@@ -4,10 +4,10 @@ import {
   type ModelSelection,
   type OrchestrationV2ProviderCapabilities,
   ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
-import { AcpProviderCapabilitiesV2 } from "@t3tools/provider-acp/server/adapter";
-import { acpSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
+import { AcpProviderCapabilitiesV2 } from "@goat/provider-acp/server/adapter";
+import { acpSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 
 const selection = (model: string, effort = "medium"): ModelSelection => ({
   instanceId: ProviderInstanceId.make("acp_test"),

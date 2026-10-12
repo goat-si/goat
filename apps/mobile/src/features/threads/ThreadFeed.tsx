@@ -14,10 +14,10 @@ import {
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
-import type { StandingInstructionsBlock } from "@t3tools/shared/standingInstructions";
-import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
+import type { StandingInstructionsBlock } from "@goat/shared/standingInstructions";
+import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
 import {
   type OrchestrationMessageContext,
   ThreadId,
@@ -28,39 +28,39 @@ import {
   type MessageId,
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
-} from "@t3tools/contracts";
-import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
-import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
-import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
-import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@t3tools/shared/promptLinks";
+} from "@goat/contracts";
+import { renderAssistantCitationsAsText } from "@goat/shared/assistantCitations";
+import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
+import { parseThreadLinkHref } from "@goat/shared/threadLinks";
+import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@goat/shared/promptLinks";
 import {
   parseComposerContextHref,
   collectComposerContextReferences,
   replaceComposerContextReferences,
   formatComposerContextReference,
-} from "@t3tools/shared/composerContextReferences";
+} from "@goat/shared/composerContextReferences";
 import { ComposerContextSheet } from "../../components/ComposerContextSheet";
 import { writeComposerContextClipboard } from "../../lib/composerContextClipboard";
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
-} from "@t3tools/shared/codexArtifactTemplates";
-import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import { isMarkdownFileLinkLabel } from "@t3tools/shared/markdownLinks";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+} from "@goat/shared/codexArtifactTemplates";
+import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
+import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
+import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
-} from "@t3tools/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
+} from "@goat/client-runtime/markdown-images";
+import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
 import {
   renderCodexFileCitationsAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
-} from "@t3tools/shared/codexMarkdownDirectives";
-import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { imageMimeType } from "@t3tools/shared/image";
-import { videoMimeType } from "@t3tools/shared/video";
+} from "@goat/shared/codexMarkdownDirectives";
+import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
+import { imageMimeType } from "@goat/shared/image";
+import { videoMimeType } from "@goat/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -112,7 +112,7 @@ import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
-import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
+import { faviconUrlForOrigin } from "@goat/shared/favicon";
 import {
   SelectableMarkdownText,
   type MarkdownFileContextMenu,
@@ -194,7 +194,7 @@ import {
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
-import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
+import { htmlRenderFrameHeight } from "@goat/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";

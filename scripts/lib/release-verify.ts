@@ -6,7 +6,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type { PlatformError } from "effect/PlatformError";
 import { parseUpdateManifest, type UpdateManifest } from "./update-manifest.ts";
 
@@ -158,7 +158,7 @@ export function isMachO(bytes: Uint8Array): boolean {
 // machine (its home, workspace and checkout) fail anywhere they appear.
 const thirdParty = /(?:^|\/)node_modules\/|\/Contents\/Frameworks\//;
 // GOAT's own workspace packages stay GOAT code even when they land in node_modules.
-const goatPackage = /(?:^|\/)node_modules\/@t3tools\//;
+const goatPackage = /(?:^|\/)node_modules\/@goat\//;
 const buildPath =
   /\/Users\/[A-Za-z0-9._-]+\/|\/home\/runner\/|\/opt\/actions-runner\/|[DC]:\\+a\\+|\$GITHUB_WORKSPACE/g;
 

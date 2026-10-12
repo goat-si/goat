@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import * as RelayTracing from "@t3tools/shared/relayTracing";
+import * as RelayTracing from "@goat/shared/relayTracing";
 
 import { hasTracingPublicConfig, resolveCloudPublicConfig } from "../cloud/publicConfig";
 

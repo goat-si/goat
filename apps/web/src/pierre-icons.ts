@@ -3,8 +3,8 @@ import {
   getBuiltInSpriteSheet,
   type FileTreeIcons,
 } from "@pierre/trees";
-import { VIDEO_FILE_EXTENSIONS } from "@t3tools/shared/video";
-import { fileIconPathForMimeType } from "@t3tools/shared/filePreview";
+import { VIDEO_FILE_EXTENSIONS } from "@goat/shared/video";
+import { fileIconPathForMimeType } from "@goat/shared/filePreview";
 
 export interface PierreIconResolution {
   name: string;

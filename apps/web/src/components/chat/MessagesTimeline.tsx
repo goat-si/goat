@@ -1,11 +1,11 @@
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
-import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
 import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
 import { ComputerUseAppIcon } from "~/components/Icons";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock, WorkLogButton, WorkLogDetails, WorkLogList, WorkLogRow } from "./WorkLog";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
-import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
+import type { WorktreeSetupSnapshot } from "@goat/contracts";
 import { ReadOnlySourcePreview } from "../files/AttachmentFilePreview";
 import { useRightPanelStore } from "~/rightPanelStore";
 import {
@@ -14,7 +14,7 @@ import {
   getQuestionAnswerAttribution,
   getQuestionTextPreview,
   hasQuestionAnswer,
-} from "@t3tools/client-runtime/work-log/user-input";
+} from "@goat/client-runtime/work-log/user-input";
 import {
   deriveTimelineMinimapItems,
   resolveTimelineMinimapPreview,
@@ -34,42 +34,42 @@ import {
   type RunId,
   ThreadId,
   type ToolActivityIcon,
-} from "@t3tools/contracts";
-import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/contracts";
+import { parseScopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentThreadDetails } from "../../state/threads";
-import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
-import type { StandingInstructionsBlock } from "@t3tools/shared/standingInstructions";
+import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
+import type { StandingInstructionsBlock } from "@goat/shared/standingInstructions";
 import { Link } from "@tanstack/react-router";
-import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
-import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
+import { notificationChildThreadId } from "@goat/client-runtime/state/thread-execution";
+import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
 import {
   liveThoughtLine,
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
   workEntryViewedImagePath,
-} from "@t3tools/client-runtime/work-log/presentation";
-import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
+} from "@goat/client-runtime/work-log/presentation";
+import { resolveWorkGroupScrollAnchor } from "@goat/client-runtime/work-log/scroll-anchor";
 import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
-} from "@t3tools/client-runtime/work-log/item-detail";
-import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+} from "@goat/client-runtime/work-log/item-detail";
+import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import {
   subagentGroupSummary,
   summarizeSubagentStatuses,
-} from "@t3tools/client-runtime/state/subagent-display";
+} from "@goat/client-runtime/state/subagent-display";
 import { observeResize } from "~/lib/observeResize";
 
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
-import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
-import { getProjectFaviconCacheKey } from "@t3tools/shared/projectFavicon";
-import { claudeSkillInvocation } from "@t3tools/shared/toolActivity";
+import { resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
+import { toolActivityFaviconUrl } from "@goat/shared/favicon";
+import { formatDuration } from "@goat/shared/orchestrationTiming";
+import { getProjectFaviconCacheKey } from "@goat/shared/projectFavicon";
+import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import {
   createContext,
@@ -102,7 +102,7 @@ import {
   workEntrySignalsSevereFailure,
   workLogEntryIsToolLike,
 } from "../../session-logic";
-import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import {
   type ChatMessage,
   type ChatFileAttachment,
@@ -159,7 +159,7 @@ import type {
   ComposerContextId,
   ComposerContextRecord,
   KnownComposerContextRecord,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Button, InlineButton } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { useAssetUrlRefresh, useAssetUrls, useAssetUrlState } from "../../assets/assetUrls";
@@ -262,12 +262,12 @@ import {
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
-} from "@t3tools/shared/composerContextReferences";
+} from "@goat/shared/composerContextReferences";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
   encodeComposerContextFragment,
-} from "@t3tools/shared/composerContextClipboard";
+} from "@goat/shared/composerContextClipboard";
 import { chatMarkdownClipboardPayload } from "../../markdown-clipboard";
 import { ContextChip, ContextChipLabel, type ContextChipKind } from "../ContextChip";
 import { createContextPresentationRegistry } from "../contextPresentationRegistry";
@@ -277,7 +277,7 @@ import type { ChatMarkdownContextReference } from "../ChatMarkdown";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
-import { type TimestampFormat } from "@t3tools/contracts/settings";
+import { type TimestampFormat } from "@goat/contracts/settings";
 import {
   formatChatTimestampTooltip,
   formatDayAwareTimestamp,
@@ -5913,7 +5913,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
 function QuestionAnswerHistory({
   answer,
 }: {
-  answer: import("@t3tools/contracts").UserInputAttachmentAnswerPayload;
+  answer: import("@goat/contracts").UserInputAttachmentAnswerPayload;
 }) {
   const { activeThreadEnvironmentId } = use(TimelineRowCtx);
   const attachments = useMemo(() => Object.values(answer.attachmentsByQuestionId).flat(), [answer]);

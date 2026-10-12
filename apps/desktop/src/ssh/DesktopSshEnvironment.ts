@@ -2,11 +2,11 @@ import type {
   DesktopDiscoveredSshHost,
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshEnvironmentTarget,
-} from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
-import * as SshAuth from "@t3tools/ssh/auth";
-import { resolveSshTarget } from "@t3tools/ssh/command";
-import { discoverSshHosts } from "@t3tools/ssh/config";
+} from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
+import * as SshAuth from "@goat/ssh/auth";
+import { resolveSshTarget } from "@goat/ssh/command";
+import { discoverSshHosts } from "@goat/ssh/config";
 import {
   SshCommandError,
   SshHostDiscoveryError,
@@ -15,8 +15,8 @@ import {
   SshPairingError,
   SshPasswordPromptError,
   SshReadinessError,
-} from "@t3tools/ssh/errors";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+} from "@goat/ssh/errors";
+import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -66,7 +66,7 @@ export class DesktopSshEnvironment extends Context.Service<
     /** Closes open SSH forwards that stopped answering, for example after sleep. */
     readonly revalidateTunnels: Effect.Effect<void>;
   }
->()("@t3tools/desktop/ssh/DesktopSshEnvironment") {}
+>()("@goat/desktop/ssh/DesktopSshEnvironment") {}
 
 export interface DesktopSshEnvironmentLayerOptions {
   readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemoteT3RunnerOptions>;

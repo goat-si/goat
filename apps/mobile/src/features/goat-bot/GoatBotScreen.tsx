@@ -1,6 +1,6 @@
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { GoatBotRow } from "@t3tools/client-runtime/goatBot";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { memo, useCallback, useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

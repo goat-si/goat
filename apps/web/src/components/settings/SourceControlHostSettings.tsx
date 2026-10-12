@@ -1,5 +1,5 @@
-import type { EnvironmentId } from "@t3tools/contracts";
-import type { SourceControlClientDefinition } from "@t3tools/client-runtime/source-control-clients";
+import type { EnvironmentId } from "@goat/contracts";
+import type { SourceControlClientDefinition } from "@goat/client-runtime/source-control-clients";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";

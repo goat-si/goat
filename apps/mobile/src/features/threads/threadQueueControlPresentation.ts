@@ -1,4 +1,4 @@
-import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 
 export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Remove queued message";
 

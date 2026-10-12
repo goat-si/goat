@@ -1,6 +1,6 @@
 import { assert } from "@effect/vitest";
-import * as NetService from "@t3tools/shared/Net";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NetService from "@goat/shared/Net";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
 import * as Duration from "effect/Duration";

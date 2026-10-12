@@ -1,13 +1,13 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
+import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
 import type {
   ChatAttachment as ContractChatAttachment,
   EnvironmentId,
   MessageId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   Clock3Icon,
   CornerUpRightIcon,

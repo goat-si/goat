@@ -5,9 +5,9 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthStandardClientScopes } from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import { AuthStandardClientScopes } from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

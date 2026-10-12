@@ -1,5 +1,5 @@
-import type { EnvironmentId, SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { DEFAULT_SIDEBAR_PROJECT_SORT_ORDER } from "@t3tools/contracts";
+import type { EnvironmentId, SidebarProjectGroupingMode } from "@goat/contracts";
+import { DEFAULT_SIDEBAR_PROJECT_SORT_ORDER } from "@goat/contracts";
 import { useAtomSet } from "@effect/atom-react";
 import {
   createContext,

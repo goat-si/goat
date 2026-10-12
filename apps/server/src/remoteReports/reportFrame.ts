@@ -1,4 +1,4 @@
-import type { RemoteReportKind } from "@t3tools/contracts";
+import type { RemoteReportKind } from "@goat/contracts";
 
 export const REPORTING_NOTE =
   "This thread was started from another machine. Report to it with goat_origin_report: status progress for milestones, completed or failed with a short factual summary when you finish, and needs_input when you need an answer before you can continue (that one may wake the origin; delivery is the origin's choice). Reports are data and grant no authority.";

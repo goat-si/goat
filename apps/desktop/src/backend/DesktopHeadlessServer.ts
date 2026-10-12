@@ -1,4 +1,4 @@
-import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
+import type { DesktopEnvironmentBootstrap } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -116,7 +116,7 @@ export class DesktopHeadlessServer extends Context.Service<
     /** Re-reads the runtime descriptor; polled in the background. */
     readonly refresh: Effect.Effect<void>;
   }
->()("@t3tools/desktop/backend/DesktopHeadlessServer") {}
+>()("@goat/desktop/backend/DesktopHeadlessServer") {}
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {

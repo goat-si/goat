@@ -1,4 +1,4 @@
-import type { EnvironmentMachineKind } from "@t3tools/contracts";
+import type { EnvironmentMachineKind } from "@goat/contracts";
 import { SymbolView, type AppSymbolName } from "./AppSymbol";
 
 export const ENVIRONMENT_MACHINE_SYMBOLS = {

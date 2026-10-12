@@ -1,20 +1,20 @@
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { getCloneDestinationPath } from "@t3tools/client-runtime/operations/projects";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
+import { getCloneDestinationPath } from "@goat/client-runtime/operations/projects";
 import {
   findPromptLinkProject,
   findPromptLinkPullRequestThread,
   resolvePromptLinkModelSelection,
-} from "@t3tools/client-runtime/prompt-links";
+} from "@goat/client-runtime/prompt-links";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+} from "@goat/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import {
   type NewThreadLink,
   type PromptLinkRepository,
   promptLinkPullRequestUrl,
-} from "@t3tools/shared/promptLinks";
+} from "@goat/shared/promptLinks";
 import { useAtomValue } from "@effect/atom-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";

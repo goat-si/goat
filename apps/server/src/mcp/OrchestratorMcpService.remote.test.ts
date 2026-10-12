@@ -18,9 +18,9 @@ import {
   type OrchestrationV2ThreadShell,
   type OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpDelegateTaskInput,
-} from "@t3tools/contracts";
-import { derive } from "@t3tools/provider-core/server/IdAllocator";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+} from "@goat/contracts";
+import { derive } from "@goat/provider-core/server/IdAllocator";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

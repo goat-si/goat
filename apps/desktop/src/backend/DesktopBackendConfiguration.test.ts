@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import { currentDesktopBootstrapToken } from "@goat/shared/desktopBootstrapToken";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -1698,7 +1698,7 @@ describe("DesktopBackendConfiguration", () => {
     // a live async effect — otherwise runSync throws in the handler. Build the
     // real WSL layer (not the sync test stub) and resolve the label with a
     // top-level runSync, exactly as the handler does.
-    // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- This test intentionally replicates the sync IPC handler's runSync path to catch a regression to async-only resolution; it.effect would mask it.
+    // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests -- This test intentionally replicates the sync IPC handler's runSync path to catch a regression to async-only resolution; it.effect would mask it.
     const runtime = ManagedRuntime.make(
       DesktopBackendConfiguration.layer.pipe(
         Layer.provideMerge(layerServerExposure),
@@ -1723,7 +1723,7 @@ describe("DesktopBackendConfiguration", () => {
       const configuration = await runtime.runPromise(
         DesktopBackendConfiguration.DesktopBackendConfiguration,
       );
-      // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Same reason: this is the synchronous resolution the IPC handler performs.
+      // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests -- Same reason: this is the synchronous resolution the IPC handler performs.
       const label = Effect.runSync(configuration.resolvePrimaryLabel);
       assert.equal(typeof label, "string");
     } finally {

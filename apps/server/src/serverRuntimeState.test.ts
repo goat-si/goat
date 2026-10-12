@@ -9,8 +9,8 @@ import * as Path from "effect/Path";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import packageJson from "../package.json" with { type: "json" };
 
 import * as ServerRuntimeState from "./serverRuntimeState.ts";

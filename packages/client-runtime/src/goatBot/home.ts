@@ -2,7 +2,7 @@ import {
   compareGoatBotHomeClaims,
   type EnvironmentId,
   type GoatBotHomeClaim,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 export interface GoatBotHomeTarget {
   readonly environmentId: EnvironmentId;

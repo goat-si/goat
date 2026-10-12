@@ -15,12 +15,12 @@ import {
   ComposerContextId,
   SshWorkspaceError,
   type SshWorkspaceLaunchResult,
-} from "@t3tools/contracts";
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import { createModelSelection } from "@t3tools/shared/model";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { SshConnectionProfile, SshConnectionTarget } from "@t3tools/client-runtime/connection";
+} from "@goat/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
+import { createModelSelection } from "@goat/shared/model";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { SshConnectionProfile, SshConnectionTarget } from "@goat/client-runtime/connection";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
 const state = vi.hoisted(() => ({

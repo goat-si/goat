@@ -1,4 +1,4 @@
-import { COMPOSER_CONTEXT_KINDS, type KnownComposerContextKind } from "@t3tools/contracts";
+import { COMPOSER_CONTEXT_KINDS, type KnownComposerContextKind } from "@goat/contracts";
 
 export interface ContextPresentationCapability {
   details: "none" | "tooltip" | "popover";

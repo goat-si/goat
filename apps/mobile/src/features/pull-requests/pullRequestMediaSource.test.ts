@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@goat/contracts";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { mediaVideoPreviewUri, mediaVideoThumbnailKey } from "../../lib/videoPreviewSource";
 import { pullRequestImageSource, pullRequestMediaSource } from "./pullRequestMediaSource";

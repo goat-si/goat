@@ -2,11 +2,11 @@ import {
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
   ScheduledTaskId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   splitStandingInstructions,
   type StandingInstructionsBlock,
-} from "@t3tools/shared/standingInstructions";
+} from "@goat/shared/standingInstructions";
 
 const LEGACY_AUTOMATION_PREFIX = /^\[Triggered by schedule task: [^\r\n]+\]\r?\n\r?\n/;
 const LEGACY_AUTOMATION_MESSAGE_ID = /^scheduled-task-message:(.+):\d+:(?:scheduled|manual)$/;

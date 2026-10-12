@@ -1,7 +1,4 @@
-import {
-  createVcsActionManager,
-  createVcsEnvironmentAtoms,
-} from "@t3tools/client-runtime/state/vcs";
+import { createVcsActionManager, createVcsEnvironmentAtoms } from "@goat/client-runtime/state/vcs";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 

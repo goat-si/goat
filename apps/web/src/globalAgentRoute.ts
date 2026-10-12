@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 
 import type { DraftId } from "./composerDraftStore";
 import type { GlobalAgentRef } from "./globalAgentStore";

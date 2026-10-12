@@ -16,11 +16,11 @@ import {
   type GoatBotEnsureMachine,
   type GoatBotAvailability,
   type GoatBotPendingInput,
-} from "@t3tools/client-runtime/goatBot";
-import { goatBotIngestInput } from "@t3tools/client-runtime/state/channels";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { ChannelBotRef, EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/goatBot";
+import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { ChannelBotRef, EnvironmentId } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,

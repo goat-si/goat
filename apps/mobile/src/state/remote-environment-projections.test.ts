@@ -1,10 +1,7 @@
-import type {
-  EnvironmentPresentation,
-  PreparedConnection,
-} from "@t3tools/client-runtime/connection";
-import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
-import type { ServerConfig } from "@t3tools/contracts";
-import { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentPresentation, PreparedConnection } from "@goat/client-runtime/connection";
+import { PrimaryConnectionTarget } from "@goat/client-runtime/connection";
+import type { ServerConfig } from "@goat/contracts";
+import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/reactivity";

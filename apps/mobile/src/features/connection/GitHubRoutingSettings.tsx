@@ -4,7 +4,7 @@ import {
   gitHubRoutingConnectionKey,
   gitHubRoutingPermissionFor,
   type GitHubRoutingPermission,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import { useState } from "react";
 import { Alert, Pressable, View } from "react-native";
 

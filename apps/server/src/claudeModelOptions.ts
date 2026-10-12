@@ -1,10 +1,10 @@
-import type { ModelSelection } from "@t3tools/contracts";
+import type { ModelSelection } from "@goat/contracts";
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
   resolvePromptInjectedEffort,
-} from "@t3tools/shared/model";
+} from "@goat/shared/model";
 
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,

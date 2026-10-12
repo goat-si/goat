@@ -9,7 +9,7 @@ import {
   MessageId,
   ScheduledTaskId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

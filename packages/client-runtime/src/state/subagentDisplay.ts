@@ -3,9 +3,9 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationProjectShell,
   ServerProvider,
-} from "@t3tools/contracts";
-import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
-import { fileBasename } from "@t3tools/shared/path";
+} from "@goat/contracts";
+import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
+import { fileBasename } from "@goat/shared/path";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 
 /** Summarizes one adjacent group, without changing its member identities or order. */

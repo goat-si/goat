@@ -5,8 +5,8 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import {
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "@t3tools/client-runtime/goatBot";
-import { EnvironmentId, ProjectId, ThreadId, type ChannelBotRef } from "@t3tools/contracts";
+} from "@goat/client-runtime/goatBot";
+import { EnvironmentId, ProjectId, ThreadId, type ChannelBotRef } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const harness = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ vi.mock("@effect/atom-react", () => ({
     atom === permissionAtom ? true : atom === connectionAtom ? connection : null,
   useAtomSet: () => harness.save,
 }));
-vi.mock("@t3tools/client-runtime/state/runtime", () => ({
+vi.mock("@goat/client-runtime/state/runtime", () => ({
   runAtomCommand: harness.run,
   squashAtomCommandFailure: () => new Error("failed"),
 }));

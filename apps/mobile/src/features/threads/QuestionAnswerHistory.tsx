@@ -2,12 +2,12 @@ import type {
   EnvironmentId,
   UserInputAttachmentAnswerPayload,
   UserInputAttachments,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Image, Linking, Pressable, View } from "react-native";
 import {
   getQuestionAnswerText,
   getQuestionAnswerAttribution,
-} from "@t3tools/client-runtime/work-log/user-input";
+} from "@goat/client-runtime/work-log/user-input";
 import { AppText as Text } from "../../components/AppText";
 import { useAssetUrl } from "../../state/assets";
 

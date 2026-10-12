@@ -4,7 +4,7 @@ import {
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";

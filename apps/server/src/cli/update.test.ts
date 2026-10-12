@@ -9,12 +9,12 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/http";
-import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { repointLauncher, resolveLauncherPath, resolveNewestVersion } from "./update.ts";
 

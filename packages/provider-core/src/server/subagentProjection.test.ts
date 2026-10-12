@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { NodeId, OrchestrationV2AppThread, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { NodeId, OrchestrationV2AppThread, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { makeSubagentChildThread } from "./subagentProjection.ts";

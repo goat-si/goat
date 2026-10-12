@@ -1,7 +1,7 @@
 import * as NodeOS from "node:os";
 
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import { parsePersistedServerObservabilitySettings } from "@goat/shared/serverSettings";
+import { currentDesktopBootstrapToken } from "@goat/shared/desktopBootstrapToken";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -69,7 +69,7 @@ export class DesktopBackendConfiguration extends Context.Service<
     // so the renderer never holds one long-lived admin credential.
     readonly currentBootstrapToken: Effect.Effect<string, PlatformError.PlatformError>;
   }
->()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
+>()("@goat/desktop/backend/DesktopBackendConfiguration") {}
 
 interface BackendObservabilitySettings {
   readonly otlpTracesUrl: Option.Option<string>;

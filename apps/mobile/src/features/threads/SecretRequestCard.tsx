@@ -5,12 +5,12 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   type SecretRequestItem,
-} from "@t3tools/client-runtime/secret-request";
+} from "@goat/client-runtime/secret-request";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/runtime";
+import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { useRef, useState } from "react";
 import { Pressable, View, type ColorValue } from "react-native";
 

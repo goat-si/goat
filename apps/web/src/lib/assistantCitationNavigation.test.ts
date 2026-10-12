@@ -1,4 +1,4 @@
-import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@goat/contracts";
 import {
   createMemoryHistory,
   createRootRoute,

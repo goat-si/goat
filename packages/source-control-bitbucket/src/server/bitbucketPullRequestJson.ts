@@ -14,11 +14,11 @@ import type {
   PullRequestReviewThread,
   PullRequestReviewerCandidate,
   PullRequestState,
-} from "@t3tools/contracts";
-import { TrimmedNonEmptyString } from "@t3tools/contracts";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+} from "@goat/contracts";
+import { TrimmedNonEmptyString } from "@goat/contracts";
+import { decodeJsonResult } from "@goat/shared/schemaJson";
 
-import { dedupeChecks } from "@t3tools/source-control-core/server/pullRequestChecks";
+import { dedupeChecks } from "@goat/source-control-core/server/pullRequestChecks";
 
 /**
  * Bitbucket's enums are decoded as plain strings and normalized here, in the same tolerant

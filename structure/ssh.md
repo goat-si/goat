@@ -9,7 +9,7 @@ once it is up: `$HOME/.goat`, not the local default.
 
 ## Package
 
-`packages/ssh` (`@t3tools/ssh`) has no root export. `packages/ssh/package.json` exports `./auth`,
+`packages/ssh` (`@goat/ssh`) has no root export. `packages/ssh/package.json` exports `./auth`,
 `./command`, `./config`, `./errors`, and `./tunnel`.
 
 `discoverSshHosts` in `packages/ssh/src/config.ts` reads the user's OpenSSH directory: `Host` and
@@ -56,9 +56,9 @@ compatible runtime only when it is older on the same release train: `0.1.0-dev.*
 
 The desktop app is a second caller of the same package. `apps/desktop/src/ssh/DesktopSshEnvironment.ts`
 discovers hosts and ensures an environment. The server-side caller used by agents is
-`apps/server/src/sshRemote/SshRemoteDispatch.ts`, which imports `@t3tools/ssh/command`,
-`@t3tools/ssh/auth`, `@t3tools/ssh/config`, `@t3tools/ssh/errors`, and `@t3tools/ssh/tunnel`.
-`apps/server/src/device/SshDeviceHost.ts` uses `@t3tools/ssh/command` for device commands.
+`apps/server/src/sshRemote/SshRemoteDispatch.ts`, which imports `@goat/ssh/command`,
+`@goat/ssh/auth`, `@goat/ssh/config`, `@goat/ssh/errors`, and `@goat/ssh/tunnel`.
+`apps/server/src/device/SshDeviceHost.ts` uses `@goat/ssh/command` for device commands.
 
 ## Agent dispatch
 

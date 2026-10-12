@@ -1,4 +1,4 @@
-import type { EnvironmentId, GoatBotHomeClaim } from "@t3tools/contracts";
+import type { EnvironmentId, GoatBotHomeClaim } from "@goat/contracts";
 import { useRef, useState } from "react";
 import { Text } from "react-native";
 

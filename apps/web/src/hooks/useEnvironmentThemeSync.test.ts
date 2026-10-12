@@ -1,4 +1,4 @@
-import type { EnvironmentTheme } from "@t3tools/contracts";
+import type { EnvironmentTheme } from "@goat/contracts";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 const NIGHTFALL_THEME = {

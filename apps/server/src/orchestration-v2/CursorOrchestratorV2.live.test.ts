@@ -11,7 +11,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -29,11 +29,11 @@ import * as CodexInstallation from "../provider/CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ModelManifest from "../provider/ModelManifest.ts";
 import * as ProviderInstanceRegistryHydration from "../provider/ProviderInstanceRegistryHydration.ts";
-import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
-import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";

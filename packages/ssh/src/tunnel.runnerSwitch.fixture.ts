@@ -1,5 +1,5 @@
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";

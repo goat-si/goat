@@ -1,5 +1,5 @@
-import type { ProjectEntry } from "@t3tools/contracts";
-import { isWindowsAbsolutePath, isAbsolutePath } from "@t3tools/shared/path";
+import type { ProjectEntry } from "@goat/contracts";
+import { isWindowsAbsolutePath, isAbsolutePath } from "@goat/shared/path";
 
 export interface FileBreadcrumb {
   label: string;

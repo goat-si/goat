@@ -1,4 +1,4 @@
-import * as SharedObservability from "@t3tools/shared/observability";
+import * as SharedObservability from "@goat/shared/observability";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";

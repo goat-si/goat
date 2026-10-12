@@ -1,24 +1,24 @@
 import { useMemo } from "react";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
+import { sourceControlRepositorySelector } from "@goat/shared/sourceControl";
 import type {
   EnvironmentId,
   ScopedThreadRef,
   ThreadLinkedPullRequest,
   ThreadPullRequestLink,
-} from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+} from "@goat/contracts";
+import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   planThreadPullRequestMutation,
   threadPullRequestLinkMode,
-} from "@t3tools/client-runtime/thread-pull-request-compatibility";
+} from "@goat/client-runtime/thread-pull-request-compatibility";
 import {
   threadPullRequestKeysEqual,
   visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+} from "@goat/shared/threadPullRequests";
 import {
   findProjectForChangeRequest,
   matchesLinkedPullRequestUrl,

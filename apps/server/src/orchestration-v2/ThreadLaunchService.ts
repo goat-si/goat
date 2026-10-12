@@ -1,8 +1,8 @@
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { splitStandingInstructions } from "@t3tools/shared/standingInstructions";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { splitStandingInstructions } from "@goat/shared/standingInstructions";
 import {
   CommandId,
   type ChatAttachment,
@@ -20,7 +20,7 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -35,7 +35,7 @@ import {
   flattenTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
   WORKTREE_BRANCH_PREFIX,
-} from "@t3tools/shared/git";
+} from "@goat/shared/git";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -45,10 +45,10 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
-import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
-import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
+import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
@@ -71,7 +71,7 @@ export interface ThreadLaunchInitialMessage {
   readonly senderThreadId?: ThreadId;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+  readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
 }
 
 export interface ThreadLaunchInput {
@@ -210,7 +210,7 @@ export class ThreadLaunchService extends Context.Service<
       | ThreadManagement.ThreadManagementProviderInstanceDisabledError
     >;
   }
->()("t3/orchestration-v2/ThreadLaunchService") {}
+>()("goat/orchestration-v2/ThreadLaunchService") {}
 
 const isThreadLaunchError = Schema.is(ThreadLaunchError);
 

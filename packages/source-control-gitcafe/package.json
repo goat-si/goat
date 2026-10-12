@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/source-control-gitcafe",
+  "name": "@goat/source-control-gitcafe",
   "private": true,
   "type": "module",
   "exports": {
@@ -41,15 +41,15 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/provider-core": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/source-control-core": "workspace:*",
+    "@goat/contracts": "workspace:*",
+    "@goat/provider-core": "workspace:*",
+    "@goat/shared": "workspace:*",
+    "@goat/source-control-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@t3tools/source-control-testing": "workspace:*",
+    "@goat/source-control-testing": "workspace:*",
     "@types/node": "catalog:",
     "vite-plus": "catalog:"
   }

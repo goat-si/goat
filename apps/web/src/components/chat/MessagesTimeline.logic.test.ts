@@ -1,5 +1,5 @@
-import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
-import { ThreadId, type WorktreeSetupSnapshot } from "@t3tools/contracts";
+import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
+import { ThreadId, type WorktreeSetupSnapshot } from "@goat/contracts";
 import {
   CheckpointRef,
   NodeId,
@@ -11,7 +11,7 @@ import {
   RuntimeRequestId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2TurnItem,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import {
   deriveTimelineEntriesFromVisibleTurnItems,
@@ -22,8 +22,8 @@ import {
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import type { TurnDiffSummary } from "../../types";
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId, MessageId, RunId } from "@t3tools/contracts";
-import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { EnvironmentId, MessageId, RunId } from "@goat/contracts";
+import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,

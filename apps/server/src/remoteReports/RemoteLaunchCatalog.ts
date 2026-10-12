@@ -5,7 +5,7 @@ import {
   type RemoteLaunch,
   type RemoteLaunchesListInput,
   type RemoteLaunchesListResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -27,7 +27,7 @@ export class RemoteLaunchCatalog extends Context.Service<
       input: RemoteLaunchesListInput,
     ) => Effect.Effect<RemoteLaunchesListResult, RemoteLaunchesError>;
   }
->()("t3/remoteReports/RemoteLaunchCatalog") {}
+>()("goat/remoteReports/RemoteLaunchCatalog") {}
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 const threadKey = (host: string, threadId: string) => `${host}\u0000${threadId}`;

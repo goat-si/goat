@@ -7,7 +7,7 @@ import {
   T3_CODE_DARK_THEME_COLORS,
   MOBILE_THEME_IDS,
   getThemeColorsForAppearance,
-} from "@t3tools/shared/themePalettes";
+} from "@goat/shared/themePalettes";
 import {
   readDefaultMobileThemeVariables,
   readGeneratedMobileThemeVariables,

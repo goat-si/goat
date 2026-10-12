@@ -2,13 +2,13 @@ import { assert, describe } from "@effect/vitest";
 
 import { createOxlintRuleHarness } from "../test/utils.ts";
 
-const rule = createOxlintRuleHarness("t3code/no-global-process-runtime");
+const rule = createOxlintRuleHarness("goat/no-global-process-runtime");
 
-describe("t3code/no-global-process-runtime", () => {
+describe("goat/no-global-process-runtime", () => {
   rule.valid(
     "allows injected host process references",
     `
-      import * as HostProcess from "@t3tools/shared/HostProcess";
+      import * as HostProcess from "@goat/shared/HostProcess";
       import * as Effect from "effect/Effect";
 
       export const isWindows = Effect.map(HostProcess.Platform, (platform) => platform === "win32");

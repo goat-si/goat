@@ -1,6 +1,6 @@
 # Desktop
 
-`apps/desktop` (`@t3tools/desktop`) is the Electron host. `apps/desktop/package.json` points `main`
+`apps/desktop` (`@goat/desktop`) is the Electron host. `apps/desktop/package.json` points `main`
 at `dist-electron/boot.cjs`. The main process source is `apps/desktop/src/main.ts`, which composes
 the desktop layers and runs `DesktopApp.program`.
 

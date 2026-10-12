@@ -1,4 +1,4 @@
-import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
+import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import { Extension, InputRule, Node, wrappingInputRule, type JSONContent } from "@tiptap/core";
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -17,15 +17,15 @@ import type {
   AssistantCitation,
   ComposerContextClipboardFragment,
   ServerProviderSkill,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   serializeAssistantCitation,
   withAssistantCitationComment,
-} from "@t3tools/shared/assistantCitations";
+} from "@goat/shared/assistantCitations";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
-} from "@t3tools/shared/composerContextClipboard";
+} from "@goat/shared/composerContextClipboard";
 import {
   createContext,
   use,

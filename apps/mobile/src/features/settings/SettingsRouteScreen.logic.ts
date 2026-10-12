@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 
 /** Wait for earlier grants before choosing the settings that edits and synchronization use. */
 export function resolveAutoSettleReferenceEnvironmentId(

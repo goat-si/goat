@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
-import { NodeId, RunId, ThreadId, type OrchestrationV2ServerCommand } from "@t3tools/contracts";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+import { NodeId, RunId, ThreadId, type OrchestrationV2ServerCommand } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

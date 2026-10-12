@@ -21,8 +21,8 @@ import {
   type RemoteOriginReportsWaitResult,
   type RemoteObservedRun,
   type RuntimeMode,
-} from "@t3tools/contracts";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+} from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

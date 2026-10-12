@@ -1,8 +1,8 @@
-import type { AssistantCitation } from "@t3tools/contracts";
+import type { AssistantCitation } from "@goat/contracts";
 import {
   assistantCitationLabel,
   serializeAssistantCitation,
-} from "@t3tools/shared/assistantCitations";
+} from "@goat/shared/assistantCitations";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRightIcon, PencilIcon, QuoteIcon } from "lucide-react";
 import {

@@ -11,7 +11,7 @@ import {
   type ChatFileAttachment,
   type ChatImageAttachment,
   type DesktopSshEnvironmentTarget,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
@@ -30,15 +30,15 @@ import * as TestClock from "effect/testing/TestClock";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
-import * as SshConfig from "@t3tools/ssh/config";
-import { SshCommandError } from "@t3tools/ssh/errors";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+import * as SshConfig from "@goat/ssh/config";
+import { SshCommandError } from "@goat/ssh/errors";
+import * as SshTunnel from "@goat/ssh/tunnel";
 
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpClient } from "effect/http";
-import { buildRemoteT3RunnerScript } from "@t3tools/ssh/tunnel";
+import { buildRemoteT3RunnerScript } from "@goat/ssh/tunnel";
 
 import * as ServerConfig from "../config.ts";
 import { hostFailure } from "../mcp/hostFailure.ts";

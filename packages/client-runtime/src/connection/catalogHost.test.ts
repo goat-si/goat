@@ -3,7 +3,7 @@ import {
   EnvironmentId,
   type ConnectionCatalogOperation,
   type DesktopSshEnvironmentTarget,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

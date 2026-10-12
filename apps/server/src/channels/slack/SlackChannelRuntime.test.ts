@@ -2,7 +2,7 @@ import {
   ChannelDeliveryId,
   SlackChannelConnectionId,
   type SlackChannelConnectionStatus,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";

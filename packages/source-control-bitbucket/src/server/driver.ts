@@ -1,11 +1,11 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 /**
  * The Bitbucket Cloud driver: repository operations, discovery, and pull requests through the
  * Bitbucket REST API.
  *
  * @module source-control-bitbucket/server/driver
  */
-import { defineSourceControlDriver } from "@t3tools/source-control-core/server/driver";
+import { defineSourceControlDriver } from "@goat/source-control-core/server/driver";
 import * as Effect from "effect/Effect";
 
 import * as BitbucketPullRequestProvider from "./BitbucketPullRequestProvider.ts";

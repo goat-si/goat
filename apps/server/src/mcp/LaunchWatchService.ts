@@ -7,8 +7,8 @@ import {
   type RuntimeMode,
   RuntimeRequestId,
   ThreadId,
-} from "@t3tools/contracts";
-import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+} from "@goat/contracts";
+import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -155,7 +155,7 @@ export interface LaunchWatchServiceShape {
 export class LaunchWatchService extends Context.Service<
   LaunchWatchService,
   LaunchWatchServiceShape
->()("t3/mcp/LaunchWatchService") {}
+>()("goat/mcp/LaunchWatchService") {}
 
 export const LAUNCH_WATCH_FILE = "thread-launch-watches.json";
 /**

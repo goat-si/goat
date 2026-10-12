@@ -1,18 +1,18 @@
-import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
+import { upgradeLegacyContextMessage } from "@goat/shared/composerContextLegacy";
 import { buildProjectThreadStartTurnInput } from "./projectThreadStartTurn";
 import {
   ProjectId,
   ProviderInstanceId,
   ComposerContextId,
   type OrchestrationMessageContext,
-} from "@t3tools/contracts";
-import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
+} from "@goat/contracts";
+import { collectComposerInlineTokens } from "@goat/shared/composerInlineTokens";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
   projectComposerContextForProvider,
-} from "@t3tools/shared/composerContextReferences";
+} from "@goat/shared/composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
 import {
   composerContextEditorTokens,

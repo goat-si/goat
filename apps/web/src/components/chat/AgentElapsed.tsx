@@ -1,6 +1,6 @@
-import type { RuntimeSubagent } from "@t3tools/client-runtime/state/subagentRuntime";
-import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
-import { deriveSubagentElapsedMs } from "@t3tools/shared/orchestrationTiming";
+import type { RuntimeSubagent } from "@goat/client-runtime/state/subagentRuntime";
+import { isOrchestrationV2WorkActive } from "@goat/contracts";
+import { deriveSubagentElapsedMs } from "@goat/shared/orchestrationTiming";
 import { useEffect, useRef } from "react";
 
 function formatElapsedSeconds(totalSeconds: number): string {

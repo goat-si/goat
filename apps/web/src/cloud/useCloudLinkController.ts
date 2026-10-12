@@ -1,11 +1,11 @@
 import { useAuth } from "@clerk/react";
-import { findErrorTraceId } from "@t3tools/client-runtime/errors";
-import { EnvironmentId, AuthRelayReadScope, AuthRelayWriteScope } from "@t3tools/contracts";
+import { findErrorTraceId } from "@goat/client-runtime/errors";
+import { EnvironmentId, AuthRelayReadScope, AuthRelayWriteScope } from "@goat/contracts";
 import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { useState } from "react";
 
 import { toastManager } from "../components/ui/toast";

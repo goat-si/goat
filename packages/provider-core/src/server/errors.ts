@@ -1,4 +1,4 @@
-import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 /**

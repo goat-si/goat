@@ -13,8 +13,8 @@ import {
   type PullRequestDetail,
   type PullRequestStack,
   type PullRequestRef,
-} from "@t3tools/contracts";
-import type { ReviewGuideGenerationInput } from "@t3tools/provider-core/server/textGeneration";
+} from "@goat/contracts";
+import type { ReviewGuideGenerationInput } from "@goat/provider-core/server/textGeneration";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";

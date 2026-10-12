@@ -1,5 +1,5 @@
-import type { Wakeups } from "@t3tools/client-runtime/connection";
-import type { DesktopBridge, DesktopSystemWakeEvent } from "@t3tools/contracts";
+import type { Wakeups } from "@goat/client-runtime/connection";
+import type { DesktopBridge, DesktopSystemWakeEvent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";

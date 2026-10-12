@@ -1,13 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { NotificationHandler } from "@muse-code/sdk";
-import {
-  MUSE_DEFAULT_MODEL,
-  ProviderInstanceId,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import { MUSE_DEFAULT_MODEL, ProviderInstanceId, type ServerProviderModel } from "@goat/contracts";
 import { MuseSettings } from "../settings.ts";
-import { createModelSelection } from "@t3tools/shared/model";
+import { createModelSelection } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";

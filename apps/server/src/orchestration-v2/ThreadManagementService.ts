@@ -1,7 +1,7 @@
 import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type {
   ProjectionRecordField,
   ProjectionRecordFilter,
@@ -34,7 +34,7 @@ import {
   type RuntimeRequestId,
   ThreadId,
   type TurnItemId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -526,7 +526,7 @@ export interface ThreadManagementServiceShape {
 export class ThreadManagementService extends Context.Service<
   ThreadManagementService,
   ThreadManagementServiceShape
->()("t3/orchestration-v2/ThreadManagementService") {}
+>()("goat/orchestration-v2/ThreadManagementService") {}
 
 export function isActiveRun(run: OrchestrationV2Run): boolean {
   return (

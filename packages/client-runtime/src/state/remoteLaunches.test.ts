@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, type RemoteLaunch } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type RemoteLaunch } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { scopeThreadRef } from "../environment/scoped.ts";

@@ -1,6 +1,6 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
+import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@goat/contracts";
 import { BotIcon, SquareIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";

@@ -1,5 +1,5 @@
 import { SessionPermissions } from "./SessionPermissions";
-import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
+import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@goat/shared/authScopeOptions";
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
@@ -45,18 +45,18 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   resolveEnvironmentMachineKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
   connectionRoutes,
   connectionStatusText,
   environmentMcpUrl,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 

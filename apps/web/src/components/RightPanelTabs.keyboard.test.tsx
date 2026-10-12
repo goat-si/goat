@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
-} from "@t3tools/shared/keybindings";
+} from "@goat/shared/keybindings";
 
 import { RightPanelTabs } from "./RightPanelTabs";
 

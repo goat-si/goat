@@ -15,15 +15,15 @@
  *
  * @module provider/Drivers/GrokSkills
  */
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { ServerProviderSkill } from "@goat/contracts";
 import type { GrokSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 
-import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
+import { spawnAndCollect } from "@goat/provider-core/server/snapshotProbe";
 
 const GROK_SKILLS_PROBE_TIMEOUT_MS = 4_000;
 

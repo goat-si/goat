@@ -16,8 +16,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@t3tools/contracts";
-import { T3ProjectFileFromJson } from "@t3tools/shared/t3ProjectFile";
+import { T3_PROJECT_FILE_NAME, type T3ProjectFile } from "@goat/contracts";
+import { T3ProjectFileFromJson } from "@goat/shared/t3ProjectFile";
 
 const decodeT3ProjectFileJson = Schema.decodeEffect(T3ProjectFileFromJson);
 
@@ -47,7 +47,7 @@ export class T3ProjectFileLoader extends Context.Service<
      */
     readonly load: (workspaceRoot: string) => Effect.Effect<Option.Option<T3ProjectFile>>;
   }
->()("t3/project/T3ProjectFileLoader") {}
+>()("goat/project/T3ProjectFileLoader") {}
 
 const logT3ProjectFileLoadError = (error: T3ProjectFileLoadError) =>
   Effect.logWarning(error).pipe(

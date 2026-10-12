@@ -1,4 +1,4 @@
-import { isSchemeOnlyUrl } from "@t3tools/shared/mobileAppIdentity";
+import { isSchemeOnlyUrl } from "@goat/shared/mobileAppIdentity";
 
 /**
  * The Expo dev client launches the app via

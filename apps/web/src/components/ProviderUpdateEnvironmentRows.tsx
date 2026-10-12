@@ -1,15 +1,11 @@
 import { CheckIcon } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
-import {
-  AuthProvidersManageScope,
-  type EnvironmentId,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { AuthProvidersManageScope, type EnvironmentId, type ServerProvider } from "@goat/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 
 import { cn } from "~/lib/utils";
 import { serverEnvironment } from "~/state/server";

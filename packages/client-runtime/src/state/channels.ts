@@ -3,7 +3,7 @@ import {
   type ChannelBotRef,
   type ChannelIngestInput,
   SLACK_CHANNEL_WS_METHODS,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";

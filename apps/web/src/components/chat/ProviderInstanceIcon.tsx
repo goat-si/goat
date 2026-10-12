@@ -1,8 +1,8 @@
 import { type CSSProperties, memo } from "react";
 
-import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
+import { providerInstanceInitials } from "@goat/client-runtime/state/provider-instance-display";
 
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@goat/contracts";
 import { AntigravityIcon, ClaudeAI, Icon, OpenAI } from "../Icons";
 
 import { cn } from "~/lib/utils";

@@ -15,7 +15,7 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createUuidV7Mint } from "@muse-code/sdk";
-import type { ProviderReplayEntry, ProviderReplayTranscript } from "@t3tools/contracts";
+import type { ProviderReplayEntry, ProviderReplayTranscript } from "@goat/contracts";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -33,14 +33,14 @@ import {
   museRecordLabel,
   MuseOrchestratorReplayHarness,
 } from "../src/orchestration-v2/Adapters/MuseAdapterV2.testkit.ts";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import {
   makeMuseEnvironment,
   museLaunch,
   museServeArgs,
   museWorkspaceRoot,
   parseMuseVersion,
-} from "@t3tools/provider-muse/testing";
+} from "@goat/provider-muse/testing";
 import { provideDeterministicTestRuntime } from "../src/orchestration-v2/testkit/DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "../src/orchestration-v2/testkit/fixtures/index.ts";
 import { materializeFixtureInput } from "../src/orchestration-v2/testkit/fixtures/shared.ts";
@@ -48,7 +48,7 @@ import { runOrchestratorV2ProviderReplayScenario } from "../src/orchestration-v2
 import {
   checkpointWorkspace,
   makeCheckpointWorkspace,
-} from "@t3tools/provider-testing/replayWorkspace";
+} from "@goat/provider-testing/replayWorkspace";
 
 const CLOCK_TICK = Duration.millis(20);
 

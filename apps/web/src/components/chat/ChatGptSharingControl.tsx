@@ -1,5 +1,5 @@
-import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
-import type { ServerProvider } from "@t3tools/contracts";
+import { usesChatGptSharing } from "@goat/shared/usageLimits";
+import type { ServerProvider } from "@goat/contracts";
 import { OpenAI } from "../Icons";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 

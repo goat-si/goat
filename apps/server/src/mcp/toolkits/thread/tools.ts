@@ -24,7 +24,7 @@ import {
   ProjectId,
   ThreadResult,
   ThreadResultReport,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";

@@ -5,7 +5,7 @@ import type {
   SlackChannelDeliveryError,
   SlackChannelSettings,
   SlackChannelStatusEvent,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 /**
  * When the Slack section can offer controls for the selected environment. The server

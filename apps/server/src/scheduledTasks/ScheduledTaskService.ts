@@ -22,7 +22,7 @@ import {
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
   type ScheduledTaskWebhookUrlUnavailableReason,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -98,7 +98,7 @@ export function relayHookBaseUrl(input: {
 }
 
 export class ScheduledTaskWebhookOrigin extends Context.Reference<Effect.Effect<WebhookOrigin>>(
-  "t3/scheduledTasks/ScheduledTaskWebhookOrigin",
+  "goat/scheduledTasks/ScheduledTaskWebhookOrigin",
   {
     defaultValue: () => Effect.succeed({ relayHookBaseUrl: null }),
   },
@@ -257,7 +257,7 @@ export class ScheduledTaskService extends Context.Service<
       request: WebhookTriggerRequest,
     ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
   }
->()("t3/scheduledTasks/ScheduledTaskService") {}
+>()("goat/scheduledTasks/ScheduledTaskService") {}
 
 function taskError(message: string, input?: { taskId?: ScheduledTaskId; cause?: unknown }) {
   return new ScheduledTaskError({

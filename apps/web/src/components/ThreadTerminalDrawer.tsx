@@ -2,14 +2,14 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   INITIAL_TERMINAL_OUTPUT_CURSOR,
   readTerminalOutputUpdate,
   type TerminalOutputCursor,
   type TerminalOutputUpdate,
   type TerminalSessionState,
-} from "@t3tools/client-runtime/state/terminal";
+} from "@goat/client-runtime/state/terminal";
 import {
   Plus,
   Square,
@@ -27,8 +27,8 @@ import {
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type ThreadId,
-} from "@t3tools/contracts";
-import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+} from "@goat/contracts";
+import { getTerminalLabel } from "@goat/shared/terminalLabels";
 import * as Schema from "effect/Schema";
 import {
   type PointerEvent as ReactPointerEvent,
@@ -60,7 +60,7 @@ import {
 } from "~/terminal/ghostty/surface";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
-import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { isTerminalUrl } from "../terminal-links";
 import {
   isDiffToggleShortcut,

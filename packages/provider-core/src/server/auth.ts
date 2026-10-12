@@ -4,7 +4,7 @@ import type {
   ProviderAuthRespondInput,
   ProviderAuthState,
   ProviderSetupError,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";

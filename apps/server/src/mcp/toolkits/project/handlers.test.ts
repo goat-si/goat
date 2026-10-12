@@ -7,7 +7,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
   type Project as ProjectRecord,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -19,7 +19,7 @@ import * as Stream from "effect/Stream";
 import {
   splitStandingInstructions,
   standingInstructionsVersion,
-} from "@t3tools/shared/standingInstructions";
+} from "@goat/shared/standingInstructions";
 
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";

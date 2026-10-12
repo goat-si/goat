@@ -13,8 +13,8 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
-} from "@t3tools/contracts";
-import { RelayAgentActivityState } from "@t3tools/contracts/relay";
+} from "@goat/contracts";
+import { RelayAgentActivityState } from "@goat/contracts/relay";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

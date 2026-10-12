@@ -1,7 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac.
 import * as NodeCrypto from "node:crypto";
 
-import type { CompletionWebhookSettings, RunId, ThreadId } from "@t3tools/contracts";
+import type { CompletionWebhookSettings, RunId, ThreadId } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -139,7 +139,7 @@ export interface CompletionWebhookShape {
 }
 
 export class CompletionWebhook extends Context.Service<CompletionWebhook, CompletionWebhookShape>()(
-  "t3/mcp/completionWebhook",
+  "goat/mcp/completionWebhook",
 ) {}
 
 /** @public Service construction is part of the canonical Effect module API. */

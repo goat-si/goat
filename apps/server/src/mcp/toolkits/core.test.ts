@@ -21,7 +21,7 @@ import {
   ThreadId,
   type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Ref from "effect/Ref";
@@ -91,8 +91,8 @@ import {
   resolveT3McpToolDefinition,
   resolveT3McpToolPresentation,
   resolveT3McpToolSummaryAction,
-} from "@t3tools/shared/t3McpToolPresentation";
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+} from "@goat/shared/t3McpToolPresentation";
+import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
@@ -1091,8 +1091,8 @@ it.effect(
         responseCapability: { type: "message" },
         createdAt: now,
         resolvedAt: null,
-      } as import("@t3tools/contracts").OrchestrationV2RuntimeRequest;
-      const item: import("@t3tools/contracts").OrchestrationV2TurnItem = {
+      } as import("@goat/contracts").OrchestrationV2RuntimeRequest;
+      const item: import("@goat/contracts").OrchestrationV2TurnItem = {
         id: TurnItemId.make("question-item"),
         type: "user_input_request",
         threadId: targetId,

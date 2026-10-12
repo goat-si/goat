@@ -3,7 +3,7 @@ import {
   OrchestratorMcpFailure,
   SavedConnection,
   TrimmedNonEmptyString,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 

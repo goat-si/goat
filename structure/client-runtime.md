@@ -1,6 +1,6 @@
 # Client runtime
 
-`packages/client-runtime` (`@t3tools/client-runtime`) is the client code that `apps/web` and
+`packages/client-runtime` (`@goat/client-runtime`) is the client code that `apps/web` and
 `apps/mobile` both import. `apps/desktop` does not reimplement it. The desktop renderer is the web
 app, so it uses the same package. Platform services (sockets, navigation, storage) stay in the app.
 Connection state, RPC session setup, and environment-scoped commands stay here.

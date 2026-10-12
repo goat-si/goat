@@ -1,7 +1,4 @@
-import type {
-  DesktopPreviewAnnotationTheme,
-  DesktopPreviewRecordingInput,
-} from "@t3tools/contracts";
+import type { DesktopPreviewAnnotationTheme, DesktopPreviewRecordingInput } from "@goat/contracts";
 
 import {
   DEFAULT_RECORDING_INPUT_OPTIONS,

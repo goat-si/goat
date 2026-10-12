@@ -1,4 +1,4 @@
-import { ProviderInstanceId, RunId } from "@t3tools/contracts";
+import { ProviderInstanceId, RunId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveHandoffEndpoints, type HandoffTimelineRun } from "./handoff.ts";
 

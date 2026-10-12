@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { DesktopUpdateStateSchema, type DesktopUpdateState } from "@t3tools/contracts";
+import { DesktopUpdateStateSchema, type DesktopUpdateState } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

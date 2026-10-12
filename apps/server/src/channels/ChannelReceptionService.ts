@@ -23,7 +23,7 @@ import {
   ChannelReceptionId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelOutboundKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -64,7 +64,7 @@ export class ChannelReceptionService extends Context.Service<
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
   }
->()("t3/channels/ChannelReceptionService") {}
+>()("goat/channels/ChannelReceptionService") {}
 
 const replyDelivery = (input: {
   readonly causeKey: string;

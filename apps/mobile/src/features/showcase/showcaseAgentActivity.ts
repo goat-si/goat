@@ -1,7 +1,4 @@
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 
 import type {
   AgentActivityPhase,

@@ -339,6 +339,6 @@ export class SlackSdk extends Context.Service<
     readonly botApi: (input: { readonly botToken: string }) => SlackBotApi;
     readonly appApi: (input: { readonly appToken: string }) => SlackAppApi;
   }
->()("t3/channels/slack/SlackSdk") {}
+>()("goat/channels/slack/SlackSdk") {}
 
 export const layer = Layer.succeed(SlackSdk, SlackSdk.of({ openSession, botApi, appApi }));

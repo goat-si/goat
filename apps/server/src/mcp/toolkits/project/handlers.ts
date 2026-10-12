@@ -1,10 +1,10 @@
-import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
+import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { prependStandingInstructions } from "@t3tools/shared/standingInstructions";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { prependStandingInstructions } from "@goat/shared/standingInstructions";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";

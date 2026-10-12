@@ -1,8 +1,4 @@
-import type {
-  PullRequestActor,
-  PullRequestMergeability,
-  PullRequestState,
-} from "@t3tools/contracts";
+import type { PullRequestActor, PullRequestMergeability, PullRequestState } from "@goat/contracts";
 import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

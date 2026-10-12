@@ -3,7 +3,7 @@ import {
   type EnvironmentId,
   type ExecutionEnvironmentCapabilities,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { pickGoatBotHomeCandidate, resolveGoatBotHome, type GoatBotHomeTarget } from "./home.ts";
 
 /** One machine as GOAT Bot sees it. */

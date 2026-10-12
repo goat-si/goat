@@ -1,10 +1,7 @@
-import {
-  BearerConnectionTarget,
-  PrimaryConnectionTarget,
-} from "@t3tools/client-runtime/connection";
-import type { EnvironmentCatalogState } from "@t3tools/client-runtime/state/connections";
-import type { EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId } from "@t3tools/contracts";
+import { BearerConnectionTarget, PrimaryConnectionTarget } from "@goat/client-runtime/connection";
+import type { EnvironmentCatalogState } from "@goat/client-runtime/state/connections";
+import type { EnvironmentShellState } from "@goat/client-runtime/state/shell";
+import { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";

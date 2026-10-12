@@ -25,7 +25,7 @@ import {
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
 import { restorePlanFollowUpComposer } from "./ChatView.logic";
-import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
+import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./chat/queuedMessageEdit";
 import {
   isPaintOnlyThreadTimeline,
@@ -39,22 +39,22 @@ import {
 } from "./ChatView.logic";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { useScratchProject } from "../hooks/useScratchProject";
-import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import { childThreadRequestsTitle } from "@t3tools/client-runtime/state/models";
-import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
+import { isScratchProject } from "@goat/client-runtime/state/projects";
+import { childThreadRequestsTitle } from "@goat/client-runtime/state/models";
+import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
-} from "@t3tools/shared/orchestrationV2ThreadError";
-import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
+} from "@goat/shared/orchestrationV2ThreadError";
+import type { UsageLimitSourceSnapshots } from "@goat/contracts";
 import {
   collectProviderUsageLimits,
   hasProviderUsageLimits,
   isUsageLimitsCommand,
-} from "@t3tools/shared/usageLimits";
+} from "@goat/shared/usageLimits";
 import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { usageLimitsBannerItem } from "./chat/ComposerUsageLimits";
-import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+import { getTerminalLabel } from "@goat/shared/terminalLabels";
 import * as Schema from "effect/Schema";
 import {
   questionAttachmentDraftId,
@@ -101,16 +101,16 @@ import {
   RuntimeMode,
   TerminalOpenInput,
   type WorktreeSetupSnapshot,
-} from "@t3tools/contracts";
-import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+} from "@goat/contracts";
+import { type EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
+import { deriveThreadTitleSeed } from "@goat/client-runtime/operations";
 import {
   wasBootstrapThreadDeleted,
   wasBootstrapThreadNotCreated,
-} from "@t3tools/client-runtime/errors";
+} from "@goat/client-runtime/errors";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
-import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
-import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import { isPasteAsTextShortcut } from "@goat/client-runtime/text-paste";
+import { effectiveSnoozed, threadWokeAt } from "@goat/client-runtime/state/thread-settled";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import {
   deriveProviderSubagentStatus,
@@ -122,46 +122,46 @@ import {
   deriveThreadRuntime,
   presentPendingBackgroundWork,
   presentProviderGoal,
-} from "@t3tools/client-runtime/state/thread-execution";
-import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
+} from "@goat/client-runtime/state/thread-execution";
+import { threadSupportsProviderHandoff } from "@goat/client-runtime/state/thread-workflows";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
   shouldShowLoadEarlierControl,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
-} from "@t3tools/client-runtime/state/threads";
+} from "@goat/client-runtime/state/threads";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
-import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import { derivePendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+} from "@goat/client-runtime/environment";
 import {
   applyClaudePromptEffortPrefix,
   createModelSelection,
   formatModelSlugName,
   resolvePromptInjectedEffort,
   resolveSelectableModel,
-} from "@t3tools/shared/model";
+} from "@goat/shared/model";
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
   resolveProjectScripts,
-} from "@t3tools/shared/projectScripts";
-import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+} from "@goat/shared/projectScripts";
+import { CHAT_LIST_ANCHOR_OFFSET } from "@goat/shared/chatList";
+import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestUnheldRun,
   usageLimitRunPresentedAsLatest,
-} from "@t3tools/shared/orchestrationV2ThreadError";
-import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
-import { truncate } from "@t3tools/shared/String";
-import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
-import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+} from "@goat/shared/orchestrationV2ThreadError";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { sourceControlRepositorySelector } from "@goat/shared/sourceControl";
+import { truncate } from "@goat/shared/String";
+import { resolveThreadReferenceCopyTarget } from "@goat/shared/threadReference";
+import { nextTerminalId, resolveTerminalSessionLabel } from "@goat/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -191,7 +191,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
@@ -234,7 +234,7 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import { seedUserInputDraftAnswers } from "@t3tools/client-runtime/state/thread-requests";
+import { seedUserInputDraftAnswers } from "@goat/client-runtime/state/thread-requests";
 import { useUiStateStore } from "../uiStateStore";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import {
@@ -312,7 +312,7 @@ import { WizardPopup } from "./ui/wizard";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { resolveChatShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
@@ -408,7 +408,7 @@ import {
   removeInlineContextReference,
   stripInlineContextReferences,
 } from "../lib/composerContextReferences";
-import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import { serializeLegacyContextMessage } from "@goat/shared/composerContextLegacySend";
 import {
   buildMessageContext,
   previewAnnotationContextLabel,
@@ -432,12 +432,12 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
-import { workspacePreparationRetryRunIds } from "@t3tools/client-runtime/state/turn-item-presentation";
-import { resolveProviderSkillsForCwd } from "@t3tools/client-runtime/providerSkills";
+import { workspacePreparationRetryRunIds } from "@goat/client-runtime/state/turn-item-presentation";
+import { resolveProviderSkillsForCwd } from "@goat/client-runtime/providerSkills";
 import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useProjectClone } from "../state/projectClones";
-import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
+import { projectCloneDisplayName, projectCloneProgressSummary } from "@goat/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   resolveThreadDetailRef,
@@ -530,7 +530,7 @@ import {
   MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME,
   runMobileComposerTransition,
 } from "./chat/draftHeroTransition";
-import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
+import type { ComposerDispatchMode } from "@goat/client-runtime/state/composer-dispatch";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   agentControlledBrowserCloseConfirmation,
@@ -590,7 +590,7 @@ import {
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
-import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
+import { clampFileAttachmentUploadBytes } from "@goat/client-runtime/state/attachments";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { fileAttachmentCapabilityBlockReason } from "./chat/composerAttachmentFiles";
 import { assetEnvironment } from "../state/assets";
@@ -628,14 +628,14 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
-import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 import { recallableComposerPrompt } from "./chat/composerPromptHistory";
 import { observeResize } from "~/lib/observeResize";
 
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
-import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
@@ -1707,7 +1707,7 @@ export default function ChatView(props: ChatViewProps) {
     readonly messageId: MessageId;
     readonly originalText: string;
     readonly existingAttachments: ReadonlyArray<ContractChatAttachment>;
-    readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
+    readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
   } | null>(null);
   const queuedEditDraftTargetFor = useCallback(
     (runId: RunId) => DraftId.make(`queued-edit:${scopedThreadKey(routeThreadRef)}:${runId}`),
@@ -10567,7 +10567,7 @@ export default function ChatView(props: ChatViewProps) {
       if (userInputResponsesInFlight.current.has(responseKey)) return;
       const attachmentsByQuestionId = new Map<
         string,
-        import("@t3tools/contracts").UserInputAttachments[string]
+        import("@goat/contracts").UserInputAttachments[string]
       >();
       for (const question of pendingInput.questions) {
         const target = questionAttachmentDraftId(
@@ -10590,7 +10590,7 @@ export default function ChatView(props: ChatViewProps) {
         }
         attachmentsByQuestionId.set(
           question.id,
-          uploaded as import("@t3tools/contracts").UserInputAttachments[string],
+          uploaded as import("@goat/contracts").UserInputAttachments[string],
         );
       }
       userInputResponsesInFlight.current.add(responseKey);

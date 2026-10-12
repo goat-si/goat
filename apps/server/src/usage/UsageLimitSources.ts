@@ -20,8 +20,8 @@ import {
   type UsageLimitSourceConfig,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
-} from "@t3tools/contracts";
-import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+} from "@goat/contracts";
+import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -49,7 +49,7 @@ export class UsageLimitSources extends Context.Service<
       input: UsageLimitSourceConsumeResetCreditInput,
     ) => Effect.Effect<ProviderConsumeResetCreditResult, UsageLimitSourceError>;
   }
->()("t3/usage/UsageLimitSources") {}
+>()("goat/usage/UsageLimitSources") {}
 
 function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   if (config.label) return config.label;

@@ -11,7 +11,7 @@ import * as NodeURL from "node:url";
 
 import { PNG } from "pngjs";
 
-import { MOBILE_APP_IDENTITY } from "@t3tools/shared/mobileAppIdentity";
+import { MOBILE_APP_IDENTITY } from "@goat/shared/mobileAppIdentity";
 
 import showcaseConfig, {
   type ShowcaseAppearance,
@@ -421,7 +421,7 @@ function printUsage(config: ShowcaseConfig): void {
   NodeProcess.stdout.write(`App screenshot showcase
 
 Usage:
-  pnpm --filter @t3tools/mobile screenshots [options]
+  pnpm --filter @goat/mobile screenshots [options]
 
 Options:
   --platform ios|android|all  Capture one platform (repeatable)

@@ -7,13 +7,13 @@ import {
   ThreadId,
   SshWorkspaceError,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   PrimaryConnectionTarget,
   SshConnectionTarget,
   SshConnectionProfile,
   type ConnectionCatalogEntry,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";

@@ -1,11 +1,6 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  EnvironmentId,
-  ProjectId,
-  CommandId,
-  SourceControlDiscoveryResult,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, CommandId, SourceControlDiscoveryResult } from "@goat/contracts";
 import * as Option from "effect/Option";
 
 import {

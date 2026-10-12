@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import type { OrchestratorMcpFailureCode } from "@t3tools/contracts";
+import type { OrchestratorMcpFailureCode } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
 import { remoteReportFailure } from "./handlers.ts";

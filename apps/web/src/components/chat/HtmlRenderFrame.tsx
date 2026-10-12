@@ -1,10 +1,10 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import {
   HTML_RENDER_COLUMN_WIDTH,
   htmlRenderFileName,
   htmlRenderFrameHeight,
   type HtmlRenderReference,
-} from "@t3tools/shared/htmlRender";
+} from "@goat/shared/htmlRender";
 import { Maximize2Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 

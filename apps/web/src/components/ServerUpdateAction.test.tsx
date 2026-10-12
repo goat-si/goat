@@ -1,7 +1,7 @@
 import { act, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AuthSessionState, type EnvironmentId, type ServerInstallation } from "@t3tools/contracts";
+import { AuthSessionState, type EnvironmentId, type ServerInstallation } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";

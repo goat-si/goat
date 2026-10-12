@@ -15,8 +15,8 @@ import {
   setRoutesInCatalog,
   replaceCatalogValue,
   Persistence,
-} from "@t3tools/client-runtime/platform";
-import { TokenStore } from "@t3tools/client-runtime/authorization";
+} from "@goat/client-runtime/platform";
+import { TokenStore } from "@goat/client-runtime/authorization";
 import {
   ConnectionTransientError,
   ConnectionBlockedError,
@@ -26,8 +26,8 @@ import {
   StoredGitHubRoutingPermission,
   gitHubRoutingConnectionKey,
   gitHubRoutingPermissionFor,
-} from "@t3tools/client-runtime/connection";
-import { EnvironmentId, ServerConfig, ThreadId, VcsListRefsResult } from "@t3tools/contracts";
+} from "@goat/client-runtime/connection";
+import { EnvironmentId, ServerConfig, ThreadId, VcsListRefsResult } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

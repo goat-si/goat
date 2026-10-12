@@ -1,4 +1,4 @@
-import type { GoatBotDelivery, GoatBotRow } from "@t3tools/client-runtime/goatBot";
+import type { GoatBotDelivery, GoatBotRow } from "@goat/client-runtime/goatBot";
 import { CircleAlertIcon, MessageCircleQuestionIcon } from "lucide-react";
 import {
   Fragment,

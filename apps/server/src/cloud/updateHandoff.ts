@@ -2,7 +2,7 @@
  * Whether this server is going down only to be replaced by an update. Shutdown
  * keeps the managed tunnel across those restarts instead of releasing it.
  */
-import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@t3tools/contracts";
+import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

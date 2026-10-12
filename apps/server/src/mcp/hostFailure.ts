@@ -1,4 +1,4 @@
-import { OrchestratorMcpFailure, OrchestratorMcpFailureCode } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, OrchestratorMcpFailureCode } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import type * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>

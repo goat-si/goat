@@ -1,7 +1,7 @@
-import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
-import type { RemoteEnvironmentRequestError } from "@t3tools/client-runtime/rpc";
-import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
-import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import { bootstrapRemoteBearerSession } from "@goat/client-runtime/authorization";
+import type { RemoteEnvironmentRequestError } from "@goat/client-runtime/rpc";
+import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/contracts";
+import { currentDesktopBootstrapToken } from "@goat/shared/desktopBootstrapToken";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -65,7 +65,7 @@ export class DesktopLocalEnvironmentAuth extends Context.Service<
   {
     readonly getBearerToken: Effect.Effect<string, DesktopLocalEnvironmentAuthError>;
   }
->()("@t3tools/desktop/backend/DesktopLocalEnvironmentAuth") {}
+>()("@goat/desktop/backend/DesktopLocalEnvironmentAuth") {}
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {

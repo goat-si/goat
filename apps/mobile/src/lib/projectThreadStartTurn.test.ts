@@ -1,11 +1,5 @@
-import {
-  EnvironmentId,
-  MessageId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
-import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { EnvironmentId, MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { serializeAssistantCitation } from "@goat/shared/assistantCitations";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

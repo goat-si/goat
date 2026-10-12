@@ -1,7 +1,4 @@
-import {
-  describeUserInputResponder,
-  type UserInputAttachmentAnswerPayload,
-} from "@t3tools/contracts";
+import { describeUserInputResponder, type UserInputAttachmentAnswerPayload } from "@goat/contracts";
 
 /** Additional history detail for recorded agent and client answers. */
 export function getQuestionAnswerAttribution(

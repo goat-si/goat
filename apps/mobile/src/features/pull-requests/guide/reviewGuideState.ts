@@ -1,4 +1,4 @@
-import type { PullRequestReviewGuideResult } from "@t3tools/contracts";
+import type { PullRequestReviewGuideResult } from "@goat/contracts";
 
 /** Old failures must not follow a PR onto a different head. */
 export function reviewGuideState(data: PullRequestReviewGuideResult | null) {

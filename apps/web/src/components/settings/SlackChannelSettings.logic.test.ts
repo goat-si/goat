@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { SlackChannelSettings } from "@t3tools/contracts";
+import type { SlackChannelSettings } from "@goat/contracts";
 
 import {
   parseSlackChannelIds,

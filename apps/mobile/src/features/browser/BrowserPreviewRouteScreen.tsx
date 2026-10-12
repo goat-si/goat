@@ -5,8 +5,8 @@ import {
   FILL_PREVIEW_VIEWPORT,
   ThreadId,
   type PreviewSessionSnapshot,
-} from "@t3tools/contracts";
-import { normalizePreviewUrl } from "@t3tools/shared/preview";
+} from "@goat/contracts";
+import { normalizePreviewUrl } from "@goat/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Platform, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

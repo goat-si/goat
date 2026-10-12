@@ -4,8 +4,8 @@ import type {
   HostThreadCounts,
   ServerProvider,
   ServerProviderUsageLimits,
-} from "@t3tools/contracts";
-import { GoatHostStatusResult } from "@t3tools/contracts";
+} from "@goat/contracts";
+import { GoatHostStatusResult } from "@goat/contracts";
 
 /** Active work this machine should show. Archived, deleted, and subagent threads are omitted. */
 export interface HostThreadCountSource {

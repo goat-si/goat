@@ -1,15 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
-import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { PREVIEW_STREAM_BASE_PATH } from "@t3tools/client-runtime/preview/server-browser-stream";
-import { createPreviewEnvironmentAtoms } from "@t3tools/client-runtime/state/preview";
-import { resolveDeviceHubAccess } from "@t3tools/client-runtime/state/deviceHubAccess";
+import { parseScopedThreadKey, scopedThreadKey } from "@goat/client-runtime/environment";
+import { PREVIEW_STREAM_BASE_PATH } from "@goat/client-runtime/preview/server-browser-stream";
+import { createPreviewEnvironmentAtoms } from "@goat/client-runtime/state/preview";
+import { resolveDeviceHubAccess } from "@goat/client-runtime/state/deviceHubAccess";
 import type {
   EnvironmentId,
   PreviewEvent,
   PreviewListResult,
   PreviewSessionSnapshot,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";

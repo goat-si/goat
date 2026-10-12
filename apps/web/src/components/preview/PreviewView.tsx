@@ -1,11 +1,11 @@
 "use client";
 
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { previewStreamDownloadUrl } from "@t3tools/client-runtime/preview/server-browser-stream";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { previewStreamDownloadUrl } from "@goat/client-runtime/preview/server-browser-stream";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -16,8 +16,8 @@ import {
   DEFAULT_PREVIEW_ZOOM_FACTOR,
   PREVIEW_ZOOM_LEVELS,
   type PreviewAdjustInput,
-} from "@t3tools/contracts";
-import { normalizePreviewUrl, resolveAddressBarInput } from "@t3tools/shared/preview";
+} from "@goat/contracts";
+import { normalizePreviewUrl, resolveAddressBarInput } from "@goat/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {

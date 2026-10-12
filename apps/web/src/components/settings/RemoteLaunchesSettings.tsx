@@ -2,12 +2,12 @@ import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
   type RemoteLaunch,
-} from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   presentRemoteLaunches,
   type RemoteLaunchHostGroup,
-} from "@t3tools/client-runtime/state/remote-launches";
+} from "@goat/client-runtime/state/remote-launches";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -22,7 +22,7 @@ import { serverEnvironment } from "~/state/server";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { Button } from "../ui/button";

@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -187,7 +187,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const root = yield* fs.makeTempDirectoryScoped();
       for (const [relative, kind] of [
         ["npm/_npx/hash/node_modules/t3/dist/bin.mjs", "npx"],
-        ["npm/_npx/hash/node_modules/@t3code/t3-linux-x64/t3", "npx"],
+        ["npm/_npx/hash/node_modules/@goat/cli-linux-x64/t3", "npx"],
         ["pnpm/dlx/hash/node_modules/t3/dist/bin.mjs", "pnpm-dlx"],
         [".bun/install/cache/t3/dist/bin.mjs", "bunx"],
       ] as const) {
@@ -247,7 +247,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       const prefix = path.join(root, "bunx-tools");
       const packageRoot = path.join(prefix, "lib/node_modules/t3");
       const launcher = path.join(packageRoot, "bin/t3.js");
-      const entry = path.join(packageRoot, "node_modules/@t3code/t3-linux-x64/t3");
+      const entry = path.join(packageRoot, "node_modules/@goat/cli-linux-x64/t3");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
@@ -255,7 +255,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"t3":"./bin/t3.js"},"optionalDependencies":{"@t3code/t3-linux-x64":"0.0.45"}}',
+        '{"name":"t3","version":"0.0.45","bin":{"t3":"./bin/t3.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
       );
       yield* fs.symlink(launcher, path.join(prefix, "bin/t3"));
       const resolve = resolveServerInstallation.pipe(
@@ -269,7 +269,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       ]) {
         yield* fs.writeFileString(
           path.join(path.dirname(entry), "package.json"),
-          `{"name":"@t3code/t3-linux-x64","version":"${version}"}`,
+          `{"name":"@goat/cli-linux-x64","version":"${version}"}`,
         );
         expect(yield* resolve).toEqual(expected);
       }
@@ -285,7 +285,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
       const packageRoot = path.join(prefix, "lib/node_modules/t3");
       const launcher = path.join(packageRoot, "bin/t3.js");
-      const entry = path.join(packageRoot, "node_modules/@t3code/t3-linux-x64/goat");
+      const entry = path.join(packageRoot, "node_modules/@goat/cli-linux-x64/goat");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
       yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
       yield* fs.makeDirectory(path.join(prefix, "bin"));
@@ -293,11 +293,11 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       yield* fs.writeFileString(entry, "");
       yield* fs.writeFileString(
         path.join(packageRoot, "package.json"),
-        '{"name":"t3","version":"0.0.45","bin":{"goat":"./bin/t3.js","t3":"./bin/t3.js"},"optionalDependencies":{"@t3code/t3-linux-x64":"0.0.45"}}',
+        '{"name":"t3","version":"0.0.45","bin":{"goat":"./bin/t3.js","t3":"./bin/t3.js"},"optionalDependencies":{"@goat/cli-linux-x64":"0.0.45"}}',
       );
       yield* fs.writeFileString(
         path.join(path.dirname(entry), "package.json"),
-        '{"name":"@t3code/t3-linux-x64","version":"0.0.45"}',
+        '{"name":"@goat/cli-linux-x64","version":"0.0.45"}',
       );
       const foreign = path.join(prefix, "bin/t3");
       yield* fs.writeFileString(foreign, "upstream command\n");
@@ -312,7 +312,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       expect(yield* fs.readFileString(foreign)).toBe("upstream command\n");
       yield* fs.writeFileString(
         path.join(path.dirname(entry), "package.json"),
-        '{"name":"@t3code/t3-linux-x64","version":"0.0.44"}',
+        '{"name":"@goat/cli-linux-x64","version":"0.0.44"}',
       );
       expect(yield* resolve).toBeNull();
     }),

@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -31,7 +31,7 @@ export class RemoteReportInbox extends Context.Service<
       throughId: number,
     ) => Effect.Effect<void, RemoteReportInboxError>;
   }
->()("t3/remoteReports/RemoteReportInbox") {}
+>()("goat/remoteReports/RemoteReportInbox") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

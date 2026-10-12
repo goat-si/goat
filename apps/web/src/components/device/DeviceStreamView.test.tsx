@@ -1,6 +1,6 @@
 import { act, useEffect, useSyncExternalStore } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@goat/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 // Like the real atom, a refresh yields a new access object and re-renders subscribers.

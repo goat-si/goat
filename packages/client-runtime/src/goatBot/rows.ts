@@ -3,7 +3,7 @@ import type {
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2TurnItem,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 /**

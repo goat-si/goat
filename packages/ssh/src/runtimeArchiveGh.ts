@@ -4,8 +4,8 @@ import {
   cliArchiveFileName,
   parseChecksums,
   type CliArchivePlatformKey,
-} from "@t3tools/shared/cliRelease";
-import * as KeyedLock from "@t3tools/shared/KeyedLock";
+} from "@goat/shared/cliRelease";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

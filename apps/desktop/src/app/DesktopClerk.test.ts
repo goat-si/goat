@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off - Hosted handoff test uses a real localhost listener without an OpenAI account.
 import * as NodeHttp from "node:http";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { codexAuthHandoffUrl, readCodexAuthDelivery } from "@t3tools/shared/codexAuthHandoff";
-import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import { codexAuthHandoffUrl, readCodexAuthDelivery } from "@goat/shared/codexAuthHandoff";
+import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -160,7 +160,7 @@ describe("DesktopClerk", () => {
       });
       // runSync throws if the layer ever suspends, which would let Electron emit
       // ready before the bridge exists. main.ts provides the same FileSystem.
-      // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The assertion IS that the layer builds synchronously; it.effect would mask a regression to async.
+      // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests -- The assertion IS that the layer builds synchronously; it.effect would mask a regression to async.
       Effect.runSync(
         Effect.scoped(
           Layer.build(

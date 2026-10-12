@@ -16,7 +16,7 @@ import {
   TurnItemId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
@@ -25,7 +25,7 @@ import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
-import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import { ServerActivation } from "../serverActivation.ts";
@@ -38,7 +38,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { runOrchestratorV2Scenario } from "./testkit/OrchestratorScenario.ts";
 import * as QuestionEscalationService from "./QuestionEscalationService.ts";
@@ -224,7 +224,7 @@ const seed = (suffix: string, events?: ReadonlyArray<OrchestrationV2DomainEvent>
   });
 // Arm an unbounded persisted-event subscription before the action that should produce it.
 const awaitEvent = (
-  matches: (stored: import("@t3tools/contracts").OrchestrationV2StoredEvent) => boolean,
+  matches: (stored: import("@goat/contracts").OrchestrationV2StoredEvent) => boolean,
 ) =>
   Effect.gen(function* () {
     const sink = yield* EventSink.EventSinkV2;

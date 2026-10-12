@@ -1,4 +1,4 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import { OrchestrationDispatchCommandError } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { wasBootstrapThreadDeleted, wasBootstrapThreadNotCreated } from "./orchestration.ts";

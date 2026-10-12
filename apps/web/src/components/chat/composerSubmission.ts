@@ -1,5 +1,5 @@
-import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
-import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
+import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@goat/contracts";
+import { expandAssistantCitationsForProvider } from "@goat/shared/assistantCitations";
 
 type ComposerSubmitEvent = { preventDefault: () => void };
 

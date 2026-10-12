@@ -2,13 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   AuthSettingsWriteScope,
   type EnvironmentId,
   type RuntimeMode,
   type SlackChannelSettings as SlackConnection,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import { Fragment, useEffect, useMemo, useState } from "react";

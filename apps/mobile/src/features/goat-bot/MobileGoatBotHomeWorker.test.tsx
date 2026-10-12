@@ -5,8 +5,8 @@ import {
   resolveGoatBotHome,
   type GoatBotHomeResolution,
   type GoatBotHomeTarget,
-} from "@t3tools/client-runtime/goatBot/home";
-import { EnvironmentId, type GoatBotHomeClaim } from "@t3tools/contracts";
+} from "@goat/client-runtime/goatBot/home";
+import { EnvironmentId, type GoatBotHomeClaim } from "@goat/contracts";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 const harness = vi.hoisted(() => ({

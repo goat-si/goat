@@ -5,7 +5,7 @@ import {
   AuthRelayReadScope,
   AuthRelayWriteScope,
   type AuthSessionState,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 

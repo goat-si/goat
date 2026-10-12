@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";

@@ -1,4 +1,4 @@
-import { createGoatBotHomeSync } from "@t3tools/client-runtime/goatBot";
+import { createGoatBotHomeSync } from "@goat/client-runtime/goatBot";
 import { useEffect, useState } from "react";
 
 import { uuidv4 } from "../../lib/uuid";

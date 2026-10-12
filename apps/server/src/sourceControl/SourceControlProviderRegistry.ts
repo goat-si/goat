@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -8,18 +8,18 @@ import * as Layer from "effect/Layer";
 import {
   SourceControlProviderError,
   type SourceControlProviderDiscoveryItem,
-} from "@t3tools/contracts";
-import type {} from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
+} from "@goat/contracts";
+import type {} from "@goat/contracts";
+import { detectSourceControlProviderFromRemoteUrl } from "@goat/shared/sourceControl";
 
 import * as BuiltInDrivers from "./builtInDrivers.ts";
-import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
+import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import {
   probeSourceControlProvider,
   refineUnknownRemoteProvider,
   type SourceControlProviderDiscoverySpec,
-} from "@t3tools/source-control-core/server/discovery";
-import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
+} from "@goat/source-control-core/server/discovery";
+import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 
 import * as ServerConfig from "../config.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -60,7 +60,7 @@ export class SourceControlProviderRegistry extends Context.Service<
     >;
     readonly discover: Effect.Effect<ReadonlyArray<SourceControlProviderDiscoveryItem>>;
   }
->()("t3/sourceControl/SourceControlProviderRegistry") {}
+>()("goat/sourceControl/SourceControlProviderRegistry") {}
 
 function unsupportedProvider(
   kind: SourceControlProviderKind,

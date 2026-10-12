@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { SshWorkspaceLaunchInput, SshWorkspaceLaunchResult } from "@t3tools/contracts";
+import { SshWorkspaceLaunchInput, SshWorkspaceLaunchResult } from "@goat/contracts";
 import * as Persistence from "../platform/persistence.ts";
 import { createVcsEnvironmentAtoms } from "./vcs.ts";
 import { requestGuarded, runStreamGuarded } from "../rpc/client.ts";
@@ -19,7 +19,7 @@ import {
   ScheduledTaskId,
   WS_METHODS,
   type AuthSessionState,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

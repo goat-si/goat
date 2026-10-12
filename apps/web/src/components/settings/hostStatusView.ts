@@ -1,4 +1,4 @@
-import type { HostStatusEntry, HostStatusMetrics, HostStatusQuota } from "@t3tools/contracts";
+import type { HostStatusEntry, HostStatusMetrics, HostStatusQuota } from "@goat/contracts";
 
 import { formatBytes } from "~/lib/formatBytes";
 import { formatElapsedDurationLabel } from "~/timestampFormat";

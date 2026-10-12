@@ -21,7 +21,7 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { type ChannelReceptionInput, type ChannelTask, ProjectId } from "@t3tools/contracts";
+import { type ChannelReceptionInput, type ChannelTask, ProjectId } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

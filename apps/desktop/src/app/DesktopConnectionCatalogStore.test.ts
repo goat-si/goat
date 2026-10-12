@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
-import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@t3tools/contracts";
+import { ConnectionCatalogDocument } from "@goat/client-runtime/platform";
+import { EnvironmentId, type PersistedSavedEnvironmentRecord } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";

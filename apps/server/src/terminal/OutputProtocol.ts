@@ -1,4 +1,4 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { RpcServer } from "effect/rpc";
 

@@ -5,8 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeHttp from "node:http";
 import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import packageJson from "../../package.json" with { type: "json" };
 import { readLiveSshRuntimeProtocol, readSshServerActivity } from "./sshHelper.ts";
 

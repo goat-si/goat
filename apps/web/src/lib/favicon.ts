@@ -1,1 +1,1 @@
-export { faviconUrlForOrigin } from "@t3tools/shared/favicon";
+export { faviconUrlForOrigin } from "@goat/shared/favicon";

@@ -2,13 +2,13 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   type CheckpointDiffTarget,
   type ComposerPathSearchTarget,
-} from "@t3tools/client-runtime/state/threads";
+} from "@goat/client-runtime/state/threads";
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   type EnvironmentThreadSearchMatch,
-} from "@t3tools/client-runtime/state/thread-search";
-import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
+} from "@goat/client-runtime/state/thread-search";
+import { type VcsRefTarget } from "@goat/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   ProjectContentMatch,
@@ -18,7 +18,7 @@ import type {
   TurnItemId,
   VcsListRefsResult,
   VcsRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";

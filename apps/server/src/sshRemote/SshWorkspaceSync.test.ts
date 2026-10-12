@@ -12,7 +12,7 @@ import {
   VcsProcessExitError,
   type SshWorkspaceError,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -142,7 +142,7 @@ const fixture = Effect.gen(function* () {
       | ((
           call: Git.ExecuteGitInput,
         ) =>
-          | Effect.Effect<Git.ExecuteGitResult, import("@t3tools/contracts").GitCommandError>
+          | Effect.Effect<Git.ExecuteGitResult, import("@goat/contracts").GitCommandError>
           | undefined)
       | undefined,
     processHook: undefined as

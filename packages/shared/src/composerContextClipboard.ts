@@ -1,7 +1,4 @@
-import {
-  COMPOSER_CONTEXT_CLIPBOARD_MIME,
-  ComposerContextClipboardFragment,
-} from "@t3tools/contracts";
+import { COMPOSER_CONTEXT_CLIPBOARD_MIME, ComposerContextClipboardFragment } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 

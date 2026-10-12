@@ -3,8 +3,8 @@ import {
   retryGoatBotEnsure,
   startGoatBotEnsure,
   syncGoatBotEnsure,
-} from "@t3tools/client-runtime/goatBot";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+} from "@goat/client-runtime/goatBot";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   settleMobileGoatBotEnsure,

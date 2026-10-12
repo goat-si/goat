@@ -19,7 +19,7 @@ import {
   RemoteReportBindingInput,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
 import * as ServerSettings from "../../../serverSettings.ts";

@@ -4,8 +4,8 @@ import {
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ServerProviderModel,
-} from "@t3tools/contracts";
-import { getProviderOptionDescriptors } from "@t3tools/shared/model";
+} from "@goat/contracts";
+import { getProviderOptionDescriptors } from "@goat/shared/model";
 import { getProviderModelCapabilities } from "../../providerModels";
 import {
   getComposerPromptInjectionState,

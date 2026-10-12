@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";

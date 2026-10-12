@@ -1,5 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { DraftId } from "./composerDraftStore";

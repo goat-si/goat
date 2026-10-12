@@ -22,7 +22,7 @@ import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
 import { OverlayPortalHost } from "./components/OverlayPortal";
 import { shouldHandleAppLink } from "./lib/appLinking";
-import { APP_SCHEMES } from "@t3tools/shared/mobileAppIdentity";
+import { APP_SCHEMES } from "@goat/shared/mobileAppIdentity";
 import { useMobileNavigationTheme } from "./lib/useMobileNavigationTheme";
 import { useUiRuntimeMemoryWarningGc } from "./lib/useUiRuntimeMemoryWarningGc";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";

@@ -14,7 +14,7 @@ import {
   type ChannelIdentityLinkCreateResult,
   type ChannelIdentityUnlinkInput,
   ChannelGatewayError,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -40,7 +40,7 @@ export class ChannelIdentityService extends Context.Service<
       input: ChannelIdentityUnlinkInput,
     ) => Effect.Effect<void, ChannelGatewayError>;
   }
->()("t3/channels/ChannelIdentityService") {}
+>()("goat/channels/ChannelIdentityService") {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;

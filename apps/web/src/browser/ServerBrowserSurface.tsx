@@ -15,12 +15,12 @@ import {
   type PreviewStreamPointer,
   type PreviewStreamViewport,
   previewStreamHostSetupMessage,
-} from "@t3tools/client-runtime/preview/server-browser-stream";
+} from "@goat/client-runtime/preview/server-browser-stream";
 import type {
   EnvironmentId,
   PreviewStreamHostSetup,
   PreviewViewportSetting,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   type FormEvent,
   type KeyboardEvent,

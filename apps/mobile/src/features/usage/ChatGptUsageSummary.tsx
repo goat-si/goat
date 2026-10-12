@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
-import { CHATGPT_USAGE_URL, collectExternalUsageLinks } from "@t3tools/shared/usageLimits";
+import type { EnvironmentId } from "@goat/contracts";
+import { CHATGPT_USAGE_URL, collectExternalUsageLinks } from "@goat/shared/usageLimits";
 import { Linking, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";

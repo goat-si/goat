@@ -1,8 +1,4 @@
-import {
-  GoatHostStatusInput,
-  GoatHostStatusResult,
-  OrchestratorMcpFailure,
-} from "@t3tools/contracts";
+import { GoatHostStatusInput, GoatHostStatusResult, OrchestratorMcpFailure } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";

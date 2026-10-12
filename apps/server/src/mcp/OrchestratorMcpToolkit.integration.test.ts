@@ -40,7 +40,7 @@ import {
   ThreadId,
   ThreadMetadataMcpUpdateResult,
   TurnItemId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -67,14 +67,14 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
-import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderReplayHarness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import {
   decodeProviderReplayNdjson,
   materializeReplayTranscriptWorkspace,
-} from "@t3tools/provider-testing/replayTranscript";
+} from "@goat/provider-testing/replayTranscript";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
@@ -86,7 +86,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
-import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 // Effect returns a declared tool failure as `isError` with its encoded payload
 // as JSON text, never as `structuredContent`.

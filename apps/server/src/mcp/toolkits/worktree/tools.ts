@@ -7,7 +7,7 @@ import {
   WorktreeMcpHandoffResult,
   WorktreeMcpStatusResult,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";

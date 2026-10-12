@@ -8,7 +8,7 @@
  *
  * @module browserLinkTarget
  */
-import type { BrowserLinkTarget, ScopedThreadRef } from "@t3tools/contracts";
+import type { BrowserLinkTarget, ScopedThreadRef } from "@goat/contracts";
 
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
 import { isPreviewAvailableFor } from "./previewRuntime";

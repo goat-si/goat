@@ -5,8 +5,8 @@ import {
   isAtomCommandInterrupted,
   runAtomCommand,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { CHANNEL_GATEWAY_WS_METHODS } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/runtime";
+import { CHANNEL_GATEWAY_WS_METHODS } from "@goat/contracts";
 import type { PropsWithChildren } from "react";
 
 import { connectionAtomRuntime } from "~/connection/runtime";

@@ -6,8 +6,8 @@ import {
   ThreadId,
   type ServerSettings,
   type T3ProjectFile,
-} from "@t3tools/contracts";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   DraftId,
   markPromotedDraftThreadByRef,
@@ -55,8 +55,8 @@ vi.mock("@effect/atom-react", () => ({
       ["environment-ssh", { settings: testState.settings }],
     ]),
 }));
-vi.mock("@t3tools/shared/projectSettings", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@t3tools/shared/projectSettings")>()),
+vi.mock("@goat/shared/projectSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goat/shared/projectSettings")>()),
   // The new-project rule has its own tests in projectSettings.test.ts.
   resolveNewThreadEnvMode: (input: {
     projectSettings: { settings: { defaultThreadEnvMode: "local" | "worktree" } };

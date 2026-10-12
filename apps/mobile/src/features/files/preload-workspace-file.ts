@@ -1,11 +1,11 @@
-import { AuthFilesystemReadScope } from "@t3tools/contracts";
+import { AuthFilesystemReadScope } from "@goat/contracts";
 import { readEnvironmentScope } from "../../state/session";
-import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { executeAtomQuery } from "@goat/client-runtime/state/runtime";
+import type { EnvironmentId } from "@goat/contracts";
 import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
-} from "@t3tools/shared/filePreview";
+} from "@goat/shared/filePreview";
 
 import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";

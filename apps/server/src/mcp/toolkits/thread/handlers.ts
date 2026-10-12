@@ -5,9 +5,9 @@ import {
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { modelSelectionCommandType } from "@t3tools/shared/model";
+import { modelSelectionCommandType } from "@goat/shared/model";
 
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";

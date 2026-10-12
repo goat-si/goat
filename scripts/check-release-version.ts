@@ -11,8 +11,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { cliReleaseChannelOf, newestCliReleaseVersion } from "@t3tools/shared/cliRelease";
-import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
+import { cliReleaseChannelOf, newestCliReleaseVersion } from "@goat/shared/cliRelease";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 
 import { resolveDesktopUpdateChannel } from "./build-desktop-artifact.ts";
 import { resolveNightlyReleaseMetadata } from "./resolve-nightly-release.ts";

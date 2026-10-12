@@ -21,7 +21,7 @@ import {
   type RemoteRelaySend,
   type RemoteReport,
   type RemoteObservedRun,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -228,7 +228,7 @@ export class RemoteDispatchCoordinator extends Context.Service<
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
   }
->()("t3/remoteReports/RemoteDispatchCoordinator") {}
+>()("goat/remoteReports/RemoteDispatchCoordinator") {}
 
 const terminal = (status: string) =>
   ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(status);

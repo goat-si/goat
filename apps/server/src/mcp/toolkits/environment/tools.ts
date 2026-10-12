@@ -7,7 +7,7 @@ import {
   ServerSettings,
   ServerSettingsPatch,
   StandingInstructions,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";

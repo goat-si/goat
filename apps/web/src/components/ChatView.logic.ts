@@ -1,5 +1,5 @@
 import * as Option from "effect/Option";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type AssetCreateUrlInput,
@@ -24,22 +24,22 @@ import {
   type ThreadLinkedPullRequest,
   type RunId,
   type WorktreeSetupSnapshot,
-} from "@t3tools/contracts";
-import { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setup";
+} from "@goat/contracts";
+import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 import * as DateTime from "effect/DateTime";
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+import { parseScopedThreadKey } from "@goat/client-runtime/environment";
+import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
-import { videoMimeType } from "@t3tools/shared/video";
+} from "@goat/client-runtime/state/runtime";
+import { videoMimeType } from "@goat/shared/video";
 import {
   appendCodexArtifactTemplateUsePrompt,
   codexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
-} from "@t3tools/shared/codexArtifactTemplates";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+} from "@goat/shared/codexArtifactTemplates";
+import { presentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   type ChatMessage,
   isImageAttachment,
@@ -265,7 +265,7 @@ export function shouldReleaseTimelineAnchorForToolActivity(input: {
 export {
   findRecordedWorktreeSetup,
   resolveVisibleWorktreeSetup,
-} from "@t3tools/client-runtime/worktree-setup";
+} from "@goat/client-runtime/worktree-setup";
 
 /** Keep setup visible across local dispatch, durable preparation, and the live stream. */
 export function resolveWorktreeSetupProgress(input: {

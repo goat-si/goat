@@ -15,15 +15,11 @@ import {
   type DirectoryRecord,
 } from "@electron/asar";
 
-import {
-  cliArchiveFileName,
-  cliArchiveTarCommand,
-  parseChecksums,
-} from "@t3tools/shared/cliRelease";
-import { fromYaml } from "@t3tools/shared/schemaYaml";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
-import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
+import { cliArchiveFileName, cliArchiveTarCommand, parseChecksums } from "@goat/shared/cliRelease";
+import { fromYaml } from "@goat/shared/schemaYaml";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { clerkFrontendApiHostnameFromPublishableKey } from "@goat/shared/relayAuth";
+import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
@@ -4360,7 +4356,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const builderArgs = [
     "exec",
     "--filter",
-    "@t3tools/desktop",
+    "@goat/desktop",
     "--",
     "electron-builder",
     "--projectDir",
@@ -4378,7 +4374,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       shell: builderCommand.shell,
     }),
     {
-      label: `vp exec --filter @t3tools/desktop -- electron-builder --projectDir ${stageAppDir} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+      label: `vp exec --filter @goat/desktop -- electron-builder --projectDir ${stageAppDir} ${platformConfig.cliFlag} --${options.arch} --publish never`,
       verbose: options.verbose,
     },
   );

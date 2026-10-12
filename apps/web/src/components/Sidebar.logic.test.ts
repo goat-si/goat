@@ -1,7 +1,7 @@
 import { DraftId } from "../composerDraftStore";
 import { excludeGlobalAgentThreads } from "../globalAgentRoute";
-import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
+import { presentThreadShell } from "@goat/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -80,8 +80,8 @@ import {
   type SidebarSection,
   resolveSidebarDropVerb,
 } from "./Sidebar.logic";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
+import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
+import { sortSettledThreads } from "@goat/client-runtime/state/thread-sort";
 import {
   EnvironmentId,
   NodeId,
@@ -91,8 +91,8 @@ import {
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
-import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+} from "@goat/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 
 import {
   DEFAULT_INTERACTION_MODE,

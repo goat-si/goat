@@ -1,9 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-import { DesktopSshEnvironmentEnsureResultSchema } from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+import { DesktopSshEnvironmentEnsureResultSchema } from "@goat/contracts";
+import * as NetService from "@goat/shared/Net";
+import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

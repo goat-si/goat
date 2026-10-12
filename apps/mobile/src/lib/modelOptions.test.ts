@@ -8,7 +8,7 @@ import {
   type ModelSelection,
   type ServerConfig,
   type ServerSettings,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import {
   buildModelOptions,

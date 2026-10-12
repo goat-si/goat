@@ -28,7 +28,7 @@ export class DesktopLegacyLocalStorage extends Context.Service<
     readonly take: Effect.Effect<Option.Option<Readonly<Record<string, string>>>>;
     readonly complete: Effect.Effect<void>;
   }
->()("@t3tools/desktop/app/DesktopLegacyLocalStorage") {}
+>()("@goat/desktop/app/DesktopLegacyLocalStorage") {}
 
 const MARKER_FILE_NAME = "v1-local-storage-imported";
 // V1 used "T3 Code (Alpha)" when that folder existed and "t3code" otherwise.

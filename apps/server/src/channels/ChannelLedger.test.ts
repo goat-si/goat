@@ -7,7 +7,7 @@ import {
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

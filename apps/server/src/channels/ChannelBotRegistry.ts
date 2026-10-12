@@ -16,7 +16,7 @@ import {
   ChannelGatewayError,
   type ChannelGetBotStatusResult,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -51,7 +51,7 @@ export class ChannelBotRegistry extends Context.Service<
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelGetBotStatusResult, ChannelGatewayError>;
   }
->()("t3/channels/ChannelBotRegistry") {}
+>()("goat/channels/ChannelBotRegistry") {}
 
 const persistence = () => new ChannelGatewayError({ reason: "persistence_failed" });
 

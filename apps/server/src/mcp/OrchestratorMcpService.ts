@@ -2,7 +2,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { derive } from "@t3tools/provider-core/server/IdAllocator";
+import { derive } from "@goat/provider-core/server/IdAllocator";
 import {
   CommandId,
   type RunId,
@@ -62,8 +62,8 @@ import {
   type ScheduledTaskUpsertInput,
   type ServerProvider,
   ThreadId,
-} from "@t3tools/contracts";
-import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+} from "@goat/contracts";
+import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -81,7 +81,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import {
   subagentResultForRun,
   delegatedTaskProgress,
-} from "@t3tools/provider-core/server/subagentProjection";
+} from "@goat/provider-core/server/subagentProjection";
 import {
   DispatchModeLimit,
   type DispatchModeRefusal,
@@ -202,7 +202,7 @@ export interface OrchestratorMcpServiceShape {
 export class OrchestratorMcpService extends Context.Service<
   OrchestratorMcpService,
   OrchestratorMcpServiceShape
->()("t3/mcp/OrchestratorMcpService") {}
+>()("goat/mcp/OrchestratorMcpService") {}
 
 const isThreadManagementError = Schema.is(ThreadManagementService.ThreadManagementError);
 

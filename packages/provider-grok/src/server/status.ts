@@ -5,10 +5,10 @@ import {
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import type { GrokSettings } from "../settings.ts";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { causeErrorTag } from "@t3tools/shared/observability";
+import { causeErrorTag } from "@goat/shared/observability";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -19,10 +19,10 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { createModelCapabilities } from "@t3tools/shared/model";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { createModelCapabilities } from "@goat/shared/model";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 
-import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -32,11 +32,11 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
-} from "@t3tools/provider-core/server/snapshotProbe";
+} from "@goat/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
-} from "@t3tools/provider-core/server/maintenanceResolver";
+} from "@goat/provider-core/server/maintenanceResolver";
 import {
   GROK_DEFAULT_MODEL_SLUG,
   GROK_SUPPORTED_RUNTIME_MODES,
@@ -44,7 +44,7 @@ import {
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "./acpSupport.ts";
-import { sessionModelStateFromInitialize } from "@t3tools/provider-acp/server/runtimeModel";
+import { sessionModelStateFromInitialize } from "@goat/provider-acp/server/runtimeModel";
 import { discoverGrokSkills } from "./skills.ts";
 
 const GROK_PRESENTATION = {

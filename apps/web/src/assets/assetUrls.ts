@@ -4,9 +4,9 @@ import {
   assetUrlStateFromResult,
   EMPTY_ASSET_URL_ATOM,
   resolveAssetUrl,
-} from "@t3tools/client-runtime/state/assets";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/state/assets";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
+import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 
@@ -15,7 +15,7 @@ import { useFilesystemReadAccess } from "~/state/filesystem";
 import { usePreparedConnection } from "~/state/session";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
-export { resolveAssetUrl, type AssetUrlState } from "@t3tools/client-runtime/state/assets";
+export { resolveAssetUrl, type AssetUrlState } from "@goat/client-runtime/state/assets";
 
 export function useAssetUrlState(
   environmentId: EnvironmentId | null,

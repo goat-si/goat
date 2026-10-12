@@ -1,5 +1,5 @@
 import { useAuth, useClerk } from "@clerk/react";
-import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
+import { readConnectAuthorizeRequest } from "@goat/shared/connectAuth";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {

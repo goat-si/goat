@@ -8,11 +8,11 @@ import {
   type ServerLifecycleWelcomePayload,
   type ServerProvider,
   type ServerSettings,
-} from "@t3tools/contracts";
-import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
-import { createOutdatedServerUpdateCommand } from "@t3tools/client-runtime/state/outdatedServerUpdate";
-import { createEnvironmentServerConfigsAtom } from "@t3tools/client-runtime/state/shell";
-import { mergeWithDefaultKeybindings } from "@t3tools/shared/keybindings";
+} from "@goat/contracts";
+import { createServerEnvironmentAtoms } from "@goat/client-runtime/state/server";
+import { createOutdatedServerUpdateCommand } from "@goat/client-runtime/state/outdatedServerUpdate";
+import { createEnvironmentServerConfigsAtom } from "@goat/client-runtime/state/shell";
+import { mergeWithDefaultKeybindings } from "@goat/shared/keybindings";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 

@@ -9,14 +9,14 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { resolveWorktreeT3Home } from "@goat/shared/devHome";
+import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   cliArchiveFileName,
   cliArchivePlatformKey,
   cliArchiveTarCommand,
-} from "@t3tools/shared/cliRelease";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+} from "@goat/shared/cliRelease";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { DEFAULT_T3_HOME } from "./dev-runner.ts";
 import { validateSshRuntimeArchives } from "./build-desktop-artifact.ts";
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -101,7 +101,7 @@ export async function buildDevRuntimeArchive(input: {
   try {
     const monitor = NodePath.join(staging, "resource-monitor", key);
     await NodeFSP.mkdir(monitor, { recursive: true });
-    // Server build task depends on @t3tools/web#build and stages dist/client.
+    // Server build task depends on @goat/web#build and stages dist/client.
     await run(vp, ["run", "--filter", "t3", "build"]);
     await run(vp, [
       "exec",

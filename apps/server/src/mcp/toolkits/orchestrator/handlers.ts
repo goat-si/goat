@@ -1,6 +1,6 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { OrchestratorMcpFailure } from "@goat/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
-import type { RunId, ThreadId } from "@t3tools/contracts";
+import type { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { isTerminalRunStatus } from "../../../orchestration-v2/ThreadManagementService.ts";

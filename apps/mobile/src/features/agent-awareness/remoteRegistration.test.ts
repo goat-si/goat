@@ -10,10 +10,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import { Cookies, FetchHttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import { ManagedRelay } from "@t3tools/client-runtime/relay";
+import { ManagedRelay } from "@goat/client-runtime/relay";
 
-import type { EnvironmentId } from "@t3tools/contracts";
-import { verifyDpopProof } from "@t3tools/shared/dpop";
+import type { EnvironmentId } from "@goat/contracts";
+import { verifyDpopProof } from "@goat/shared/dpop";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import * as Dpop from "../cloud/dpop";
 import * as ManagedRelayLayer from "../cloud/managedRelayLayer";

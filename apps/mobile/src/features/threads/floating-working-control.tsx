@@ -1,5 +1,5 @@
-import type { SubagentPillSegment } from "@t3tools/client-runtime/state/thread-subagents";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import type { SubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
+import { formatDuration } from "@goat/shared/orchestrationTiming";
 import { GlassContainer, GlassView } from "expo-glass-effect";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {

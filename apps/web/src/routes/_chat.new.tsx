@@ -1,4 +1,4 @@
-import { parseNewThreadLink } from "@t3tools/shared/promptLinks";
+import { parseNewThreadLink } from "@goat/shared/promptLinks";
 import { createFileRoute, useLocation } from "@tanstack/react-router";
 import { useMemo } from "react";
 

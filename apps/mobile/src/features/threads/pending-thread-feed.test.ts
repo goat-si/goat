@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  CommandId,
-  ComposerContextId,
-  EnvironmentId,
-  MessageId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { CommandId, ComposerContextId, EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { appendPendingThreadMessages } from "./pending-thread-feed";
 

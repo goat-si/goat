@@ -1,7 +1,7 @@
 import {
   type ComposerPathSearchState,
   type ComposerPathSearchTarget,
-} from "@t3tools/client-runtime/state/threads";
+} from "@goat/client-runtime/state/threads";
 
 import { useMemo } from "react";
 

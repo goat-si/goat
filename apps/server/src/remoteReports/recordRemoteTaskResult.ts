@@ -10,7 +10,7 @@ import {
   type RemoteObservedRun,
   type RemoteKnownRun,
   type RemoteReport,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ProjectId, RunId, ThreadId, type CompletionWebhookSettings } from "@t3tools/contracts";
+import { ProjectId, RunId, ThreadId, type CompletionWebhookSettings } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";

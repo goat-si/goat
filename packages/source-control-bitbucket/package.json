@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/source-control-bitbucket",
+  "name": "@goat/source-control-bitbucket",
   "private": true,
   "type": "module",
   "exports": {
@@ -41,10 +41,10 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/provider-core": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/source-control-core": "workspace:*",
+    "@goat/contracts": "workspace:*",
+    "@goat/provider-core": "workspace:*",
+    "@goat/shared": "workspace:*",
+    "@goat/source-control-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

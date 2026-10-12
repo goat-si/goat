@@ -1,4 +1,4 @@
-import type { OrchestrationV2ThreadProjection, TurnItemId } from "@t3tools/contracts";
+import type { OrchestrationV2ThreadProjection, TurnItemId } from "@goat/contracts";
 
 type Projection = OrchestrationV2ThreadProjection;
 

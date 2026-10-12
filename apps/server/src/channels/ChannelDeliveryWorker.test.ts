@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelOutboundMessage, type ChannelTaskId } from "@t3tools/contracts";
+import { ChannelOutboundMessage, type ChannelTaskId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

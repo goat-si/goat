@@ -23,7 +23,7 @@ import {
   connectionRouteLabel,
   connectionRoutes,
   isLearned,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 

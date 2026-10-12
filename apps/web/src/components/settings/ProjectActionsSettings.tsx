@@ -1,7 +1,7 @@
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
-import { EnvironmentId } from "@t3tools/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import { AuthSettingsWriteScope } from "@goat/contracts";
+import { EnvironmentId } from "@goat/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";

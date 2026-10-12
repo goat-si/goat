@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/source-control-testing",
+  "name": "@goat/source-control-testing",
   "private": true,
   "type": "module",
   "exports": {
@@ -12,9 +12,9 @@
     "typecheck": "tsc-rs --noEmit"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
-    "@t3tools/source-control-core": "workspace:*",
+    "@goat/contracts": "workspace:*",
+    "@goat/shared": "workspace:*",
+    "@goat/source-control-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

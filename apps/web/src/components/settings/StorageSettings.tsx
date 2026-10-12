@@ -2,15 +2,15 @@ import type {
   StorageCleanupReport,
   StorageCleanupSettings,
   WorktreeCleanupRules,
-} from "@t3tools/contracts";
-import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+} from "@goat/contracts";
+import { resolveWorktreeCleanup } from "@goat/shared/projectSettings";
 import { useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import { formatBytes } from "../../lib/formatBytes";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";

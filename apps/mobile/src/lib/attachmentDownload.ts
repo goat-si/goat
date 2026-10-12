@@ -1,4 +1,4 @@
-import type { ChatFileAttachment } from "@t3tools/contracts";
+import type { ChatFileAttachment } from "@goat/contracts";
 import type { Directory } from "expo-file-system";
 import type { SharingOptions } from "expo-sharing";
 

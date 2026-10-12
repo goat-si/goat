@@ -1,4 +1,4 @@
-import type { DesktopSystemWakeEvent } from "@t3tools/contracts";
+import type { DesktopSystemWakeEvent } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

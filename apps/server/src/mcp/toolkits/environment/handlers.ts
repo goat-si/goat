@@ -3,7 +3,7 @@ import {
   type ProjectId,
   type ProjectSettingsOverrides,
   type ServerSettings,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";

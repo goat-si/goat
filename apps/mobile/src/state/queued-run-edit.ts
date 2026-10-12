@@ -19,7 +19,7 @@ import type {
   OrchestrationMessageContext,
   RunId,
   UploadChatAttachment,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { useAtomValue } from "@effect/atom-react";
 

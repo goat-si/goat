@@ -1,6 +1,6 @@
 # Contracts
 
-`packages/contracts` (`@t3tools/contracts`) is the wire and persisted-schema package. It is Effect
+`packages/contracts` (`@goat/contracts`) is the wire and persisted-schema package. It is Effect
 Schema plus small helpers. It does not start a server, open a socket, or run a provider.
 
 `packages/contracts/package.json` exports `"."` from `packages/contracts/src/index.ts`, plus

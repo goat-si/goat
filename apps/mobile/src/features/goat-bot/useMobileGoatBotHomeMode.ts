@@ -6,11 +6,11 @@ import {
   type NavigationProp,
   type ParamListBase,
 } from "@react-navigation/native";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-import { resolveGoatBotHomeSelection } from "@t3tools/client-runtime/goatBot";
+import { resolveGoatBotHomeSelection } from "@goat/client-runtime/goatBot";
 import { useMobileGoatBotEnvironments } from "./useMobileGoatBotEnvironments";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { effectiveHomeMode, mobileGoatBotKnown, mobileGoatBotDetailOpen } from "./goatBotHomeMode";

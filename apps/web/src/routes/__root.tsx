@@ -1,6 +1,6 @@
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { type ServerLifecycleWelcomePayload } from "@goat/contracts";
+import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
 import {
   Outlet,
   Link,

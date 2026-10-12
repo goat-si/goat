@@ -2,8 +2,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
-import type { HostCapacitySnapshot } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import type { HostCapacitySnapshot } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -17,7 +17,7 @@ import { readHostCapacityExtras } from "./hostCapacity.ts";
 export class HostResources extends Context.Service<
   HostResources,
   { readonly read: Effect.Effect<HostCapacitySnapshot> }
->()("t3/resourceTelemetry/HostResources") {}
+>()("goat/resourceTelemetry/HostResources") {}
 
 function readCpu() {
   const cpus = NodeOS.cpus();

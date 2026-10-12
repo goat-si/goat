@@ -4,7 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerSettings,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";

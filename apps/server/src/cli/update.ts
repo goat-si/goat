@@ -1,4 +1,4 @@
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_REPOSITORY,
@@ -7,7 +7,7 @@ import {
   cliReleaseChannelOf,
   newestCliReleaseVersion,
   type CliReleaseChannel,
-} from "@t3tools/shared/cliRelease";
+} from "@goat/shared/cliRelease";
 import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";

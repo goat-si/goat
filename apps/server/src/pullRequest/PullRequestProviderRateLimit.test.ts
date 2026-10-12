@@ -1,15 +1,15 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 
-import * as AzureDevOpsCli from "@t3tools/source-control-azure-devops/server/AzureDevOpsCli";
-import * as BitbucketApi from "@t3tools/source-control-bitbucket/server/BitbucketApi";
-import * as GitHubApi from "@t3tools/source-control-github/server/GitHubApi";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
-import * as GitLabCli from "@t3tools/source-control-gitlab/server/GitLabCli";
-import { azureDevOpsProviderFailure } from "@t3tools/source-control-azure-devops/server/AzureDevOpsPullRequestProvider";
-import { bitbucketProviderFailure } from "@t3tools/source-control-bitbucket/server/BitbucketPullRequestProvider";
-import { gitHubProviderFailure } from "@t3tools/source-control-github/server/GitHubPullRequestProvider";
-import { gitLabProviderFailure } from "@t3tools/source-control-gitlab/server/GitLabPullRequestProvider";
+import * as AzureDevOpsCli from "@goat/source-control-azure-devops/server/AzureDevOpsCli";
+import * as BitbucketApi from "@goat/source-control-bitbucket/server/BitbucketApi";
+import * as GitHubApi from "@goat/source-control-github/server/GitHubApi";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
+import * as GitLabCli from "@goat/source-control-gitlab/server/GitLabCli";
+import { azureDevOpsProviderFailure } from "@goat/source-control-azure-devops/server/AzureDevOpsPullRequestProvider";
+import { bitbucketProviderFailure } from "@goat/source-control-bitbucket/server/BitbucketPullRequestProvider";
+import { gitHubProviderFailure } from "@goat/source-control-github/server/GitHubPullRequestProvider";
+import { gitLabProviderFailure } from "@goat/source-control-gitlab/server/GitLabPullRequestProvider";
 
 const cause = new Error("redacted provider failure");
 

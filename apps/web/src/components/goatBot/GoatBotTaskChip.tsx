@@ -2,8 +2,8 @@ import type {
   GoatBotCardTarget,
   GoatBotCardTone,
   GoatBotTaskCard,
-} from "@t3tools/client-runtime/goatBot";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+} from "@goat/client-runtime/goatBot";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowUpRightIcon,

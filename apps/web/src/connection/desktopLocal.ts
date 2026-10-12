@@ -1,16 +1,16 @@
-import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
+import type { ConnectionTarget } from "@goat/client-runtime/connection";
 import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
-import { desktopLocalBackendId } from "@t3tools/client-runtime/connection";
+import { desktopLocalBackendId } from "@goat/client-runtime/connection";
 export {
   desktopLocalConnectionId,
   isDesktopLocalConnectionTarget,
   desktopLocalBackendId,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 
 export function isWslConnectionTarget(target: ConnectionTarget): boolean {
   return desktopLocalBackendId(target)?.startsWith("wsl:") === true;

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@goat/contracts";
 import {
   BearerConnectionTarget,
   SshConnectionTarget,
   SshConnectionProfile,
   type ConnectionCatalogEntry,
-} from "@t3tools/client-runtime/connection";
+} from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
 import {
   savedSshWorktreeOptions,

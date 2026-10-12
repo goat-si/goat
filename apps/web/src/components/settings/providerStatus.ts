@@ -2,7 +2,7 @@ import type {
   ServerProvider,
   ServerProviderVersionAdvisory,
   ServerProviderCompatibilityAdvisory,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 /**
  * Visual treatment for each server-reported provider status. Centralized so

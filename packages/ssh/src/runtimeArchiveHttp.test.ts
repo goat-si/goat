@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it, vi } from "@effect/vitest";
-import { cliArchiveFileName, cliReleaseDownloadBaseUrl } from "@t3tools/shared/cliRelease";
+import { cliArchiveFileName, cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";

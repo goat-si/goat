@@ -1,10 +1,5 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type {
-  EnvironmentId,
-  ModelSelection,
-  ProjectId,
-  ScopedProjectRef,
-} from "@t3tools/contracts";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
+import type { EnvironmentId, ModelSelection, ProjectId, ScopedProjectRef } from "@goat/contracts";
 import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
 
 type ComposerModelSelectionState = Pick<

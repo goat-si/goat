@@ -6,8 +6,8 @@ import {
   AuthAccessTokenType,
   EnvironmentAuthenticatedAuth,
   EnvironmentHttpApi,
-} from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
+} from "@goat/contracts";
+import { RelayClientTracer } from "@goat/shared/relayTracing";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";

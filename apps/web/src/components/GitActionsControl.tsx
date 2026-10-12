@@ -5,11 +5,11 @@ import {
   AuthSourceControlWriteScope,
   SourceControlProviderKind,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
@@ -18,7 +18,7 @@ import type {
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
   VcsStatusResult,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
@@ -115,7 +115,7 @@ import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsActionManager, vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
-import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import {
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
@@ -125,8 +125,8 @@ import {
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControlPresentation";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
-import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import { formatDiffCount } from "@goat/client-runtime/diff-count";
 import { useOpenLink } from "~/browser/useOpenLink";
 
 interface GitActionsControlProps {

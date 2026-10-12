@@ -10,8 +10,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
-import { compareSemverVersions } from "@t3tools/shared/semver";
-import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
+import { compareSemverVersions } from "@goat/shared/semver";
+import { cliReleaseChannelOf } from "@goat/shared/cliRelease";
 import {
   gitBlobSha,
   hashBytes,

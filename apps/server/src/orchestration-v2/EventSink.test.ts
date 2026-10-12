@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EventId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

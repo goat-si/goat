@@ -1,14 +1,11 @@
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { LegendList } from "@legendapp/list/react-native";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type EnvironmentMachineKind,
   resolveEnvironmentMachineKind,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { useNavigation } from "@react-navigation/native";
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { ScreenHeader } from "../../components/ScreenHeader";

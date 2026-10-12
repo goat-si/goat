@@ -3,26 +3,26 @@ import type {
   DesktopSshRuntimePendingResult,
   SshRuntimePendingReplacement,
   DesktopSshEnvironmentTarget,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
-} from "@t3tools/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+} from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import {
   describeReadinessCause,
   waitForHttpReady as waitForHttpReadyShared,
-} from "@t3tools/shared/httpReadiness";
+} from "@goat/shared/httpReadiness";
 import {
   CLI_RELEASE_REPOSITORY,
   cliArchiveFileName,
   cliArchivePlatformKey,
   cliReleaseDownloadBaseUrl,
-} from "@t3tools/shared/cliRelease";
-import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import * as NetService from "@t3tools/shared/Net";
-import { extractJsonObject, fromLenientJson } from "@t3tools/shared/schemaJson";
-import { compareSemverVersions, satisfiesSemverRange } from "@t3tools/shared/semver";
+} from "@goat/shared/cliRelease";
+import * as KeyedLock from "@goat/shared/KeyedLock";
+import * as NetService from "@goat/shared/Net";
+import { extractJsonObject, fromLenientJson } from "@goat/shared/schemaJson";
+import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -3591,7 +3591,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 export class SshEnvironmentManager extends Context.Service<
   SshEnvironmentManager,
   SshEnvironmentManagerShape
->()("@t3tools/ssh/tunnel/SshEnvironmentManager") {
+>()("@goat/ssh/tunnel/SshEnvironmentManager") {
   static readonly layer = (options: SshEnvironmentManagerOptions = {}) =>
     Layer.effect(SshEnvironmentManager, makeSshEnvironmentManager(options));
 }

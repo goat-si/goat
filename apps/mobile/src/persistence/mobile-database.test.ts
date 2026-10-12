@@ -73,8 +73,8 @@ describe("mobile database legacy cache migration", () => {
 
 // Exercise the production SQL against SQLite, including the eviction window functions.
 describe("offline pull request cache", () => {
-  const environmentId = "cached-environment" as import("@t3tools/contracts").EnvironmentId;
-  const otherEnvironment = "other-environment" as import("@t3tools/contracts").EnvironmentId;
+  const environmentId = "cached-environment" as import("@goat/contracts").EnvironmentId;
+  const otherEnvironment = "other-environment" as import("@goat/contracts").EnvironmentId;
 
   async function sqliteDatabase() {
     const { DatabaseSync } = await import("node:sqlite");

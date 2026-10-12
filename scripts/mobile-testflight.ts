@@ -23,7 +23,7 @@ import {
   DEFAULT_IOS_TEAM_ID,
   MOBILE_APP_IDENTITY,
   type MobileAppVariant,
-} from "@t3tools/shared/mobileAppIdentity";
+} from "@goat/shared/mobileAppIdentity";
 
 import { loadRepoEnv } from "./lib/public-config.ts";
 

@@ -1,15 +1,15 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type {
   ExecutionEnvironmentCapabilities,
   ThreadPullRequestLink,
   VcsStatusResult,
-} from "@t3tools/contracts";
-import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+} from "@goat/contracts";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 
 import {
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestBadge,
-} from "@t3tools/shared/threadPullRequests";
+} from "@goat/shared/threadPullRequests";
 
 export type ThreadPr = NonNullable<VcsStatusResult["pr"]>;
 

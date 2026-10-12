@@ -3,27 +3,27 @@ import {
   buildFileLinkParentSuffixByPath,
   fileLinkLabel,
   resolvePathLinkTarget,
-} from "@t3tools/shared/fileLinks";
+} from "@goat/shared/fileLinks";
 import {
   isWindowsDrivePathHref,
   normalizeMarkdownLinkDestination,
   extractInlineCodeSpans,
   extractMarkdownLinkHrefs,
   inlineCodeFilePathCandidate,
-} from "@t3tools/shared/markdownLinks";
-import { isAbsolutePath } from "@t3tools/shared/path";
+} from "@goat/shared/markdownLinks";
+import { isAbsolutePath } from "@goat/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
-import { AuthFilesystemReadScope, AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import { AuthFilesystemReadScope, AuthOrchestrationOperateScope } from "@goat/contracts";
 import {
   CHAT_MARKDOWN_REMARK_PLUGINS,
   CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS,
   CHAT_MARKDOWN_REHYPE_PLUGINS,
-} from "@t3tools/shared/markdownPipeline";
+} from "@goat/shared/markdownPipeline";
 import { useAtomValue } from "@effect/atom-react";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
-} from "@t3tools/shared/composerContextClipboard";
+} from "@goat/shared/composerContextClipboard";
 import {
   ChevronRightIcon,
   CodeIcon,
@@ -53,25 +53,25 @@ import {
   type ScopedThreadRef,
   type ServerProviderSkill,
   type ThreadPullRequestKey,
-} from "@t3tools/contracts";
-import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
-import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
+} from "@goat/contracts";
+import { faviconUrlForOrigin } from "@goat/shared/favicon";
+import { githubMediaFetchUrl } from "@goat/shared/githubMedia";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
   type CodexArtifactTemplateKind,
-} from "@t3tools/shared/codexArtifactTemplates";
+} from "@goat/shared/codexArtifactTemplates";
 import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
-} from "@t3tools/client-runtime/markdown-images";
-import { mediaFileReference, mediaUrlReference } from "@t3tools/client-runtime/media-reference";
-import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+} from "@goat/client-runtime/markdown-images";
+import { mediaFileReference, mediaUrlReference } from "@goat/client-runtime/media-reference";
+import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@goat/shared/filePreview";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import React, {
@@ -101,16 +101,16 @@ import ReactMarkdown from "react-markdown";
 import { toHtml } from "hast-util-to-html";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
-import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
-import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
-import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
+import { parseAssistantCitationHref } from "@goat/shared/assistantCitations";
+import { parseComposerContextHref } from "@goat/shared/composerContextReferences";
+import { parseThreadLinkHref } from "@goat/shared/threadLinks";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { isWindowsAbsolutePath } from "@goat/shared/path";
 import {
   artifactTemplateFromHastProperties,
   renderCodexFileCitationsAsMarkdown,
-} from "@t3tools/shared/codexMarkdownDirectives";
+} from "@goat/shared/codexMarkdownDirectives";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import {
   resolveMarkdownMediaPreview,
@@ -172,7 +172,7 @@ import {
   shouldOpenMarkdownFileLinkInEditor,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
-import { isMarkdownFileLinkLabel } from "@t3tools/shared/markdownLinks";
+import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";

@@ -1,5 +1,5 @@
-import type { ScopedProjectRef, ScopedThreadRef } from "@t3tools/contracts";
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { ScopedProjectRef, ScopedThreadRef } from "@goat/contracts";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
 
 import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { releaseDraftAttachments } from "./attachmentUploadQueue";

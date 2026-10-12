@@ -1,4 +1,4 @@
-import { ChannelDeliveryId, ChannelGatewayError } from "@t3tools/contracts";
+import { ChannelDeliveryId, ChannelGatewayError } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

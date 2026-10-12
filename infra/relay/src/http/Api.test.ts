@@ -3,7 +3,7 @@ import {
   RelayClientAuth,
   RelayClientPrincipal,
   type RelayClientDeviceRecord,
-} from "@t3tools/contracts/relay";
+} from "@goat/contracts/relay";
 import * as EnvironmentLinker from "../environments/EnvironmentLinker.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as Devices from "../agentActivity/Devices.ts";
@@ -36,13 +36,9 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { EnvironmentId } from "@t3tools/contracts";
-import {
-  RelayEnvironmentAuth,
-  RelayEnvironmentPrincipal,
-  RelayApi,
-} from "@t3tools/contracts/relay";
-import { RELAY_MANAGED_TUNNEL_RECOVERY_TYP, signRelayJwt } from "@t3tools/shared/relayJwt";
+import { EnvironmentId } from "@goat/contracts";
+import { RelayEnvironmentAuth, RelayEnvironmentPrincipal, RelayApi } from "@goat/contracts/relay";
+import { RELAY_MANAGED_TUNNEL_RECOVERY_TYP, signRelayJwt } from "@goat/shared/relayJwt";
 
 import {
   RELAY_HTTP_ROUTER_CONFIG,

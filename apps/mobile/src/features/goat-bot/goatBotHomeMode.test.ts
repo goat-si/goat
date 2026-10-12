@@ -1,5 +1,5 @@
-import type { GoatBotEnvironmentInput } from "@t3tools/client-runtime/goatBot";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   effectiveHomeMode,

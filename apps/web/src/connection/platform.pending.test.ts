@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { DesktopBridge, DesktopSshRuntimePendingResult } from "@t3tools/contracts";
+import type { DesktopBridge, DesktopSshRuntimePendingResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { prepareDesktopSshEnvironment, provisionDesktopSshEnvironment } from "./platform.ts";
 

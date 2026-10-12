@@ -1,11 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import { resolveGoatBotHomeSelection } from "@t3tools/client-runtime/goatBot";
-import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import {
-  AuthSettingsWriteScope,
-  type EnvironmentId,
-  type GoatBotHomeClaim,
-} from "@t3tools/contracts";
+import { resolveGoatBotHomeSelection } from "@goat/client-runtime/goatBot";
+import { runAtomCommand } from "@goat/client-runtime/state/runtime";
+import { AuthSettingsWriteScope, type EnvironmentId, type GoatBotHomeClaim } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useCallback, useMemo } from "react";
 

@@ -14,7 +14,7 @@ import {
   AuthSourceControlWriteScope,
   EnvironmentId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";

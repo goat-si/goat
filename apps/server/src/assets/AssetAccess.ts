@@ -1,4 +1,4 @@
-import type { AssetResource } from "@t3tools/contracts";
+import type { AssetResource } from "@goat/contracts";
 import {
   AssetAttachmentNotFoundError,
   AssetGitHubMediaUrlValidationError,
@@ -16,7 +16,7 @@ import {
   ThreadId,
   ToolActivityNativeAppReference,
   TurnItemId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import {
   audioMimeTypeFromExtension,
   hostPreviewMimeTypeFromExtension,
@@ -24,19 +24,16 @@ import {
   isWorkspacePreviewEntryPath,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
-} from "@t3tools/shared/filePreview";
+} from "@goat/shared/filePreview";
 import {
   IMAGE_DIMENSIONS_HEADER_BYTES,
   readImageDimensions,
   type ImageDimensions,
-} from "@t3tools/shared/imageDimensions";
-import { githubMediaFetchUrl, githubMediaFileName } from "@t3tools/shared/githubMedia";
-import { MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
-import {
-  isProjectFaviconPath,
-  PROJECT_FAVICON_FALLBACK_MARKER,
-} from "@t3tools/shared/projectFavicon";
-import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@t3tools/shared/toolOutput";
+} from "@goat/shared/imageDimensions";
+import { githubMediaFetchUrl, githubMediaFileName } from "@goat/shared/githubMedia";
+import { MCP_APP_MAX_HTML_BYTES } from "@goat/shared/mcpApp";
+import { isProjectFaviconPath, PROJECT_FAVICON_FALLBACK_MARKER } from "@goat/shared/projectFavicon";
+import { MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH, toolOutputImages } from "@goat/shared/toolOutput";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -58,13 +55,13 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 

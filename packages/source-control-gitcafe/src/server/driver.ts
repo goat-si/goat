@@ -1,11 +1,11 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { SourceControlProviderKind } from "@goat/contracts";
 /**
  * The GitCafe driver: repository operations and discovery through `cafe` and git, and pull
  * requests through GitCafe's REST API on git.cafe and staging.git.cafe.
  *
  * @module source-control-gitcafe/server/driver
  */
-import { defineSourceControlDriver } from "@t3tools/source-control-core/server/driver";
+import { defineSourceControlDriver } from "@goat/source-control-core/server/driver";
 import * as Effect from "effect/Effect";
 
 import * as GitCafePullRequestProvider from "./GitCafePullRequestProvider.ts";

@@ -8,11 +8,7 @@
  *
  * @module provider-core/server/ModelCatalog
  */
-import type {
-  ModelCapabilities,
-  ProviderDriverKind,
-  ServerProviderModel,
-} from "@t3tools/contracts";
+import type { ModelCapabilities, ProviderDriverKind, ServerProviderModel } from "@goat/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
@@ -58,7 +54,7 @@ export class ModelCatalog extends Context.Service<
      */
     readonly refreshInBackground: Effect.Effect<void>;
   }
->()("@t3tools/provider-core/server/ModelCatalog") {}
+>()("@goat/provider-core/server/ModelCatalog") {}
 
 /** A catalog model as the snapshot model it presents. */
 export const catalogServerModel = (

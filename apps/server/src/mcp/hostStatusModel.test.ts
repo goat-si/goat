@@ -7,7 +7,7 @@ import {
   type OrchestrationV2ThreadShell,
   type ServerProvider,
   type ServerProviderUsageLimits,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";

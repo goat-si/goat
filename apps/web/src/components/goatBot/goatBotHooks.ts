@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { useMemo } from "react";
 
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
@@ -12,7 +12,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import {
   environmentSupportsChannelLedger,
   type GoatBotEnvironmentInput,
-} from "@t3tools/client-runtime/goatBot";
+} from "@goat/client-runtime/goatBot";
 
 /** Every machine as GOAT Bot sees it: connected, offering channels, primary. */
 export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput> {

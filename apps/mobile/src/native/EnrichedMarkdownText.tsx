@@ -1,9 +1,9 @@
-import { decodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import { decodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import {
   collectComposerContextReferences,
   formatComposerContextHref,
   formatComposerContextReference,
-} from "@t3tools/shared/composerContextReferences";
+} from "@goat/shared/composerContextReferences";
 import { markdownWithHtml } from "../lib/markdownDocument";
 import { useCallback, useMemo, useState } from "react";
 import { ActionSheetIOS, Platform, Share, StyleSheet, View } from "react-native";

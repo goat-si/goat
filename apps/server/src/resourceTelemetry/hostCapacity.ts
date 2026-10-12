@@ -1,4 +1,4 @@
-import type { HostDiskUsage, HostLoadAverage } from "@t3tools/contracts";
+import type { HostDiskUsage, HostLoadAverage } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { getDesktopUpdateStatusText } from "./desktopUpdate.logic";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
 
 import {
   canCheckForUpdate,

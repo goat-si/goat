@@ -1,5 +1,5 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { ScopedThreadRef } from "@goat/contracts";
+import { parseScopedThreadKey } from "@goat/client-runtime/environment";
 import {
   useCallback,
   useEffect,

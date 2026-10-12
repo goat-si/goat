@@ -1,5 +1,5 @@
-import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
+import { AuthStandardClientScopes, EnvironmentId, type ServerConfig } from "@goat/contracts";
+import { RelayClientTracer } from "@goat/shared/relayTracing";
 import { describe, expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";

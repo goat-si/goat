@@ -14,14 +14,14 @@ import {
   type ProviderInstanceId,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
-} from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+} from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { presentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@goat/client-runtime/state/runtime";
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
@@ -47,9 +47,9 @@ import {
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
   SidebarProjectSortOrder,
-} from "@t3tools/contracts/settings";
-import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@goat/contracts/settings";
+import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
+import { createModelSelection } from "@goat/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";

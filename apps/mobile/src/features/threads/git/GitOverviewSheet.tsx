@@ -4,12 +4,12 @@ import {
   buildMenuItems,
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
-} from "@t3tools/client-runtime/state/vcs";
+} from "@goat/client-runtime/state/vcs";
 import {
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
-} from "@t3tools/shared/threadPullRequests";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+} from "@goat/shared/threadPullRequests";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   CommonActions,
   StackActions,

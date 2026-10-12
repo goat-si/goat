@@ -2,7 +2,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2TurnItem,
   ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 /**
  * The subset of a projection run that handoff rows read. Kept minimal so the

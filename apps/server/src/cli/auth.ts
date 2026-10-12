@@ -6,7 +6,7 @@ import {
   AuthSessionId,
   AuthStandardClientScopes,
   RuntimeMode,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

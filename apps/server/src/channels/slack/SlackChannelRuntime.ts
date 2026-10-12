@@ -14,7 +14,7 @@ import type {
   SlackChannelDeliveryError,
   SlackChannelStatusEvent,
   SlackChannelSettingsError,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -87,7 +87,7 @@ export class SlackChannelRuntime extends Context.Service<
     /** Every connection's current status once, then only changes. */
     readonly streamStatus: Stream.Stream<SlackChannelStatusEvent>;
   }
->()("t3/channels/slack/SlackChannelRuntime") {}
+>()("goat/channels/slack/SlackChannelRuntime") {}
 
 /** How one attempt ended without failing. */
 type AttemptEnd =

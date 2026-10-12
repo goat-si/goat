@@ -4,7 +4,7 @@ import type {
   OrchestrationV2ProviderThread,
   OrchestrationV2TurnItem,
   ThreadTokenUsageSnapshot,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 function asFiniteNumber(value: unknown): number | null {

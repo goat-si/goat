@@ -6,16 +6,13 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
-import {
-  deriveToolActivityPresentation,
-  mergeToolActivityData,
-} from "@t3tools/shared/toolActivity";
-import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
+import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
+import { T3_MCP_TOOL_NAMES } from "@goat/shared/t3McpToolPresentation";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
   ToolLifecycleItemType,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

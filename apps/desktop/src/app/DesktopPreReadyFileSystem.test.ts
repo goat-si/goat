@@ -16,7 +16,7 @@ it.layer(NodeServices.layer)("DesktopPreReadyFileSystem", (it) => {
       yield* fs.makeDirectory(path.dirname(old), { recursive: true });
       yield* fs.writeFileString(old, "upstream keys");
       const synchronous = yield* Effect.context<Path.Path>();
-      // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Proves the pre-ready path resolver cannot yield before Electron is ready.
+      // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests -- Proves the pre-ready path resolver cannot yield before Electron is ready.
       const actual = Effect.runSync(
         DesktopUserData.resolveUserDataPath({
           appDataDirectory: root,
@@ -28,7 +28,7 @@ it.layer(NodeServices.layer)("DesktopPreReadyFileSystem", (it) => {
       assert.equal(actual, path.join(root, "goat-desktop"));
       assert.isFalse(yield* fs.exists(path.join(actual, "Local State")));
       assert.equal(
-        // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- Proves the pre-ready filesystem adapter reads synchronously.
+        // oxlint-disable-next-line goat/no-manual-effect-runtime-in-tests -- Proves the pre-ready filesystem adapter reads synchronously.
         Effect.runSync(DesktopPreReadyFileSystem.make.readFileString(old)),
         "upstream keys",
       );

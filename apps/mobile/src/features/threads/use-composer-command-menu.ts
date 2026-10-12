@@ -4,17 +4,14 @@ import type {
   ProviderInteractionMode,
   ServerProvider,
   ThreadId,
-} from "@t3tools/contracts";
-import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThreadItems";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+} from "@goat/contracts";
+import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
-import {
-  COMPOSER_CONTEXT_MAX_RECORDS,
-  PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
-} from "@t3tools/contracts";
+import { COMPOSER_CONTEXT_MAX_RECORDS, PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS } from "@goat/contracts";
 import { Alert } from "react-native";
-import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
+import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { pullRequestComposerContext, threadComposerContext } from "../../lib/composerContext";
 import { uuidv4 } from "../../lib/uuid";
 import {
@@ -22,18 +19,18 @@ import {
   readComposerDraftSelection,
   setComposerDraftContext,
 } from "../../state/use-composer-drafts";
-import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
+import { USAGE_LIMITS_COMMAND } from "@goat/shared/usageLimits";
 import {
   detectComposerTrigger,
   replaceTextRange,
   serializeComposerFileLink,
   type ComposerTrigger,
-} from "@t3tools/shared/composerTrigger";
+} from "@goat/shared/composerTrigger";
 import {
   insertRankedSearchResult,
   normalizeSearchQuery,
   scoreQueryMatch,
-} from "@t3tools/shared/searchRanking";
+} from "@goat/shared/searchRanking";
 import {
   dedupeProviderSkillsByName,
   getProviderSkillsForSlashMenu,
@@ -43,7 +40,7 @@ import {
   hasCurrentProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
-} from "@t3tools/client-runtime/providerSkills";
+} from "@goat/client-runtime/providerSkills";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";

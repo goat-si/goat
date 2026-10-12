@@ -3,11 +3,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
-import type { PullRequestReaction } from "@t3tools/contracts";
+import type { PullRequestReaction } from "@goat/contracts";
 
 import { decodePullRequestDetailJson } from "./gitHubPullRequestJson.ts";
 import * as GitHubApi from "./GitHubApi.ts";
-import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import type { GitHubPullRequestCore } from "./gitHubPullRequestJson.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";

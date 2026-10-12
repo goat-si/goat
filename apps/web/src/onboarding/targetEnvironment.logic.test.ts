@@ -3,8 +3,8 @@ import {
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
-} from "@t3tools/client-runtime/connection";
-import { EnvironmentId } from "@t3tools/contracts";
+} from "@goat/client-runtime/connection";
+import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

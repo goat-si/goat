@@ -5,11 +5,11 @@ import {
   ProjectId,
   ProviderInstanceId,
   type ServerSettings,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 import * as Cause from "effect/Cause";
-import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+import { resolveWorktreeCleanup } from "@goat/shared/projectSettings";
 
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import {

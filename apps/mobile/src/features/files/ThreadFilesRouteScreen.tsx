@@ -1,4 +1,4 @@
-import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
+import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
 import { environmentSession } from "../../state/session";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
@@ -6,14 +6,14 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { Platform, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
-import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@t3tools/contracts";
-import { videoMimeType } from "@t3tools/shared/video";
+import { EnvironmentId, type ProjectReadFileResult, ThreadId } from "@goat/contracts";
+import { videoMimeType } from "@goat/shared/video";
 import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
   mediaMimeTypeFromExtension,
-} from "@t3tools/shared/filePreview";
-import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
+} from "@goat/shared/filePreview";
+import { mediaFileReference } from "@goat/client-runtime/media-reference";
 
 import { MaterialScreenContent } from "../../components/MaterialScreenContent";
 import { AudioFilePreview } from "../../components/AudioFilePreview";

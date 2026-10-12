@@ -1,7 +1,7 @@
 import {
   canonicalRepositoryKey,
   sourceControlRepositorySelector,
-} from "@t3tools/shared/sourceControl";
+} from "@goat/shared/sourceControl";
 import {
   CommandId,
   type OrchestrationProjectShell,
@@ -9,8 +9,8 @@ import {
   type OrchestrationV2ThreadShell,
   type ThreadId,
   type ThreadLinkedPullRequest,
-} from "@t3tools/contracts";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+} from "@goat/contracts";
+import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -35,7 +35,7 @@ class ThreadPullRequestServiceV2 extends Context.Service<
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     readonly drain: Effect.Effect<void>;
   }
->()("t3/orchestration-v2/ThreadPullRequestService/ThreadPullRequestServiceV2") {}
+>()("goat/orchestration-v2/ThreadPullRequestService/ThreadPullRequestServiceV2") {}
 
 function samePullRequest(
   left: ThreadLinkedPullRequest | null | undefined,

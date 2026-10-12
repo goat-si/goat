@@ -1,7 +1,7 @@
 import {
   threadRuntimeCanArchive,
   type ThreadRuntimeSummary,
-} from "@t3tools/client-runtime/state/models";
+} from "@goat/client-runtime/state/models";
 
 /**
  * Archiving may discard queued work, but it must not detach a provider while

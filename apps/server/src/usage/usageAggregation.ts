@@ -18,9 +18,9 @@ import type {
   UsageDay,
   UsageResolution,
   UsageTokenTotals,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
-import { EMPTY_TOTALS, type UsageRecord } from "@t3tools/provider-core/server/usage";
+import { EMPTY_TOTALS, type UsageRecord } from "@goat/provider-core/server/usage";
 import { cacheSavingsUsd, priceUsage, type RateTable } from "./usagePricing.ts";
 
 /**

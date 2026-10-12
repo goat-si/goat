@@ -3,7 +3,7 @@ import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@goat/contracts";
 
 import { cn } from "~/lib/utils";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";

@@ -6,7 +6,7 @@
  *
  * @module ChannelBotDirectory
  */
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -27,7 +27,7 @@ export class ChannelBotDirectory extends Context.Service<
   {
     readonly isBotThread: (threadId: ThreadId) => Effect.Effect<boolean, ChannelBotDirectoryError>;
   }
->()("t3/channels/ChannelBotDirectory") {}
+>()("goat/channels/ChannelBotDirectory") {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

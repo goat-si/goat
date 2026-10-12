@@ -4,8 +4,8 @@ import {
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
-} from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -69,7 +69,7 @@ export interface HostStatusMcpServiceShape {
 export class HostStatusMcpService extends Context.Service<
   HostStatusMcpService,
   HostStatusMcpServiceShape
->()("t3/mcp/HostStatusMcpService") {}
+>()("goat/mcp/HostStatusMcpService") {}
 
 const make = Effect.gen(function* () {
   const resources = yield* HostResources.HostResources;

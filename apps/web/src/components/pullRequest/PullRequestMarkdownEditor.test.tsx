@@ -1,4 +1,4 @@
-import { AuthSourceControlWriteScope, EnvironmentId } from "@t3tools/contracts";
+import { AuthSourceControlWriteScope, EnvironmentId } from "@goat/contracts";
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
