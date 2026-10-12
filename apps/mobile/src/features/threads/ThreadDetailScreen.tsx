@@ -5,7 +5,10 @@ import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  childThreadRequestsTitle,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import type {
   CodexFeedbackSubmission,
   EnvironmentThreadStatus,
@@ -515,11 +518,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     if (childInput && contentPresentationKind === "ready") {
       return {
         kind: "child-input",
-        label:
-          childThreadInputs.length === 1
-            ? "Subagent needs input"
-            : `${childThreadInputs.length} subagents need input`,
-        accessibilityLabel: `Open question from ${childInput.title}`,
+        label: childThreadRequestsTitle(childThreadInputs),
+        accessibilityLabel: `Open ${childInput.hasPendingApprovals ? "approval" : "question"} from ${childInput.title}`,
         onPress: () => {
           Keyboard.dismiss();
           navigation.navigate("Thread", {

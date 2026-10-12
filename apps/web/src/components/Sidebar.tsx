@@ -157,6 +157,7 @@ import {
   readEnvironmentSupportsVisitedTracking,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
+  useThreadShell,
   useThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
@@ -166,12 +167,8 @@ import { useEnvironmentQuery } from "../state/query";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomCommand } from "../state/use-atom-command";
-import {
-  DEFAULT_SIDEBAR_DELEGATED_CHILDREN_UI,
-  SidebarDelegatedChildren,
-  useSidebarDelegatedChildrenUiStore,
-} from "./sidebar/SidebarDelegatedChildren";
-import { useSidebarDelegatedChildIndex } from "./sidebar/delegatedChildIndex";
+import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
+import { useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import { usePromoteThread } from "./promoteThread";
 import {
   readEnvironmentScope,
@@ -202,8 +199,9 @@ import {
   animateSidebarLayoutChanges,
   canPromoteThread,
   canStopSidebarDelegatedChild,
-  resolveSidebarDelegatedChildWindow,
-  type SidebarDelegatedChildren as SidebarDelegatedChildrenEntry,
+  isSidebarDelegatedChildThread,
+  type SidebarChildAttention,
+  withSidebarChildAttention,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   buildBulkTitleRegenerationContextMenuItem,
@@ -218,7 +216,6 @@ import {
   holdSidebarPriorityRank,
   resolveSidebarPriorityRank,
   resolveSidebarThreadPresentation,
-  sidebarDelegatedChildState,
   sidebarFolderName,
   sidebarShortDeviceName,
   sidebarHostHueClassName,
@@ -1068,15 +1065,17 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
-  delegatedChildren?: SidebarDelegatedChildrenEntry<EnvironmentThreadShell> | undefined;
-  openThreadKey: string | null;
+  // The open subagent this row owns; subagents never get rows of their own.
+  openSubagent: EnvironmentThreadShell | null;
+  // A pending approval or question from one of this row's subagents.
+  childAttention: SidebarChildAttention | undefined;
   onOpenDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onStopDelegatedChild: (threadRef: ScopedThreadRef) => void;
   onDelegatedChildContextMenu: (
     threadRef: ScopedThreadRef,
     position: { x: number; y: number },
   ) => void;
-  stoppingDelegatedChildKey: string | null;
+  isStoppingOpenSubagent: boolean;
   variant: "card" | "slim";
   // Settled rows un-settle, snoozed rows wake, and cards settle.
   variantAction: SidebarSweepAction;
@@ -1177,17 +1176,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
-  const delegatedChildrenGroup = props.delegatedChildren ? (
-    <SidebarDelegatedChildren
-      parentKey={threadKey}
-      openThreadKey={props.openThreadKey}
+  const delegatedChildrenGroup = props.openSubagent ? (
+    <SidebarOpenSubagent
+      thread={props.openSubagent}
       onOpen={props.onOpenDelegatedChild}
       onStop={props.onStopDelegatedChild}
       onContextMenu={props.onDelegatedChildContextMenu}
-      stoppingThreadKey={props.stoppingDelegatedChildKey}
-    >
-      {props.delegatedChildren}
-    </SidebarDelegatedChildren>
+      isStopping={props.isStoppingOpenSubagent}
+    />
   ) : null;
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   useEffect(() => {
@@ -1246,7 +1242,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  const status = withSidebarChildAttention(
+    resolveSidebarThreadStatus(thread),
+    props.childAttention,
+  );
   // Wake attention is independent of lifecycle and clears at its visited
   // watermark. A malformed visit cannot silently acknowledge a wake.
   const isWoke = isSidebarThreadWoke(props.wokeAt, lastVisitedAt);
@@ -2359,8 +2358,7 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
-  const delegatedChildIndex = useSidebarDelegatedChildIndex();
-  const delegatedChildrenUi = useSidebarDelegatedChildrenUiStore((state) => state.parents);
+  const subagentIndex = useSidebarSubagentIndex();
   const promoteDelegatedChild = usePromoteThread();
   const interruptDelegatedTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
@@ -2474,6 +2472,12 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  // An open subagent shows beneath its owner row, so the owner stands in for it
+  // wherever the open thread's row is kept visible.
+  const openSubagentOwnerKey =
+    routeThreadKey === null ? undefined : subagentIndex.ownerKeyByChildKey.get(routeThreadKey);
+  const openSubagent = useThreadShell(openSubagentOwnerKey === undefined ? null : routeThreadRef);
+  const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
   const routeTargetRef = useRef(routeTarget);
   routeTargetRef.current = routeTarget;
   // Post-settle navigation validates against the CURRENT route, not the one
@@ -2807,11 +2811,7 @@ export default function Sidebar() {
             thread,
             localLastVisitedAt: localLastVisitedAtByKey[threadKey],
             wokeAt: threadWokeAt(thread, { now: preciseNow }),
-            hasChildAttention:
-              delegatedChildIndex
-                .get(threadKey)
-                ?.active.some((child) => sidebarDelegatedChildState(child) === "attention") ??
-              false,
+            hasChildAttention: subagentIndex.attentionByOwnerKey.has(threadKey),
           }),
           key: threadKey,
           settledOverride: thread.settledOverride,
@@ -2881,7 +2881,7 @@ export default function Sidebar() {
     serverConfigs,
     snoozeWakeTick,
     threads,
-    delegatedChildIndex,
+    subagentIndex.attentionByOwnerKey,
     localLastVisitedAtByKey,
     priorityHolds,
   ]);
@@ -3025,17 +3025,17 @@ export default function Sidebar() {
     // The open thread must never hide under "Show more": navigating into a
     // deep settled thread (search, deep link) pulls its row into the visible
     // tail so the highlight and the un-settle affordance stay reachable.
-    if (routeThreadKey !== null) {
+    if (routeRowKey !== null) {
       const routeThread = settledThreads
         .slice(settledVisibleCount)
         .find(
           (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeRowKey,
         );
       if (routeThread !== undefined) visible.push(routeThread);
     }
     return visible;
-  }, [routeThreadKey, settledThreads, settledVisibleCount]);
+  }, [routeRowKey, settledThreads, settledVisibleCount]);
   const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
   const showMoreSettled = useCallback(
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
@@ -3052,13 +3052,12 @@ export default function Sidebar() {
   );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
-    if (routeThreadKey === null) return EMPTY_THREADS;
+    if (routeRowKey === null) return EMPTY_THREADS;
     const routeThread = visibleSettledThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+      (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeRowKey,
     );
     return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-  }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+  }, [routeRowKey, settledShelfExpanded, visibleSettledThreads]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -3078,13 +3077,12 @@ export default function Sidebar() {
     // snoozed thread reached by route (deep link, open before snoozing
     // elsewhere) keeps its row — with highlight and wake affordance — same
     // exception the settled tail's "Show more" makes.
-    if (routeThreadKey === null) return EMPTY_THREADS;
+    if (routeRowKey === null) return EMPTY_THREADS;
     const routeThread = snoozedThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+      (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeRowKey,
     );
     return routeThread === undefined ? EMPTY_THREADS : [routeThread];
-  }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
+  }, [routeRowKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
     () => [
@@ -3915,20 +3913,14 @@ export default function Sidebar() {
   }, [dragState, settledThreads, threadByKey]);
   const nestedKeys = useMemo(() => {
     const keys = new Set<string>();
-    for (const item of sidebarListItems) {
-      if (item.kind !== "thread") continue;
-      const children = delegatedChildIndex.get(item.key);
-      if (!children) continue;
-      const ui = delegatedChildrenUi.get(item.key) ?? DEFAULT_SIDEBAR_DELEGATED_CHILDREN_UI;
-      const rows = resolveSidebarDelegatedChildWindow({
-        children,
-        runningExpanded: ui.running,
-        openThreadKey: routeThreadKey,
-      });
-      if (rows.activeRows.length > 0 || rows.pinnedOpenRow !== null) keys.add(item.key);
-    }
+    if (
+      openSubagent !== null &&
+      openSubagentOwnerKey !== undefined &&
+      sidebarListItems.some((item) => item.kind === "thread" && item.key === openSubagentOwnerKey)
+    )
+      keys.add(openSubagentOwnerKey);
     return keys;
-  }, [delegatedChildIndex, delegatedChildrenUi, routeThreadKey, sidebarListItems]);
+  }, [openSubagent, openSubagentOwnerKey, sidebarListItems]);
   const sidebarSortingStrategy = useMemo(
     () =>
       createSidebarSortingStrategy({
@@ -4680,11 +4672,16 @@ export default function Sidebar() {
                     },
                   ]
                 : []),
-              {
-                id: "archive",
-                label: "Archive",
-                disabled: !canOperate || !threadRuntimeCanArchive(thread.runtime),
-              },
+              // Provider-native subagents belong to their provider's session.
+              ...(isSidebarDelegatedChildThread(thread)
+                ? [
+                    {
+                      id: "archive",
+                      label: "Archive",
+                      disabled: !canOperate || !threadRuntimeCanArchive(thread.runtime),
+                    },
+                  ]
+                : []),
               ...(canOperate &&
               canPromoteThread(
                 thread,
@@ -5396,15 +5393,14 @@ export default function Sidebar() {
                             // sortable wrapper keeps its identity during a drag.
                             key={`${threadKey}:${rowVariant}`}
                             thread={thread}
-                            delegatedChildren={delegatedChildIndex.get(threadKey)}
-                            openThreadKey={
-                              delegatedChildIndex.has(threadKey) ? routeThreadKey : null
-                            }
+                            openSubagent={threadKey === openSubagentOwnerKey ? openSubagent : null}
+                            childAttention={subagentIndex.attentionByOwnerKey.get(threadKey)}
                             onOpenDelegatedChild={navigateToThread}
                             onStopDelegatedChild={onStopDelegatedChild}
                             onDelegatedChildContextMenu={onDelegatedChildContextMenu}
-                            stoppingDelegatedChildKey={
-                              delegatedChildIndex.has(threadKey) ? stoppingDelegatedChildKey : null
+                            isStoppingOpenSubagent={
+                              threadKey === openSubagentOwnerKey &&
+                              stoppingDelegatedChildKey === routeThreadKey
                             }
                             variant={rowVariant}
                             variantAction={presentation.action}

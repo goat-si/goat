@@ -4,29 +4,17 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
 import type { GlobalAgentRef } from "../../globalAgentStore";
 import {
+  buildSidebarSubagentIndex,
   filterSidebarV2VisibleThreads,
-  isSidebarDelegatedChildThread,
   resolveSidebarThreadStatus,
-  sidebarDelegatedChildState,
 } from "../Sidebar.logic";
 
-/** Attention belongs to a visible parent, including its nested delegated tasks. */
+/** Attention belongs to a visible thread, including requests from its delegated tasks. */
 export function hasSidebarActivityAttention(
   threads: readonly EnvironmentThreadShell[],
   globalAgentRef: GlobalAgentRef | null,
 ): boolean {
-  const attentionParents = new Set<string>();
-  for (const thread of threads) {
-    if (
-      isSidebarDelegatedChildThread(thread) &&
-      thread.lineage.parentThreadId !== null &&
-      sidebarDelegatedChildState(thread) === "attention"
-    ) {
-      attentionParents.add(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId)),
-      );
-    }
-  }
+  const childAttention = buildSidebarSubagentIndex(threads).attentionByOwnerKey;
   return excludeGlobalAgentThreads(
     filterSidebarV2VisibleThreads(threads, null),
     globalAgentRef,
@@ -36,7 +24,7 @@ export function hasSidebarActivityAttention(
     return (
       status === "approval" ||
       status === "input" ||
-      attentionParents.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
+      childAttention.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
     );
   });
 }

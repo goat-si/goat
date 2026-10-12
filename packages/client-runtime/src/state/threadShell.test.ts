@@ -1,14 +1,17 @@
 import {
   EnvironmentId,
   ProjectId,
+  RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PrimaryConnectionTarget } from "../connection/model.ts";
+import { childThreadRequestsTitle } from "./models.ts";
 import { v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import { createEnvironmentThreadShellAtoms } from "./threadShell.ts";
@@ -221,5 +224,56 @@ describe("v2 thread shell lists", () => {
       disposeList();
       harness.registry.dispose();
     }
+  });
+});
+
+describe("child thread requests", () => {
+  it("lists a delegated child's questions and approvals on its parent", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const request = (kind: "user_input" | "command" | "auth_refresh") => ({
+      id: RuntimeRequestId.make(kind),
+      kind,
+      createdAt: DateTime.makeUnsafe("2026-10-12T01:00:00Z"),
+    });
+    const child = (id: string, overrides: Partial<typeof root> = {}) => ({
+      ...root,
+      id: ThreadId.make(id),
+      creationSource: "mcp" as const,
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent" as const,
+      },
+      ...overrides,
+    });
+    const question = child("question", { pendingRuntimeRequest: request("user_input") });
+    const approval = child("approval", { pendingRuntimeRequest: request("command") });
+    const snapshot = {
+      ...v2ShellSnapshot,
+      threads: [
+        root,
+        question,
+        approval,
+        child("auth", { pendingRuntimeRequest: request("auth_refresh") }),
+        child("native", { creationSource: "provider", pendingRuntimeRequest: request("command") }),
+        child("idle"),
+      ],
+    };
+    registry.set(snapshotAtom(environmentId), snapshot);
+    const atom = threads.childThreadInputsAtom({ environmentId, threadId: root.id });
+    const dispose = registry.mount(atom);
+    const listed = registry.get(atom);
+    expect(listed.map((thread) => thread.id)).toEqual([question.id, approval.id]);
+    expect(childThreadRequestsTitle(listed)).toBe("2 subagents need a response");
+    expect(childThreadRequestsTitle(listed.slice(0, 1))).toBe("Subagent needs input");
+    expect(childThreadRequestsTitle(listed.slice(1))).toBe("Subagent needs approval");
+    registry.set(snapshotAtom(environmentId), {
+      ...snapshot,
+      threads: [root, question, { ...approval, pendingRuntimeRequest: request("user_input") }],
+    });
+    expect(childThreadRequestsTitle(registry.get(atom))).toBe("2 subagents need input");
+    dispose();
+    registry.dispose();
   });
 });

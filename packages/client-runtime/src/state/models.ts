@@ -86,6 +86,18 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
   );
 }
 
+/** Parent banner title for subagents waiting on the user (approvals or questions). */
+export function childThreadRequestsTitle(
+  children: ReadonlyArray<Pick<EnvironmentThreadShell, "hasPendingApprovals">>,
+): string {
+  const approvals = children.filter((child) => child.hasPendingApprovals).length;
+  const need =
+    approvals === 0 ? "input" : approvals === children.length ? "approval" : "a response";
+  return children.length === 1
+    ? `Subagent needs ${need}`
+    : `${children.length} subagents need ${need}`;
+}
+
 export interface EnvironmentThreadShell {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;

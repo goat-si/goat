@@ -120,7 +120,8 @@ open.
 
 On web and desktop, switch to **Activity** to see **Priority** at the top. It holds threads
 with work in progress, pending approvals or answers, unread completions, or an unacknowledged
-return from snooze. A delegated task needing approval or an answer brings its parent here too.
+return from snooze. A delegated task needing approval or an answer brings its parent here too,
+and the parent row shows **Approval** or **Input**.
 Pinned and settled threads can appear in Priority; when they no longer need attention, they
 return to their previous section.
 
@@ -232,7 +233,12 @@ the snooze. Enable **Snooze limited threads** in thread behavior settings to
 snooze limit stops by default. Providers without a reset time offer manual
 retry and the normal snooze choices.
 
-On web and desktop, use **Agents** to follow work delegated to subagents.
+Subagents never get their own rows in the sidebar, whether they are queued, running, or
+finished, on this machine or a connected one. On web and desktop, follow them under
+**Lineage** in the thread details, which counts the ones still running; open one there to read
+it, or choose **Promote to thread** from its menu to make it a regular thread. While a subagent
+is open, it shows beneath the thread that started it until you navigate away.
+
 Stop ends the thread's current turn. Subagents it delegated in the background keep
 working and report back when they finish; a subagent the turn was waiting on stops
 with it. To stop a background subagent, use its stop button under **Lineage** in the

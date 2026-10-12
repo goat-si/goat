@@ -139,8 +139,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
 
-  // Child questions are hidden with their sidebar rows. Read their shell summaries,
-  // without subscribing to every child transcript.
+  // Subagents have no sidebar rows, so their questions and approvals surface on the
+  // parent. Read their shell summaries, without subscribing to every child transcript.
   const childThreadInputsAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -162,18 +162,23 @@ export function createEnvironmentThreadShellAtoms(input: {
           seen.add(child.id);
           pending.push(child.id);
           if (
-            child.pendingRuntimeRequest?.kind === "user_input" &&
+            child.pendingRuntimeRequest !== null &&
+            child.pendingRuntimeRequest.kind !== "auth_refresh" &&
             !isProviderNativeSubagentThread(child)
           ) {
             next.push(scopedThread(ref.environmentId, child));
           }
         }
       }
-      // Indicators read only ids and titles, so other shell updates keep the old array.
+      // Indicators read only ids, titles and request kinds, so other shell updates keep
+      // the old array.
       if (
         previous.length === next.length &&
         previous.every(
-          (thread, index) => thread.id === next[index]?.id && thread.title === next[index]?.title,
+          (thread, index) =>
+            thread.id === next[index]?.id &&
+            thread.title === next[index]?.title &&
+            thread.hasPendingApprovals === next[index]?.hasPendingApprovals,
         )
       ) {
         return previous;

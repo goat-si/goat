@@ -13,10 +13,11 @@ import {
   sidebarHostHueClassName,
   animateSidebarLayoutChanges,
   canPromoteThread,
-  buildSidebarDelegatedChildIndex,
+  buildSidebarSubagentIndex,
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
-  resolveSidebarDelegatedChildWindow,
+  isSidebarSubagentChildThread,
+  withSidebarChildAttention,
   sidebarDelegatedChildState,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
@@ -157,12 +158,13 @@ describe("sidebar delegated children", () => {
     ]);
   });
 
-  it("indexes only live MCP subagent children and scopes parent ids by environment", () => {
-    const local = delegatedChild("local", { status: "running" });
-    const remote = delegatedChild("remote", { status: "running" }, EnvironmentId.make("remote"));
+  it("separates delegated tasks from provider-native subagents and dead or non-subagent threads", () => {
+    const live = [
+      delegatedChild("local", { status: "running" }),
+      delegatedChild("remote", { status: "running" }, EnvironmentId.make("remote")),
+    ];
+    const native = delegatedChild("native", { creationSource: "provider", status: "running" });
     const excluded = [
-      delegatedChild("provider", { creationSource: "provider" }),
-      delegatedChild("web", { creationSource: "web" }),
       delegatedChild("archived", { archivedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z") }),
       delegatedChild("deleted", { deletedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z") }),
       delegatedChild("root", {
@@ -180,62 +182,18 @@ describe("sidebar delegated children", () => {
         },
       }),
     ];
-    expect(excluded.map(isSidebarDelegatedChildThread)).toEqual(excluded.map(() => false));
-    const index = buildSidebarDelegatedChildIndex([local, ...excluded, remote]);
-    expect(index.size).toBe(2);
-    expect(index.get(delegatedParentKey)?.active).toEqual([local]);
+    expect([...live, native].map(isSidebarSubagentChildThread)).toEqual([true, true, true]);
+    expect(excluded.map(isSidebarSubagentChildThread)).toEqual(excluded.map(() => false));
+    expect([...live, native].map(isSidebarDelegatedChildThread)).toEqual([true, true, false]);
     expect(
-      index.get(scopedThreadKey(scopeThreadRef(remote.environmentId, ThreadId.make("parent"))))
-        ?.active,
-    ).toEqual([remote]);
-  });
-
-  it("puts attention first, merges working and queued oldest first, and drops finished", () => {
-    const newer = delegatedChild("newer", {
-      status: "running",
-      createdAt: DateTime.makeUnsafe("2026-10-12T01:03:00Z"),
-    });
-    const older = delegatedChild("older", {
-      status: "queued",
-      createdAt: DateTime.makeUnsafe("2026-10-12T01:01:00Z"),
-    });
-    const attention = delegatedChild("attention", {
-      pendingRuntimeRequest: {
-        id: RuntimeRequestId.make("input"),
-        kind: "user_input",
-        createdAt: DateTime.makeUnsafe("2026-10-12T01:04:00Z"),
-      },
-    });
-    const finished = delegatedChild("finished");
-    const entry = buildSidebarDelegatedChildIndex([newer, finished, older, attention]).get(
-      delegatedParentKey,
-    )!;
-    expect(entry.active).toEqual([attention, older, newer]);
-    expect(buildSidebarDelegatedChildIndex([finished]).size).toBe(0);
-  });
-
-  it("reuses per-parent entries only when their ordered element identities are unchanged", () => {
-    const first = delegatedChild("first", { status: "running" });
-    const other = delegatedChild("other", {
-      status: "running",
-      lineage: {
-        rootThreadId: ThreadId.make("other-parent"),
-        parentThreadId: ThreadId.make("other-parent"),
-        relationshipToParent: "subagent",
-      },
-    });
-    const index = buildSidebarDelegatedChildIndex([first, other]);
-    const changedOther = { ...other, title: "Changed" };
-    const next = buildSidebarDelegatedChildIndex([changedOther, first], index);
-    expect(next.get(delegatedParentKey)).toBe(index.get(delegatedParentKey));
-    expect(
-      next.get(scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("other-parent")))),
-    ).not.toBe(
-      index.get(scopedThreadKey(scopeThreadRef(localEnvironmentId, ThreadId.make("other-parent")))),
-    );
-    const replaced = buildSidebarDelegatedChildIndex([{ ...first }, changedOther], next);
-    expect(replaced.get(delegatedParentKey)).not.toBe(next.get(delegatedParentKey));
-    expect(buildSidebarDelegatedChildIndex([], replaced).size).toBe(0);
+      canStopSidebarDelegatedChild(
+        delegatedChild("native-running", {
+          creationSource: "provider",
+          status: "running",
+          activeRunId: RunId.make("active"),
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("classifies queued-only shells separately from older active work with a newer queued run", () => {
@@ -320,73 +278,122 @@ describe("sidebar delegated children", () => {
   });
 });
 
-describe("sidebar delegated child window", () => {
-  const attention = Array.from({ length: 4 }, (_, index) =>
-    delegatedChild(`attention-${index}`, {
-      pendingRuntimeRequest: {
-        id: RuntimeRequestId.make(`input-${index}`),
-        kind: "user_input",
-        createdAt: DateTime.makeUnsafe("2026-10-12T01:00:00Z"),
+describe("sidebar subagent index", () => {
+  const parent = makeThreadFixture({ id: ThreadId.make("parent") });
+  const input = (id: string, kind: "user_input" | "command") => ({
+    pendingRuntimeRequest: {
+      id: RuntimeRequestId.make(id),
+      kind,
+      createdAt: DateTime.makeUnsafe("2026-10-12T01:04:00Z"),
+    },
+  });
+  const running = delegatedChild("running", { status: "running" });
+  const queued = delegatedChild("queued", { status: "queued", activeRunId: null });
+  const finished = delegatedChild("finished");
+  const native = delegatedChild("native", { creationSource: "provider", status: "running" });
+  const remoteEnvironmentId = EnvironmentId.make("juns");
+  const remoteParent = { ...parent, environmentId: remoteEnvironmentId };
+  const remote = delegatedChild("remote", { status: "running" }, remoteEnvironmentId);
+  const all = [parent, running, queued, finished, native, remoteParent, remote];
+
+  it("never gives a subagent its own row, whatever its state, provider or host", () => {
+    expect(filterSidebarV2VisibleThreads(all, null)).toEqual([parent, remoteParent]);
+  });
+
+  it("keeps an open subagent beneath its owner row in every state", () => {
+    const owners = buildSidebarSubagentIndex(all).ownerKeyByChildKey;
+    for (const child of [running, queued, finished, native]) {
+      expect(owners.get(delegatedChildKey(child))).toBe(delegatedParentKey);
+    }
+    expect(owners.get(delegatedChildKey(remote))).toBe(delegatedChildKey(remoteParent));
+    // A matching id on another host is a different thread.
+    expect(
+      owners.get(scopedThreadKey(scopeThreadRef(remoteEnvironmentId, running.id))),
+    ).toBeUndefined();
+    expect(owners.get(delegatedParentKey)).toBeUndefined();
+    const archived = delegatedChild("archived", {
+      archivedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z"),
+    });
+    expect(buildSidebarSubagentIndex([parent, archived]).ownerKeyByChildKey.size).toBe(0);
+  });
+
+  it("assigns a subagent's own subagents to the first ancestor with a row", () => {
+    const grandchild = delegatedChild("grandchild", {
+      status: "running",
+      lineage: {
+        rootThreadId: ThreadId.make("parent"),
+        parentThreadId: running.id,
+        relationshipToParent: "subagent",
       },
-    }),
-  );
-  const running = Array.from({ length: 5 }, (_, index) =>
-    delegatedChild(`running-${index}`, { status: index % 2 === 0 ? "running" : "queued" }),
-  );
-  const children = { active: [...attention, ...running] };
-  const defaults = {
-    children,
-    runningExpanded: false,
-    openThreadKey: null,
-  };
-
-  it("shows all attention plus three working/queued rows and expands the rest", () => {
-    expect(resolveSidebarDelegatedChildWindow(defaults)).toEqual({
-      activeRows: [...attention, ...running.slice(0, 3)],
-      hiddenActiveCount: 2,
-      pinnedOpenRow: null,
+      ...input("grandchild-input", "user_input"),
     });
-    expect(
-      resolveSidebarDelegatedChildWindow({ ...defaults, runningExpanded: true }),
-    ).toMatchObject({ activeRows: children.active, hiddenActiveCount: 0 });
+    const index = buildSidebarSubagentIndex([parent, running, grandchild]);
+    expect(index.ownerKeyByChildKey.get(delegatedChildKey(grandchild))).toBe(delegatedParentKey);
+    expect(index.attentionByOwnerKey.get(delegatedParentKey)).toBe("input");
   });
 
-  it.each([
-    { row: running[4]!, runningExpanded: false, pinned: true },
-    { row: running[4]!, runningExpanded: true, pinned: false },
-    { row: attention[3]!, runningExpanded: false, pinned: false },
-  ])("shows the open $row.id once with pinned=$pinned", ({ row, pinned, ...state }) => {
-    const window = resolveSidebarDelegatedChildWindow({
-      ...defaults,
-      ...state,
-      openThreadKey: delegatedChildKey(row),
-    });
-    expect(window.pinnedOpenRow).toBe(pinned ? row : null);
+  it("carries a delegated task's request on the owner, approvals first, per host", () => {
+    const question = delegatedChild("question", input("question", "user_input"));
+    const approval = delegatedChild("approval", input("approval", "command"));
     expect(
-      [...window.activeRows, ...(window.pinnedOpenRow ? [window.pinnedOpenRow] : [])].filter(
-        (child) => child === row,
+      buildSidebarSubagentIndex([parent, question]).attentionByOwnerKey.get(delegatedParentKey),
+    ).toBe("input");
+    for (const order of [
+      [question, approval],
+      [approval, question],
+    ]) {
+      expect(
+        buildSidebarSubagentIndex([parent, ...order]).attentionByOwnerKey.get(delegatedParentKey),
+      ).toBe("approval");
+    }
+    const remoteQuestion = delegatedChild(
+      "remote-question",
+      input("remote-question", "user_input"),
+      remoteEnvironmentId,
+    );
+    expect([
+      ...buildSidebarSubagentIndex([
+        parent,
+        remoteParent,
+        remoteQuestion,
+      ]).attentionByOwnerKey.keys(),
+    ]).toEqual([delegatedChildKey(remoteParent)]);
+    // Provider-native subagents ask through their parent's own request.
+    const nativeQuestion = delegatedChild("native-question", {
+      creationSource: "provider",
+      ...input("native-question", "user_input"),
+    });
+    expect(buildSidebarSubagentIndex([parent, nativeQuestion]).attentionByOwnerKey.size).toBe(0);
+    expect(buildSidebarSubagentIndex(all).attentionByOwnerKey.size).toBe(0);
+  });
+
+  it("shows the strongest request on the owner without hiding its own", () => {
+    expect(withSidebarChildAttention("working", "input")).toBe("input");
+    expect(withSidebarChildAttention("ready", "approval")).toBe("approval");
+    expect(withSidebarChildAttention("input", "approval")).toBe("approval");
+    expect(withSidebarChildAttention("input", "input")).toBe("input");
+    expect(withSidebarChildAttention("approval", "input")).toBe("approval");
+    expect(withSidebarChildAttention("working", undefined)).toBe("working");
+  });
+
+  it("keeps map identity while owners and requests are unchanged", () => {
+    const index = buildSidebarSubagentIndex(all);
+    const streamed = buildSidebarSubagentIndex(
+      all.map((thread) => (thread === running ? { ...running, title: "Renamed" } : thread)),
+      index,
+    );
+    expect(streamed.ownerKeyByChildKey).toBe(index.ownerKeyByChildKey);
+    expect(streamed.attentionByOwnerKey).toBe(index.attentionByOwnerKey);
+    const asking = buildSidebarSubagentIndex(
+      all.map((thread) =>
+        thread === running
+          ? { ...running, ...delegatedChild("running", input("q", "user_input")) }
+          : thread,
       ),
-    ).toHaveLength(1);
-  });
-
-  it("does not pin a different environment's matching id or an unrelated open thread", () => {
-    expect(
-      resolveSidebarDelegatedChildWindow({
-        ...defaults,
-        openThreadKey: scopedThreadKey(
-          scopeThreadRef(EnvironmentId.make("remote"), running[4]!.id),
-        ),
-      }).pinnedOpenRow,
-    ).toBeNull();
-    expect(
-      resolveSidebarDelegatedChildWindow({ ...defaults, openThreadKey: delegatedParentKey })
-        .pinnedOpenRow,
-    ).toBeNull();
-    expect(resolveSidebarDelegatedChildWindow({ ...defaults, children: { active: [] } })).toEqual({
-      activeRows: [],
-      hiddenActiveCount: 0,
-      pinnedOpenRow: null,
-    });
+      streamed,
+    );
+    expect(asking.ownerKeyByChildKey).toBe(index.ownerKeyByChildKey);
+    expect(asking.attentionByOwnerKey).not.toBe(index.attentionByOwnerKey);
   });
 });
 
@@ -628,7 +635,7 @@ describe("Activity Priority", () => {
     ).toBeNull();
   });
 
-  it("lifts the parent for delegated attention and retains each child only beneath it", () => {
+  it("lifts the parent for delegated attention while the child stays off the list", () => {
     const parent = makeThread({ id: ThreadId.make("parent"), settledOverride: "settled" });
     const attention = delegatedChild("attention", {
       pendingRuntimeRequest: {
@@ -638,25 +645,11 @@ describe("Activity Priority", () => {
       },
     });
     const finished = delegatedChild("finished");
-    const children = buildSidebarDelegatedChildIndex([parent, attention, finished]).get(
-      delegatedParentKey,
-    )!;
+    const index = buildSidebarSubagentIndex([parent, attention, finished]);
     expect(filterSidebarV2VisibleThreads([parent, attention, finished], null)).toEqual([parent]);
-    expect(
-      rank(
-        parent,
-        children.active.some((child) => sidebarDelegatedChildState(child) === "attention"),
-      ),
-    ).toBe(0);
+    expect(rank(parent, index.attentionByOwnerKey.has(delegatedParentKey))).toBe(0);
     const presentation = resolveSidebarThreadPresentation({ settled: true, snoozed: false });
     expect(presentation.action).toBe("unsettle");
-    const window = resolveSidebarDelegatedChildWindow({
-      children,
-      runningExpanded: true,
-      openThreadKey: null,
-    });
-    expect(window.activeRows).toEqual([attention]);
-    expect(window.pinnedOpenRow).toBeNull();
   });
 
   it("keeps global agents, delegated children, archived threads and out-of-scope threads out of candidates", () => {

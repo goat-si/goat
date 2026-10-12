@@ -603,8 +603,6 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
   return thread.lineage.relationshipToParent === "subagent";
 }
 
-export const SIDEBAR_CHILD_RUNNING_LIMIT = 3;
-
 type SidebarChildInput = Pick<
   SidebarThreadSummary,
   | "environmentId"
@@ -622,15 +620,24 @@ type SidebarChildInput = Pick<
   | "pendingBackgroundTasks"
 >;
 
-/** T3-owned delegate_task children, nested beneath their visible parent. */
-export function isSidebarDelegatedChildThread(thread: SidebarChildInput): boolean {
+/**
+ * Live subagent threads with a parent: delegate_task children (and their backing
+ * threads) and provider-native subagents, on any environment.
+ */
+export function isSidebarSubagentChildThread(
+  thread: Pick<SidebarThreadSummary, "lineage" | "archivedAt" | "deletedAt">,
+): boolean {
   return (
     isSidebarSubagentThread(thread) &&
     thread.lineage.parentThreadId !== null &&
-    thread.source.creationSource === "mcp" &&
     thread.archivedAt === null &&
     thread.deletedAt === null
   );
+}
+
+/** GOAT-owned delegate_task children; provider-native subagents belong to their provider. */
+export function isSidebarDelegatedChildThread(thread: SidebarChildInput): boolean {
+  return isSidebarSubagentChildThread(thread) && thread.source.creationSource === "mcp";
 }
 
 export type SidebarDelegatedChildState = "attention" | "working" | "queued" | "finished";
@@ -676,75 +683,93 @@ export function sidebarDelegatedChildState(
 export function canStopSidebarDelegatedChild(thread: SidebarChildInput): boolean {
   const state = sidebarDelegatedChildState(thread);
   return (
+    isSidebarDelegatedChildThread(thread) &&
     thread.runtime?.activeRunId != null &&
     (state === "attention" || (state === "working" && thread.runtime.status !== "idle"))
   );
 }
 
-/** Unfinished delegated tasks; finished ones never appear in the sidebar. */
-export interface SidebarDelegatedChildren<T> {
-  readonly active: ReadonlyArray<T>;
+export type SidebarChildAttention = "approval" | "input";
+
+/**
+ * Subagents never get a sidebar row of their own. Each one belongs to its nearest
+ * non-subagent ancestor (the owner row): the owner shows the subagent while it is the
+ * open thread, and carries a delegated task's pending approval or question as the
+ * owner's status. Provider-native subagents already ask through their parent.
+ */
+export interface SidebarSubagentIndex {
+  readonly ownerKeyByChildKey: ReadonlyMap<string, string>;
+  readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
 }
 
-/** Index once per shell collection, retaining unchanged parent entries for memoized rows. */
-export function buildSidebarDelegatedChildIndex<T extends SidebarChildInput>(
-  threads: ReadonlyArray<T>,
-  previous?: ReadonlyMap<string, SidebarDelegatedChildren<T>>,
-): ReadonlyMap<string, SidebarDelegatedChildren<T>> {
-  const groups = new Map<string, { active: T[] }>();
+const sameMap = <V>(left: ReadonlyMap<string, V>, right: ReadonlyMap<string, V>) =>
+  left.size === right.size &&
+  [...left].every(([key, value]) => right.has(key) && right.get(key) === value);
+
+/** Index once per shell collection; unchanged maps keep their identity for memoized rows. */
+export function buildSidebarSubagentIndex(
+  threads: ReadonlyArray<
+    Pick<
+      SidebarThreadSummary,
+      | "environmentId"
+      | "id"
+      | "lineage"
+      | "archivedAt"
+      | "deletedAt"
+      | "source"
+      | "hasPendingApprovals"
+      | "hasPendingUserInput"
+    >
+  >,
+  previous?: SidebarSubagentIndex,
+): SidebarSubagentIndex {
+  const parentKeyByChildKey = new Map<string, string>();
   for (const thread of threads) {
-    if (!isSidebarDelegatedChildThread(thread) || thread.lineage.parentThreadId === null) continue;
-    if (sidebarDelegatedChildState(thread) === "finished") continue;
-    const key = scopedThreadKey(
-      scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId),
+    if (!isSidebarSubagentChildThread(thread) || thread.lineage.parentThreadId === null) continue;
+    parentKeyByChildKey.set(
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId)),
     );
-    const group = groups.get(key) ?? { active: [] };
-    group.active.push(thread);
-    groups.set(key, group);
   }
-  const index = new Map<string, SidebarDelegatedChildren<T>>();
-  const sameElements = (left: ReadonlyArray<T>, right: ReadonlyArray<T>) =>
-    left.length === right.length && left.every((thread, position) => thread === right[position]);
-  for (const [key, group] of groups) {
-    group.active.sort(
-      (left, right) =>
-        Number(sidebarDelegatedChildState(right) === "attention") -
-          Number(sidebarDelegatedChildState(left) === "attention") ||
-        left.createdAt.localeCompare(right.createdAt) ||
-        left.id.localeCompare(right.id),
-    );
-    const old = previous?.get(key);
-    index.set(key, old && sameElements(old.active, group.active) ? old : group);
+  const ownerKeyByChildKey = new Map<string, string>();
+  const attentionByOwnerKey = new Map<string, SidebarChildAttention>();
+  for (const thread of threads) {
+    const childKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    let ownerKey = parentKeyByChildKey.get(childKey);
+    if (ownerKey === undefined) continue;
+    // A subagent of a subagent belongs to the first ancestor that has a row.
+    const seen = new Set([childKey]);
+    while (!seen.has(ownerKey)) {
+      const next = parentKeyByChildKey.get(ownerKey);
+      if (next === undefined) break;
+      seen.add(ownerKey);
+      ownerKey = next;
+    }
+    ownerKeyByChildKey.set(childKey, ownerKey);
+    if (thread.source.creationSource !== "mcp") continue;
+    if (thread.hasPendingApprovals) attentionByOwnerKey.set(ownerKey, "approval");
+    else if (thread.hasPendingUserInput && !attentionByOwnerKey.has(ownerKey))
+      attentionByOwnerKey.set(ownerKey, "input");
   }
-  return index;
+  return {
+    ownerKeyByChildKey:
+      previous && sameMap(previous.ownerKeyByChildKey, ownerKeyByChildKey)
+        ? previous.ownerKeyByChildKey
+        : ownerKeyByChildKey,
+    attentionByOwnerKey:
+      previous && sameMap(previous.attentionByOwnerKey, attentionByOwnerKey)
+        ? previous.attentionByOwnerKey
+        : attentionByOwnerKey,
+  };
 }
 
-export function resolveSidebarDelegatedChildWindow<T extends SidebarChildInput>(input: {
-  readonly children: SidebarDelegatedChildren<T>;
-  readonly runningExpanded: boolean;
-  readonly openThreadKey: string | null;
-}) {
-  const attention = input.children.active.filter(
-    (thread) => sidebarDelegatedChildState(thread) === "attention",
-  );
-  const running = input.children.active.filter(
-    (thread) => sidebarDelegatedChildState(thread) !== "attention",
-  );
-  const activeRows = [
-    ...attention,
-    ...(input.runningExpanded ? running : running.slice(0, SIDEBAR_CHILD_RUNNING_LIMIT)),
-  ];
-  const isOpen = (thread: T) =>
-    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === input.openThreadKey;
-  const pinnedOpenRow =
-    input.openThreadKey !== null && !activeRows.some(isOpen)
-      ? (input.children.active.find(isOpen) ?? null)
-      : null;
-  return {
-    activeRows,
-    hiddenActiveCount: running.length - (activeRows.length - attention.length),
-    pinnedOpenRow,
-  };
+/** A subagent's pending request outranks the owner's own work, but not its own request. */
+export function withSidebarChildAttention(
+  status: SidebarThreadStatus,
+  childAttention: SidebarChildAttention | undefined,
+): SidebarThreadStatus {
+  if (status === "approval" || childAttention === undefined) return status;
+  return childAttention === "approval" || status !== "input" ? childAttention : status;
 }
 
 export function filterSidebarV2VisibleThreads<
