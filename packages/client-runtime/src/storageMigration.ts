@@ -79,9 +79,16 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
       } catch (error) {
         // Over quota, the retained legacy copy of this key is what crowds out the current
         // value (a write used to replace it in place): drop that copy and retry once.
+        // When that copy cannot be found or removed, the original write error is the one
+        // callers need to see.
         const legacy = legacyStorageKey(key);
-        if (legacy === undefined || storage.getItem(legacy) === null) throw error;
-        storage.removeItem(legacy);
+        if (legacy === undefined) throw error;
+        try {
+          if (storage.getItem(legacy) === null) throw error;
+          storage.removeItem(legacy);
+        } catch {
+          throw error;
+        }
         return storage.setItem(key, value);
       }
     });
