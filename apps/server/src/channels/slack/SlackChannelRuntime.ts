@@ -31,12 +31,12 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ChannelGateway from "../ChannelGateway.ts";
+import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
 import {
   handleSlackEnvelope,
   makeSlackChannelTransport,
   type SlackActiveSession,
-  type SlackConnectionOwner,
   type SlackDeliveryFailureReport,
 } from "./SlackChannelAdapter.ts";
 import type { SlackRevocationEvent } from "./slackEventMapping.ts";
@@ -50,7 +50,7 @@ export interface SlackRuntimeConnection {
   readonly botToken: string | undefined;
   /** The workspace saved when the tokens were validated. */
   readonly expectedTeamId: string | undefined;
-  readonly owner: SlackConnectionOwner | undefined;
+  readonly owner: ChannelConnectionOwner | undefined;
   readonly botUserId?: string;
   readonly revoked?: "bot_revoked" | "app_uninstalled";
   readonly onRevoked?: (
@@ -235,7 +235,7 @@ const make = Effect.gen(function* () {
 
   const attempt = (
     connection: SlackRuntimeConnection & { appToken: string },
-    owner: SlackConnectionOwner,
+    owner: ChannelConnectionOwner,
     generation: number,
     blocked: Ref.Ref<string | undefined>,
     savedIdentity: Ref.Ref<SlackSdk.SlackAuthIdentity | undefined>,
@@ -416,7 +416,7 @@ const make = Effect.gen(function* () {
   /** The reconnect loop for a connection that has passed {@link prepare}. */
   const supervise = (
     connection: SlackRuntimeConnection & { appToken: string },
-    owner: SlackConnectionOwner,
+    owner: ChannelConnectionOwner,
     generation: number,
   ) =>
     Effect.gen(function* () {

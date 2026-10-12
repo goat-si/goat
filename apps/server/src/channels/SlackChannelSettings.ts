@@ -8,6 +8,7 @@
  * @module SlackChannelSettings
  */
 import type {
+  SlackChannelDefaultTarget,
   SlackChannelConfigureInput,
   SlackChannelDisconnectInput,
   SlackChannelSettingsError,
@@ -18,6 +19,7 @@ import { SlackChannelSettingsError as SettingsError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
@@ -41,6 +43,10 @@ export class SlackChannelSettings extends Context.Service<
     ) => Effect.Effect<void, SlackChannelSettingsError>;
     /** Emits the current status of every connection once, then only changes. */
     readonly streamStatus: () => Stream.Stream<SlackChannelStatusEvent, SlackChannelSettingsError>;
+    /** Defaults for work started from a connection; none for an unknown connection. */
+    readonly defaultTarget: (
+      connectionId: string,
+    ) => Effect.Effect<Option.Option<SlackChannelDefaultTarget>, SlackChannelSettingsError>;
   }
 >()("t3/channels/SlackChannelSettings") {}
 
@@ -55,5 +61,6 @@ export const layerUnavailable = Layer.succeed(
     configure: () => Effect.fail(new SettingsError({ reason: "adapter_unavailable" })),
     disconnect: () => Effect.fail(new SettingsError({ reason: "adapter_unavailable" })),
     streamStatus: () => Stream.fail(new SettingsError({ reason: "adapter_unavailable" })),
+    defaultTarget: () => Effect.succeed(Option.none()),
   }),
 );

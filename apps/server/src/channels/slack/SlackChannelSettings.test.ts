@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   ChannelDeliveryId,
+  ProjectId,
   SlackChannelConnectionId,
   type SlackChannelSettingsError,
 } from "@t3tools/contracts";
@@ -467,6 +468,32 @@ describe("SlackChannelSettings.live", () => {
             connectionId: created.connectionId,
             status: "connected",
           });
+        }),
+      );
+    }),
+  );
+});
+
+describe("defaultTarget", () => {
+  it.effect("returns a connection's saved defaults and none for an unknown connection", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* tempBaseDir;
+      yield* withServer(baseDir, makeFakeSlackSdk(), (settings) =>
+        Effect.gen(function* () {
+          const created = yield* settings.configure(
+            {
+              enabled: false,
+              appToken: APP_TOKEN,
+              botToken: BOT_TOKEN,
+              defaultTarget: { projectId: ProjectId.make("project-slack") },
+            },
+            owner,
+          );
+          assert.deepEqual(
+            Option.getOrUndefined(yield* settings.defaultTarget(created.connectionId)),
+            { projectId: ProjectId.make("project-slack") },
+          );
+          assert(Option.isNone(yield* settings.defaultTarget("slack-000000000000")));
         }),
       );
     }),

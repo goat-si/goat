@@ -25,9 +25,9 @@ import * as Option from "effect/Option";
 import * as ChannelGateway from "../ChannelGateway.ts";
 import type { ChannelIngressContext } from "../ChannelIngressContext.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
-import type { SlackConnectionOwner } from "./SlackChannelAdapter.ts";
+import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 
-export const owner: SlackConnectionOwner = {
+export const owner: ChannelConnectionOwner = {
   ownerId: "owner-1",
   principalId: "principal-owner",
   displayName: "Host Owner",

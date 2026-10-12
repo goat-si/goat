@@ -38,7 +38,7 @@ import * as Stream from "effect/Stream";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
-import type { SlackConnectionOwner } from "./SlackChannelAdapter.ts";
+import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
 import type { SlackRevocationEvent } from "./slackEventMapping.ts";
 import * as SlackSdk from "./SlackSdk.ts";
@@ -352,7 +352,7 @@ export const make = Effect.gen(function* () {
    * `owner` is the authenticated host owner from the RPC session. It is required to create a
    * connection; an existing connection keeps its stored owner when none is given.
    */
-  const configure = (input: SlackChannelConfigureInput, owner?: SlackConnectionOwner) =>
+  const configure = (input: SlackChannelConfigureInput, owner?: ChannelConnectionOwner) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
         const existing =
@@ -464,6 +464,12 @@ export const make = Effect.gen(function* () {
         }),
       ),
     streamStatus: () => Stream.unwrap(Effect.as(readConnections, runtime.streamStatus)),
+    defaultTarget: (connectionId) =>
+      Effect.map(readConnections, (connections) =>
+        Option.fromNullishOr(
+          connections.find((connection) => connection.connectionId === connectionId)?.defaultTarget,
+        ),
+      ),
   });
 
   // Bring saved connections back up. A connection whose secrets cannot be read starts in error.

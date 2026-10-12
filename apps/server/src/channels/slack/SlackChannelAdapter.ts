@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 
 import * as ChannelGateway from "../ChannelGateway.ts";
-import type { ChannelIngressContext } from "../ChannelIngressContext.ts";
+import type { ChannelConnectionOwner, ChannelIngressContext } from "../ChannelIngressContext.ts";
 import type * as ChannelTransport from "../ChannelTransport.ts";
 import {
   classifySlackEvent,
@@ -32,11 +32,8 @@ import {
   type SlackSocketEnvelope,
 } from "./SlackSdk.ts";
 
-/** Who a Slack connection acts for: the host owner who configured it, with its ceiling. */
-export type SlackConnectionOwner = Omit<ChannelIngressContext, "caller">;
-
 function slackIngressContext(
-  owner: SlackConnectionOwner,
+  owner: ChannelConnectionOwner,
   connectionId: string,
 ): ChannelIngressContext {
   return { ...owner, caller: { type: "transport", kind: "slack", connectionId } };
@@ -72,7 +69,7 @@ export const handleSlackEnvelope = (
   input: {
     readonly connectionId: string;
     readonly classifier: SlackClassifierConfig;
-    readonly owner: SlackConnectionOwner;
+    readonly owner: ChannelConnectionOwner;
     readonly receiveOnly?: Effect.Effect<boolean>;
     readonly onRevocation?: (event: SlackRevocationEvent) => Effect.Effect<boolean>;
   },
