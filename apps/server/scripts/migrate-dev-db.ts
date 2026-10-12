@@ -313,8 +313,13 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
             : nullable === undefined || name === PROVIDER_SESSIONS_TABLE
               ? ""
               : `WHERE thread_id IN (SELECT thread_id FROM copied_threads)${nullable ? " OR thread_id IS NULL" : ""}`;
-        yield* sql.unsafe(`INSERT INTO main."${name}" SELECT * FROM src."${name}" ${filter}`)
-          .unprepared;
+        // Generated columns can't be inserted, so copy the stored ones and let SQLite recompute them.
+        const columns = yield* sql<{ name: string }>`
+          SELECT name FROM pragma_table_xinfo(${name}, 'src') WHERE hidden = 0`;
+        const columnList = columns.map((column) => `"${column.name}"`).join(", ");
+        yield* sql.unsafe(
+          `INSERT INTO main."${name}" (${columnList}) SELECT ${columnList} FROM src."${name}" ${filter}`,
+        ).unprepared;
       }
       // The source's AUTOINCREMENT high-water marks, so new events append after them.
       yield* sql`DELETE FROM main.sqlite_sequence`;
