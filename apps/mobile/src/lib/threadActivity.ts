@@ -618,7 +618,7 @@ function itemSummary(
     case "web_search":
       return "Searched the web";
     case "approval_request":
-      return item.title?.trim() || "Approval requested";
+      return "Approval requested";
     case "user_input_request":
       return "Input requested";
     case "checkpoint":
