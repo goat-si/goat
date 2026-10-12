@@ -370,17 +370,20 @@ describe("cluster home availability", () => {
         },
       });
     const legacyRemote = env(remote);
-    for (const [connected, kind] of [
-      [false, "offline"],
-      [true, "connecting"],
-    ] as const) {
-      expect(
-        resolveGoatBotAvailability({
-          environments: [loading(connected), legacyRemote],
-          botRef: null,
-          ensure: { state: "idle" },
-        }),
-      ).toEqual({ kind, environmentId: primary });
+    // Beside an old remote (legacy picker) and a remote that can be home (home branch).
+    for (const other of [legacyRemote, homeEnv(remote, null)]) {
+      for (const [connected, kind] of [
+        [false, "offline"],
+        [true, "connecting"],
+      ] as const) {
+        expect(
+          resolveGoatBotAvailability({
+            environments: [loading(connected), other],
+            botRef: null,
+            ensure: { state: "idle" },
+          }),
+        ).toEqual({ kind, environmentId: primary });
+      }
     }
   });
 });

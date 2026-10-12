@@ -149,8 +149,10 @@ export function resolveGoatBotAvailability(input: {
         candidateId ??
         primary?.environmentId ??
         input.environments.find((entry) => entry.homeTarget?.supportsHome)?.environmentId;
-      return environmentId === undefined
-        ? { kind: "unsupported" }
+      if (environmentId === undefined) return { kind: "unsupported" };
+      const waitingOn = input.environments.find((entry) => entry.environmentId === environmentId);
+      return waitingOn?.connected === false
+        ? { kind: "offline", environmentId }
         : { kind: "connecting", environmentId };
     }
   }
