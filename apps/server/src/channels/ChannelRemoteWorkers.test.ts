@@ -1183,6 +1183,36 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("does not carry a project choice past an answer that picks the machine", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "m1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "m2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.environmentReadDown = false;
+      // Picking the machine again starts a new destination; the earlier project answer was for
+      // the old one, so the project is asked for again.
+      yield* gateway.ingest(slackInput("answer: use mac-studio", "m3"), slackContext);
+      const third = yield* until(
+        "asked for the project",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      assert.include(third.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "m4"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {

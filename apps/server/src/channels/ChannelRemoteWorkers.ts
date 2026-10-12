@@ -401,8 +401,10 @@ const make = Effect.gen(function* () {
       readonly projectId?: string;
       readonly localTitle?: string;
       readonly canonicalKey?: string;
-      /** The requester's answers, newest first. */
+      /** The requester's answers in this generation, newest first. */
       readonly answers?: ReadonlyArray<string>;
+      /** Machines an answer may name; an answer that picks one ends the older answers' reach. */
+      readonly hosts?: ReadonlyArray<string>;
       readonly requireNamed?: boolean;
     },
   ) => {
@@ -410,12 +412,18 @@ const make = Effect.gen(function* () {
     if (byId !== undefined) return byId;
     // The newest answer that names one of its projects decides, so a later answer to another
     // question ("try again") keeps the project chosen before it, and a newer name replaces it.
+    // Answers before one that picked a machine were about another destination, so they stop
+    // counting there, even when that machine has a project with the same name.
     for (const raw of hint.answers ?? []) {
       const answer = raw.toLowerCase();
       const named = projects.filter((project) => answer.includes(project.title.toLowerCase()));
       if (named.length > 0) {
         return named.toSorted((left, right) => right.title.length - left.title.length)[0];
       }
+      const pickedMachine =
+        meansThisMachine(raw) ||
+        (hint.hosts ?? []).some((host) => answer.includes(host.toLowerCase()));
+      if (pickedMachine) break;
     }
     // The same repository as the local project, by its canonical remote key.
     if (hint.canonicalKey !== undefined) {
@@ -471,7 +479,7 @@ const make = Effect.gen(function* () {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
-        ...(answers.length === 0 ? {} : { answers }),
+        ...(answers.length === 0 ? {} : { answers, hosts }),
         ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
       });
       if (chosen === undefined) {

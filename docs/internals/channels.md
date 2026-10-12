@@ -44,7 +44,7 @@ On another machine the remote's only project stands in only when no project was 
 project named here, or a default that is gone, must match one of its projects. The newest answer
 in the current generation that names one of its projects decides, so an answer to a later question
 ("try again" after the machine was unreachable) keeps the project chosen before it, naming another
-replaces it, and a retry asks again.
+replaces it, and a retry or an answer that picks a machine asks again.
 
 ## Who runs the workers
 
