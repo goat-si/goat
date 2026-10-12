@@ -4,6 +4,7 @@ import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
   IsoDateTime,
+  NonNegativeInt,
   PositiveInt,
   ThreadId,
   TrimmedNonEmptyString,
@@ -268,6 +269,19 @@ export type ChannelEnsureBotInput = typeof ChannelEnsureBotInput.Type;
 export const ChannelEnsureBotResult = ChannelBotRef;
 export type ChannelEnsureBotResult = ChannelBotRef;
 
+/**
+ * What a client shows about the GOAT bot without opening it: which thread is the bot (null until
+ * an `ensureBot` creates one; this never creates it) and how many GOAT tasks wait for an answer.
+ */
+export const ChannelGetBotStatusInput = Schema.Struct({});
+export type ChannelGetBotStatusInput = typeof ChannelGetBotStatusInput.Type;
+
+export const ChannelGetBotStatusResult = Schema.Struct({
+  bot: Schema.NullOr(ChannelBotRef),
+  waitingCount: NonNegativeInt,
+});
+export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
+
 export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
@@ -293,6 +307,7 @@ export type ChannelGetInputInput = typeof ChannelGetInputInput.Type;
 
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
+  getBotStatus: "channel.getBotStatus",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
   listTasks: "channel.listTasks",

@@ -26,6 +26,7 @@ export function useGoatBotEnvironments(): ReadonlyArray<GoatBotEnvironmentInput>
         supportsChannelLedger: environmentSupportsChannelLedger(
           entry.serverConfig?.environment.capabilities,
         ),
+        supportsBotStatus: entry.serverConfig?.environment.capabilities.goatBotStatus === true,
         primary: entry.environmentId === primaryEnvironmentId,
         label: resolveEnvironmentOptionLabel({
           isPrimary: entry.environmentId === primaryEnvironmentId,

@@ -60,6 +60,23 @@ describe("presentTaskChip", () => {
     expect(presentTaskChip(chip({ originKind: "mcp" })).sourceLabel).toBe("Agent · Jun");
   });
 
+  it("names the machine that runs remote work", () => {
+    const worker = {
+      environmentId: EnvironmentId.make("remote-env"),
+      threadId: ThreadId.make("worker"),
+      host: "mac-studio",
+    };
+    expect(presentTaskChip(chip({ originKind: "slack", worker }))).toMatchObject({
+      sourceLabel: "Slack · Jun · on mac-studio",
+      target: {
+        kind: "thread",
+        environmentId: "remote-env",
+        threadId: "worker",
+        host: "mac-studio",
+      },
+    });
+  });
+
   it("counts open questions and drops an empty summary", () => {
     expect(presentTaskChip(chip({ openQuestionCount: 1, status: "waiting_input" }))).toMatchObject({
       statusLabel: "Needs your input",

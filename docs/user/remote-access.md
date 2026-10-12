@@ -240,7 +240,9 @@ machine's own GOAT, which is started the same way as above if needed.
 Only SSH keys or a running ssh-agent are used; a host that asks for a password
 is refused. Starting a thread needs a full-access thread or a full-access
 outside agent. To watch the new thread, add the same host under
-**Settings → Connections**, or ask the agent to add it for you. Each start
+**Settings → Connections**, or ask the agent to add it for you. On that machine
+itself, the GOAT desktop app lists these threads under **Headless server** while
+that server is running. Each start
 issues a 12-hour sign-in on that machine, listed with its other clients. A
 machine running an older GOAT
 only accepts approval-required threads in folders that are already projects
@@ -257,7 +259,8 @@ change right away, and the agent's connection list shows which agent added each
 connection.
 
 The agent that started the thread can follow it from here: it waits for the
-thread to finish, reads its messages, sends it follow-ups, or stops it, and it
+thread to finish, reads its messages and the result its agent recorded (outcome,
+pull requests, tests, and commits), sends it follow-ups, or stops it, and it
 can list threads across this machine and the ones it is connected to. The
 remote thread cannot report back on its own, so ask the starting agent to wait
 on it. Sending to or stopping a thread on another machine needs an agent in the

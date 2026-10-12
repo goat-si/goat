@@ -24,6 +24,7 @@ import {
   secondaryRegistrationsToRetainAfterTopologyRead,
   secondaryBearerExpiresAtEpochMs,
   secondaryBearerRefreshAtEpochMs,
+  secondsUntil,
 } from "./platform.ts";
 
 const TARGET: DesktopSshEnvironmentTarget = {
@@ -157,6 +158,17 @@ describe("desktop-local bearer cache", () => {
     expect(
       canRetainCachedPlatformRegistrationAfterRefreshFailure(cached, cached.signature, 70_000),
     ).toBe(false);
+  });
+
+  it("caches a desktop-issued bearer until just before its own expiry", () => {
+    const now = Date.parse("2026-10-12T10:00:00.000Z");
+    const expiresIn = secondsUntil("2026-10-12T10:01:00.000Z", now);
+    expect(expiresIn).toBe(60);
+    expect(secondaryBearerRefreshAtEpochMs(now, expiresIn)).toBe(now + 55_000);
+    // An unreadable or past expiry is never cached, so the next poll asks again.
+    expect(secondsUntil(undefined, now)).toBe(0);
+    expect(secondsUntil("not a date", now)).toBe(0);
+    expect(secondsUntil("2026-10-12T09:00:00.000Z", now)).toBe(0);
   });
 
   it("does not cache credentials whose lifetime is shorter than the refresh skew", () => {

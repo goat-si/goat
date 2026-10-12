@@ -22,6 +22,7 @@ import {
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "../../../config.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -152,10 +153,22 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
       }),
     ),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
+    standingInstructions: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Default true: GOAT puts this environment's standing instructions (the project's own when it has them; see goat_environment_read) in front of message, in a block the user sees collapsed. Pass false to send message exactly as written.",
+      }),
+    ),
     notifyOnCompletion: Schema.optional(
       Schema.Boolean.annotate({
         description:
           'Default true for a calling GOAT thread: it is woken with a message when the new thread\'s run ends, waits on a question, or later runs you start with goat_thread_send end. Pass false to stop run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.',
+      }),
+    ),
+    notifyWebhook: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the completion webhook configured in server settings, for an agent outside GOAT. Needs the launch watch (notifyOnCompletion not false). Does nothing while the webhook is off. Default false.",
       }),
     ),
     launchedBy: Schema.optional(
@@ -179,6 +192,8 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     status: Schema.NullOr(OrchestrationV2RunStatus),
     /** Whether the calling thread will be told when the new thread finishes. */
     watching: Schema.Boolean,
+    /** Version of the standing instructions put in front of message; null when none were. */
+    standingInstructionsVersion: Schema.NullOr(Schema.String),
     report: Schema.optional(
       Schema.Struct({ correlationId: RemoteReportBindingInput.fields.correlationId }),
     ),
@@ -192,6 +207,7 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     ServerConfig.ServerConfig,
     LaunchWatchService.LaunchWatchService,
     RemoteReportService.RemoteReportService,
+    ServerSettings.ServerSettingsService,
   ],
 })
   .annotate(Tool.Destructive, true)

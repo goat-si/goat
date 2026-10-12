@@ -29,6 +29,8 @@ import {
 } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as CompletionWebhook from "./completionWebhook.ts";
+import type { LaunchWatch } from "./launchWatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 
 const launcher = ThreadId.make("launcher");
@@ -77,6 +79,12 @@ interface World {
     ceiling: string;
     at: number;
   }>;
+  /** Reports handed to the completion webhook, with the watch they came from. */
+  readonly webhookReports: Array<{
+    watch: LaunchWatch;
+    report: CompletionWebhook.CompletionWebhookReport;
+  }>;
+  webhookNotify?: Effect.Effect<void>;
 }
 
 const makeWorld = Effect.gen(function* () {
@@ -114,6 +122,7 @@ const makeWorld = Effect.gen(function* () {
     deliveredLog: [],
     hostCall: (call) => Effect.die(new Error("unexpected host call " + call.tool)),
     hostCalls: [],
+    webhookReports: [],
   };
   return world;
 });
@@ -203,6 +212,13 @@ const layerFor = (world: World, baseDir: string) =>
                 ),
               ),
             ),
+        }),
+        Layer.mock(CompletionWebhook.CompletionWebhook)({
+          notify: (watch, report) =>
+            Effect.suspend(() => {
+              world.webhookReports.push({ watch, report });
+              return world.webhookNotify ?? Effect.void;
+            }),
         }),
         ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
         NodeCrypto.layer,
@@ -1135,6 +1151,129 @@ describe("LaunchWatchService", () => {
         }),
       );
       expect(world.attempts).toHaveLength(2);
+    }),
+  );
+
+  it.effect("hands a run report to the completion webhook once its wake is queued", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      world.shells.set(target, {
+        ...world.shells.get(target),
+        linkedPullRequest: { url: "https://github.com/acme/app/pull/7" } as never,
+      });
+      world.assistantMessages.push({ runId: run1, text: "Fixed the flake; tests pass." });
+      world.dispatchFailures.push("transient");
+      const baseDir = yield* tempDir;
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...local,
+            projectId,
+            title: null,
+            runId: run1,
+            notifyWebhook: true,
+          });
+          yield* Queue.offer(world.waits, finished(run1));
+          yield* Queue.offer(world.waits, finished(run1));
+          yield* advanceUntil(Queue.take(world.delivered));
+          // list waits for the lock the wake and its report run under.
+          yield* service.list(launcher);
+        }),
+      );
+      // The failed first wake reported nothing; the queued retry reported once, under the
+      // event's stable id rather than the retry's.
+      expect(world.webhookReports).toHaveLength(1);
+      const [{ watch, report }] = world.webhookReports as [(typeof world.webhookReports)[number]];
+      expect(watch.notifyWebhook).toBe(true);
+      expect(report).toEqual({
+        id: world.attempts[0]?.commandId,
+        event: "run.completed",
+        runId: run1,
+        status: "completed",
+        title: "Fix the flake",
+        summary: 'Launched thread "Fix the flake" completed',
+        excerpt: "Fixed the flake; tests pass.",
+        prUrl: "https://github.com/acme/app/pull/7",
+      });
+    }),
+  );
+
+  it.effect("hands question and outage reports to the completion webhook", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          yield* Queue.take(world.waitStarted);
+          world.requests = [{ id: "question-1", status: "pending", kind: "user_input" }];
+          yield* Queue.offer(world.waits, stillRunning(run1));
+          yield* Queue.take(world.delivered);
+          yield* service.list(launcher);
+        }),
+      );
+      expect(world.webhookReports.map(({ report }) => report)).toEqual([
+        expect.objectContaining({
+          event: "question",
+          runId: run1,
+          requestId: "question-1",
+          status: "waiting",
+          excerpt: null,
+          prUrl: null,
+        }),
+      ]);
+
+      const remote = yield* makeWorld;
+      remote.hostCall = () =>
+        Effect.fail(
+          new SshRemoteDispatch.SshRemoteDispatchError({
+            reason: "host_unavailable",
+            message: "box is unavailable: connection refused",
+          }),
+        );
+      yield* withService(remote, yield* tempDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          yield* advanceUntil(Queue.take(remote.delivered));
+          yield* service.list(launcher);
+        }),
+      );
+      expect(remote.webhookReports.map(({ watch, report }) => [watch.host, report])).toEqual([
+        [
+          "box",
+          expect.objectContaining({
+            event: "host.unavailable",
+            runId: run1,
+            status: "unreachable",
+          }),
+        ],
+      ]);
+    }),
+  );
+
+  it.effect("keeps a watch's webhook choice across restarts and re-registration", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      yield* withService(world, baseDir, (service) =>
+        service.register({ ...local, projectId, title: null, runId: null, notifyWebhook: true }),
+      );
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          // goat_thread_watch passes no choice and leaves it as it was.
+          const watch = yield* watchLocal(service, null);
+          expect(watch.notifyWebhook).toBe(true);
+          const other = yield* service.register({
+            launcherThreadId: launcher,
+            host: null,
+            threadId: ThreadId.make("other"),
+            projectId,
+            title: null,
+            runId: null,
+          });
+          expect(other.notifyWebhook).toBe(false);
+        }),
+      );
     }),
   );
 

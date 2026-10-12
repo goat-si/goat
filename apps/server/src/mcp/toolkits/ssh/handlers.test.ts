@@ -39,6 +39,7 @@ type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["regis
 const launchFromThread = (
   options: {
     readonly notifyOnCompletion?: boolean;
+    readonly notifyWebhook?: boolean;
     readonly reportsSupported?: boolean;
     readonly registerError?: LaunchWatchService.LaunchWatchStoreError;
     /** An outside MCP client launches instead of a GOAT thread. */
@@ -127,6 +128,7 @@ const launchFromThread = (
               ...input,
               host: input.host ?? null,
               incarnation: "ssh-watch",
+              notifyWebhook: input.notifyWebhook ?? false,
               now: 0,
             });
           }),
@@ -146,6 +148,7 @@ const launchFromThread = (
         ...(options.notifyOnCompletion === undefined
           ? {}
           : { notifyOnCompletion: options.notifyOnCompletion }),
+        ...(options.notifyWebhook === undefined ? {} : { notifyWebhook: options.notifyWebhook }),
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     const result = responses.at(-1)?.result;
@@ -197,6 +200,7 @@ it.effect("watches the remote run for its calling thread and explains how to sto
         runId: "remote-run",
         projectId: null,
         title: "Audit",
+        notifyWebhook: false,
       },
     ]);
     expect(launched.result).toMatchObject({
@@ -205,6 +209,16 @@ it.effect("watches the remote run for its calling thread and explains how to sto
       notes: expect.arrayContaining([expect.stringContaining("goat_thread_unwatch")]),
     });
     expect(launched.deliveries).toEqual(["wake"]);
+  }),
+);
+
+it.effect("records a launch's webhook opt-in on its watch, not on the remote launch", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({ notifyWebhook: true });
+    expect(launched.registrations.map((registration) => registration.notifyWebhook)).toEqual([
+      true,
+    ]);
+    expect(launched.launchInputs[0]).not.toHaveProperty("notifyWebhook");
   }),
 );
 
@@ -340,6 +354,7 @@ const fixture = (sourceFault?: "missing" | "size") =>
                   ...input,
                   host: input.host ?? null,
                   incarnation: "attachment-watch",
+                  notifyWebhook: input.notifyWebhook ?? false,
                   now: 0,
                 }),
               ),

@@ -207,6 +207,8 @@ export class ChannelLedger extends Context.Service<
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
+    /** How many of an owner's GOAT-origin tasks wait for an answer, without reading them. */
+    readonly countWaitingGoatTasks: (ownerId: string) => Effect.Effect<number, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelStoredTask | undefined, ChannelLedgerError>;
@@ -894,6 +896,16 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => rows.map(storedTask)),
         Effect.mapError(toLedgerError("listTasksByStatus")),
+      ),
+
+    countWaitingGoatTasks: (ownerId) =>
+      sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM channel_tasks
+        WHERE status = 'waiting_input' AND owner_id = ${ownerId}
+          AND json_extract(task_json, '$.originAddress.kind') = 'goat'
+      `.pipe(
+        Effect.map((rows) => Number(rows[0]?.count ?? 0)),
+        Effect.mapError(toLedgerError("countWaitingGoatTasks")),
       ),
 
     findTaskByWorkerThread: (threadId) =>

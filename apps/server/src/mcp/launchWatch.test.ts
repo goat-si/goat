@@ -1,10 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
   finishedWake,
+  LaunchWatchDocument,
   launchWatchId,
   newLaunchWatch,
   normalizeHost,
@@ -23,8 +25,18 @@ const makeWatch = (host: string | null = "box") =>
     projectId: null,
     title: "Audit",
     incarnation: "watch-incarnation",
+    notifyWebhook: false,
     now: 0,
   });
+
+it("reads watches saved before completion webhooks with the webhook off", () => {
+  const { notifyWebhook: _added, ...saved } = makeWatch();
+  const document = Schema.decodeUnknownSync(LaunchWatchDocument)({
+    version: 1,
+    watches: [saved],
+  });
+  expect(document.watches[0]?.notifyWebhook).toBe(false);
+});
 
 it.effect("notifies once on the third failure and caps contact backoff at fifteen minutes", () =>
   Effect.sync(() => {

@@ -28,19 +28,28 @@ const env = (
 });
 
 describe("pickGoatBotEnvironment", () => {
-  it("prefers the known bot's machine, then a supporting primary, then any supporter", () => {
+  it("prefers the known bot's machine, then the primary", () => {
     const both = [env(remote), env(primary)];
     expect(
       pickGoatBotEnvironment(both, { environmentId: remote, threadId: botThread })?.environmentId,
     ).toBe(remote);
     expect(pickGoatBotEnvironment(both, null)?.environmentId).toBe(primary);
+  });
+
+  it("does not move the bot to a remote when the primary lacks it", () => {
+    const environments = [env(primary, { supportsChannelLedger: false }), env(remote)];
+    expect(pickGoatBotEnvironment(environments, null)?.environmentId).toBe(primary);
     expect(
-      pickGoatBotEnvironment([env(primary, { supportsChannelLedger: false }), env(remote)], null)
-        ?.environmentId,
-    ).toBe(remote);
-    expect(
-      pickGoatBotEnvironment([env(primary, { supportsChannelLedger: false })], null),
-    ).toBeNull();
+      resolveGoatBotAvailability({ environments, botRef: null, ensure: { state: "idle" } }),
+    ).toEqual({ kind: "unsupported" });
+  });
+
+  it("takes the first supporting machine on a client with no primary", () => {
+    const hosted = [
+      env(primary, { primary: false, supportsChannelLedger: false }),
+      env(remote, { primary: false }),
+    ];
+    expect(pickGoatBotEnvironment(hosted, null)?.environmentId).toBe(remote);
   });
 });
 
@@ -301,5 +310,80 @@ describe("cluster home availability", () => {
         ensure: { state: "confirmed", bot: remembered },
       }),
     ).toEqual({ kind: "ready", bot: remembered });
+  });
+  it("does not claim a remote while the primary cannot be home", () => {
+    const oldPrimary = homeEnv(primary, null, {
+      supportsChannelLedger: false,
+      homeTarget: {
+        environmentId: primary,
+        connected: true,
+        supportsHome: false,
+        supportsBot: false,
+        settingsLoaded: true,
+        home: null,
+      },
+    });
+    const environments = [oldPrimary, homeEnv(remote, null)];
+    expect(pickGoatBotEnvironment(environments, null)).toBeNull();
+    expect(
+      resolveGoatBotAvailability({ environments, botRef: null, ensure: { state: "idle" } }),
+    ).toEqual({ kind: "unsupported" });
+    // A remote the user chose in Settings is still followed.
+    const chosen = { environmentId: remote, claimedAt: 100, claimId: "chosen" };
+    expect(pickGoatBotEnvironment([oldPrimary, homeEnv(remote, chosen)], null)?.environmentId).toBe(
+      remote,
+    );
+  });
+  it("keeps the bot on a primary that runs it but predates home claims", () => {
+    const legacyPrimary = homeEnv(primary, null, {
+      homeTarget: {
+        environmentId: primary,
+        connected: true,
+        supportsHome: false,
+        supportsBot: true,
+        settingsLoaded: true,
+        home: null,
+      },
+    });
+    const environments = [legacyPrimary, homeEnv(remote, null)];
+    expect(pickGoatBotEnvironment(environments, null)?.environmentId).toBe(primary);
+    expect(
+      resolveGoatBotAvailability({
+        environments,
+        botRef: remembered,
+        ensure: { state: "confirmed", bot: remembered },
+      }),
+    ).toEqual({ kind: "ready", bot: remembered });
+  });
+  it("waits for a primary whose capabilities have not loaded", () => {
+    const loading = (connected: boolean) =>
+      homeEnv(primary, null, {
+        connected,
+        supportsChannelLedger: false,
+        homeTarget: {
+          environmentId: primary,
+          connected,
+          supportsHome: false,
+          supportsBot: false,
+          settingsLoaded: false,
+          home: null,
+        },
+      });
+    const legacyRemote = env(remote);
+    // Beside an old remote (legacy picker) and a remote that can be home (home branch).
+    for (const other of [legacyRemote, homeEnv(remote, null)]) {
+      for (const [connected, kind] of [
+        [false, "offline"],
+        [true, "connecting"],
+      ] as const) {
+        expect(
+          resolveGoatBotAvailability({
+            environments: [loading(connected), other],
+            botRef: null,
+            ensure: { state: "idle" },
+          }),
+        ).toEqual({ kind, environmentId: primary });
+      }
+    }
   });
 });

@@ -1468,6 +1468,76 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   );
 
   it.effect(
+    "keeps the completion webhook secret in the secret store and tells clients only that one is set",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const url = "https://agent.example/hooks/goat";
+
+        const saved = yield* serverSettings.updateSettings({
+          completionWebhook: { enabled: true, url, secret: "hook-secret" },
+        });
+        assert.deepEqual(saved.completionWebhook, {
+          enabled: true,
+          url,
+          secret: "hook-secret",
+          allLaunches: false,
+        });
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.notInclude(raw, "hook-secret");
+        assert.include(raw, url);
+
+        const forClient =
+          ServerSettingsModule.redactServerSettingsForClient(saved).completionWebhook;
+        assert.notInclude(forClient.secret, "hook-secret");
+        assert.isAbove(forClient.secret.length, 0);
+
+        // Echoing the marker back, or leaving the secret out, keeps it.
+        yield* serverSettings.updateSettings({ completionWebhook: forClient });
+        yield* serverSettings.updateSettings({ completionWebhook: { allLaunches: true } });
+        assert.deepEqual((yield* serverSettings.getSettings).completionWebhook, {
+          enabled: true,
+          url,
+          secret: "hook-secret",
+          allLaunches: true,
+        });
+
+        const cleared = yield* serverSettings.updateSettings({ completionWebhook: { secret: "" } });
+        assert.equal(cleared.completionWebhook.secret, "");
+        assert.isTrue(Option.isNone(yield* secrets.get("completion-webhook-secret")));
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("moves a hand-edited completion webhook secret into the secret store on load", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"completionWebhook":{"enabled":true,"url":"https://agent.example/hook","secret":"hand-edited-secret"}}',
+      );
+
+      const loaded = yield* serverSettings.getSettings;
+
+      assert.equal(loaded.completionWebhook.secret, "hand-edited-secret");
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        "hand-edited-secret",
+      );
+      const stored = yield* secrets.get("completion-webhook-secret");
+      assert.equal(
+        Option.isSome(stored) ? new TextDecoder().decode(stored.value) : null,
+        "hand-edited-secret",
+      );
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect(
     "keeps GitHub tokens per host in the secret store and tells clients only that one is set",
     () =>
       Effect.gen(function* () {

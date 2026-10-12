@@ -387,6 +387,26 @@ wake or prompt delivery. `goat_ssh_reports` reads the origin's bounded dispatch
 status list. Run-end notifications are controlled separately by
 `notifyOnCompletion` and the launch watch.
 
+### Completion webhook
+
+The launch watch's reports can also be posted to an agent outside GOAT. Turn on
+the `completionWebhook` server setting (`{ enabled, url, secret, allLaunches }`,
+off by default) and pass `notifyWebhook: true` to `goat_thread_launch` or
+`goat_ssh_thread_launch`; `allLaunches: true` posts for every watch instead. The
+webhook rides on the launch watch, so it needs a calling GOAT thread and
+`notifyOnCompletion` left on. The launcher's server posts, also for SSH launches.
+
+Each report is one JSON `POST` after the launcher's wake is queued, never
+instead of it: `{ id, event, threadId, runId, requestId?, host, title, status,
+summary, excerpt, prUrl?, launcherThreadId, at }`, where `event` is
+`run.completed`, `question`, or `host.unavailable`. Headers carry
+`x-goat-event`, `x-goat-delivery` (the stable `id`), and, with a secret,
+`x-goat-signature: sha256=<hex HMAC-SHA256 of the body>`. Network errors, 408,
+429, and 5xx retry with the launch watch backoff, up to six attempts; turning
+the setting off stops retries. Delivery is best effort: a report still
+retrying when the server stops is lost, and a crash right after a wake can
+repeat a report, so receivers dedupe on `x-goat-delivery`.
+
 ### `goat_thread_list`
 
 Lists durable thread shells in one project, newest first: `projectId` when

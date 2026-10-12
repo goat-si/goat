@@ -2,6 +2,7 @@ import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { splitStandingInstructions } from "@t3tools/shared/standingInstructions";
 import {
   CommandId,
   type ChatAttachment,
@@ -390,7 +391,8 @@ const make = Effect.gen(function* () {
                 instructions: settings.branchNameInstructions,
               },
               cwd,
-              message: message.text,
+              // Name the branch after the task, not the standing instructions in front of it.
+              message: splitStandingInstructions(message.text).text,
               attachments: message.attachments,
               ...(message.context ? { context: message.context } : {}),
               modelSelection,

@@ -87,6 +87,7 @@ describe("desktop local topology reads", () => {
     { httpBaseUrl: "http://127.0.0.1:4001" },
     { wsBaseUrl: "ws://127.0.0.1:4001" },
     { bootstrapToken: "bootstrap-2" },
+    { accessToken: "access-2" },
   ])("publishes bootstrap changes: %j", (change) => {
     let secondary: DesktopEnvironmentBootstrap = {
       id: "wsl:default",

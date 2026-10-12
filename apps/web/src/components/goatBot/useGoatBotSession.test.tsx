@@ -395,6 +395,7 @@ beforeEach(() => {
       };
     }),
     ingest: vi.fn(async (_env, input) => receipt(input.idempotencyKey)),
+    getBotStatus: vi.fn(async () => ({ bot: null, waitingCount: 0 })),
     listTasks: vi.fn(async () => ({ tasks: [] })),
     useCanSend: () => {
       useTick();

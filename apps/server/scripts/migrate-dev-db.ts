@@ -2,11 +2,13 @@
 
 /**
  * Rebuild an isolated dev database from a pruned snapshot of the real
- * ~/.t3 database, then run this checkout's migrations against it.
+ * ~/.goat database (or ~/.t3 when that database is absent), then run this
+ * checkout's migrations against it.
  *
  * `vp run migrate-dev-db` from a worktree:
  *   1. Nukes `<worktree>/.t3/userdata/statev2.sqlite`.
- *   2. Copies a slice of the real db (`~/.t3/userdata/statev2.sqlite`,
+ *   2. Copies a slice of the real db (`~/.goat/userdata/statev2.sqlite`, or
+ *      `~/.t3/userdata/statev2.sqlite` when the GOAT database is absent,
  *      attached read-only): the schema, and every row except those of
  *      deleted, archived, and settled threads, which are nearly all of a
  *      long-lived database. It then prunes that to the most recently updated
@@ -61,7 +63,7 @@ export class MigrateDevDbSharedHomeError extends Schema.TaggedError<MigrateDevDb
   {},
 ) {
   override get message(): string {
-    return "Refusing to rebuild the shared ~/.t3 database. Use an isolated --base-dir.";
+    return "Refusing to rebuild a shared ~/.goat or ~/.t3 database. Use an isolated --base-dir.";
   }
 }
 
@@ -150,7 +152,7 @@ export class MigrateDevDbPhaseError extends Schema.TaggedError<MigrateDevDbPhase
 export interface RunMigrateDevDbInput {
   /** Isolated .t3 directory. Defaults to `<worktree>/.t3` of the cwd. */
   readonly baseDir?: string | undefined;
-  /** Source database. Defaults to `~/.t3/userdata/statev2.sqlite`. */
+  /** Source database. Defaults to `~/.goat/userdata/statev2.sqlite`, then `~/.t3`. */
   readonly source?: string | undefined;
   readonly projects: number;
   readonly threadsPerProject: number;
@@ -159,6 +161,12 @@ export interface RunMigrateDevDbInput {
 export interface RunMigrateDevDbOptions {
   /** Overridable for tests; the directory writes must never target. */
   readonly sharedHome?: string | undefined;
+  /**
+   * Homes checked in order for `userdata/statev2.sqlite` when `source` is
+   * omitted. Defaults to `~/.goat`, then `~/.t3`. Writes to these homes are
+   * refused either way.
+   */
+  readonly sourceHomes?: ReadonlyArray<string> | undefined;
 }
 
 interface KeptProject {
@@ -286,6 +294,22 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
     SELECT m.name, c."notnull" FROM src.sqlite_master m, pragma_table_info(m.name, 'src') c
     WHERE m.type = 'table' AND c.name = 'thread_id'`;
   const threadIdNullable = new Map(threadColumns.map((row) => [row.name, row.notnull === 0]));
+  // `hidden` 2 and 3 are VIRTUAL and STORED generated columns. INSERT refuses
+  // them (`cannot INSERT into generated column`), so SELECT * cannot copy a
+  // table that has one — including an empty provider-thread roster.
+  const columnRows = yield* sql<{ table_name: string; name: string; hidden: number }>`
+    SELECT m.name AS table_name, c.name AS name, c.hidden AS hidden
+    FROM src.sqlite_master m, pragma_table_xinfo(m.name, 'src') c
+    WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'
+    ORDER BY m.name, c.cid`;
+  const writableColumns = new Map<string, Array<string>>();
+  for (const column of columnRows) {
+    if (Number(column.hidden) !== 0) continue;
+    const names = writableColumns.get(column.table_name) ?? [];
+    names.push(column.name);
+    writableColumns.set(column.table_name, names);
+  }
+  const quoteIdent = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
   const tables = schema.filter((entry) => entry.type === "table");
   const filtered = tables.some((table) => table.name === "orchestration_v2_projection_threads");
 
@@ -313,8 +337,13 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
             : nullable === undefined || name === PROVIDER_SESSIONS_TABLE
               ? ""
               : `WHERE thread_id IN (SELECT thread_id FROM copied_threads)${nullable ? " OR thread_id IS NULL" : ""}`;
-        yield* sql.unsafe(`INSERT INTO main."${name}" SELECT * FROM src."${name}" ${filter}`)
-          .unprepared;
+        const columns = writableColumns.get(name) ?? [];
+        if (columns.length === 0) continue;
+        const columnList = columns.map(quoteIdent).join(", ");
+        const quoted = quoteIdent(name);
+        yield* sql.unsafe(
+          `INSERT INTO main.${quoted} (${columnList}) SELECT ${columnList} FROM src.${quoted} ${filter}`,
+        ).unprepared;
       }
       // The source's AUTOINCREMENT high-water marks, so new events append after them.
       yield* sql`DELETE FROM main.sqlite_sequence`;
@@ -479,10 +508,24 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
-  const sourcePath = path.resolve(
-    input.source ?? path.join(sharedHome, "userdata", "statev2.sqlite"),
-  );
+  const homeDirectory = NodeOS.homedir();
+  const sourceHomes = (
+    options.sourceHomes ?? [path.join(homeDirectory, ".goat"), path.join(homeDirectory, ".t3")]
+  ).map((home) => path.resolve(home));
+  const protectedHomes = [
+    ...sourceHomes,
+    ...(options.sharedHome === undefined ? [] : [path.resolve(options.sharedHome)]),
+  ];
+  const sourceCandidates = sourceHomes.map((home) => path.join(home, "userdata", "statev2.sqlite"));
+  let sourcePath = path.resolve(input.source ?? sourceCandidates[0] ?? "");
+  if (input.source === undefined) {
+    for (const candidate of sourceCandidates) {
+      if (yield* fs.exists(candidate)) {
+        sourcePath = candidate;
+        break;
+      }
+    }
+  }
 
   const baseDir =
     input.baseDir !== undefined
@@ -498,12 +541,12 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const [canonicalBaseDir, canonicalSharedHome] = yield* Effect.all([
-    fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir)),
-    fs.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome)),
-  ]);
-  if (canonicalBaseDir === canonicalSharedHome) {
-    return yield* new MigrateDevDbSharedHomeError();
+  const canonicalBaseDir = yield* fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir));
+  for (const home of protectedHomes) {
+    const canonicalHome = yield* fs.realPath(home).pipe(Effect.orElseSucceed(() => home));
+    if (canonicalBaseDir === canonicalHome) {
+      return yield* new MigrateDevDbSharedHomeError();
+    }
   }
   // The destination db and snapshot both get deleted below; a --source that
   // resolves to either (e.g. a leftover snapshot file) would be destroyed
@@ -639,7 +682,9 @@ export const migrateDevDbCommand = Command.make(
     ),
     source: Flag.String("source").pipe(
       Flag.optional,
-      Flag.withDescription("Source database. Defaults to ~/.t3/userdata/statev2.sqlite."),
+      Flag.withDescription(
+        "Source database. Defaults to ~/.goat/userdata/statev2.sqlite, or ~/.t3/userdata/statev2.sqlite when that file is absent.",
+      ),
     ),
   },
   ({ projects, threadsPerProject, baseDir, source }) =>
@@ -666,7 +711,7 @@ export const migrateDevDbCommand = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Rebuild the worktree dev database from a pruned snapshot of the real ~/.t3 data, then run migrations.",
+    "Rebuild the worktree dev database from a pruned snapshot of the real ~/.goat data (or ~/.t3 when that database is absent), then run migrations.",
   ),
 );
 
