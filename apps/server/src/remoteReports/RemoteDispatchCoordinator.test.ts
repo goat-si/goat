@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShell,
@@ -29,6 +30,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import Migration0062 from "../persistence/Migrations/062_RemoteReports.ts";
 import Migration0063 from "../persistence/Migrations/063_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/065_RemoteDispatchQuestions.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
@@ -69,6 +71,7 @@ const fixture = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* Migration0062;
   yield* Migration0063;
+  yield* Migration0065;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -1002,6 +1005,53 @@ it.effect.each([true, false])("observes task A on %s despite a later B", (suppor
       assert.equal(yield* c.isTaskThread("box", remote), true);
       yield* c.resume("box", remote);
       assert.equal(yield* Queue.size(f.calls), 0);
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("a remote task's question wakes the parent once and stays readable until answered", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const launched = yield* taskLaunch(c);
+      yield* Queue.take(f.notifications);
+      const question = RuntimeRequestId.make("request-1");
+      const asking = (pendingRequestIds: ReadonlyArray<RuntimeRequestId>) => ({
+        ...answer([]),
+        observedRun: { runId, status: "running", summary: null, pendingRequestIds },
+      });
+      yield* Queue.offer((yield* Queue.take(f.calls)).reply, Effect.succeed(asking([question])));
+      const progress = yield* Queue.take(f.notifications);
+      assert.equal(
+        progress.commandId,
+        `remote-task-progress:${launched.correlationId}:question:request-1`,
+      );
+      const notice = yield* Queue.take(f.notifications);
+      assert.equal(notice.type, "message.dispatch");
+      if (notice.type === "message.dispatch") {
+        assert.equal(notice.threadId, origin);
+        assert.include(
+          notice.text,
+          `goat_pending_request_read {host: "box", threadId: "${remote}", requestId: "request-1"}`,
+        );
+      }
+      yield* Queue.take(f.commits);
+      assert.deepEqual((yield* c.get(launched.correlationId))?.pendingRequestIds, [question]);
+      // The next wait echoes the question, and seeing it again announces nothing.
+      const second = yield* Queue.take(f.calls);
+      assert.deepEqual(second.call.arguments.knownRun, {
+        runId,
+        status: "running",
+        pendingRequestIds: [question],
+      });
+      yield* Queue.offer(second.reply, Effect.succeed(asking([question])));
+      yield* Queue.take(f.commits);
+      assert.equal(yield* Queue.size(f.notifications), 0);
+      yield* Queue.offer((yield* Queue.take(f.calls)).reply, Effect.succeed(asking([])));
+      yield* Queue.take(f.commits);
+      assert.deepEqual((yield* c.get(launched.correlationId))?.pendingRequestIds, []);
+      assert.equal((yield* c.get(launched.correlationId))?.state, "running");
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

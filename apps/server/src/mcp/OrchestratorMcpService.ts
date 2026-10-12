@@ -1441,6 +1441,16 @@ const make = Effect.gen(function* () {
       if (task.remote !== undefined) {
         const status = isTerminalTaskStatus(task.status) ? task.status : "running";
         const terminal = isTerminalTaskStatus(status);
+        // The coordinator records the remote run's open questions before announcing them.
+        const pendingRequestIds = terminal
+          ? []
+          : ((yield* remoteDispatch
+              .get(task.remote.correlationId)
+              .pipe(
+                Effect.mapError(() =>
+                  failure("orchestration_error", "Unable to load the persisted remote dispatch."),
+                ),
+              ))?.pendingRequestIds ?? []);
         const response = {
           taskId: task.id,
           host: task.remote.host,
@@ -1459,6 +1469,7 @@ const make = Effect.gen(function* () {
           latestTerminalSummary: terminal ? task.result : null,
           latestTerminalResultContextTransferId: null,
           waitTimedOut,
+          ...(pendingRequestIds.length === 0 ? {} : { pendingRequestIds }),
         } satisfies OrchestratorMcpDelegateTaskResult;
         if (acknowledgeTerminal)
           yield* acknowledgeTaskResult(

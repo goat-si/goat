@@ -45,6 +45,7 @@ describe("V2 preview upgrade", () => {
         [62, "RemoteReports"],
         [63, "RemoteDispatches"],
         [64, "ChannelLedger"],
+        [65, "RemoteDispatchQuestions"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -132,6 +133,7 @@ describe("V2 preview upgrade", () => {
         [62, "RemoteReports"],
         [63, "RemoteDispatches"],
         [64, "ChannelLedger"],
+        [65, "RemoteDispatchQuestions"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
