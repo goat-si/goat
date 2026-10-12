@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GlobalAgentRef } from "../../globalAgentStore";
@@ -115,4 +115,23 @@ describe("sidebar activity attention", () => {
       hasSidebarActivityAttention([parent, { ...child, hasPendingUserInput: false }], null),
     ).toBe(false);
   });
+});
+
+it("excludes the bot and its delegated child attention only in the bot environment", () => {
+  const botRef = {
+    environmentId: parent.environmentId,
+    threadId: parent.id,
+    projectId: ProjectId.make("scratch"),
+  };
+  expect(
+    hasSidebarActivityAttention([{ ...parent, hasPendingApprovals: true }], null, botRef),
+  ).toBe(false);
+  expect(hasSidebarActivityAttention([parent, child], null, botRef)).toBe(false);
+  expect(
+    hasSidebarActivityAttention(
+      [{ ...parent, environmentId: EnvironmentId.make("remote"), hasPendingUserInput: true }],
+      null,
+      botRef,
+    ),
+  ).toBe(true);
 });

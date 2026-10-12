@@ -137,3 +137,34 @@ it("removes a projected client key even when the receipt is lost and never retri
   expect(queue.pendingInputs()).toEqual([]);
   expect(calls).toHaveLength(1);
 });
+
+it("does not hold later messages after failure and sends a retry at retry time", async () => {
+  const { queue, calls } = setup();
+  const key = queue.submit("first", bot);
+  queue.submit("second", bot);
+  calls[0]!.reply.reject(new Error("offline"));
+  await flush();
+  calls[1]!.reply.resolve({ requestKey: "input-2" });
+  await flush();
+  queue.retry(key);
+  expect(calls.map((call) => call.text)).toEqual(["first", "second", "first"]);
+  calls[2]!.reply.resolve({ requestKey: "input-1" });
+  await flush();
+});
+
+it("never retries a final rejected input even through the queue API", async () => {
+  const queue = createGoatBotSendQueue({
+    send: async () => ({ requestKey: "rejected", rejected: "Account is not linked" }),
+    canDispatch: () => true,
+    onChange: () => {},
+    makeKey: () => "key",
+  });
+  queue.submit("hello", bot);
+  await flush();
+  expect(queue.pendingInputs()[0]).toMatchObject({
+    state: "failed",
+    rejectionReason: "Account is not linked",
+  });
+  queue.retry("key");
+  expect(queue.pendingInputs()[0]?.state).toBe("failed");
+});

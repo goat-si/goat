@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
+import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
 import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -11,6 +12,11 @@ import { SidebarInset } from "../components/ui/sidebar";
  * and keeps sending off; it never falls back to the global agent's provider.
  */
 function GoatBotRouteView() {
+  const port = useContext(GoatBotChannelContext);
+  return <GoatBotRouteSession key={port ? "port" : "none"} />;
+}
+
+function GoatBotRouteSession() {
   const session = useGoatBotSession();
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
   const navigate = useNavigate();

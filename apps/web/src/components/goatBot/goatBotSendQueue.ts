@@ -12,6 +12,7 @@ interface Entry {
   readonly bot: GoatBotRef;
   state: EntryState;
   requestKey: string | null;
+  rejectionReason: string | null;
 }
 
 export interface GoatBotSendQueueOptions {
@@ -21,7 +22,7 @@ export interface GoatBotSendQueueOptions {
     readonly text: string;
     readonly receivedAt: string;
     readonly bot: GoatBotRef;
-  }) => Promise<{ readonly requestKey: string }>;
+  }) => Promise<{ readonly requestKey: string; readonly rejected?: string }>;
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
@@ -40,9 +41,8 @@ export interface GoatBotSendQueue {
 }
 
 /**
- * Sends GOAT Bot messages one at a time, in the order they were written, so
- * a quick second message can never land before the first. Each message keeps
- * one key for all attempts; the server treats a repeat as the same input.
+ * Sends queued messages one at a time. Failed messages do not hold later ones;
+ * a retry lands at its retry time. Each message keeps one key for all attempts.
  */
 export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBotSendQueue {
   const makeKey = options.makeKey ?? randomUUID;
@@ -60,6 +60,7 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       state:
         entry.state === "accepted" ? "accepted" : entry.state === "failed" ? "failed" : "sending",
       requestKey: entry.requestKey,
+      ...(entry.rejectionReason === null ? {} : { rejectionReason: entry.rejectionReason }),
     }));
     options.onChange();
   };
@@ -87,7 +88,8 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       }))()
       .then(
         (result) => {
-          next.state = "accepted";
+          next.state = result.rejected === undefined ? "accepted" : "failed";
+          next.rejectionReason = result.rejected ?? null;
           next.requestKey = result.requestKey;
           if (projectedKeys.has(result.requestKey) || projectedKeys.has(next.clientKey)) {
             entries = entries.filter((entry) => entry !== next);
@@ -109,7 +111,15 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
       const clientKey = makeKey();
       entries = [
         ...entries,
-        { clientKey, text, createdAt: now(), bot: { ...bot }, state: "queued", requestKey: null },
+        {
+          clientKey,
+          text,
+          createdAt: now(),
+          bot: { ...bot },
+          state: "queued",
+          requestKey: null,
+          rejectionReason: null,
+        },
       ];
       changed();
       pump();
@@ -117,7 +127,7 @@ export function createGoatBotSendQueue(options: GoatBotSendQueueOptions): GoatBo
     },
     retry: (clientKey) => {
       const entry = entries.find((candidate) => candidate.clientKey === clientKey);
-      if (entry?.state !== "failed") return;
+      if (entry?.state !== "failed" || entry.rejectionReason !== null) return;
       entry.state = "queued";
       changed();
       pump();

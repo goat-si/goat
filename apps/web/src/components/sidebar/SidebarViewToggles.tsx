@@ -27,10 +27,11 @@ export function SidebarViewToggles({ onBackdrop }: { onBackdrop: boolean }) {
   const { activityActive, toggleActivity } = useSidebarActivityToggle();
   const threads = useThreadShells(!activityActive);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const botRef = useGlobalAgentStore((state) => state.botRef);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const needsAttention = useMemo(
-    () => !activityActive && hasSidebarActivityAttention(threads, globalAgentRef),
-    [activityActive, threads, globalAgentRef],
+    () => !activityActive && hasSidebarActivityAttention(threads, globalAgentRef, botRef),
+    [activityActive, threads, globalAgentRef, botRef],
   );
   const activityLabel = activityActive
     ? "Turn off activity view"

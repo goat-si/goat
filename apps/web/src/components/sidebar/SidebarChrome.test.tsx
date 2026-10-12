@@ -2,7 +2,7 @@
 
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
@@ -11,10 +11,19 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   Link: ({ to, ...props }: ComponentProps<"a"> & { to: string }) => <a href={to} {...props} />,
 }));
 
-import { SidebarCollapsedBrand } from "./SidebarChrome";
+const botState = vi.hoisted(() => ({ count: undefined as number | undefined }));
+vi.mock("../goatBot/useGoatBotWaitingCount", () => ({
+  useGoatBotWaitingCount: () => botState.count,
+}));
+
+import { SidebarBrandWidthProbe, SidebarCollapsedBrand } from "./SidebarChrome";
 
 let root: Root | undefined;
 let container: HTMLDivElement;
+
+beforeEach(() => {
+  botState.count = undefined;
+});
 
 afterEach(async () => {
   await act(() => root?.unmount());
@@ -60,4 +69,37 @@ it("renders the no-drag global agent link while the sidebar is collapsed", async
   expect(container.querySelector("[data-collapsed-brand]")?.getAttribute("aria-hidden")).toBe(
     "false",
   );
+});
+
+it("keeps the waiting badge in both brand width probes as the count changes", async () => {
+  await renderBrand(false);
+  await act(() =>
+    root?.render(
+      <>
+        <SidebarBrandWidthProbe onWidthChange={() => {}} />
+        <SidebarCollapsedBrand visible={false} onWidthChange={() => {}} />
+      </>,
+    ),
+  );
+  expect(container.textContent?.trim()).toBe("GOATGOAT");
+  botState.count = 101;
+  await act(() =>
+    root?.render(
+      <>
+        <SidebarBrandWidthProbe onWidthChange={() => {}} />
+        <SidebarCollapsedBrand visible={false} onWidthChange={() => {}} />
+      </>,
+    ),
+  );
+  expect(container.textContent?.trim()).toBe("GOAT101GOAT101");
+  botState.count = undefined;
+  await act(() =>
+    root?.render(
+      <>
+        <SidebarBrandWidthProbe onWidthChange={() => {}} />
+        <SidebarCollapsedBrand visible={false} onWidthChange={() => {}} />
+      </>,
+    ),
+  );
+  expect(container.textContent?.trim()).toBe("GOATGOAT");
 });

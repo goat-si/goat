@@ -9,7 +9,7 @@ import { useContext, useEffect, useMemo } from "react";
 import { create } from "zustand";
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
-import { useThreadShell } from "~/state/entities";
+import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
 import {
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
@@ -36,7 +36,7 @@ interface Session {
   readonly machine: GoatBotEnsureMachine;
   readonly port: GoatBotChannelPort | null;
   readonly canOperate: boolean;
-  readonly legacyRunning: boolean;
+  readonly legacyAutoRetried: boolean;
   readonly queue: GoatBotSendQueue;
 }
 
@@ -83,7 +83,8 @@ function newQueue(environmentId: EnvironmentId) {
         receivedAt,
         intent: "message",
       });
-      if (result.state === "rejected") throw new Error("GOAT Bot did not accept this message");
+      if (result.state === "rejected")
+        return { requestKey: result.inputId, rejected: "GOAT Bot did not accept this message" };
       return { requestKey: result.inputId };
     },
   });
@@ -123,7 +124,7 @@ function useObservedEnvironments() {
         machine: syncGoatBotEnsure(previous?.machine ?? initialGoatBotEnsure, key),
         port: previous?.port ?? null,
         canOperate: false,
-        legacyRunning: previous?.legacyRunning ?? false,
+        legacyAutoRetried: false,
         queue: previous?.queue ?? newQueue(environment.environmentId),
       });
     }
@@ -164,6 +165,7 @@ const useCannotSend = (_environmentId: EnvironmentId | null) => false;
 export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
   const { enabled, environment, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
+  const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
   const session = useSessions((state) =>
     environmentId === null ? undefined : state.sessions.get(environmentId),
   );
@@ -175,8 +177,8 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     [legacyRef],
   );
   const legacyShell = useThreadShell(legacyThreadRef);
-  const legacyRunning =
-    legacyRef?.environmentId === environmentId && legacyShell?.runtime?.activeRunId != null;
+  const legacyStopped =
+    legacyRef?.environmentId === environmentId && legacyShell?.runtime?.activeRunId === null;
   // The transport supplies a hook, installed for the lifetime of the app provider.
   // oxlint-disable-next-line react/hooks -- The channel port owns its permission hook.
   const useCanSend = port?.useCanSend ?? useCannotSend;
@@ -188,27 +190,29 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     let current = useSessions.getState().sessions.get(environmentId);
     if (!current) return;
     let machine = current.machine;
+    let legacyAutoRetried = current.port === port ? current.legacyAutoRetried : false;
     if (current.port !== port) machine = retryGoatBotEnsure(machine);
-    if (machine.ensure.state === "legacy_active" && current.legacyRunning && !legacyRunning)
+    if (machine.ensure.state === "legacy_active" && legacyStopped && !legacyAutoRetried) {
       machine = retryGoatBotEnsure(machine);
+      legacyAutoRetried = true;
+    }
     if (
       machine !== current.machine ||
       current.port !== port ||
       current.canOperate !== canOperate ||
-      current.legacyRunning !== legacyRunning
+      current.legacyAutoRetried !== legacyAutoRetried
     ) {
-      current = { ...current, port, canOperate, legacyRunning, machine };
+      current = { ...current, port, canOperate, legacyAutoRetried, machine };
       update(environmentId, current);
     }
-    if (!enabled || !current.connected || !port || machine.ensure.state !== "idle") return;
+    if (!enabled || !bootstrapped || !current.connected || !port || machine.ensure.state !== "idle")
+      return;
     const request = startGoatBotEnsure(machine);
     update(environmentId, { ...current, machine: request.machine });
     const candidateThreadId =
       legacyRef?.environmentId === environmentId &&
-      legacyShell !== null &&
-      !legacyRunning &&
-      legacyShell.archivedAt === null &&
-      legacyShell.deletedAt == null
+      legacyShell?.archivedAt == null &&
+      legacyShell?.deletedAt == null
         ? legacyRef.threadId
         : undefined;
     const settle = (result: Parameters<typeof settleGoatBotEnsure>[2], bot?: ChannelBotRef) => {
@@ -238,7 +242,17 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
         );
       }
     })();
-  }, [environmentId, enabled, port, session, canOperate, legacyRunning, legacyRef, legacyShell]);
+  }, [
+    environmentId,
+    enabled,
+    bootstrapped,
+    port,
+    session,
+    canOperate,
+    legacyStopped,
+    legacyRef,
+    legacyShell,
+  ]);
 
   const availability = !enabled
     ? { kind: "unsupported" as const }
@@ -270,6 +284,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     readers: goatBotItemReaders,
   });
   return {
+    confirmedBot: availability.kind === "ready" ? availability.bot : null,
     availability,
     canOperate,
     rows,

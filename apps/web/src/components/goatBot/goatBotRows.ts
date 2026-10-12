@@ -65,11 +65,13 @@ export interface GoatBotPendingInput {
   readonly state: "sending" | "accepted" | "failed";
   /** The server's identity for the input once it has accepted it. */
   readonly requestKey: string | null;
+  /** A final rejection cannot be retried with this input's key. */
+  readonly rejectionReason?: string;
 }
 
 export type GoatBotDelivery =
   | { readonly state: "sending" }
-  | { readonly state: "failed"; readonly clientKey: string }
+  | { readonly state: "failed"; readonly clientKey: string; readonly rejectionReason?: string }
   | { readonly state: "sent" }
   | { readonly state: "read"; readonly readAt: string };
 
@@ -205,7 +207,13 @@ export function buildGoatBotTimeline(input: {
       createdAt: entry.createdAt,
       delivery:
         entry.state === "failed"
-          ? { state: "failed", clientKey: entry.clientKey }
+          ? {
+              state: "failed",
+              clientKey: entry.clientKey,
+              ...(entry.rejectionReason === undefined
+                ? {}
+                : { rejectionReason: entry.rejectionReason }),
+            }
           : entry.state === "accepted"
             ? { state: "sent" }
             : { state: "sending" },

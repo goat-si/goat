@@ -17,7 +17,7 @@ import {
   type OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { act, type ReactNode } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -32,6 +32,12 @@ const state = vi.hoisted(() => ({
   bootstrapped: true,
   bootstrapByEnvironment: {} as Record<string, boolean>,
   workerMissing: false,
+  legacyMissing: false,
+  legacyArchived: false,
+  legacyDeleted: false,
+  botMissing: false,
+  botArchived: false,
+  botDeleted: false,
   workerDeleted: false,
 }));
 vi.mock("./goatBotHooks", () => ({
@@ -40,14 +46,27 @@ vi.mock("./goatBotHooks", () => ({
 }));
 vi.mock("~/state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
-    ref === null || (ref.threadId === "worker" && state.workerMissing)
+    ref === null ||
+    (ref.threadId === "worker" && state.workerMissing) ||
+    (ref.threadId === "legacy" && state.legacyMissing) ||
+    (ref.threadId === "bot" && state.botMissing)
       ? null
       : {
           runtime: { activeRunId: state.running },
-          archivedAt: null,
+          archivedAt:
+            (ref.threadId === "legacy" && state.legacyArchived) ||
+            (ref.threadId === "bot" && state.botArchived)
+              ? at
+              : null,
           deletedAt:
-            ref.threadId === "worker" && state.workerDeleted ? "2026-10-12T12:03:00.000Z" : null,
+            (ref.threadId === "worker" && state.workerDeleted) ||
+            (ref.threadId === "legacy" && state.legacyDeleted) ||
+            (ref.threadId === "bot" && state.botDeleted)
+              ? "2026-10-12T12:03:00.000Z"
+              : null,
         },
+  resolveThreadDetailRef: (ref: unknown) => ref,
+  useThreadVisibleTurnItems: () => items,
   useEnvironmentShellsBootstrapped: (environmentId: EnvironmentId) =>
     state.bootstrapByEnvironment[environmentId] ?? state.bootstrapped,
 }));
@@ -55,6 +74,7 @@ vi.mock("~/state/environments", () => ({
   useConnectedEnvironmentIds: () =>
     state.environments.filter((entry) => entry.connected).map((entry) => entry.environmentId),
 }));
+vi.mock("~/hooks/useMediaQuery", () => ({ useIsMobile: () => false }));
 vi.mock("~/hooks/useSettings", () => ({
   usePrimarySettings: (select: (settings: { timestampFormat: "24-hour" }) => unknown) =>
     select({ timestampFormat: "24-hour" }),
@@ -64,6 +84,8 @@ vi.mock("../WorkspacePageHeader", () => ({
 }));
 // Link target assertions are paired with the real ThreadRouteView worker-branch test.
 vi.mock("@tanstack/react-router", () => ({
+  useLocation: () => "/",
+  useParams: () => ({}),
   Link: ({
     to,
     params,
@@ -90,6 +112,9 @@ import { DraftId } from "~/composerDraftStore";
 import { formatShortTimestamp } from "~/timestampFormat";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { isGoatBotThread, globalAgentLogoTarget } from "~/globalAgentRoute";
+import { SidebarProvider } from "../ui/sidebar";
+import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
+import { GoatBotThreadView } from "./GoatBotThreadView";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { goatBotEnabled, useGoatBotSession } from "./useGoatBotSession";
@@ -207,18 +232,24 @@ function Count() {
   const count = useGoatBotWaitingCount();
   return <output>{count === undefined ? "unknown" : count}</output>;
 }
-async function render(count = false) {
+async function render(count = false, sidebar = false, thread = false) {
   await act(() =>
     root.render(
       <GoatBotChannelContext.Provider value={provided}>
-        {count ? (
+        {sidebar ? (
+          <SidebarProvider>
+            <GoatBotSidebarRow />
+          </SidebarProvider>
+        ) : thread ? (
+          <GoatBotThreadView environmentId={environmentId} threadId={ThreadId.make("bot")} />
+        ) : count ? (
           <>
             <Count />
             <Count />
           </>
         ) : (
           <>
-            <Controller />
+            <Controller key={provided ? "port" : "none"} />
             {dual ? <Controller entry /> : null}
           </>
         )}
@@ -259,16 +290,27 @@ beforeEach(() => {
   state.bootstrapByEnvironment = {};
   state.workerMissing = false;
   state.workerDeleted = false;
+  state.legacyMissing = false;
+  state.legacyArchived = false;
+  state.legacyDeleted = false;
+  state.botMissing = false;
+  state.botArchived = false;
+  state.botDeleted = false;
   items = [];
   permission = true;
   dual = false;
   useGlobalAgentStore.setState({ ref: null, botRef: null });
   port = {
-    ensureBot: vi.fn(async () => ({
-      environmentId,
-      threadId: ThreadId.make("bot"),
-      projectId: ProjectId.make("project"),
-    })),
+    // Like ChannelBotRegistry: only an active candidate can cause legacy_active.
+    ensureBot: vi.fn(async (_env, input) => {
+      if (input.candidateThreadId && state.running !== null)
+        throw new ChannelGatewayError({ reason: "legacy_active" });
+      return {
+        environmentId,
+        threadId: input.candidateThreadId ?? ThreadId.make("bot"),
+        projectId: ProjectId.make("project"),
+      };
+    }),
     ingest: vi.fn(async (_env, input) => receipt(input.idempotencyKey)),
     listTasks: vi.fn(async () => ({ tasks: [] })),
     useCanSend: () => permission,
@@ -395,11 +437,8 @@ it("retries legacy_active once after activeRunId stops, then adopts only the sam
   });
   state.running = RunId.make("run");
   dual = true;
-  vi.mocked(port.ensureBot).mockRejectedValueOnce(
-    new ChannelGatewayError({ reason: "legacy_active" }),
-  );
   await render();
-  expect(port.ensureBot).toHaveBeenCalledWith(environmentId, {});
+  expect(port.ensureBot).toHaveBeenCalledWith(environmentId, { candidateThreadId: "legacy" });
   expect(container.textContent).toContain("becomes GOAT Bot when it finishes");
   expect(container.querySelector('a[href$="/legacy"]')?.textContent).toBe("Open global agent");
   expect(textarea().disabled).toBe(true);
@@ -609,6 +648,10 @@ it("counts 101 GOAT waiting tasks across pages, dedupes, shares observers and pr
   expect(container.querySelector("output")?.textContent).toBe("101");
   setConnection(false);
   await render(true);
+  expect(container.querySelector("output")?.textContent).toBe("unknown");
+  const callsBeforeFocus = vi.mocked(port.listTasks).mock.calls.length;
+  await act(() => window.dispatchEvent(new Event("focus")));
+  expect(port.listTasks).toHaveBeenCalledTimes(callsBeforeFocus);
   setConnection(true);
   await render(true);
   expect(port.listTasks).toHaveBeenCalledTimes(5);
@@ -687,4 +730,166 @@ it("refreshes after chip updates even when a previous task-page request is pendi
   await act(() => first.resolve({ tasks: [] }));
   expect(port.listTasks).toHaveBeenCalledTimes(2);
   expect(container.querySelector("output")?.textContent).toBe("1");
+});
+
+function legacyRef() {
+  return { environmentId, threadId: ThreadId.make("legacy"), draftId: DraftId.make("draft") };
+}
+
+it("waits for shell bootstrap then sends the stopped legacy candidate for adoption", async () => {
+  useGlobalAgentStore.setState({ ref: legacyRef() });
+  state.bootstrapped = false;
+  state.legacyMissing = true;
+  await render();
+  expect(port.ensureBot).not.toHaveBeenCalled();
+  state.bootstrapped = true;
+  state.legacyMissing = false;
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledExactlyOnceWith(environmentId, {
+    candidateThreadId: "legacy",
+  });
+  expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("legacy");
+});
+
+it("sends an unknown legacy candidate after bootstrap and lets the server inspect it", async () => {
+  useGlobalAgentStore.setState({ ref: legacyRef() });
+  state.legacyMissing = true;
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledWith(environmentId, { candidateThreadId: "legacy" });
+});
+
+it.each(["archived", "deleted"])("does not send a known %s legacy candidate", async (kind) => {
+  useGlobalAgentStore.setState({ ref: legacyRef() });
+  state.legacyArchived = kind === "archived";
+  state.legacyDeleted = kind === "deleted";
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledExactlyOnceWith(environmentId, {});
+});
+
+it("retries legacy_active once when the stopped shell arrives after the server response", async () => {
+  useGlobalAgentStore.setState({ ref: legacyRef() });
+  state.legacyMissing = true;
+  state.running = RunId.make("server-active");
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  state.running = null;
+  state.legacyMissing = false;
+  await render();
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("legacy");
+});
+
+it("bounds automatic legacy retries when the server stays active despite a stopped client shell", async () => {
+  useGlobalAgentStore.setState({ ref: legacyRef() });
+  vi.mocked(port.ensureBot).mockImplementation(async (_env, input) => {
+    if (input.candidateThreadId) throw new ChannelGatewayError({ reason: "legacy_active" });
+    return { environmentId, threadId: ThreadId.make("bot"), projectId: ProjectId.make("project") };
+  });
+  await render();
+  await render();
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  expect(textarea().disabled).toBe(true);
+});
+
+it("learns botRef from the sidebar without visiting the bot route and shares ensure with the thread", async () => {
+  await render(false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
+  await render(false, false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  expect(textarea().disabled).toBe(false);
+});
+
+it("adds no sidebar group or menu with a null port, then renders the enabled row when installed", async () => {
+  provided = null;
+  await render(false, true);
+  expect(container.querySelector("[data-sidebar=group], [data-sidebar=menu]")).toBeNull();
+  expect(port.ensureBot).not.toHaveBeenCalled();
+  provided = port;
+  await render(false, true);
+  expect(container.querySelectorAll("[data-sidebar=group]")).toHaveLength(1);
+  expect(container.querySelectorAll("[data-sidebar=menu]")).toHaveLength(1);
+  expect(container.querySelector('a[href="/bot"]')).not.toBeNull();
+});
+
+it("remounts the sidebar permission hook when the port is installed and removed", async () => {
+  provided = null;
+  await render(false, true);
+  port = {
+    ...port,
+    useCanSend: () => {
+      const [allowed] = useState(true);
+      return allowed;
+    },
+  };
+  provided = port;
+  await render(false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  provided = null;
+  await render(false, true);
+  expect(container.querySelector("[data-sidebar=menu]")).toBeNull();
+});
+
+it("treats a rejected ingest as a final failed message with a reason and no retry", async () => {
+  vi.mocked(port.ingest).mockResolvedValue({ ...receipt("rejected-input"), state: "rejected" });
+  await render();
+  await send("cannot accept");
+  expect(container.textContent).toContain("GOAT Bot did not accept this message");
+  expect(
+    [...container.querySelectorAll("button")].some((button) => button.textContent === "Retry"),
+  ).toBe(false);
+  expect(port.ingest).toHaveBeenCalledTimes(1);
+});
+
+it.each(["archived", "deleted"])(
+  "does not offer a looping link for the confirmed %s bot",
+  async (kind) => {
+    state.botArchived = kind === "archived";
+    state.botDeleted = kind === "deleted";
+    await render(false, false, true);
+    expect(container.textContent).toContain("This chat was archived or deleted");
+    expect(container.querySelector('a[href="/bot"]')).toBeNull();
+    expect(textarea().disabled).toBe(true);
+  },
+);
+
+it("offers the bot link only when the confirmed bot differs from the removed chat", async () => {
+  state.botDeleted = true;
+  vi.mocked(port.ensureBot).mockResolvedValue({
+    environmentId,
+    threadId: ThreadId.make("replacement"),
+    projectId: ProjectId.make("project"),
+  });
+  await render(false, false, true);
+  expect(container.querySelector('a[href="/bot"]')?.textContent).toBe("Open GOAT Bot");
+});
+
+it("keeps a just-confirmed bot awaiting its shell rather than showing removed", async () => {
+  state.botMissing = true;
+  await render(false, false, true);
+  expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
+  expect(container.textContent).not.toContain("This chat is no longer available");
+  expect(textarea().disabled).toBe(false);
+  setConnection(false);
+  await render(false, false, true);
+  expect(container.textContent).toContain("This chat is no longer available");
+});
+
+it("remounts the thread permission hook when the port is installed and removed", async () => {
+  provided = null;
+  await render(false, false, true);
+  port = {
+    ...port,
+    useCanSend: () => {
+      const [allowed] = useState(true);
+      return allowed;
+    },
+  };
+  provided = port;
+  await render(false, false, true);
+  expect(textarea().disabled).toBe(false);
+  provided = null;
+  await render(false, false, true);
+  expect(textarea().disabled).toBe(true);
 });

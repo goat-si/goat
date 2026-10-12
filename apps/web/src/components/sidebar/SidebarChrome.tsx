@@ -111,7 +111,7 @@ export function SidebarBrandWidthProbe({
       ref={observeWidth}
     >
       <div className="ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] flex px-1.5">
-        <SidebarBrandMark onBackdrop={false} />
+        <SidebarBrandContents onBackdrop={false} />
       </div>
       <span className="flex items-center gap-1">
         <span className="size-8 sm:size-7" />
@@ -129,7 +129,6 @@ function SidebarBrand({
   placement?: "header" | "collapsed";
 }) {
   const { enabled } = useGoatBotEnabled();
-  const waitingCount = useGoatBotWaitingCount();
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const logo = globalAgentLogoTarget(enabled);
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
@@ -158,10 +157,7 @@ function SidebarBrand({
       )}
       to={logo.to}
     >
-      <SidebarBrandMark onBackdrop={onBackdrop} />
-      {enabled && waitingCount !== undefined && waitingCount > 0 ? (
-        <span className="ml-1 text-xs">{waitingCount}</span>
-      ) : null}
+      <SidebarBrandContents onBackdrop={onBackdrop} />
     </Link>
   );
 }
@@ -198,10 +194,23 @@ export function SidebarCollapsedBrand({
       ) : (
         // Keep the measured width without adding a focus target or a no-drag region.
         <span className="flex h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5">
-          <SidebarBrandMark onBackdrop={false} />
+          <SidebarBrandContents onBackdrop={false} />
         </span>
       )}
     </div>
+  );
+}
+
+/** The visible brand and both width probes measure the same waiting badge. */
+function SidebarBrandContents({ onBackdrop }: { onBackdrop: boolean }) {
+  const waitingCount = useGoatBotWaitingCount();
+  return (
+    <>
+      <SidebarBrandMark onBackdrop={onBackdrop} />
+      {waitingCount !== undefined && waitingCount > 0 ? (
+        <span className="ml-1 text-xs">{waitingCount}</span>
+      ) : null}
+    </>
   );
 }
 

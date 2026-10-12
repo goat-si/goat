@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useEffect, useMemo } from "react";
+import { useContext, useEffect, useMemo } from "react";
 
 import {
   resolveThreadDetailRef,
@@ -10,6 +10,7 @@ import {
 } from "~/state/entities";
 
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
@@ -22,6 +23,23 @@ const NO_PENDING = [] as const;
  * off until the server confirms the bot on this connection.
  */
 export function GoatBotThreadView({
+  environmentId,
+  threadId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const port = useContext(GoatBotChannelContext);
+  return (
+    <GoatBotThreadSession
+      key={port ? "port" : "none"}
+      environmentId={environmentId}
+      threadId={threadId}
+    />
+  );
+}
+
+function GoatBotThreadSession({
   environmentId,
   threadId,
 }: {
@@ -49,13 +67,20 @@ export function GoatBotThreadView({
     refreshGoatBotWaitingCount(environmentId, chipRevision);
   }, [environmentId, chipRevision]);
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
+  const confirmedHere =
+    session.confirmedBot?.environmentId === environmentId &&
+    session.confirmedBot.threadId === threadId;
   const removed =
-    bootstrapped && (shell === null || shell.archivedAt !== null || shell.deletedAt != null);
+    shell !== null
+      ? shell.archivedAt !== null || shell.deletedAt != null
+      : bootstrapped && !confirmedHere;
+  const canOpenCurrentBot = session.confirmedBot !== null && !confirmedHere;
   return (
     <GoatBotChatView
       {...session}
       rows={removed ? NO_PENDING : session.rows}
       removed={removed}
+      canOpenCurrentBot={canOpenCurrentBot}
       legacyAgentRoute={legacyAgentRoute}
     />
   );

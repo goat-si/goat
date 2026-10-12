@@ -99,9 +99,17 @@ export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
 }
 
+const environmentShellsBootstrappedAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  environmentId === null
+    ? Atom.make(false)
+    : Atom.map(environmentShell.stateValueAtom(environmentId), (state) =>
+        Option.isSome(state.snapshot),
+      ),
+);
+
 /** A different machine's pending bootstrap cannot decide whether this thread is missing. */
-export function useEnvironmentShellsBootstrapped(environmentId: EnvironmentId): boolean {
-  return Option.isSome(useAtomValue(environmentShell.stateValueAtom(environmentId)).snapshot);
+export function useEnvironmentShellsBootstrapped(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(environmentShellsBootstrappedAtom(environmentId));
 }
 
 export function useAllEnvironmentProjectSnapshotsReady(): boolean {

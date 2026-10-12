@@ -28,6 +28,8 @@ export interface GoatBotChatViewProps {
   readonly legacyAgentRoute: GlobalAgentLegacyRoute | null;
   /** The bot thread was archived or deleted, here or on another device. */
   readonly removed?: boolean | undefined;
+  /** Only offer navigation when this connection confirmed a different bot chat. */
+  readonly canOpenCurrentBot?: boolean | undefined;
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
@@ -40,6 +42,7 @@ export function GoatBotChatView({
   onRetryAvailability,
   legacyAgentRoute,
   removed = false,
+  canOpenCurrentBot = false,
 }: GoatBotChatViewProps) {
   const ready = availability.kind === "ready" && !removed;
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
@@ -82,7 +85,7 @@ export function GoatBotChatView({
         // History stays readable while the bot is unavailable; only sending stops.
         <GoatBotTimeline rows={rows} onRetry={onRetryInput} />
       ) : removed ? (
-        <GoatBotRemovedNotice />
+        <GoatBotRemovedNotice canOpenCurrentBot={canOpenCurrentBot} />
       ) : (
         <GoatBotNotice
           availability={availability}
@@ -104,23 +107,27 @@ export function GoatBotChatView({
   );
 }
 
-function GoatBotRemovedNotice() {
+function GoatBotRemovedNotice({ canOpenCurrentBot }: { canOpenCurrentBot: boolean }) {
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
         <GoatBotAvatar size="lg" className="mx-auto mb-4" />
         <EmptyTitle>This chat is no longer available</EmptyTitle>
         <EmptyDescription>
-          It was archived or deleted. GOAT Bot keeps going in its current chat.
+          {canOpenCurrentBot
+            ? "It was archived or deleted. GOAT Bot keeps going in its current chat."
+            : "This chat was archived or deleted."}
         </EmptyDescription>
       </EmptyHeader>
-      <EmptyContent>
-        <div className="flex justify-center">
-          <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
-            Open GOAT Bot
-          </Button>
-        </div>
-      </EmptyContent>
+      {canOpenCurrentBot ? (
+        <EmptyContent>
+          <div className="flex justify-center">
+            <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
+              Open GOAT Bot
+            </Button>
+          </div>
+        </EmptyContent>
+      ) : null}
     </Empty>
   );
 }

@@ -133,10 +133,12 @@ function DeliveryMark({
     case "failed":
       return (
         <span className="flex shrink-0 items-center gap-1 pb-0.5 text-xs text-destructive-foreground">
-          Not sent
-          <Button size="xs" variant="ghost" onClick={() => onRetry(delivery.clientKey)}>
-            Retry
-          </Button>
+          {delivery.rejectionReason ?? "Not sent"}
+          {delivery.rejectionReason === undefined ? (
+            <Button size="xs" variant="ghost" onClick={() => onRetry(delivery.clientKey)}>
+              Retry
+            </Button>
+          ) : null}
         </span>
       );
     case "read":

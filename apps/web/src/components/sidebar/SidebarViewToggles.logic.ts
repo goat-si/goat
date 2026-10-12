@@ -1,5 +1,6 @@
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ChannelBotRef } from "@t3tools/contracts";
 
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
 import type { GlobalAgentRef } from "../../globalAgentStore";
@@ -13,11 +14,13 @@ import {
 export function hasSidebarActivityAttention(
   threads: readonly EnvironmentThreadShell[],
   globalAgentRef: GlobalAgentRef | null,
+  botRef: ChannelBotRef | null = null,
 ): boolean {
   const childAttention = buildSidebarSubagentIndex(threads).attentionByOwnerKey;
   return excludeGlobalAgentThreads(
     filterSidebarV2VisibleThreads(threads, null),
     globalAgentRef,
+    botRef,
   ).some((thread) => {
     if (thread.deletedAt !== null) return false;
     const status = resolveSidebarThreadStatus(thread);

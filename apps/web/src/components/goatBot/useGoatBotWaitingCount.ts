@@ -110,7 +110,7 @@ export function useGoatBotWaitingCount() {
       }
     };
   }, [enabled, connected, environmentId, port, generation]);
-  return enabled ? count : undefined;
+  return enabled && connected ? count : undefined;
 }
 
 /** Chip updates while the bot screen is open also refresh the sidebar's shared count. */
