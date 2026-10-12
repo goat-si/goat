@@ -174,10 +174,14 @@ export const make = Effect.gen(function* () {
 export const layer = (options: DesktopSshEnvironmentLayerOptions = {}) =>
   Layer.effect(DesktopSshEnvironment, make).pipe(
     Layer.provide(
-      SshTunnel.SshEnvironmentManager.layer(
-        options.resolveCliRunner === undefined
+      // The remote server is shared with other clients (agent dispatch, other
+      // desktops) and owns their running threads, so closing this app's tunnel
+      // never stops it.
+      SshTunnel.SshEnvironmentManager.layer({
+        leaveRemoteServerRunning: true,
+        ...(options.resolveCliRunner === undefined
           ? {}
-          : { resolveCliRunner: options.resolveCliRunner },
-      ),
+          : { resolveCliRunner: options.resolveCliRunner }),
+      }),
     ),
   );

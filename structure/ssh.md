@@ -44,8 +44,10 @@ Remembered launch files whose PID has exited are stale and do not block attachin
 (`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
 authority either, because the launch script requires its PID file to name the live PID.
 
-The stop script and the replacement path signal a server only after its `/.well-known/t3/activity`
-answers `idle` for that PID. `busy` or no answer leaves it running. A startup refresh replaces a
+Desktop and agent dispatch both leave the server running when they disconnect
+(`leaveRemoteServerRunning`). The stop script and the replacement path signal a server only after
+its `/.well-known/t3/activity` answers `idle` for that PID. `busy` or no answer leaves it
+running. A startup refresh replaces a
 compatible runtime only when it is older on the same release train: `0.1.0-dev.*` and
 `0.1.0-nightly.*` have no meaningful SemVer order, so the client attaches instead
 (`releasesOrderable` in `packages/ssh/src/tunnel.ts`).
