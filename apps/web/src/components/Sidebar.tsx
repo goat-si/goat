@@ -85,6 +85,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -157,7 +158,6 @@ import {
   readEnvironmentSupportsVisitedTracking,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
-  useThreadShell,
   useThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
@@ -168,7 +168,7 @@ import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomCommand } from "../state/use-atom-command";
 import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
-import { useSidebarSubagentIndex } from "./sidebar/subagentIndex";
+import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import { usePromoteThread } from "./promoteThread";
 import {
   readEnvironmentScope,
@@ -201,7 +201,7 @@ import {
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
   type SidebarChildAttention,
-  withSidebarChildAttention,
+  withSidebarChildRequest,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
   buildBulkTitleRegenerationContextMenuItem,
@@ -1242,10 +1242,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = withSidebarChildAttention(
-    resolveSidebarThreadStatus(thread),
-    props.childAttention,
-  );
+  const status = resolveSidebarThreadStatus(withSidebarChildRequest(thread, props.childAttention));
   // Wake attention is independent of lifecycle and clears at its visited
   // watermark. A malformed visit cannot silently acknowledge a wake.
   const isWoke = isSidebarThreadWoke(props.wokeAt, lastVisitedAt);
@@ -2474,9 +2471,9 @@ export default function Sidebar() {
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   // An open subagent shows beneath its owner row, so the owner stands in for it
   // wherever the open thread's row is kept visible.
-  const openSubagentOwnerKey =
-    routeThreadKey === null ? undefined : subagentIndex.ownerKeyByChildKey.get(routeThreadKey);
-  const openSubagent = useThreadShell(openSubagentOwnerKey === undefined ? null : routeThreadRef);
+  const openSubagentEntry = useSidebarOpenSubagent(routeThreadKey);
+  const openSubagentOwnerKey = openSubagentEntry?.ownerKey;
+  const openSubagent = openSubagentEntry?.thread ?? null;
   const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
   const routeTargetRef = useRef(routeTarget);
   routeTargetRef.current = routeTarget;
@@ -3931,14 +3928,15 @@ export default function Sidebar() {
         settledOrder: draggedSettledOrder,
         settledExpanded: settledShelfExpanded,
         settledVisibleCount,
-        routeThreadKey,
+        // An open subagent's owner row stands in for it in a collapsed shelf.
+        routeThreadKey: routeRowKey,
         snoozedThreadCount: snoozedThreads.length,
       }),
     [
       draggedSettledOrder,
       isContextDrag,
       nestedKeys,
-      routeThreadKey,
+      routeRowKey,
       settledShelfExpanded,
       settledVisibleCount,
       sidebarListItems,
@@ -5284,7 +5282,7 @@ export default function Sidebar() {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
-                    return (
+                    const row = (
                       <SidebarSearchResultRow
                         key={threadKey}
                         thread={thread}
@@ -5320,6 +5318,22 @@ export default function Sidebar() {
                         onSelect={() => selectThreadSearchResult(thread)}
                         onFileDropThreads={handleThreadFileDrop}
                       />
+                    );
+                    return openSubagentEntry?.ownerKey === threadKey ? (
+                      <Fragment key={threadKey}>
+                        {row}
+                        <li>
+                          <SidebarOpenSubagent
+                            thread={openSubagentEntry.thread}
+                            onOpen={navigateToThread}
+                            onStop={onStopDelegatedChild}
+                            onContextMenu={onDelegatedChildContextMenu}
+                            isStopping={stoppingDelegatedChildKey === routeThreadKey}
+                          />
+                        </li>
+                      </Fragment>
+                    ) : (
+                      row
                     );
                   })}
                 </ul>

@@ -205,13 +205,18 @@ import {
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
+  type SidebarChildAttention,
+  withSidebarChildRequest,
 } from "./Sidebar.logic";
 import {
   isProjectsViewPinnedThread,
+  isProjectsViewListedThread,
   resolveProjectsViewThreadOrder,
   createProjectsViewEnvironmentAtoms,
   resolveProjectsViewProjectConnectionStatus,
 } from "./LegacySidebar.logic";
+import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
+import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -336,6 +341,8 @@ function buildThreadJumpLabelMap(input: {
 
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
+  // A pending approval or question from one of this thread's subagents.
+  childAttention: SidebarChildAttention | undefined;
   displayedThreadKeys: readonly string[];
   isActive: boolean;
   openPullRequestsInRightPanel: boolean;
@@ -416,6 +423,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     openPrLink,
     onFileDropThreads,
     thread,
+    childAttention,
   } = props;
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(thread.environmentId, AuthPreviewOperateScope);
@@ -501,7 +509,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const isThreadRunning = !threadRuntimeCanArchive(thread.runtime);
   const threadStatus = resolveThreadStatusPill({
     thread: {
-      ...thread,
+      ...withSidebarChildRequest(thread, childAttention),
       lastVisitedAt,
     },
   });
@@ -1001,6 +1009,8 @@ interface SidebarProjectThreadListProps {
   shouldShowThreadPanel: boolean;
   isThreadListExpanded: boolean;
   activeRouteThreadKey: string | null;
+  openSubagent: ReturnType<typeof useSidebarOpenSubagent>;
+  childAttentionByKey: ReadonlyMap<string, SidebarChildAttention>;
   openPullRequestsInRightPanel: boolean;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   appSettingsConfirmThreadArchive: boolean;
@@ -1057,6 +1067,8 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     shouldShowThreadPanel,
     isThreadListExpanded,
     activeRouteThreadKey,
+    openSubagent,
+    childAttentionByKey,
     openPullRequestsInRightPanel,
     threadJumpLabelByKey,
     appSettingsConfirmThreadArchive,
@@ -1104,10 +1116,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       {shouldShowThreadPanel &&
         renderedThreads.map((thread) => {
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          return (
+          const row = (
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
+              childAttention={childAttentionByKey.get(threadKey)}
               displayedThreadKeys={displayedThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
               openPullRequestsInRightPanel={openPullRequestsInRightPanel}
@@ -1133,6 +1146,16 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               attemptArchiveThread={attemptArchiveThread}
               openPrLink={openPrLink}
             />
+          );
+          return openSubagent?.ownerKey === threadKey ? (
+            <React.Fragment key={threadKey}>
+              {row}
+              <SidebarMenuSubItem className="w-full">
+                <SidebarOpenSubagent thread={openSubagent.thread} onOpen={navigateToThread} />
+              </SidebarMenuSubItem>
+            </React.Fragment>
+          ) : (
+            row
           );
         })}
 
@@ -1225,6 +1248,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     isManualProjectSorting,
     dragHandleProps,
   } = props;
+  const childAttentionByKey = useSidebarSubagentIndex().attentionByOwnerKey;
+  // An open subagent has no row; its owner row stands in wherever the open row is kept.
+  const openSubagent = useSidebarOpenSubagent(activeRouteThreadKey);
+  const routeRowKey = openSubagent?.ownerKey ?? activeRouteThreadKey;
   const environmentMachine = project.allRemoteMembersAreWsl
     ? "linux"
     : project.allRemoteMembersAreDesktopLocal
@@ -1390,12 +1417,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       ]),
     );
     const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
-      const lastVisitedAt = lastVisitedAtByThreadKey.get(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const lastVisitedAt = lastVisitedAtByThreadKey.get(threadKey);
       return resolveThreadStatusPill({
         thread: {
-          ...thread,
+          ...withSidebarChildRequest(thread, childAttentionByKey.get(threadKey)),
           ...(lastVisitedAt !== null && lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
         },
       });
@@ -1404,9 +1430,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       pinnedThreads ??
       sortThreads(
         excludeGlobalAgentThreads(
-          projectThreads.filter(
-            (thread) => thread.archivedAt === null && !isProjectsViewPinnedThread(thread),
-          ),
+          projectThreads.filter(isProjectsViewListedThread),
           globalAgentRef,
         ),
         threadSortOrder,
@@ -1418,9 +1442,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       projectStatus,
       visibleProjectThreads,
     };
-  }, [globalAgentRef, pinnedThreads, projectThreads, threadLastVisitedAts, threadSortOrder]);
+  }, [
+    childAttentionByKey,
+    globalAgentRef,
+    pinnedThreads,
+    projectThreads,
+    threadLastVisitedAts,
+    threadSortOrder,
+  ]);
   const pinnedCollapsedThread = useMemo(() => {
-    const activeThreadKey = activeRouteThreadKey ?? undefined;
+    const activeThreadKey = routeRowKey ?? undefined;
     if (!activeThreadKey || projectExpanded) {
       return null;
     }
@@ -1430,7 +1461,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === activeThreadKey,
       ) ?? null
     );
-  }, [activeRouteThreadKey, projectExpanded, visibleProjectThreads]);
+  }, [routeRowKey, projectExpanded, visibleProjectThreads]);
 
   const {
     hasOverflowingThreads,
@@ -1446,12 +1477,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       ]),
     );
     const resolveProjectThreadStatus = (thread: SidebarThreadSummary) => {
-      const lastVisitedAt = lastVisitedAtByThreadKey.get(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const lastVisitedAt = lastVisitedAtByThreadKey.get(threadKey);
       return resolveThreadStatusPill({
         thread: {
-          ...thread,
+          ...withSidebarChildRequest(thread, childAttentionByKey.get(threadKey)),
           ...(lastVisitedAt !== null && lastVisitedAt !== undefined ? { lastVisitedAt } : {}),
         },
       });
@@ -1486,6 +1516,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       shouldShowThreadPanel: projectExpanded || pinnedCollapsedThread !== null,
     };
   }, [
+    childAttentionByKey,
     isThreadListExpanded,
     pinnedThreads,
     pinnedCollapsedThread,
@@ -2657,6 +2688,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         shouldShowThreadPanel={shouldShowThreadPanel}
         isThreadListExpanded={isThreadListExpanded}
         activeRouteThreadKey={activeRouteThreadKey}
+        openSubagent={openSubagent}
+        childAttentionByKey={childAttentionByKey}
         openPullRequestsInRightPanel={openPullRequestsInRightPanel}
         threadJumpLabelByKey={threadJumpLabelByKey}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
@@ -3403,6 +3436,7 @@ export default function LegacySidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const routeRowKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? routeThreadKey;
   const routeTerminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -3653,7 +3687,11 @@ export default function LegacySidebar() {
   }, []);
 
   const visibleThreads = useMemo(
-    () => sidebarThreads.filter((thread) => thread.archivedAt === null),
+    () =>
+      sidebarThreads.filter(
+        (thread) =>
+          thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
+      ),
     [sidebarThreads],
   );
   const sortedProjects = useMemo(() => {
@@ -3760,16 +3798,14 @@ export default function LegacySidebar() {
         ),
         sortedProjects.flatMap((project) => {
           const projectThreads = sortThreads(
-            (threadsByProjectKey.get(project.projectKey) ?? []).filter(
-              (thread) => thread.archivedAt === null && !isProjectsViewPinnedThread(thread),
-            ),
+            (threadsByProjectKey.get(project.projectKey) ?? []).filter(isProjectsViewListedThread),
             sidebarThreadSortOrder,
           );
           const projectExpanded = resolveProjectExpanded(
             projectExpandedById,
             projectExpansionPreferenceKeys(project),
           );
-          const activeThreadKey = routeThreadKey ?? undefined;
+          const activeThreadKey = routeRowKey ?? undefined;
           const pinnedCollapsedThread =
             !projectExpanded && activeThreadKey
               ? (projectThreads.find(
@@ -3800,7 +3836,7 @@ export default function LegacySidebar() {
       sidebarThreadPreviewCount,
       expandedThreadListsByProject,
       projectExpandedById,
-      routeThreadKey,
+      routeRowKey,
       sortedProjects,
       threadsByProjectKey,
     ],

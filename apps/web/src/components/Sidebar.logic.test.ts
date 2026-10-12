@@ -17,7 +17,7 @@ import {
   canStopSidebarDelegatedChild,
   isSidebarDelegatedChildThread,
   isSidebarSubagentChildThread,
-  withSidebarChildAttention,
+  withSidebarChildRequest,
   sidebarDelegatedChildState,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
@@ -279,7 +279,10 @@ describe("sidebar delegated children", () => {
 });
 
 describe("sidebar subagent index", () => {
-  const parent = makeThreadFixture({ id: ThreadId.make("parent") });
+  const parent = makeThreadFixture({
+    id: ThreadId.make("parent"),
+    environmentId: localEnvironmentId,
+  });
   const input = (id: string, kind: "user_input" | "command") => ({
     pendingRuntimeRequest: {
       id: RuntimeRequestId.make(id),
@@ -368,12 +371,42 @@ describe("sidebar subagent index", () => {
   });
 
   it("shows the strongest request on the owner without hiding its own", () => {
-    expect(withSidebarChildAttention("working", "input")).toBe("input");
-    expect(withSidebarChildAttention("ready", "approval")).toBe("approval");
-    expect(withSidebarChildAttention("input", "approval")).toBe("approval");
-    expect(withSidebarChildAttention("input", "input")).toBe("input");
-    expect(withSidebarChildAttention("approval", "input")).toBe("approval");
-    expect(withSidebarChildAttention("working", undefined)).toBe("working");
+    const owner = (overrides: Partial<OrchestrationV2ThreadShell> = {}) =>
+      delegatedChild("owner", { creationSource: "web", status: "running", ...overrides });
+    const status = (thread: ReturnType<typeof owner>, attention?: "approval" | "input") =>
+      resolveSidebarThreadStatus(withSidebarChildRequest(thread, attention));
+    expect(status(owner())).toBe("working");
+    expect(status(owner(), "input")).toBe("input");
+    expect(status(owner({ status: "completed" }), "approval")).toBe("approval");
+    const asking = owner(input("own-question", "user_input"));
+    expect(status(asking, "approval")).toBe("approval");
+    expect(status(asking, "input")).toBe("input");
+    expect(status(owner(input("own-approval", "command")), "input")).toBe("approval");
+  });
+
+  it("finds the owner row past archived or unloaded subagents in between", () => {
+    const middle = delegatedChild("middle", {
+      archivedAt: DateTime.makeUnsafe("2026-10-12T03:00:00Z"),
+    });
+    const grandchild = delegatedChild("grandchild", {
+      lineage: {
+        rootThreadId: ThreadId.make("parent"),
+        parentThreadId: middle.id,
+        relationshipToParent: "subagent",
+      },
+      ...input("grandchild-approval", "command"),
+    });
+    for (const threads of [
+      [parent, middle, grandchild],
+      [parent, grandchild],
+    ]) {
+      const index = buildSidebarSubagentIndex(threads);
+      expect(index.ownerKeyByChildKey.get(delegatedChildKey(grandchild))).toBe(delegatedParentKey);
+      expect(index.ownerKeyByChildKey.has(delegatedChildKey(middle))).toBe(false);
+      expect(index.attentionByOwnerKey.get(delegatedParentKey)).toBe("approval");
+    }
+    // Without a loaded owner there is no row to show it under.
+    expect(buildSidebarSubagentIndex([grandchild]).ownerKeyByChildKey.size).toBe(0);
   });
 
   it("keeps map identity while owners and requests are unchanged", () => {

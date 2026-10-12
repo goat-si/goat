@@ -12,9 +12,12 @@ import { Button } from "../ui/button";
 interface SidebarOpenSubagentProps {
   readonly thread: EnvironmentThreadShell;
   readonly onOpen: (threadRef: ScopedThreadRef) => void;
-  readonly onStop: (threadRef: ScopedThreadRef) => void;
-  readonly onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
-  readonly isStopping: boolean;
+  // Views without delegated-task controls omit these; Lineage still offers Stop.
+  readonly onStop?: ((threadRef: ScopedThreadRef) => void) | undefined;
+  readonly onContextMenu?:
+    | ((threadRef: ScopedThreadRef, position: { x: number; y: number }) => void)
+    | undefined;
+  readonly isStopping?: boolean | undefined;
 }
 
 /**
@@ -43,11 +46,12 @@ export const SidebarOpenSubagent = memo(function SidebarOpenSubagent(
     [onOpen, thread.environmentId, thread.id],
   );
   const stop = useCallback(
-    () => onStop(scopeThreadRef(thread.environmentId, thread.id)),
+    () => onStop?.(scopeThreadRef(thread.environmentId, thread.id)),
     [onStop, thread.environmentId, thread.id],
   );
   const contextMenu = useCallback(
     (event: React.MouseEvent) => {
+      if (!onContextMenu) return;
       event.preventDefault();
       event.stopPropagation();
       onContextMenu(scopeThreadRef(thread.environmentId, thread.id), {
@@ -95,7 +99,7 @@ export const SidebarOpenSubagent = memo(function SidebarOpenSubagent(
             {label}
           </span>
         </div>
-        {canOperate && canStopSidebarDelegatedChild(thread) ? (
+        {onStop && canOperate && canStopSidebarDelegatedChild(thread) ? (
           <span className="ml-1 shrink-0 opacity-0 focus-within:opacity-100 group-hover/delegated-child:opacity-100">
             <Button
               size="icon-micro"

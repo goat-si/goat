@@ -1,6 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { useMemo } from "react";
 import { Atom } from "effect/reactivity";
 
+import { useThreadShell } from "../../state/entities";
 import { environmentThreadShells } from "../../state/threads";
 import { buildSidebarSubagentIndex, type SidebarSubagentIndex } from "../Sidebar.logic";
 
@@ -18,4 +22,21 @@ const subagentIndexAtom = (() => {
 /** Owner rows of every live subagent, and the subagent requests each owner carries. */
 export function useSidebarSubagentIndex(): SidebarSubagentIndex {
   return useAtomValue(subagentIndexAtom);
+}
+
+/** The open subagent and the row that owns it, or null when the open thread has a row. */
+export function useSidebarOpenSubagent(
+  routeThreadKey: string | null,
+): { readonly ownerKey: string; readonly thread: EnvironmentThreadShell } | null {
+  const ownerKey = useSidebarSubagentIndex().ownerKeyByChildKey.get(routeThreadKey ?? "") ?? null;
+  const ref = useMemo(
+    () =>
+      ownerKey === null || routeThreadKey === null ? null : parseScopedThreadKey(routeThreadKey),
+    [ownerKey, routeThreadKey],
+  );
+  const thread = useThreadShell(ref);
+  return useMemo(
+    () => (ownerKey === null || thread === null ? null : { ownerKey, thread }),
+    [ownerKey, thread],
+  );
 }

@@ -10,6 +10,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
   createProjectsViewEnvironmentAtoms,
   isProjectsViewPinnedThread,
+  isProjectsViewListedThread,
   resolveProjectConnectionStatus,
   resolveProjectsViewProjectConnectionStatus,
   resolveProjectsViewThreadOrder,
@@ -74,6 +75,33 @@ describe("Projects view pins", () => {
       "remote:last",
     ]);
     expect(resolveProjectsViewThreadOrder(orderedPins, [])).toEqual(orderedPins);
+  });
+});
+
+describe("Projects view rows", () => {
+  const row = { ...pinned, pinnedAt: null };
+  const subagent = {
+    ...row,
+    lineage: {
+      ...row.lineage,
+      parentThreadId: ThreadId.make("parent"),
+      relationshipToParent: "subagent" as const,
+    },
+  };
+  it("lists live unpinned threads and forks once", () => {
+    expect(isProjectsViewListedThread(row)).toBe(true);
+    expect(
+      isProjectsViewListedThread({
+        ...subagent,
+        lineage: { ...subagent.lineage, relationshipToParent: "fork" },
+      }),
+    ).toBe(true);
+    expect(isProjectsViewListedThread(pinned)).toBe(false);
+    expect(isProjectsViewListedThread({ ...row, archivedAt: pinned.pinnedAt })).toBe(false);
+  });
+  it("never lists a subagent, pinned or not", () => {
+    expect(isProjectsViewListedThread(subagent)).toBe(false);
+    expect(isProjectsViewListedThread({ ...subagent, pinnedAt: pinned.pinnedAt })).toBe(false);
   });
 });
 

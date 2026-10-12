@@ -723,17 +723,23 @@ export function buildSidebarSubagentIndex(
   >,
   previous?: SidebarSubagentIndex,
 ): SidebarSubagentIndex {
+  // Archived or deleted subagents never own anything, but they still link their own
+  // subagents to an ancestor.
   const parentKeyByChildKey = new Map<string, string>();
+  const rowKeys = new Set<string>();
   for (const thread of threads) {
-    if (!isSidebarSubagentChildThread(thread) || thread.lineage.parentThreadId === null) continue;
-    parentKeyByChildKey.set(
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId)),
-    );
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    if (!isSidebarSubagentThread(thread)) rowKeys.add(key);
+    else if (thread.lineage.parentThreadId !== null)
+      parentKeyByChildKey.set(
+        key,
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId)),
+      );
   }
   const ownerKeyByChildKey = new Map<string, string>();
   const attentionByOwnerKey = new Map<string, SidebarChildAttention>();
   for (const thread of threads) {
+    if (!isSidebarSubagentChildThread(thread)) continue;
     const childKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
     let ownerKey = parentKeyByChildKey.get(childKey);
     if (ownerKey === undefined) continue;
@@ -744,6 +750,12 @@ export function buildSidebarSubagentIndex(
       if (next === undefined) break;
       seen.add(ownerKey);
       ownerKey = next;
+    }
+    // A link missing from the shells (an archived subagent the client never loaded, or a
+    // cycle) falls back to the lineage root when that thread has a row.
+    if (!rowKeys.has(ownerKey)) {
+      ownerKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.rootThreadId));
+      if (!rowKeys.has(ownerKey)) continue;
     }
     ownerKeyByChildKey.set(childKey, ownerKey);
     if (thread.source.creationSource !== "mcp") continue;
@@ -763,13 +775,19 @@ export function buildSidebarSubagentIndex(
   };
 }
 
-/** A subagent's pending request outranks the owner's own work, but not its own request. */
-export function withSidebarChildAttention(
-  status: SidebarThreadStatus,
-  childAttention: SidebarChildAttention | undefined,
-): SidebarThreadStatus {
-  if (status === "approval" || childAttention === undefined) return status;
-  return childAttention === "approval" || status !== "input" ? childAttention : status;
+/**
+ * Folds a subagent's pending request into its owner row, so status pills, Priority and
+ * project indicators treat it like the owner's own approval or question.
+ */
+export function withSidebarChildRequest<
+  T extends Pick<SidebarThreadSummary, "hasPendingApprovals" | "hasPendingUserInput">,
+>(thread: T, childAttention: SidebarChildAttention | undefined): T {
+  if (childAttention === undefined) return thread;
+  return {
+    ...thread,
+    hasPendingApprovals: thread.hasPendingApprovals || childAttention === "approval",
+    hasPendingUserInput: thread.hasPendingUserInput || childAttention === "input",
+  };
 }
 
 export function filterSidebarV2VisibleThreads<

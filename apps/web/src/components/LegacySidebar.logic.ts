@@ -79,6 +79,20 @@ export function isProjectsViewPinnedThread(
   );
 }
 
+/**
+ * Rows under a project: live, unpinned, and never a subagent in any state. An open
+ * subagent shows beneath its owner row instead.
+ */
+export function isProjectsViewListedThread(
+  thread: Pick<SidebarThreadSummary, "pinnedAt" | "archivedAt" | "deletedAt" | "lineage">,
+) {
+  return (
+    thread.archivedAt === null &&
+    thread.lineage.relationshipToParent !== "subagent" &&
+    !isProjectsViewPinnedThread(thread)
+  );
+}
+
 /** Keyboard jumps, traversal and range selection share the displayed order, with pins once. */
 export function resolveProjectsViewThreadOrder(
   pinnedKeys: readonly string[],
