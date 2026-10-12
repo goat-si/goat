@@ -35,6 +35,21 @@ const ownerIdOf = McpInvocationContext.McpInvocationContext.pipe(
 const notFound = () =>
   new OrchestratorMcpFailure({ code: "task_not_found", message: "No such GOAT ledger task." });
 
+/** The ingress context an MCP caller acts in. */
+const mcpContextOf = (scope: McpInvocationContext.McpInvocationScope) => ({
+  ownerId: channelOwnerIdFor(scope.environmentId),
+  principalId: "mcp:" + scope.requestNamespace,
+  displayName: scope.client?.label ?? "Agent",
+  // Agents never start work (reception refuses it), so they only need to read.
+  grantedScopes: ["orchestration:read" as const],
+  runtimeModeCeiling: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
+  caller: {
+    type: "mcp" as const,
+    requestNamespace: scope.requestNamespace,
+    ...(scope.thread === undefined ? {} : { callerThreadId: scope.thread.threadId }),
+  },
+});
+
 export const layer = McpToolAccess.toLayer(ChannelToolkit, {
   channel_ingest: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
@@ -66,21 +81,23 @@ export const layer = McpToolAccess.toLayer(ChannelToolkit, {
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
         ...(input.questionId === undefined ? {} : { questionId: input.questionId }),
       };
-      return yield* gateway
-        .ingest(message, {
-          ownerId: channelOwnerIdFor(scope.environmentId),
-          principalId: "mcp:" + scope.requestNamespace,
-          displayName: scope.client?.label ?? "Agent",
-          // Agents never start work (reception refuses it), so they only need to read.
-          grantedScopes: ["orchestration:read"],
-          runtimeModeCeiling: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
-          caller: {
-            type: "mcp",
-            requestNamespace: scope.requestNamespace,
-            ...(scope.thread === undefined ? {} : { callerThreadId: scope.thread.threadId }),
-          },
-        })
-        .pipe(Effect.mapError(failureFor));
+      return yield* gateway.ingest(message, mcpContextOf(scope)).pipe(Effect.mapError(failureFor));
+    }),
+  ),
+  channel_input_get: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      return yield* gateway.getInput(input.inputId, mcpContextOf(scope)).pipe(
+        Effect.mapError((error) =>
+          error.reason === "not_found"
+            ? new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: "No such message from this caller.",
+              })
+            : failureFor(error),
+        ),
+      );
     }),
   ),
   channel_task_get: McpToolAccess.reads((input) =>

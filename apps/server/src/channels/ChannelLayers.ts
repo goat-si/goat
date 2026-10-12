@@ -1,7 +1,7 @@
 /**
  * The channel layer as the server assembles it: ledger, gateway, reception, dispatch, worker
- * reports, delivery, and the background runtime, with the GOAT bot registered as a transport.
- * Slack settings use the unavailable port until a live Slack runtime is assembled.
+ * reports, delivery, and the background runtime, with the GOAT bot and the MCP mailbox registered
+ * as transports. Slack settings use the unavailable port until a live Slack runtime is assembled.
  *
  * @module ChannelLayers
  */
@@ -47,7 +47,11 @@ const layerWorkers = Layer.mergeAll(
 
 /** Every channel service, without background loops (tests drive passes with `drain`). */
 export const layerServices = ChannelRuntime.layer.pipe(
-  Layer.provideMerge(ChannelBotTimeline.layerGoatTransport.pipe(Layer.provideMerge(layerWorkers))),
+  Layer.provideMerge(
+    Layer.mergeAll(ChannelBotTimeline.layerGoatTransport, ChannelGateway.layerMcpMailbox).pipe(
+      Layer.provideMerge(layerWorkers),
+    ),
+  ),
 );
 
 /** Every channel service plus the background owner loop. */

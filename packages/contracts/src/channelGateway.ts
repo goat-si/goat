@@ -293,6 +293,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
 /** Agent-facing channel tools. There is deliberately no tool that sends to an arbitrary channel. */
 export const CHANNEL_MCP_TOOL_NAMES = {
   ingest: "channel_ingest",
+  inputGet: "channel_input_get",
   taskGet: "channel_task_get",
   taskList: "channel_task_list",
   taskReport: "channel_task_report",

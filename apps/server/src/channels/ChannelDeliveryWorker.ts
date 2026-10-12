@@ -4,8 +4,9 @@
  * Delivery is at least once and keeps its delivery id across retries. A transport says whether
  * a failed send certainly did not arrive (`not_sent`, retried, after Retry-After for rate limits)
  * or may have (`unknown`, recorded as ambiguous and not repeated). Account and channel errors that
- * a retry cannot fix fail the row. Rows are claimed oldest first, so a task's receipt goes out
- * before its result.
+ * a retry cannot fix fail the row. Each row is claimed right before its send, so a restart finds at
+ * most the one row that was really in flight. Rows go oldest first, and a task's later row waits for
+ * its earlier ones, so a receipt goes out before its result.
  *
  * @module ChannelDeliveryWorker
  */
@@ -19,7 +20,10 @@ import * as Layer from "effect/Layer";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 
-const MAX_ATTEMPTS = 6;
+/** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
+const MAX_ATTEMPTS = 10;
+/** Rows one pass may send before it yields to the rest of the loop. */
+const MAX_PER_PASS = 50;
 const NON_RETRYABLE = new Set([
   "not_in_channel",
   "channel_not_found",
@@ -62,13 +66,14 @@ const make = Effect.gen(function* () {
 
   const deliverDue: ChannelDeliveryWorker["Service"]["deliverDue"] = (owner) =>
     Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const due = yield* ledger.claimDueDeliveries({
-        owner,
-        now: DateTime.formatIso(now),
-        limit: 50,
-      });
-      for (const delivery of due) {
+      let handled = 0;
+      while (handled < MAX_PER_PASS) {
+        const [delivery] = yield* ledger.claimDueDeliveries({
+          owner,
+          now: DateTime.formatIso(yield* DateTime.now),
+          limit: 1,
+        });
+        if (delivery === undefined) break;
         const sent = yield* gateway.send(delivery.message).pipe(Effect.result);
         const finishedAt = yield* DateTime.now;
         yield* ledger.recordDelivery({
@@ -85,8 +90,9 @@ const make = Effect.gen(function* () {
               : deliveryOutcomeFor(sent.failure, delivery.attempts, finishedAt),
           now: DateTime.formatIso(finishedAt),
         });
+        handled += 1;
       }
-      return due.length;
+      return handled;
     });
 
   return ChannelDeliveryWorker.of({ deliverDue });

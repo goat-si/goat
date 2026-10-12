@@ -445,6 +445,22 @@ export function summarizeT3ToolCalls(
     case "capabilities":
       label = phrase("Checked", "check", `orchestration capabilities ${times}`);
       break;
+    case "channel-message":
+      label = phrase("Messaged", "message", `GOAT's front desk ${times}`);
+      break;
+    case "channel-reply":
+      label = phrase(
+        "Read",
+        "read",
+        quantity(selected.length, "front desk reply", "front desk replies"),
+      );
+      break;
+    case "channel-task-read":
+      label = phrase("Checked", "check", `GOAT ledger tasks ${times}`);
+      break;
+    case "channel-task-report":
+      label = phrase("Reported", "report", `on GOAT ledger tasks ${times}`);
+      break;
   }
   return { label, failedCount };
 }

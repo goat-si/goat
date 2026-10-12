@@ -245,6 +245,10 @@ export class ChannelLedger extends Context.Service<
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
       now: string,
     ) => Effect.Effect<void, ChannelLedgerError>;
+    /**
+     * Marks the oldest due rows as delivering. A row waits while an earlier row for the same task
+     * and destination kind is still pending or in flight, so a receipt goes out before its result.
+     */
     readonly claimDueDeliveries: (input: {
       readonly owner: string;
       readonly now: string;
@@ -256,7 +260,7 @@ export class ChannelLedger extends Context.Service<
       readonly outcome: ChannelDeliveryOutcome;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** After a restart: GOAT bot deliveries retry, external ones in flight become ambiguous. */
+    /** After a restart: GOAT bot and MCP deliveries retry, external ones in flight become ambiguous. */
     readonly settleInterruptedDeliveries: (input: {
       readonly owner: string;
       readonly now: string;
@@ -915,6 +919,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* fence(input.owner);
             const rows = yield* sql<{
+              readonly row_order: number;
               readonly delivery_id: ChannelDeliveryId;
               readonly message_json: string;
               readonly attempts: number;
@@ -922,19 +927,26 @@ const make = Effect.gen(function* () {
               UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
                 updated_at = ${input.now}
               WHERE delivery_id IN (
-                SELECT delivery_id FROM channel_outbox
-                WHERE state = 'pending' AND next_attempt_at <= ${input.now}
-                ORDER BY created_at, delivery_id LIMIT ${input.limit}
+                SELECT due.delivery_id FROM channel_outbox AS due
+                WHERE due.state = 'pending' AND due.next_attempt_at <= ${input.now}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM channel_outbox AS earlier
+                    WHERE earlier.task_id = due.task_id
+                      AND earlier.destination_kind = due.destination_kind
+                      AND earlier.state IN ('pending', 'delivering')
+                      AND earlier.rowid < due.rowid
+                  )
+                ORDER BY due.created_at, due.rowid LIMIT ${input.limit}
               )
-              RETURNING delivery_id, message_json, attempts
+              RETURNING rowid AS row_order, delivery_id, message_json, attempts
             `;
             return rows
+              .toSorted((left, right) => left.row_order - right.row_order)
               .map((row) => ({
                 deliveryId: row.delivery_id,
                 message: decodeOutbound(row.message_json),
                 attempts: row.attempts,
-              }))
-              .toSorted((left, right) => left.deliveryId.localeCompare(right.deliveryId));
+              }));
           }),
         )
         .pipe(Effect.mapError(toLedgerError("claimDueDeliveries"))),
@@ -979,14 +991,15 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            // Local destinations record idempotently, so an interrupted one is simply sent again.
             yield* sql`
               UPDATE channel_outbox SET state = 'pending', updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind = 'goat'
+              WHERE state = 'delivering' AND destination_kind IN ('goat', 'mcp')
             `;
             yield* sql`
               UPDATE channel_outbox SET state = 'ambiguous', last_error_code = 'interrupted',
                 updated_at = ${input.now}
-              WHERE state = 'delivering' AND destination_kind != 'goat'
+              WHERE state = 'delivering' AND destination_kind NOT IN ('goat', 'mcp')
             `;
           }),
         )

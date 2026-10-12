@@ -1,0 +1,433 @@
+/**
+ * A channel core harness for tests: the GOAT bot thread is a real orchestrator thread whose
+ * provider adapter refuses to run anything, worker threads are scripted (`WorkerWorld`), and the
+ * reception model and Slack transport are fakes the test controls. Other lanes swap in their own
+ * channel layer or Slack transport through `makeHarness` options.
+ *
+ * @module ChannelHarness
+ */
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  type ChannelIngestInput,
+  type ChannelOutboundMessage,
+  type ChannelReceptionInput,
+  type ChannelReceptionResult,
+  ChannelGatewayError,
+  CommandId,
+  EnvironmentId,
+  MessageId,
+  type OrchestrationV2Run,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  TextGenerationError,
+} from "@t3tools/contracts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import * as ServerConfig from "../../config.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import { CodexProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
+import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ProviderReplayHarness from "../../orchestration-v2/testkit/ProviderReplayHarness.ts";
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import * as ManagedProjectFolders from "../../project/ManagedProjectFolders.ts";
+import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
+import * as ChannelGateway from "../ChannelGateway.ts";
+import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
+import * as ChannelIdentityService from "../ChannelIdentityService.ts";
+import * as ChannelLayers from "../ChannelLayers.ts";
+import * as ChannelLedger from "../ChannelLedger.ts";
+import * as ChannelTransport from "../ChannelTransport.ts";
+import { channelOwnerIdFor } from "../channelOwner.ts";
+
+export const environmentId = EnvironmentId.make("environment:channel-test");
+export const ownerId = channelOwnerIdFor(environmentId);
+export const owner: ChannelConnectionOwner = {
+  ownerId,
+  principalId: "owner",
+  displayName: "Owner",
+  grantedScopes: ["orchestration:read", "orchestration:operate", "settings:write"],
+  runtimeModeCeiling: "full-access",
+};
+export const projectId = ProjectId.make("project:channel-work");
+export const scratchProjectId = ProjectId.make("project:scratch");
+export const botThreadId = ThreadId.make("thread:goat-bot");
+export const modelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-6.1-sol",
+} as const;
+
+export const refusingAdapter = {
+  instanceId: modelSelection.instanceId,
+  driver: ProviderDriverKind.make("codex"),
+  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+  openSession: () => Effect.die("the GOAT bot must never start a provider session"),
+} as ProviderAdapter.ProviderAdapterV2["Service"];
+
+/** Scripted worker threads: their runs, final assistant text, and background work. */
+export class WorkerWorld {
+  readonly runs = new Map<string, Array<OrchestrationV2Run>>();
+  readonly finalText = new Map<string, string>();
+  readonly background = new Set<string>();
+  readonly launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
+  readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
+
+  addRun(threadId: ThreadId, userMessageId: MessageId) {
+    const existing = this.runs.get(threadId) ?? [];
+    const run = {
+      id: RunId.make("run:" + threadId + ":" + (existing.length + 1)),
+      threadId,
+      ordinal: existing.length + 1,
+      providerInstanceId: modelSelection.instanceId,
+      modelSelection,
+      providerThreadId: null,
+      userMessageId,
+      rootNodeId: null,
+      activeAttemptId: null,
+      status: "running",
+      requestedAt: DateTime.makeUnsafe("2026-10-12T00:00:00.000Z"),
+      startedAt: null,
+      completedAt: null,
+      checkpointId: null,
+      contextHandoffId: null,
+    } as unknown as OrchestrationV2Run;
+    this.runs.set(threadId, [...existing, run]);
+    return run;
+  }
+
+  setStatus(
+    threadId: ThreadId,
+    ordinal: number,
+    status: OrchestrationV2Run["status"],
+    text?: string,
+  ) {
+    const runs = this.runs.get(threadId) ?? [];
+    this.runs.set(
+      threadId,
+      runs.map((run) =>
+        run.ordinal === ordinal ? ({ ...run, status } as OrchestrationV2Run) : run,
+      ),
+    );
+    const run = runs.find((candidate) => candidate.ordinal === ordinal);
+    if (run !== undefined && text !== undefined) this.finalText.set(run.id, text);
+  }
+
+  latestRun(threadId: ThreadId) {
+    return (this.runs.get(threadId) ?? []).at(-1);
+  }
+}
+
+export type ReceptionScript = (
+  input: ChannelReceptionInput,
+) => Effect.Effect<ChannelReceptionResult, TextGenerationError>;
+
+export const defaultScript: ReceptionScript = (input) => {
+  const text = input.inputText ?? "";
+  if (input.mode === "task_event") {
+    return Effect.succeed({
+      replyText: input.taskEvent?.summary ?? "",
+      action: { type: "report_only" },
+    });
+  }
+  if (text.startsWith("do:")) {
+    return Effect.succeed({
+      replyText: "On it.",
+      action: {
+        type: "create_task",
+        title: text.slice(3).trim(),
+        instruction: text.slice(3).trim(),
+      },
+    });
+  }
+  return Effect.succeed({ replyText: "Okay.", action: { type: "report_only" } });
+};
+
+export interface SlackSend {
+  readonly message: ChannelOutboundMessage;
+}
+
+/**
+ * A channel layer the harness accepts: at least the core services, needing at most what the core
+ * needs. A layer that also outputs more, such as a live Slack runtime, fits.
+ */
+export type ChannelServicesLayer = Layer.Layer<
+  Layer.Success<typeof ChannelLayers.layerServices>,
+  Layer.Error<typeof ChannelLayers.layerServices>,
+  Layer.Services<typeof ChannelLayers.layerServices>
+>;
+
+export function makeHarness(
+  options: {
+    readonly projects?: number;
+    /** The channel services under test; defaults to the assembled core without background loops. */
+    readonly channelsLayer?: ChannelServicesLayer;
+    /** Register the fake Slack transport behind `slackSent` and `slackFailures` (default true). */
+    readonly fakeSlackTransport?: boolean;
+  } = {},
+) {
+  const world = new WorkerWorld();
+  const slackSent: Array<SlackSend> = [];
+  const slackFailures: Array<ChannelGatewayError> = [];
+  const script = { current: defaultScript };
+
+  const layerDatabase = SqlitePersistence.layerMemory;
+  const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
+    { name: "channel-scenarios" },
+    ProviderAdapterRegistry.layerFromAdapters([refusingAdapter]),
+    { databaseLayer: layerDatabase, runEffectWorker: false },
+  );
+  const layerRealThreads = ThreadManagement.layer.pipe(Layer.provide(layerOrchestrator));
+  const isWorker = (threadId: ThreadId) => world.runs.has(threadId);
+
+  const layerThreads = Layer.effect(
+    ThreadManagement.ThreadManagementService,
+    Effect.gen(function* () {
+      const real = yield* ThreadManagement.ThreadManagementService;
+      return ThreadManagement.ThreadManagementService.of({
+        ...real,
+        getThreadRecords: ((threadId: ThreadId, fields: never, filter: never) => {
+          if (!isWorker(threadId)) return real.getThreadRecords(threadId, fields, filter);
+          const runs = world.runs.get(threadId) ?? [];
+          const messageRunIds = (
+            filter as { readonly messageRunIds?: ReadonlyArray<string> } | undefined
+          )?.messageRunIds;
+          return Effect.succeed({
+            thread: { id: threadId, projectId, archivedAt: null, deletedAt: null },
+            runs,
+            providerThreads: world.background.has(threadId)
+              ? [{ pendingBackgroundTasks: [{ taskId: "background" }] }]
+              : [],
+            messages: runs
+              .filter((run) => messageRunIds === undefined || messageRunIds.includes(run.id))
+              .flatMap((run) => {
+                const text = world.finalText.get(run.id);
+                return text === undefined
+                  ? []
+                  : [{ role: "assistant", text, streaming: false, runId: run.id }];
+              }),
+          } as never);
+        }) as typeof real.getThreadRecords,
+        sendToThread: (input) => {
+          if (!isWorker(input.threadId)) return real.sendToThread(input);
+          world.sends.push(input);
+          if (
+            !(world.runs.get(input.threadId) ?? []).some(
+              (run) => run.userMessageId === input.messageId,
+            )
+          ) {
+            world.addRun(input.threadId, input.messageId);
+          }
+          return Effect.succeed({} as never);
+        },
+        delegatedTaskResultPending: () => Effect.succeed(false),
+      });
+    }),
+  ).pipe(Layer.provide(layerRealThreads));
+
+  const layerLaunch = Layer.mock(ThreadLaunch.ThreadLaunchService)({
+    launch: (input) =>
+      Effect.sync(() => {
+        world.launches.push(input);
+        const threadId = input.threadId ?? ThreadId.make("thread:worker:" + input.commandId);
+        // Same command, same thread and run: a retried launch finds what the first one made.
+        if (!world.runs.has(threadId) && input.initialMessage?.messageId !== undefined) {
+          world.addRun(threadId, input.initialMessage.messageId);
+        }
+        return {
+          threadId,
+          projection: { runs: world.runs.get(threadId) ?? [] },
+          resumed: false,
+        } as never;
+      }),
+  });
+
+  const shells = Array.from({ length: options.projects ?? 1 }, (_, index) => ({
+    id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
+    title: index === 0 ? "Channel work" : "Other work " + index,
+    workspaceRoot: "/nonexistent/channel-work-" + index,
+    defaultModelSelection: modelSelection,
+    scripts: [],
+    createdAt: "2026-10-12T00:00:00.000Z",
+    updatedAt: "2026-10-12T00:00:00.000Z",
+  }));
+
+  const layerExternal = Layer.mergeAll(
+    Layer.mock(TextGeneration.TextGeneration)({
+      generateChannelReception: (input) => script.current(input.input),
+    }),
+    Layer.mock(ProjectStore.ProjectStoreV2)({
+      listShells: () => Effect.succeed(shells as never),
+    }),
+    Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+      getInstance: () => Effect.succeed({} as never),
+    }),
+    Layer.mock(ServerEnvironment.ServerEnvironment)({
+      getEnvironmentId: Effect.succeed(environmentId),
+    }),
+    Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+      namedProjectsRoot: "/unused",
+      ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
+    }),
+    ServerSettings.layerTest({
+      textGenerationModelSelection: modelSelection,
+      defaultRuntimeMode: "full-access",
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-channel-scenarios-" })),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+  const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
+    Layer.provide(
+      Layer.mergeAll(layerThreads, layerLaunch, layerExternal, layerDatabase, IdAllocator.layer),
+    ),
+  );
+
+  const layerSlack = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const registry = yield* ChannelTransport.ChannelTransportRegistry;
+      yield* registry.register({
+        kind: "slack",
+        send: (message) => {
+          const failure = slackFailures.shift();
+          if (failure !== undefined) return Effect.fail(failure);
+          slackSent.push({ message });
+          return Effect.succeed({
+            deliveryId: message.deliveryId,
+            acceptedAt: "2026-10-12T00:00:01.000Z",
+          });
+        },
+      });
+    }),
+  );
+
+  const layer = (options.fakeSlackTransport === false ? Layer.empty : layerSlack).pipe(
+    Layer.provideMerge(layerChannels),
+    Layer.provideMerge(layerThreads),
+    Layer.provideMerge(layerOrchestrator),
+    Layer.provideMerge(layerExternal),
+  );
+  return { layer, world, slackSent, slackFailures, script };
+}
+
+export const setupBot = Effect.gen(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make("create-goat-bot"),
+    threadId: botThreadId,
+    projectId: scratchProjectId,
+    title: "GOAT bot",
+    modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "system",
+    creationSource: "server",
+  });
+  yield* ledger.setBotIfAbsent({
+    ownerId,
+    bot: { environmentId, projectId: scratchProjectId, threadId: botThreadId },
+    now: "2026-10-12T00:00:00.000Z",
+  });
+});
+
+export const goatInput = (text: string, key: string): ChannelIngestInput => ({
+  kind: "goat",
+  connectionId: "goat",
+  conversationKey: botThreadId,
+  externalMessageId: key,
+  idempotencyKey: key,
+  actor: {},
+  replyAddress: { kind: "goat", environmentId, threadId: botThreadId },
+  text,
+  attachments: [],
+  receivedAt: "2026-10-12T00:00:00.000Z",
+  intent: "message",
+});
+
+export const slackInput = (
+  text: string,
+  key: string,
+  rootTs = "1760000000.000100",
+  user = "U1",
+): ChannelIngestInput => ({
+  kind: "slack",
+  connectionId: "slack-1",
+  conversationKey: "T1:C1:" + rootTs,
+  externalMessageId: key,
+  idempotencyKey: "T1:" + key,
+  actor: { externalActorId: user, displayName: "Slack user" },
+  replyAddress: { kind: "slack", connectionId: "slack-1", teamId: "T1", channelId: "C1", rootTs },
+  text,
+  attachments: [],
+  receivedAt: "2026-10-12T00:00:00.000Z",
+  intent: "message",
+});
+
+export const rpcContext = { ...owner, caller: { type: "rpc" as const } };
+export const slackContext = {
+  ...owner,
+  caller: { type: "transport" as const, kind: "slack" as const, connectionId: "slack-1" },
+};
+
+/** Links Slack user U1 the way a person would: a code from GOAT, sent to the bot. */
+export const linkSlackUser = (user = "U1") =>
+  Effect.gen(function* () {
+    const identities = yield* ChannelIdentityService.ChannelIdentityService;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const { code } = yield* identities.createLink(
+      { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
+      owner,
+    );
+    yield* gateway.linkIdentity(
+      {
+        connectionId: "slack-1",
+        externalActorId: user,
+        code,
+        idempotencyKey: "link-" + user,
+        replyAddress: {
+          kind: "slack",
+          connectionId: "slack-1",
+          teamId: "T1",
+          channelId: "D1",
+          rootTs: "1",
+        },
+      },
+      slackContext,
+    );
+  });
+
+export const botMessages = Effect.gen(function* () {
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const records = yield* threads.getThreadRecords(botThreadId, ["messages", "runs", "turnItems"]);
+  return records;
+});
+
+export const onlyTask = Effect.gen(function* () {
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+  const [task, ...others] = page.tasks;
+  if (task === undefined || others.length > 0) {
+    return yield* Effect.die(new Error("expected exactly one task, found " + page.tasks.length));
+  }
+  return task;
+});
+
+export const resultsTo = (sent: ReadonlyArray<SlackSend>, kind: ChannelOutboundMessage["kind"]) =>
+  sent.filter((send) => send.message.kind === kind);

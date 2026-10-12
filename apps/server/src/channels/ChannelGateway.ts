@@ -20,6 +20,7 @@ import {
   type ChannelIngestInput,
   type ChannelIngestResult,
   type ChannelInputId,
+  type ChannelInputSnapshot,
   type ChannelKind,
   type ChannelNoticeInput,
   type ChannelNoticeReceipt,
@@ -74,6 +75,14 @@ export class ChannelGateway extends Context.Service<
       input: ChannelNoticeInput,
       context: ChannelIngressContext,
     ) => Effect.Effect<ChannelNoticeReceipt, ChannelGatewayError>;
+    /**
+     * Reads a stored input and its reply. Owners read their own inputs; an MCP caller reads only
+     * inputs its request namespace sent, which is how agents get their answers.
+     */
+    readonly getInput: (
+      inputId: ChannelInputId,
+      context: ChannelIngressContext,
+    ) => Effect.Effect<ChannelInputSnapshot, ChannelGatewayError>;
     /** Hands one delivery to the registered transport for its destination. */
     readonly send: (
       message: ChannelOutboundMessage,
@@ -140,6 +149,25 @@ const ledgerFailure = (cause: ChannelLedger.ChannelLedgerError) =>
   });
 
 const forbidden = () => new ChannelGatewayError({ reason: "forbidden" });
+
+/**
+ * MCP callers share one connection, so the request namespace scopes their conversations and
+ * retry keys: two agents sending the same key stay two inputs in two conversations. Applied after
+ * the caller check, which ties the reply address to the same namespace.
+ */
+const scopedForCaller = (
+  input: ChannelIngestInput,
+  context: ChannelIngressContext,
+): ChannelIngestInput => {
+  if (input.kind !== "mcp" || context.caller.type !== "mcp") return input;
+  const namespace = context.caller.requestNamespace;
+  const scope = (key: string) => JSON.stringify([namespace, key]);
+  return {
+    ...input,
+    conversationKey: scope(input.conversationKey),
+    idempotencyKey: scope(input.idempotencyKey),
+  };
+};
 
 const noticeDelivery = (
   causeKey: string,
@@ -280,17 +308,18 @@ const make = Effect.gen(function* () {
       }
       yield* checkCaller(input, context);
       const requester = yield* resolveRequester(input, context);
+      const stored = scopedForCaller(input, context);
       const conversationId = conversationIdFor({
         ownerId: context.ownerId,
-        kind: input.kind,
-        connectionId: input.connectionId,
-        conversationKey: input.conversationKey,
+        kind: stored.kind,
+        connectionId: stored.connectionId,
+        conversationKey: stored.conversationKey,
       });
       const inputId = inputIdFor({
         ownerId: context.ownerId,
-        kind: input.kind,
-        connectionId: input.connectionId,
-        idempotencyKey: input.idempotencyKey,
+        kind: stored.kind,
+        connectionId: stored.connectionId,
+        idempotencyKey: stored.idempotencyKey,
       });
       const acceptedAt = DateTime.formatIso(yield* DateTime.now);
       const result = yield* ledger
@@ -299,8 +328,8 @@ const make = Effect.gen(function* () {
           inputId,
           conversationId,
           bindingId: bindingIdFor(conversationId, replyAddressKey(input.replyAddress)),
-          message: input,
-          contentHash: contentHashFor(input),
+          message: stored,
+          contentHash: contentHashFor(stored),
           requester,
           acceptedAt,
           ...(requester === undefined
@@ -398,6 +427,20 @@ const make = Effect.gen(function* () {
       return { deliveryId, duplicate: false };
     });
 
+  const getInput: ChannelGateway["Service"]["getInput"] = (inputId, context) =>
+    Effect.gen(function* () {
+      const stored = yield* ledger.getInput(inputId).pipe(Effect.mapError(ledgerFailure));
+      const caller = context.caller;
+      const address = stored?.message.replyAddress;
+      const visible =
+        stored !== undefined &&
+        stored.ownerId === context.ownerId &&
+        (caller.type !== "mcp" ||
+          (address?.kind === "mcp" && address.requestNamespace === caller.requestNamespace));
+      if (!visible) return yield* new ChannelGatewayError({ reason: "not_found" });
+      return stored.snapshot;
+    });
+
   const send: ChannelGateway["Service"]["send"] = (message) =>
     registry.resolve(message.destination.kind).pipe(
       Effect.flatMap(
@@ -408,7 +451,28 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  return ChannelGateway.of({ ingest, linkIdentity, requestNotice, send });
+  return ChannelGateway.of({ ingest, linkIdentity, requestNotice, getInput, send });
 });
 
 export const layer = Layer.effect(ChannelGateway, make);
+
+/**
+ * Replies to agent input stay in the ledger, on the input itself, where the agent reads them
+ * with `channel_input_get`. This transport accepts those deliveries so the outbox records them
+ * as delivered instead of failing them for want of an adapter.
+ */
+export const layerMcpMailbox = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const registry = yield* ChannelTransport.ChannelTransportRegistry;
+    yield* registry.register({
+      kind: "mcp",
+      send: (message) =>
+        DateTime.now.pipe(
+          Effect.map((now) => ({
+            deliveryId: message.deliveryId,
+            acceptedAt: DateTime.formatIso(now),
+          })),
+        ),
+    });
+  }),
+);

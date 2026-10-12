@@ -70,7 +70,11 @@ export type T3McpToolSummaryAction =
   | "browser"
   | "device"
   | "html-preview"
-  | "html-render";
+  | "html-render"
+  | "channel-message"
+  | "channel-reply"
+  | "channel-task-read"
+  | "channel-task-report";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -366,6 +370,17 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   goat_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
+  channel_ingest: tool(
+    ["Message", "Messaging", "Messaged", "GOAT's front desk"],
+    "channel-message",
+  ),
+  channel_input_get: tool(["Read", "Reading", "Read", "a front desk reply"], "channel-reply"),
+  channel_task_get: tool(["Read", "Reading", "Read", "a GOAT ledger task"], "channel-task-read"),
+  channel_task_list: tool(["List", "Listing", "Listed", "GOAT ledger tasks"], "channel-task-read"),
+  channel_task_report: tool(
+    ["Report on", "Reporting on", "Reported on", "a GOAT ledger task"],
+    "channel-task-report",
+  ),
 };
 
 /**

@@ -314,9 +314,10 @@ describe("ChannelLedger tasks", () => {
 });
 
 describe("ChannelLedger outbox", () => {
-  const delivery = (causeKey: string, destination: unknown) => ({
+  const delivery = (causeKey: string, destination: unknown, taskId?: string) => ({
     deliveryId: deliveryIdFor(causeKey),
     causeKey,
+    ...(taskId === undefined ? {} : { taskId: taskId as never }),
     message: decodeOutbound({
       deliveryId: deliveryIdFor(causeKey),
       destination,
@@ -370,6 +371,50 @@ describe("ChannelLedger outbox", () => {
         1,
       );
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "holds a task's later delivery until its earlier one to the same destination kind is done",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* claimOwner("a", NOW, "2026-10-11T23:59:30.000Z");
+        const claim = (now = NOW) =>
+          ledger
+            .claimDueDeliveries({ owner: "a", now, limit: 10 })
+            .pipe(Effect.map((rows) => rows.map((row) => row.deliveryId)));
+        // Same timestamp: insertion order decides, not the hashed delivery id.
+        yield* ledger.enqueueDeliveries(
+          [
+            delivery("receipt", slackDestination, "task-1"),
+            delivery("result", slackDestination, "task-1"),
+            delivery("bot-copy", goatDestination, "task-1"),
+          ],
+          NOW,
+        );
+        assert.deepStrictEqual(yield* claim(), [
+          deliveryIdFor("receipt"),
+          deliveryIdFor("bot-copy"),
+        ]);
+        // A receipt waiting out a rate limit keeps the result behind it.
+        yield* ledger.recordDelivery({
+          owner: "a",
+          deliveryId: deliveryIdFor("receipt"),
+          outcome: { type: "retry", at: "2026-10-12T00:00:30.000Z", errorCode: "rate_limited" },
+          now: NOW,
+        });
+        assert.deepStrictEqual(yield* claim("2026-10-12T00:00:10.000Z"), []);
+        assert.deepStrictEqual(yield* claim("2026-10-12T00:00:30.000Z"), [
+          deliveryIdFor("receipt"),
+        ]);
+        yield* ledger.recordDelivery({
+          owner: "a",
+          deliveryId: deliveryIdFor("receipt"),
+          outcome: { type: "delivered" },
+          now: "2026-10-12T00:00:30.000Z",
+        });
+        assert.deepStrictEqual(yield* claim("2026-10-12T00:00:30.000Z"), [deliveryIdFor("result")]);
+      }).pipe(Effect.provide(TestLayer)),
   );
 });
 

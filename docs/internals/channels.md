@@ -30,5 +30,16 @@ Recovery reads state, not history. Every id a retry could recreate is derived fr
 key (input from the idempotency key, worker launch from task and generation, deliveries from their
 cause), so re-running a step lands on the same row, thread, or message. Task completion is decided
 from the worker thread's current runs on each pass, so replayed or missed run events only change
-timing. External deliveries left in flight become ambiguous rather than being sent again; GOAT bot
-deliveries are retried because recording is idempotent.
+timing. The delivery worker claims one outbox row right before sending it, so a restart finds at
+most one row in flight. External deliveries left in flight become ambiguous rather than being sent
+again; GOAT bot and MCP deliveries are retried because recording is idempotent. A task's later
+delivery to a kind of destination waits until its earlier one there is delivered or given up, so a
+receipt that hit a rate limit still arrives before the result.
+
+## Agents over MCP
+
+All MCP callers share the `mcp` connection, so the gateway scopes an agent's conversation key and
+retry key by its request namespace: two agents that send the same `clientRequestId` stay two
+inputs in two conversations. Agents cannot start work. Their replies are not pushed anywhere; the
+outbox marks them delivered and the agent reads them with `channel_input_get`, which shows only
+inputs from the caller's own namespace.

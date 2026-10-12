@@ -2130,14 +2130,7 @@ const layerWsRpc = (
               Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
             ),
         [CHANNEL_GATEWAY_WS_METHODS.getInput]: (input) =>
-          channelLedger.getInput(input.inputId).pipe(
-            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-            Effect.flatMap((stored) =>
-              stored === undefined || stored.ownerId !== channelOwner.ownerId
-                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
-                : Effect.succeed(stored.snapshot),
-            ),
-          ),
+          channelGateway.getInput(input.inputId, { ...channelOwner, caller: { type: "rpc" } }),
         [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: (input) =>
           channelIdentities.createLink(input, channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: (input) => channelIdentities.unlink(input),

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
+import ChannelLedgerMigration from "./064_ChannelLedger.ts";
 
 const channelTables = [
   "channel_bindings",
@@ -34,6 +35,18 @@ it.effect("adds the channel ledger to a database at schema 63 and keeps existing
       SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads`;
     assert.deepStrictEqual(kept, [{ provider_thread_id: "existing" }]);
     assert.deepStrictEqual(yield* runMigrations(), []);
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("runs again over its own schema, as a relocated migration id would", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations();
+    yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+      VALUES ('kept', '{}', 'now')`;
+    yield* ChannelLedgerMigration;
+    const kept = yield* sql<{ key: string }>`SELECT key FROM channel_runtime_state`;
+    assert.deepStrictEqual(kept, [{ key: "kept" }]);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 

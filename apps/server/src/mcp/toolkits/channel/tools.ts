@@ -1,6 +1,8 @@
 import {
   CHANNEL_MCP_TOOL_NAMES,
   ChannelIngestResult,
+  ChannelInputId,
+  ChannelInputSnapshot,
   ChannelListTasksInput,
   ChannelListTasksResult,
   ChannelQuestionId,
@@ -34,7 +36,7 @@ const shared = {
 const ChannelIngestTool = Tool.make(CHANNEL_MCP_TOOL_NAMES.ingest, {
   ...shared,
   description:
-    "Send a message to GOAT's front desk as an agent. It answers right away; read the answer later with channel_task_get or channel_task_list. Agents can ask about work, report on it, or answer a question a task asked; only people can start new work. Reuse clientRequestId to retry safely. conversationKey keeps related messages in one conversation (default: one per caller).",
+    "Send a message to GOAT's front desk as an agent. It answers within seconds; read the answer with channel_input_get and the returned inputId. Agents can ask about work, report on it, or answer a question a task asked; only people can start new work. Reuse clientRequestId to retry safely. conversationKey keeps related messages in one conversation (default: one per caller).",
   parameters: Schema.Struct({
     text: Schema.String.check(Schema.isMaxLength(20_000)),
     clientRequestId: TrimmedNonEmptyString,
@@ -45,6 +47,18 @@ const ChannelIngestTool = Tool.make(CHANNEL_MCP_TOOL_NAMES.ingest, {
   success: ChannelIngestResult,
 })
   .annotate(Tool.Title, "Message GOAT's front desk")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
+const ChannelInputGetTool = Tool.make(CHANNEL_MCP_TOOL_NAMES.inputGet, {
+  ...shared,
+  description:
+    "Read a message you sent with channel_ingest: its state and the front desk's reply once it has one (reply.text), or failure. Only your own messages are visible.",
+  parameters: Schema.Struct({ inputId: ChannelInputId }),
+  success: ChannelInputSnapshot,
+})
+  .annotate(Tool.Title, "Read a front desk reply")
+  .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
@@ -84,6 +98,7 @@ const ChannelTaskReportTool = Tool.make(CHANNEL_MCP_TOOL_NAMES.taskReport, {
 
 export const ChannelToolkit = Toolkit.make(
   ChannelIngestTool,
+  ChannelInputGetTool,
   ChannelTaskGetTool,
   ChannelTaskListTool,
   ChannelTaskReportTool,

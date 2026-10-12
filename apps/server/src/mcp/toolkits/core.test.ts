@@ -80,6 +80,7 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
 };
 import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import { HtmlToolkit } from "./html/tools.ts";
+import { ChannelToolkit } from "./channel/tools.ts";
 import {
   resolveT3McpToolDefinition,
   resolveT3McpToolPresentation,
@@ -121,6 +122,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     SshToolkit,
     ConnectionToolkit,
     RemoteReportToolkit,
+    ChannelToolkit,
   ]) {
     for (const tool of Object.values(toolkit.tools)) {
       expect(names.has(tool.name)).toBe(false);
@@ -196,7 +198,14 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_worktree_list",
     "goat_worktree_status",
   ]);
-  expect(names.size).toBe(92);
+  expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([
+    "channel_ingest",
+    "channel_input_get",
+    "channel_task_get",
+    "channel_task_list",
+    "channel_task_report",
+  ]);
+  expect(names.size).toBe(97);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);

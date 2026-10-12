@@ -9,7 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`CREATE TABLE channel_conversations (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_conversations (
     conversation_id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -21,7 +21,7 @@ export default Effect.gen(function* () {
     UNIQUE (owner_id, kind, connection_id, conversation_key)
   )`;
 
-  yield* sql`CREATE TABLE channel_bindings (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_bindings (
     binding_id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES channel_conversations(conversation_id),
     connection_id TEXT NOT NULL,
@@ -29,7 +29,7 @@ export default Effect.gen(function* () {
     last_activity_at TEXT NOT NULL
   )`;
 
-  yield* sql`CREATE TABLE channel_inbox (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_inbox (
     input_id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -51,12 +51,12 @@ export default Effect.gen(function* () {
     timeline_sequence INTEGER,
     UNIQUE (owner_id, kind, connection_id, idempotency_key)
   )`;
-  yield* sql`CREATE INDEX channel_inbox_conversation_idx
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_inbox_conversation_idx
     ON channel_inbox(conversation_id, accepted_at)`;
-  yield* sql`CREATE INDEX channel_inbox_pending_idx
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_inbox_pending_idx
     ON channel_inbox(state) WHERE state IN ('accepted', 'processing')`;
 
-  yield* sql`CREATE TABLE channel_tasks (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_tasks (
     task_id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
     conversation_id TEXT NOT NULL REFERENCES channel_conversations(conversation_id),
@@ -70,13 +70,13 @@ export default Effect.gen(function* () {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`;
-  yield* sql`CREATE INDEX channel_tasks_owner_idx ON channel_tasks(owner_id, updated_at)`;
-  yield* sql`CREATE INDEX channel_tasks_worker_idx ON channel_tasks(worker_thread_id)
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_tasks_owner_idx ON channel_tasks(owner_id, updated_at)`;
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_tasks_worker_idx ON channel_tasks(worker_thread_id)
     WHERE worker_thread_id IS NOT NULL`;
-  yield* sql`CREATE INDEX channel_tasks_active_idx ON channel_tasks(status)
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_tasks_active_idx ON channel_tasks(status)
     WHERE status NOT IN ('completed', 'failed', 'cancelled')`;
 
-  yield* sql`CREATE TABLE channel_task_events (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_task_events (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE,
     task_id TEXT NOT NULL REFERENCES channel_tasks(task_id),
@@ -88,12 +88,12 @@ export default Effect.gen(function* () {
     forward_state TEXT NOT NULL DEFAULT 'none',
     UNIQUE (task_id, task_version)
   )`;
-  yield* sql`CREATE INDEX channel_task_events_narration_idx
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_task_events_narration_idx
     ON channel_task_events(narration_state) WHERE narration_state = 'pending'`;
-  yield* sql`CREATE INDEX channel_task_events_forward_idx
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_task_events_forward_idx
     ON channel_task_events(forward_state) WHERE forward_state = 'pending'`;
 
-  yield* sql`CREATE TABLE channel_outbox (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_outbox (
     delivery_id TEXT PRIMARY KEY,
     cause_key TEXT NOT NULL UNIQUE,
     input_id TEXT,
@@ -109,10 +109,10 @@ export default Effect.gen(function* () {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`;
-  yield* sql`CREATE INDEX channel_outbox_due_idx ON channel_outbox(state, next_attempt_at)
+  yield* sql`CREATE INDEX IF NOT EXISTS channel_outbox_due_idx ON channel_outbox(state, next_attempt_at)
     WHERE state IN ('pending', 'delivering')`;
 
-  yield* sql`CREATE TABLE channel_runtime_state (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_runtime_state (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL,
     owner_token TEXT,
@@ -120,7 +120,7 @@ export default Effect.gen(function* () {
     updated_at TEXT NOT NULL
   )`;
 
-  yield* sql`CREATE TABLE channel_identities (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_identities (
     connection_id TEXT NOT NULL,
     external_actor_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -132,7 +132,7 @@ export default Effect.gen(function* () {
     PRIMARY KEY (connection_id, external_actor_id)
   )`;
 
-  yield* sql`CREATE TABLE channel_identity_links (
+  yield* sql`CREATE TABLE IF NOT EXISTS channel_identity_links (
     code_hash TEXT PRIMARY KEY,
     connection_id TEXT NOT NULL,
     owner_id TEXT NOT NULL,
