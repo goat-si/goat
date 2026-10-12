@@ -1110,16 +1110,16 @@ it("opens a disclosure only when find selects a match inside it", async () => {
     expect(openStates()).toEqual(["false", "false", "false"]);
     expect(container.textContent).toContain("nothing here");
     expect(
-      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()), // goat-rename: legacy
+      [...(highlights.get("goat-thread-find-active") ?? [])].map((range) => range.toString()),
     ).toEqual(["needle"]);
-    expect(highlights.get("t3-thread-find")?.size).toBe(0); // goat-rename: legacy
+    expect(highlights.get("goat-thread-find")?.size).toBe(0);
 
     await act(() => root.render(<Probe activeOccurrence={1} />));
     await frame();
     await frame();
     // Stepping to the folded match opens its two ancestors, not the unrelated one.
     expect(openStates()).toEqual(["false", "true", "true"]);
-    expect(highlights.get("t3-thread-find-active")?.size).toBe(1); // goat-rename: legacy
+    expect(highlights.get("goat-thread-find-active")?.size).toBe(1);
   } finally {
     await act(() => root.unmount());
     container.remove();
@@ -1174,7 +1174,7 @@ it("keeps Mermaid diagrams rendered until find selects a match in their source",
     // Only the diagram holding the selected match switches to source.
     expect(diagrams()).toBe(1);
     expect(
-      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()), // goat-rename: legacy
+      [...(highlights.get("goat-thread-find-active") ?? [])].map((range) => range.toString()),
     ).toEqual(["Alpha"]);
   } finally {
     await act(() => root.unmount());
