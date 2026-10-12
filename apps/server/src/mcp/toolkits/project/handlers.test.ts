@@ -636,6 +636,47 @@ it.effect("a launch into a new worktree creates nothing when its base ref has no
   }),
 );
 
+it.effect(
+  "a launch onto a branch checked out elsewhere names that checkout and creates nothing",
+  () =>
+    Effect.gen(function* () {
+      const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+      const { projectId, dependencies } = clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+        checkWorktreeBase: ({ projectId, workspaceStrategy }) =>
+          Effect.fail(
+            new ThreadLaunch.ThreadLaunchBranchError({
+              projectId,
+              projectTitle: "Client target",
+              workspaceRoot: "/projects/client-target",
+              branch: workspaceStrategy.branch ?? "",
+              worktreePath: "/worktrees/lane",
+            }),
+          ),
+      });
+      const toolkit = yield* ProjectToolkit.pipe(
+        Effect.provide(
+          McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+            Layer.provide(dependencies),
+          ),
+        ),
+      );
+      const refused = (yield* toolkit
+        .handle("goat_thread_launch", {
+          title: "Fix",
+          projectId,
+          workspaceStrategy: { type: "worktree", baseRef: "origin/lane", branch: "lane" },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies))).at(-1)?.result;
+      expect(refused).toMatchObject({ code: "invalid_request" });
+      expect((refused as { message: string }).message).toBe(
+        'Branch "lane" is already checked out at /worktrees/lane in project "Client target". No thread was created. Launch into that checkout with workspaceStrategy {type:"existing_worktree", worktreePath:"/worktrees/lane"}, or pass a branch name that does not exist yet.',
+      );
+      expect(launched).toHaveLength(0);
+    }),
+);
+
 it.effect("lists and reads another machine's projects through that machine's own tools", () =>
   Effect.gen(function* () {
     const sourceThreadId = ThreadId.make("source-thread");

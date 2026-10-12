@@ -2902,6 +2902,34 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
+    it.effect("finds the worktree that has a branch checked out", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "lane");
+        yield* git(cwd, ["branch", "feature/free"]);
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/taken",
+        });
+
+        assert.equal(
+          yield* driver.branchWorktreePath({ cwd, branch: "feature/taken" }),
+          yield* fs.realPath(worktreePath),
+        );
+        assert.equal(
+          yield* driver.branchWorktreePath({ cwd, branch: initialBranch }),
+          yield* fs.realPath(cwd),
+        );
+        assert.isNull(yield* driver.branchWorktreePath({ cwd, branch: "feature/free" }));
+        assert.isNull(yield* driver.branchWorktreePath({ cwd, branch: "feature" }));
+      }),
+    );
     it.effect("uses parallel checkout without skipping filters or hooks", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

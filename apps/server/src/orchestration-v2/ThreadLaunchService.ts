@@ -165,6 +165,23 @@ export class ThreadLaunchBaseRefError extends Schema.TaggedError<ThreadLaunchBas
   }
 }
 
+export class ThreadLaunchBranchError extends Schema.TaggedError<ThreadLaunchBranchError>()(
+  "ThreadLaunchBranchError",
+  {
+    projectId: ProjectId,
+    projectTitle: Schema.String,
+    workspaceRoot: Schema.String,
+    branch: Schema.String,
+    worktreePath: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.worktreePath === null
+      ? `Branch "${this.branch}" already exists in project "${this.projectTitle}" (${this.workspaceRoot}), and a new worktree needs a new branch.`
+      : `Branch "${this.branch}" is already checked out at ${this.worktreePath} in project "${this.projectTitle}".`;
+  }
+}
+
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
   {
@@ -172,13 +189,14 @@ export class ThreadLaunchService extends Context.Service<
       input: ThreadLaunchInput,
     ) => Effect.Effect<ThreadLaunchResult, ThreadLaunchError>;
     /**
-     * Fails when a new worktree's base ref cannot give provisioning a commit.
-     * `launch` accepts such a launch and reports the failure inside the
-     * thread; a caller that needs it before a thread exists checks first.
+     * Fails when a new worktree's base ref cannot give provisioning a commit,
+     * or when its requested branch already exists (`git worktree add -b`
+     * refuses it). `launch` accepts such a launch and reports the failure
+     * inside the thread; a caller that needs it before a thread exists checks first.
      */
     readonly checkWorktreeBase: (
       input: Pick<ThreadLaunchInput, "projectId" | "workspaceStrategy">,
-    ) => Effect.Effect<void, ThreadLaunchBaseRefError>;
+    ) => Effect.Effect<void, ThreadLaunchBaseRefError | ThreadLaunchBranchError>;
     /** Dispatches prepared-run.retry and prepares the run's workspace again. */
     readonly retryPreparation: (
       input: ThreadLaunchRetryInput,
@@ -259,8 +277,27 @@ const make = Effect.gen(function* () {
     "ThreadLaunchService.checkWorktreeBase",
   )(function* (input) {
     const strategy = input.workspaceStrategy;
+    if (strategy.type !== "worktree") return;
+    const { branch } = strategy;
+    if (branch !== undefined) {
+      const taken = yield* Effect.gen(function* () {
+        const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
+        if (project === undefined) return undefined;
+        const cwd = project.workspaceRoot;
+        if (!(yield* git.hasCommit({ cwd, refName: `refs/heads/${branch}` }))) return undefined;
+        return { project, worktreePath: yield* git.branchWorktreePath({ cwd, branch }) };
+      }).pipe(Effect.orElseSucceed(() => undefined));
+      if (taken !== undefined)
+        return yield* new ThreadLaunchBranchError({
+          projectId: taken.project.id,
+          projectTitle: taken.project.title,
+          workspaceRoot: taken.project.workspaceRoot,
+          branch,
+          worktreePath: taken.worktreePath,
+        });
+    }
     // `:/text` is a commit search, which cannot be asked for a commit type.
-    if (strategy.type !== "worktree" || strategy.baseRef.startsWith(":")) return;
+    if (strategy.baseRef.startsWith(":")) return;
     const { baseRef } = strategy;
     // Anything this cannot establish is left for the launch to report: a
     // missing project, a folder that is not a repository, a failing Git.
