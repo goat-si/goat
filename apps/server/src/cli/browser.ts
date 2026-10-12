@@ -1,5 +1,5 @@
 /**
- * `goat browser setup` - prepares a Linux host for GOAT's headless browser, which
+ * `goat browser setup` - prepares a Linux host for T3's headless browser, which
  * server browser tabs and HTML render previews share. It is the fix every
  * browser host error names, so it does the whole job in one run:
  *
@@ -23,6 +23,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
 import { resolveBaseDir } from "../os-jank.ts";
+import { resolveGoatHome } from "@goat/shared/goatHome";
 import { baseDirFlag } from "./config.ts";
 import { resolveRootCliCommand } from "./invocation.ts";
 
@@ -54,7 +55,7 @@ const runStep = Effect.fn("browserSetup.runStep")(function* (
 
 /**
  * The GOAT home to check. Under `sudo` the process home is root's, so an
- * unspecified home falls back to the invoking user's `~/.t3`.
+ * unspecified home falls back to the invoking user's home.
  */
 export const setupBaseDir = Effect.fn("browserSetup.baseDir")(function* (
   explicit: Option.Option<string>,
@@ -69,8 +70,7 @@ export const setupBaseDir = Effect.fn("browserSetup.baseDir")(function* (
     )
     .pipe(Effect.orElseSucceed(() => ""));
   const home = entry.trim().split(":")[5];
-  const path = yield* Path.Path;
-  return home ? path.join(home, ".t3") : yield* resolveBaseDir(undefined);
+  return home ? yield* resolveGoatHome(home, "userdata") : yield* resolveBaseDir(undefined);
 });
 
 /** Whether apt has an installable candidate for `name`. */
@@ -83,7 +83,7 @@ const aptOffers = Effect.fn("browserSetup.aptOffers")(function* (name: string) {
   return candidate !== undefined && candidate !== "(none)";
 });
 
-/** The installed browser in this GOAT home, if any, to check its libraries. */
+/** The installed browser in this T3 home, if any, to check its libraries. */
 const installedBrowser = Effect.fn("browserSetup.installedBrowser")(function* (baseDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

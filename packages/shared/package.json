@@ -355,6 +355,10 @@
       "types": "./src/devHome.ts",
       "import": "./src/devHome.ts"
     },
+    "./goatHome": {
+      "types": "./src/goatHome.ts",
+      "import": "./src/goatHome.ts"
+    },
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"

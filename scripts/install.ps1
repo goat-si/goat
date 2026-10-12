@@ -26,7 +26,13 @@ foreach ($name in "RELEASE_BASE_URL", "HOME", "INSTALL_BIN_DIR", "CHANNEL", "VER
 }
 # goat-rename: legacy-end
 $baseUrl = if ($env:GOAT_RELEASE_BASE_URL) { $env:GOAT_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
-$t3Home = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".t3" }
+# goat-rename: legacy-begin
+# An install made before the GOAT rename keeps its ~/.t3 home until ~/.goat holds state.
+if (-not $env:GOAT_HOME -and -not (Test-Path (Join-Path $HOME ".goat\userdata")) -and (Test-Path (Join-Path $HOME ".t3\userdata"))) {
+  $env:GOAT_HOME = Join-Path $HOME ".t3"
+}
+# goat-rename: legacy-end
+$t3Home = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".goat" }
 $binDir = if ($env:GOAT_INSTALL_BIN_DIR) { $env:GOAT_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
 
 function Fail([string] $message) {

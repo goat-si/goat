@@ -19,6 +19,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Argument, Command } from "effect/cli";
+import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { baseDirFlag } from "./config.ts";
@@ -218,11 +219,13 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
     workspaceRoot,
     platform: hostPlatform,
   };
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  // A desktop started before the GOAT rename may still run on the legacy home.
+  const defaultHomes = [...new Set([baseDir, path.join(homeDirectory, LEGACY_HOME_DIR_NAME)])];
   const stateDirectories = allowDefaultSearch
     ? [
-        path.join(yield* HostProcess.HomeDirectory, ".goat", "desktop", "userdata"),
-        path.join(baseDir, "userdata"),
-        path.join(baseDir, "dev"),
+        path.join(homeDirectory, ".goat", "desktop", "userdata"),
+        ...defaultHomes.flatMap((home) => [path.join(home, "userdata"), path.join(home, "dev")]),
       ]
     : [path.join(baseDir, "userdata")];
   const [address, ...fallbackAddresses] = stateDirectories.map(resolveAddress);

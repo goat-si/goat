@@ -18,7 +18,8 @@ export function resolveDesktopBaseDir(input: {
 }): string {
   return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () =>
     input.isDevelopment
-      ? input.joinPath(input.homeDirectory, ".t3")
+      ? // The dev runner passes its home explicitly; this is a hand-launched dev build.
+        input.joinPath(input.homeDirectory, ".goat")
       : input.joinPath(input.homeDirectory, ".goat", "desktop"),
   );
 }

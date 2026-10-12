@@ -316,6 +316,8 @@ export const resolveServerConfig = (
       Option.getOrUndefined(
         resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
       ),
+      // Same rule as deriveServerPaths: an implicit dev run reads <home>/dev.
+      devUrl !== undefined && Option.isNone(explicitBaseDir) ? "dev" : "userdata",
     );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));

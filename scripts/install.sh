@@ -29,7 +29,13 @@ GOAT_VERSION="${GOAT_VERSION:-${T3CODE_VERSION:-}}"
 
 repo="goat-si/goat-releases"
 base_url="${GOAT_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
-t3_home="${GOAT_HOME:-$HOME/.t3}"
+# goat-rename: legacy-begin
+# An install made before the GOAT rename keeps its ~/.t3 home until ~/.goat holds state.
+if [ -z "${GOAT_HOME:-}" ] && [ ! -d "$HOME/.goat/userdata" ] && [ -d "$HOME/.t3/userdata" ]; then
+  GOAT_HOME="$HOME/.t3"
+fi
+# goat-rename: legacy-end
+t3_home="${GOAT_HOME:-$HOME/.goat}"
 bin_dir="${GOAT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {

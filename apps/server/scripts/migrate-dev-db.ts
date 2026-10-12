@@ -35,6 +35,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 import { resolveWorktreeHome } from "@goat/shared/devHome";
+import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
+import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -510,7 +512,8 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
 
   const homeDirectory = NodeOS.homedir();
   const sourceHomes = (
-    options.sourceHomes ?? [path.join(homeDirectory, ".goat"), path.join(homeDirectory, ".t3")]
+    options.sourceHomes ??
+    [GOAT_HOME_DIR_NAME, LEGACY_HOME_DIR_NAME].map((name) => path.join(homeDirectory, name))
   ).map((home) => path.resolve(home));
   const protectedHomes = [
     ...sourceHomes,

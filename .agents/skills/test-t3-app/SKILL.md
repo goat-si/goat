@@ -14,11 +14,11 @@ testing, use [test-t3-mobile](../test-t3-mobile/SKILL.md).
 
 Reuse this task's healthy dev server. Otherwise run `vp run dev` from the
 repository root and retain its terminal session. Use the worktree's ignored
-`.t3` state and read the actual ports and pairing URL from the dev-runner output.
+`.goat` state (`.t3` in a worktree created earlier) and read the actual ports and pairing URL from the dev-runner output.
 Never run a server against `~/.goat/userdata` or `~/.t3/userdata`, and never set
 `VITE_HTTP_URL` or `VITE_WS_URL`. `vp run migrate-dev-db` reads
 `~/.goat/userdata/statev2.sqlite` (or `~/.t3/userdata/statev2.sqlite` when the
-GOAT database is absent) and writes the worktree `.t3`.
+GOAT database is absent) and writes the worktree home.
 
 Test with meaningful project and thread data. Read
 [references/sqlite-fixtures.md](references/sqlite-fixtures.md) only when

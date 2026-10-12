@@ -13,6 +13,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
+import { resolveGoatHome } from "./goatHome.ts";
+
 /**
  * A `.git` file points at the real git directory. A linked worktree's lives at
  * `<common-dir>/worktrees/<name>`; a submodule's at
@@ -89,6 +91,7 @@ export const resolveGitWorktreePath = (
  * The worktree-local data directory for `cwd`, or undefined outside a linked
  * worktree. Deliberately does not require the directory to exist yet: falling
  * back because it is missing would send callers at the shared home.
+ * A worktree set up before the GOAT rename keeps its `.t3` (see `resolveGoatHome`).
  */
 export const resolveWorktreeHome = (
   cwd: string,
@@ -98,6 +101,6 @@ export const resolveWorktreeHome = (
     if (worktreePath === undefined) {
       return undefined;
     }
-    const path = yield* Path.Path;
-    return path.join(worktreePath, ".t3");
+    // The dev runner hands this home to the server as an explicit base dir, which reads userdata.
+    return yield* resolveGoatHome(worktreePath, "userdata");
   });

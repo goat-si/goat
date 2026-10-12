@@ -212,7 +212,7 @@ describe("development runtime archive publication", () => {
       yield* fs.writeFileString(root + "/.git", "gitdir: /example/.git/worktrees/fixture\n");
       assert.equal(
         yield* resolveRuntimeArchiveHome({ cwd: root, ambientHome: "/ambient" }),
-        root + "/.t3",
+        root + "/.goat",
       );
       assert.equal(
         yield* resolveRuntimeArchiveHome({

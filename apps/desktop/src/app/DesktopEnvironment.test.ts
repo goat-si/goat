@@ -178,7 +178,7 @@ describe("DesktopEnvironment", () => {
       );
       const production = yield* makeEnvironment();
 
-      assert.equal(development.stateDir, "/Users/alice/.t3/dev");
+      assert.equal(development.stateDir, "/Users/alice/.goat/dev");
       assert.equal(production.baseDir, "/Users/alice/.goat/desktop");
       assert.equal(production.stateDir, "/Users/alice/.goat/desktop/userdata");
     }),
