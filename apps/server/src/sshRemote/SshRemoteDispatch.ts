@@ -162,6 +162,12 @@ export interface SshHostToolCall {
   readonly timeoutMs: number;
   /** Writes need a remote that applies the session's runtime-mode ceiling. */
   readonly writes: boolean;
+  /**
+   * The caller holds `orchestration:approve`, so the remote session asks for
+   * it too. A remote too old to grant it gets a session without, and refuses
+   * approval answers itself.
+   */
+  readonly approvals?: boolean;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -220,6 +226,12 @@ export class SshRemoteDispatch extends Context.Service<
 const decodeRemoteIdentity = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
+
+const sessionKey = (
+  target: DesktopSshEnvironmentTarget,
+  ceiling: RuntimeMode,
+  approvals: boolean,
+) => `${targetConnectionKey(target)}\u0000${ceiling}${approvals ? "\u0000approvals" : ""}`;
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
@@ -527,17 +539,23 @@ const make = Effect.gen(function* () {
   const sessionFor = Effect.fn("SshRemoteDispatch.sessionFor")(function* (
     target: DesktopSshEnvironmentTarget,
     ceiling: RuntimeMode,
+    approvals = false,
   ) {
-    const key = `${targetConnectionKey(target)}\u0000${ceiling}`;
+    const key = sessionKey(target, ceiling, approvals);
     const now = yield* Clock.currentTimeMillis;
     const cached = sessions.get(key);
     if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
-    const issued = yield* withRuntime(
-      manager.issueMcpClientSession(target, {
-        label: `GOAT SSH dispatch (${ceiling})`,
-        ttl: SESSION_TTL,
-        runtimeModeCeiling: ceiling,
-      }),
+    const issue = (withApprovals: boolean) =>
+      withRuntime(
+        manager.issueMcpClientSession(target, {
+          label: `GOAT SSH dispatch (${ceiling}${withApprovals ? ", approvals" : ""})`,
+          ttl: SESSION_TTL,
+          runtimeModeCeiling: ceiling,
+          ...(withApprovals ? { approvals: true } : {}),
+        }),
+      );
+    const issued = yield* (
+      approvals ? issue(true).pipe(Effect.catch(() => issue(false))) : issue(false)
     ).pipe(sshFailed(target.alias));
     const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
     const session = {
@@ -615,7 +633,7 @@ const make = Effect.gen(function* () {
         }
         if (describe(error).includes("HTTP 401")) {
           // Revoked or expired on the remote: forget it so the next call issues a fresh one.
-          sessions.delete(`${targetConnectionKey(input.target)}\u0000${input.ceiling}`);
+          sessions.delete(sessionKey(input.target, input.ceiling, false));
           return failure(
             "remote_refused",
             `${input.target.alias} rejected this machine's GOAT session; call the tool again to sign in anew.`,
@@ -1235,7 +1253,9 @@ const make = Effect.gen(function* () {
 
     const attempt = (retried: boolean): Effect.Effect<unknown, SshRemoteDispatchError | E, R> =>
       Effect.gen(function* () {
-        const session = yield* sessionFor(target, ceiling).pipe(unavailable(target.alias));
+        const session = yield* sessionFor(target, ceiling, call.approvals === true).pipe(
+          unavailable(target.alias),
+        );
         if (call.writes && !session.ceilingApplied) {
           return yield* failure(
             "remote_refused",
@@ -1269,7 +1289,7 @@ const make = Effect.gen(function* () {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) {
             // Revoked or expired on the remote: issue a fresh session once.
-            sessions.delete(`${targetConnectionKey(target)}\u0000${ceiling}`);
+            sessions.delete(sessionKey(target, ceiling, call.approvals === true));
             return retried
               ? Effect.fail(
                   failure(

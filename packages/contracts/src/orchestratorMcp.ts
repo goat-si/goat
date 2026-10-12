@@ -26,6 +26,7 @@ import {
 } from "./scheduledTask.ts";
 import {
   ProviderInteractionMode,
+  ProviderRequestKind,
   RuntimeMode,
   ProviderUserInputAnswers,
   UserInputRespondedBy,
@@ -374,6 +375,8 @@ export type OrchestratorMcpLaunchedQuestionsResult =
 export const OrchestratorMcpThreadPendingRequestsResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   requestIds: Schema.Array(RuntimeRequestId),
+  /** Pending approvals, listed only for callers allowed to answer them. */
+  approvalRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
 });
 export const OrchestratorMcpPendingRequestListResult = Schema.Union([
   OrchestratorMcpThreadPendingRequestsResult,
@@ -392,6 +395,13 @@ export const OrchestratorMcpPendingRequestReadResult = Schema.Struct({
   host: OrchestratorMcpResultHost,
   requestId: RuntimeRequestId,
   questions: Schema.Array(OrchestrationV2UserInputQuestion),
+  /** Set for an approval request; its questions are empty. */
+  approval: Schema.optional(
+    Schema.Struct({
+      kind: ProviderRequestKind,
+      prompt: Schema.optional(Schema.String),
+    }),
+  ),
   status: Schema.optional(OrchestrationV2RuntimeRequest.fields.status),
   decision: Schema.optional(ProviderApprovalDecision),
   respondedBy: Schema.optional(UserInputRespondedBy),
@@ -399,11 +409,14 @@ export const OrchestratorMcpPendingRequestReadResult = Schema.Struct({
 });
 export type OrchestratorMcpPendingRequestReadResult =
   typeof OrchestratorMcpPendingRequestReadResult.Type;
+/** Single-shot approval answers; session-wide grants stay with the user. */
+export const OrchestratorMcpApprovalDecision = Schema.Literals(["accept", "decline"]);
 export const OrchestratorMcpPendingRequestRespondInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   host: Schema.optional(OrchestratorMcpHost),
   requestId: RuntimeRequestId,
-  answers: ProviderUserInputAnswers,
+  answers: Schema.optional(ProviderUserInputAnswers),
+  decision: Schema.optional(OrchestratorMcpApprovalDecision),
   reason: UserInputResponseReason,
   respondedBy: Schema.optional(UserInputRespondedBy),
 });

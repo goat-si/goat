@@ -150,6 +150,8 @@ export interface HostThreadsMcpServiceShape {
       readonly host: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
+      /** Ask the host for a session that may answer approvals; see SshHostToolCall. */
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -171,6 +173,7 @@ export interface HostThreadsMcpServiceShape {
       readonly host: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -256,6 +259,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly approvals?: boolean;
     },
   ) =>
     dispatch
@@ -266,6 +270,7 @@ const make = Effect.gen(function* () {
           arguments: input.arguments,
           writes: input.writes,
           timeoutMs: input.timeoutMs ?? REMOTE_TIMEOUT_MS,
+          ...(input.approvals === true ? { approvals: true } : {}),
         },
         authorize(input.writes).pipe(
           Effect.provideService(McpInvocationContext, scope),
@@ -287,6 +292,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly approvals?: boolean;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) =>

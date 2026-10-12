@@ -145,7 +145,7 @@ const pendingTool = {
 const PendingRequestListTool = Tool.make("goat_pending_request_list", {
   ...pendingTool,
   description:
-    "List pending user-input questions; approvals are human-only and excluded. Omit threadId for this thread, or pass host and threadId for another machine. scope='launched' shows your launched threads' questions locally and on connected hosts plus hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Results cap at 100; when truncated, answer questions or narrow with host and threadId. Launcher filters are reserved for outside host transport.",
+    "List pending user-input questions. Approvals are human-only and excluded, except that an MCP client token with orchestration:approve also gets approvalRequestIds for one thread. Omit threadId for this thread, or pass host and threadId for another machine. scope='launched' shows your launched threads' questions locally and on connected hosts plus hosts[]. Host fan-out caps at 16; unavailableHosts reports skipped aliases and hosts that could not be queried. Results cap at 100; when truncated, answer questions or narrow with host and threadId. Launcher filters are reserved for outside host transport.",
   parameters: OrchestratorMcpPendingRequestListInput,
   success: OrchestratorMcpPendingRequestListResult,
 })
@@ -154,7 +154,7 @@ const PendingRequestListTool = Tool.make("goat_pending_request_list", {
 const PendingRequestReadTool = Tool.make("goat_pending_request_read", {
   ...pendingTool,
   description:
-    "Read a pending or resolved user question, including status, responder and resolution time when available. Pass host and threadId for another machine. Answer with goat_pending_request_respond or forward to the user; old remotes may omit status and provenance.",
+    "Read a pending or resolved user question, including status, responder and resolution time when available. A caller with orchestration:approve can also read an approval, returned with approval.kind and approval.prompt. Pass host and threadId for another machine. Answer with goat_pending_request_respond or forward to the user; old remotes may omit status and provenance.",
   parameters: OrchestratorMcpPendingRequestReadInput,
   success: OrchestratorMcpPendingRequestReadResult,
 })
@@ -163,7 +163,7 @@ const PendingRequestReadTool = Tool.make("goat_pending_request_read", {
 const PendingRequestRespondTool = Tool.make("goat_pending_request_respond", {
   ...pendingTool,
   description:
-    "Answer a pending user-input question with answers and a required reason (1–2000 characters, including non-whitespace text). Pass host and threadId for another machine; remote writes need default interaction mode. Approvals are human-only; forward humanRequired questions to the user. respondedBy is reserved for outside host transport; thread callers must omit it.",
+    "Answer a pending user-input question with answers and a required reason (1–2000 characters, including non-whitespace text). Pass host and threadId for another machine; remote writes need default interaction mode. Approvals are human-only, except for an MCP client token with orchestration:approve, which answers one with decision ('accept' or 'decline') instead of answers. Forward humanRequired questions to the user. respondedBy is reserved for outside host transport; thread callers must omit it.",
   parameters: OrchestratorMcpPendingRequestRespondInput,
   success: OrchestratorMcpPendingRequestRespondResult,
 })
