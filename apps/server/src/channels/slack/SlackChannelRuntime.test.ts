@@ -563,6 +563,27 @@ describe("Slack delivery status", () => {
     );
   });
 
+  it.effect("leaves a revocation unacknowledged when settings say its session was replaced", () => {
+    const h = harness();
+    return run(
+      h,
+      Effect.gen(function* () {
+        yield* apply(connection({ onRevoked: () => Effect.succeed("ignored" as const) }));
+        yield* awaitStatus("connected");
+        const revocation = latestSession(h.sdk).emitEnvelope(
+          eventCallback(
+            { type: "tokens_revoked", tokens: { bot: ["U0BOT"] } },
+            { event_time: 1000 },
+          ),
+        );
+        // Envelopes are handled one at a time, so the next ACK proves the revocation finished.
+        const next = latestSession(h.sdk).emitEnvelope(eventCallback(channelMention()));
+        yield* Effect.promise(() => next.acked);
+        assert.equal(revocation.ackCount(), 0);
+      }),
+    );
+  });
+
   it.effect(
     "receive-only reconnect authentication failure stops without calling revocation cleanup",
     () => {

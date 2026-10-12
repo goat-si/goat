@@ -1269,6 +1269,27 @@ describe("Slack revocation recovery", () => {
       }),
   );
 
+  it.effect("applies an uninstall inside the margin once the bot token is already revoked", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* tempBaseDir;
+      const sdk = makeFakeSlackSdk();
+      yield* withServer(baseDir, sdk, (settings) =>
+        Effect.gen(function* () {
+          yield* createConnected(settings);
+          yield* Effect.promise(() => revoke(sdk, "tokens_revoked").acked);
+          const authCalls = sdk.calls.filter((call) => call === "authTest").length;
+          // Within five minutes of the saved tokens; the tombstone already proves the bot is dead.
+          yield* Effect.promise(() => revoke(sdk, "app_uninstalled", 100).acked);
+          const [current] = yield* settings.get();
+          assert.equal(current?.hasAppToken, false);
+          assert.equal(current?.hasBotToken, false);
+          assert.equal(sdk.calls.filter((call) => call === "authTest").length, authCalls);
+          assert((yield* fileState(baseDir)).settings?.includes('"revoked":"app_uninstalled"'));
+        }),
+      );
+    }),
+  );
+
   it.effect("applies revocation at savedAt plus 300 seconds without reauthenticating", () =>
     Effect.gen(function* () {
       const baseDir = yield* tempBaseDir;

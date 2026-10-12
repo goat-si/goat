@@ -92,7 +92,11 @@ export const handleSlackEnvelope = (
         return { acked: false, handling: "redeliver" } satisfies SlackEnvelopeOutcome;
       }
       handling = "revocation";
-    } else if (input.receiveOnly !== undefined && (yield* input.receiveOnly)) {
+    } else if (
+      !(classification._tag === "ignored" && classification.reason === "team_mismatch") &&
+      input.receiveOnly !== undefined &&
+      (yield* input.receiveOnly)
+    ) {
       yield* Effect.logInfo("Slack receive-only event dropped.").pipe(
         Effect.annotateLogs({ count: 1 }),
       );

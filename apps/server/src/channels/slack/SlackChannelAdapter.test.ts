@@ -252,6 +252,23 @@ describe("handleSlackEnvelope", () => {
     }).pipe(Effect.provide(gateway.layer));
   });
 
+  it.effect("still reports another workspace while the connection is receive-only", () => {
+    const gateway = makeFakeGateway();
+    return Effect.gen(function* () {
+      const { envelope } = envelopeFor(eventCallback(channelMention(), { team_id: "T0OTHER" }));
+      assert.deepEqual(
+        yield* handleSlackEnvelope(envelope, {
+          connectionId,
+          classifier,
+          owner,
+          receiveOnly: Effect.succeed(true),
+        }),
+        { acked: true, handling: "team_mismatch" },
+      );
+      assert.equal(gateway.calls.length, 0);
+    }).pipe(Effect.provide(gateway.layer));
+  });
+
   it.effect("links an identity from a DM code and keeps the code out of message input", () => {
     const gateway = makeFakeGateway();
     return Effect.gen(function* () {

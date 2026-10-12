@@ -291,7 +291,8 @@ const make = Effect.gen(function* () {
       const terminateAfterAck = yield* Ref.make(false);
       const onRevocation = (event: SlackRevocationEvent) =>
         Effect.gen(function* () {
-          if (!(yield* isCurrent(connection.connectionId, generation))) return true;
+          // A replaced session leaves the event unacknowledged so Slack redelivers it to the new one.
+          if (!(yield* isCurrent(connection.connectionId, generation))) return false;
           yield* Ref.set(terminateAfterAck, false);
           const previous = yield* Ref.get(blocked);
           const reason =
@@ -309,7 +310,7 @@ const make = Effect.gen(function* () {
             );
             return false;
           }
-          if (result.value === "ignored") return true;
+          if (result.value === "ignored") return false;
           if (result.value === "stale" && previous !== undefined) {
             yield* Ref.set(blocked, previous);
             yield* setPhase(connection.connectionId, "error", previous);

@@ -277,9 +277,10 @@ export const make = Effect.gen(function* () {
           // More than five minutes of clock skew can still misidentify an old installation's
           // event and delete replacement tokens; recovery requires entering the tokens again.
           if (
+            // A stored tombstone already proves the bot token is dead, so only a live connection
+            // needs auth.test to tell an old event from a current one.
             event.eventTime < savedAt + REVOCATION_SKEW_MARGIN_SECONDS &&
-            connection.revoked !== "app_uninstalled" &&
-            !(connection.revoked === "bot_revoked" && event.kind === "tokens_revoked")
+            connection.revoked === undefined
           ) {
             const token = yield* readSecret(botTokenSecretName(connectionId));
             if (Option.isNone(token)) return "blocked" as const;
