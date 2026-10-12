@@ -98,6 +98,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         attachments,
         allowBroadWorkspaceRoot: input.allowBroadWorkspaceRoot,
         launchedBy,
+        standingInstructions: input.standingInstructions,
       };
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const result = yield* Effect.gen(function* () {

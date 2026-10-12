@@ -136,6 +136,11 @@ export type SshLaunchInput = SshDispatchDestination & {
    * whose goat_thread_launch declares launchedBy; older remotes refuse unknown arguments.
    */
   readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
+  /**
+   * False asks the remote not to put its standing instructions in front of
+   * message. Forwarded only to a remote whose goat_thread_launch declares it.
+   */
+  readonly standingInstructions?: boolean | undefined;
 };
 
 export interface SshLaunchResult {
@@ -552,8 +557,9 @@ const make = Effect.gen(function* () {
 
   /**
    * The arguments the remote's goat_thread_launch declares, or null when the listing
-   * failed. Only a listing that declares report is cached; a failure or an older remote
-   * is asked again on the next launch, so an upgrade takes effect without a new session.
+   * failed. Only a listing that declares report and standingInstructions is cached; a
+   * failure or an older remote is asked again on the next launch, so an upgrade takes
+   * effect without a new session.
    */
   const remoteLaunchArguments = Effect.fn("SshRemoteDispatch.remoteLaunchArguments")(
     function* (remote: {
@@ -577,7 +583,8 @@ const make = Effect.gen(function* () {
       const declared = new Set(
         listed.value.find((tool) => tool.name === "goat_thread_launch")?.argumentNames ?? [],
       );
-      if (declared.has("report")) launchArguments.set(key, declared);
+      if (declared.has("report") && declared.has("standingInstructions"))
+        launchArguments.set(key, declared);
       return declared;
     },
   );
@@ -1085,11 +1092,19 @@ const make = Effect.gen(function* () {
     }
 
     const declared =
-      input.launchedBy === undefined && input.report === undefined
+      input.launchedBy === undefined &&
+      input.report === undefined &&
+      input.standingInstructions !== false
         ? null
         : yield* remoteLaunchArguments(remote);
     const forwardLaunchedBy =
       input.launchedBy !== undefined && declared?.has("launchedBy") === true;
+    const forwardStandingOptOut =
+      input.standingInstructions === false && declared?.has("standingInstructions") === true;
+    if (input.standingInstructions === false && !forwardStandingOptOut)
+      notes.push(
+        `GOAT on ${target.alias} could not be asked to skip its standing instructions; if it has any, they were put in front of message.`,
+      );
     // A remote whose goat_thread_launch declares arguments but not report would drop the
     // binding and leave its agent told to report. An unknown or schemaless listing still
     // sends it, and a remote that refuses it is relaunched without it by the coordinator.
@@ -1137,6 +1152,7 @@ const make = Effect.gen(function* () {
               : {}),
             ...(attachments.length === 0 ? {} : { attachments }),
             ...(forwardReport ? { report: input.report } : {}),
+            ...(forwardStandingOptOut ? { standingInstructions: false } : {}),
           },
         });
       const rawLaunched = yield* launch(forwardLaunchedBy).pipe(
