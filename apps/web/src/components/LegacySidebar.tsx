@@ -211,6 +211,7 @@ import {
 import {
   isProjectsViewPinnedThread,
   isProjectsViewListedThread,
+  resolveProjectsViewPreview,
   resolveProjectsViewThreadOrder,
   createProjectsViewEnvironmentAtoms,
   resolveProjectsViewProjectConnectionStatus,
@@ -1491,7 +1492,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const previewThreads =
       isThreadListExpanded || !hasOverflowingThreads
         ? visibleProjectThreads
-        : visibleProjectThreads.slice(0, sidebarThreadPreviewCount);
+        : resolveProjectsViewPreview(
+            visibleProjectThreads,
+            sidebarThreadPreviewCount,
+            openSubagent?.ownerKey ?? null,
+            (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          );
     const visibleThreadKeys = new Set(
       [...previewThreads, ...(pinnedCollapsedThread ? [pinnedCollapsedThread] : [])].map((thread) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -1518,6 +1524,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   }, [
     childAttentionByKey,
     isThreadListExpanded,
+    openSubagent,
     pinnedThreads,
     pinnedCollapsedThread,
     projectExpanded,
@@ -3436,7 +3443,8 @@ export default function LegacySidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const routeRowKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? routeThreadKey;
+  const openSubagentOwnerKey = useSidebarOpenSubagent(routeThreadKey)?.ownerKey ?? null;
+  const routeRowKey = openSubagentOwnerKey ?? routeThreadKey;
   const routeTerminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -3823,7 +3831,12 @@ export default function LegacySidebar() {
           const previewThreads =
             isThreadListExpanded || !hasOverflowingThreads
               ? projectThreads
-              : projectThreads.slice(0, sidebarThreadPreviewCount);
+              : resolveProjectsViewPreview(
+                  projectThreads,
+                  sidebarThreadPreviewCount,
+                  openSubagentOwnerKey,
+                  (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                );
           const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : previewThreads;
           return renderedThreads.map((thread) =>
             scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -3835,6 +3848,7 @@ export default function LegacySidebar() {
       sidebarThreadSortOrder,
       sidebarThreadPreviewCount,
       expandedThreadListsByProject,
+      openSubagentOwnerKey,
       projectExpandedById,
       routeRowKey,
       sortedProjects,
@@ -3917,7 +3931,8 @@ export default function LegacySidebar() {
       if (traversalDirection !== null) {
         const targetThreadKey = resolveAdjacentThreadId({
           threadIds: orderedSidebarThreadKeys,
-          currentThreadId: routeThreadKey,
+          // An open subagent has no row; move from its owner row.
+          currentThreadId: routeRowKey,
           direction: traversalDirection,
         });
         if (!targetThreadKey) {
@@ -3964,7 +3979,7 @@ export default function LegacySidebar() {
     navigateToThread,
     orderedSidebarThreadKeys,
     platform,
-    routeThreadKey,
+    routeRowKey,
     sidebarThreadByKey,
     threadJumpThreadKeys,
   ]);

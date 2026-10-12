@@ -11,6 +11,7 @@ import {
   createProjectsViewEnvironmentAtoms,
   isProjectsViewPinnedThread,
   isProjectsViewListedThread,
+  resolveProjectsViewPreview,
   resolveProjectConnectionStatus,
   resolveProjectsViewProjectConnectionStatus,
   resolveProjectsViewThreadOrder,
@@ -102,6 +103,16 @@ describe("Projects view rows", () => {
   it("never lists a subagent, pinned or not", () => {
     expect(isProjectsViewListedThread(subagent)).toBe(false);
     expect(isProjectsViewListedThread({ ...subagent, pinnedAt: pinned.pinnedAt })).toBe(false);
+  });
+  it("keeps the open subagent's owner past the preview limit, in order", () => {
+    const keys = ["a", "b", "c", "d", "e"];
+    const preview = (owner: string | null) =>
+      resolveProjectsViewPreview(keys, 2, owner, (key) => key);
+    expect(preview(null)).toEqual(["a", "b"]);
+    expect(preview("b")).toEqual(["a", "b"]);
+    expect(preview("d")).toEqual(["a", "b", "d"]);
+    expect(preview("other-project")).toEqual(["a", "b"]);
+    expect(resolveProjectsViewPreview(keys, 10, "d", (key) => key)).toEqual(keys);
   });
 });
 

@@ -5016,7 +5016,8 @@ export default function Sidebar() {
         navigateToThreadKey(
           resolveAdjacentThreadId({
             threadIds: orderedThreadKeys,
-            currentThreadId: routeThreadKey,
+            // An open subagent has no row; move from its owner row.
+            currentThreadId: routeRowKey,
             direction: traversalDirection,
           }),
         );
@@ -5033,7 +5034,7 @@ export default function Sidebar() {
     navigateToThread,
     orderedThreadKeys,
     routeTerminalOpen,
-    routeThreadKey,
+    routeRowKey,
     threadByKey,
   ]);
 

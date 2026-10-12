@@ -763,15 +763,14 @@ export function buildSidebarSubagentIndex(
     else if (thread.hasPendingUserInput && !attentionByOwnerKey.has(ownerKey))
       attentionByOwnerKey.set(ownerKey, "input");
   }
+  const sameOwners =
+    previous !== undefined && sameMap(previous.ownerKeyByChildKey, ownerKeyByChildKey);
+  const sameAttention =
+    previous !== undefined && sameMap(previous.attentionByOwnerKey, attentionByOwnerKey);
+  if (previous !== undefined && sameOwners && sameAttention) return previous;
   return {
-    ownerKeyByChildKey:
-      previous && sameMap(previous.ownerKeyByChildKey, ownerKeyByChildKey)
-        ? previous.ownerKeyByChildKey
-        : ownerKeyByChildKey,
-    attentionByOwnerKey:
-      previous && sameMap(previous.attentionByOwnerKey, attentionByOwnerKey)
-        ? previous.attentionByOwnerKey
-        : attentionByOwnerKey,
+    ownerKeyByChildKey: sameOwners ? previous.ownerKeyByChildKey : ownerKeyByChildKey,
+    attentionByOwnerKey: sameAttention ? previous.attentionByOwnerKey : attentionByOwnerKey,
   };
 }
 

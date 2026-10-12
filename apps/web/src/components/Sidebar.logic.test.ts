@@ -417,6 +417,8 @@ describe("sidebar subagent index", () => {
     );
     expect(streamed.ownerKeyByChildKey).toBe(index.ownerKeyByChildKey);
     expect(streamed.attentionByOwnerKey).toBe(index.attentionByOwnerKey);
+    // Subscribers see the same index object until an owner or request changes.
+    expect(streamed).toBe(index);
     const asking = buildSidebarSubagentIndex(
       all.map((thread) =>
         thread === running
