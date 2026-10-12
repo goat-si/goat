@@ -29,10 +29,12 @@ import {
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 
 const HANDOFF_DELAY_MS = 2_000;
 const PREPARED_TIMEOUT_MS = 120_000;
 const TERMINATE_GRACE_MS = 5_000;
+const RESTORE_RETRY_MS = 5_000;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -65,6 +67,14 @@ const runtimeSpawnArguments = (paths: ReturnType<typeof runtimePaths>) => ({
 /** SQLite persists across the main file plus its WAL and shared-memory sidecars. */
 const DB_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
 const RESTORE_MARKER = ".restore-pending";
+const ROLLBACK_MARKER = ".rollback-pending";
+const OWNER_GENERATION_FILE = "owner-generation";
+
+// Owner tags in the server-owner.lock generation log. Only these two may own
+// the userdata between an update's backup and its restore.
+const launcherOwner = (updateId: string) => `service-launcher:${updateId}`;
+const trialOwner = (updateId: string) => `service-trial:${updateId}`;
+const ownerLockDir = (pending: PendingServiceUpdate) => NodePath.dirname(pending.dbPath);
 
 const databaseBackupDir = (baseDir: string, updateId: string) =>
   NodePath.join(baseDir, "runtime", "db-backup", updateId);
@@ -107,11 +117,16 @@ async function syncDirectory(directory: string): Promise<void> {
 }
 
 /**
- * Snapshots the database once per update before the first trial. A completed
- * backup is never overwritten because a restarted launcher may be looking at
- * database writes from an earlier attempt by the same trial.
+ * Snapshots the database once per update before the first trial, while the
+ * caller holds server-owner.lock at `generation`. A completed backup is never
+ * overwritten because a restarted launcher may be looking at database writes
+ * from an earlier attempt by the same trial.
  */
-async function backupDatabaseOnce(baseDir: string, pending: PendingServiceUpdate): Promise<void> {
+async function backupDatabaseOnce(
+  baseDir: string,
+  pending: PendingServiceUpdate,
+  generation: number,
+): Promise<void> {
   const backupDir = databaseBackupDir(baseDir, pending.id);
   if (await pathExists(backupDir)) return;
 
@@ -126,6 +141,9 @@ async function backupDatabaseOnce(baseDir: string, pending: PendingServiceUpdate
       await NodeFSP.copyFile(source, destination);
       await syncFile(destination);
     }
+    const generationPath = NodePath.join(stagingDir, OWNER_GENERATION_FILE);
+    await NodeFSP.writeFile(generationPath, `${generation}\n`, { mode: 0o600 });
+    await syncFile(generationPath);
     await NodeFSP.rename(stagingDir, backupDir);
     await syncDirectory(NodePath.dirname(backupDir));
   } catch (cause) {
@@ -134,15 +152,20 @@ async function backupDatabaseOnce(baseDir: string, pending: PendingServiceUpdate
   }
 }
 
-const restoreMarkerPath = (baseDir: string, updateId: string) =>
-  NodePath.join(databaseBackupDir(baseDir, updateId), RESTORE_MARKER);
+/** A rollback was decided, or its restore started, and recovery must finish it. */
+async function databaseRestorePending(
+  baseDir: string,
+  pending: PendingServiceUpdate,
+): Promise<boolean> {
+  const backupDir = databaseBackupDir(baseDir, pending.id);
+  return (
+    (await pathExists(NodePath.join(backupDir, ROLLBACK_MARKER))) ||
+    (await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))
+  );
+}
 
-const databaseRestorePending = (baseDir: string, pending: PendingServiceUpdate) =>
-  pathExists(restoreMarkerPath(baseDir, pending.id));
-
-/** Mark rollback before changing live files so launcher recovery cannot boot a partial restore. */
-async function markDatabaseRestorePending(backupDir: string): Promise<void> {
-  const markerPath = NodePath.join(backupDir, RESTORE_MARKER);
+async function writeMarker(backupDir: string, marker: string): Promise<void> {
+  const markerPath = NodePath.join(backupDir, marker);
   if (!(await pathExists(markerPath))) {
     const handle = await NodeFSP.open(markerPath, "wx", 0o600);
     try {
@@ -154,26 +177,56 @@ async function markDatabaseRestorePending(backupDir: string): Promise<void> {
   }
 }
 
-/** Restore is retryable after any process crash while the backup directory remains. */
+/**
+ * Restores the backup under server-owner.lock. `busy` means another process
+ * holds the lock now, and the rollback stays pending until it can run.
+ * `kept` means a server other than this update's launcher and trial owned
+ * the data since the backup, so its writes win over the snapshot. Once the
+ * copy has started the live files are partial, and later attempts finish it
+ * regardless. Retryable after any process crash while the backup remains.
+ */
 async function restoreDatabaseBackup(
   baseDir: string,
   pending: PendingServiceUpdate,
-): Promise<void> {
+): Promise<"restored" | "busy" | "kept"> {
   const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (!(await pathExists(backupDir))) return;
+  if (!(await pathExists(backupDir))) return "restored";
+  await writeMarker(backupDir, ROLLBACK_MARKER);
 
-  await markDatabaseRestorePending(backupDir);
-  for (const suffix of DB_FILE_SUFFIXES) {
-    const target = `${pending.dbPath}${suffix}`;
-    const source = databaseBackupFile(backupDir, suffix);
-    if (await pathExists(source)) {
-      await NodeFSP.copyFile(source, target);
-      await syncFile(target);
-    } else {
-      await NodeFSP.rm(target, { force: true });
+  const lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
+  if (lock === undefined) return "busy";
+  try {
+    if (!(await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))) {
+      const recorded = await NodeFSP.readFile(
+        NodePath.join(backupDir, OWNER_GENERATION_FILE),
+        "utf8",
+      ).catch(() => "");
+      const generation = Number.parseInt(recorded, 10);
+      const ours = new Set([launcherOwner(pending.id), trialOwner(pending.id)]);
+      // A backup without a recorded generation cannot prove nobody else wrote.
+      if (
+        !Number.isSafeInteger(generation) ||
+        lock.ownersSince(generation).some((owner) => !ours.has(owner))
+      ) {
+        return "kept";
+      }
+      await writeMarker(backupDir, RESTORE_MARKER);
     }
+    for (const suffix of DB_FILE_SUFFIXES) {
+      const target = `${pending.dbPath}${suffix}`;
+      const source = databaseBackupFile(backupDir, suffix);
+      if (await pathExists(source)) {
+        await NodeFSP.copyFile(source, target);
+        await syncFile(target);
+      } else {
+        await NodeFSP.rm(target, { force: true });
+      }
+    }
+    await syncDirectory(NodePath.dirname(pending.dbPath));
+    return "restored";
+  } finally {
+    lock.release();
   }
-  await syncDirectory(NodePath.dirname(pending.dbPath));
 }
 
 async function discardDatabaseBackup(baseDir: string, updateId: string): Promise<void> {
@@ -351,6 +404,8 @@ export class Launcher {
       // before this queued stop tears it down. That replacement owns the
       // pre-activation tunnel cleanup path and observes the marker above.
       this.#stopping = true;
+      // A rollback waiting on server-owner.lock stays pending for the next launcher.
+      this.#clearTimer();
       const child = this.#child?.process;
       this.#child = null;
       if (child !== undefined) await terminateChild(child, signal);
@@ -399,13 +454,27 @@ export class Launcher {
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
-    // The previous child is dead here, so all three SQLite files are quiescent.
+    // The previous child is dead here. Holding server-owner.lock keeps every
+    // other server out while the three SQLite files are copied.
+    let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
     try {
-      await backupDatabaseOnce(this.#baseDir, pending);
+      lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
     } catch {
       await this.#returnToPrevious(pending, "failed", "db-backup-failed");
       return;
     }
+    if (lock === undefined) {
+      await this.#returnToPrevious(pending, "failed", "db-owner-busy");
+      return;
+    }
+    try {
+      await backupDatabaseOnce(this.#baseDir, pending, lock.generation);
+    } catch {
+      lock.release();
+      await this.#returnToPrevious(pending, "failed", "db-backup-failed");
+      return;
+    }
+    lock.release();
     try {
       await this.#startChild(pending.targetVersion, "trial", pending);
     } catch {
@@ -612,8 +681,21 @@ export class Launcher {
       this.#child = null;
       await terminateChild(child.process);
     }
-    await restoreDatabaseBackup(this.#baseDir, pending);
-    const outcome = terminalUpdate({ pending, status, reason });
+    const restore = await restoreDatabaseBackup(this.#baseDir, pending);
+    if (restore === "busy") {
+      // Another server owns the userdata. Starting the previous version would
+      // skip the restore, so retry until the lock frees up.
+      this.#timer = setTimeout(
+        () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
+        RESTORE_RETRY_MS,
+      );
+      return;
+    }
+    const outcome = terminalUpdate({
+      pending,
+      status,
+      reason: restore === "kept" ? `${reason};db-kept-for-other-server` : reason,
+    });
     const next: ServiceState = {
       ...this.#state,
       activeVersion: pending.fromVersion,

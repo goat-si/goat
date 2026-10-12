@@ -1,3 +1,5 @@
+import * as NodeURL from "node:url";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -5,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import {
   compareExactServiceVersions,
   decodeServiceState,
@@ -75,6 +78,55 @@ it("rejects contradictory service state", () => {
     }),
   );
 });
+
+// Fake runtimes import the real lock helper, as a lock-aware server would.
+const lockModuleUrl = JSON.stringify(
+  NodeURL.pathToFileURL(NodeURL.fileURLToPath(new URL("./serverOwnerLockFile.ts", import.meta.url)))
+    .href,
+);
+
+/** An active 1.0.0 that asks for 1.1.0, and a 1.1.0 trial running `trialSource`. */
+const writeUpdateRuntimes = (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  root: string,
+  databasePath: string,
+  trialSource: string,
+) =>
+  Effect.forEach(["1.0.0", "1.1.0"], (version) =>
+    writeFakeRuntime(
+      fs,
+      path,
+      path.join(root, "runtime", "goat", "versions", version),
+      `
+import { writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.update?.status === "pending") {
+${trialSource}
+} else if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(databasePath)} });
+  setInterval(() => {}, 1_000);
+} else {
+  process.exit(0);
+}
+`,
+    ),
+  );
+
+/** Runs a launcher until its restarted active child exits, which ends these scenarios. */
+const runUntilActiveExits = (root: string, statePath: string) =>
+  Effect.gen(function* () {
+    const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+    yield* Effect.promise(() =>
+      launcher.run().then(
+        () => Promise.reject(new Error("launcher unexpectedly completed")),
+        () => Promise.resolve(),
+      ),
+    );
+    return yield* Effect.promise(() => readServiceState(statePath));
+  });
 
 // A pinned runtime is an executable at <versionDir>/t3. The tests stand one up
 // as a Node shebang script so the launcher spawns it the way it spawns the
@@ -309,8 +361,12 @@ if (context.update?.status === "pending") {
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
 import { writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
 const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
+  // The trial's own ownership does not stand in the way of its rollback.
+  tryAcquireServerOwnerLock(dirname(context.update.dbPath), "service-trial:" + context.update.id);
   writeFileSync(context.update.dbPath, "database after migration");
   writeFileSync(context.update.dbPath + "-wal", "trial wal");
   writeFileSync(context.update.dbPath + "-shm", "trial shm");
@@ -354,6 +410,147 @@ if (context.update?.status === "pending") {
       const updateId = state.update?.id;
       assert.isDefined(updateId);
       assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", updateId)));
+    }),
+  );
+
+  it.effect("keeps a database another server wrote between the backup and the rollback", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-foreign-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "before trial");
+      // The trial migrates, then a desktop server takes the data, writes and
+      // exits before the trial fails.
+      yield* writeUpdateRuntimes(
+        fs,
+        path,
+        root,
+        databasePath,
+        `
+  const lockDir = dirname(context.update.dbPath);
+  tryAcquireServerOwnerLock(lockDir, "service-trial:" + context.update.id).release();
+  writeFileSync(context.update.dbPath, "trial migration");
+  tryAcquireServerOwnerLock(lockDir, "desktop").release();
+  writeFileSync(context.update.dbPath, "desktop write");
+  process.exit(1);`,
+      );
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const state = yield* runUntilActiveExits(root, statePath);
+      assert.equal(state.activeVersion, "1.0.0");
+      assert.equal(state.update?.status, "rolled-back");
+      assert.equal(
+        state.update?.status === "rolled-back" ? state.update.reason : undefined,
+        "candidate-exited:1;db-kept-for-other-server",
+      );
+      assert.equal(yield* fs.readFileString(databasePath), "desktop write");
+      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
+    }),
+  );
+
+  it.effect("neither backs up nor starts a trial while another server owns the userdata", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-busy-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "desktop data");
+      yield* writeUpdateRuntimes(
+        fs,
+        path,
+        root,
+        databasePath,
+        `  writeFileSync(context.update.dbPath, "trial ran");
+  process.exit(1);`,
+      );
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+      const desktop = yield* Effect.acquireRelease(
+        Effect.sync(() => tryAcquireServerOwnerLock(path.dirname(databasePath), "desktop")),
+        (lock) => Effect.sync(() => lock?.release()),
+      );
+      assert.isDefined(desktop);
+
+      const state = yield* runUntilActiveExits(root, statePath);
+      assert.equal(state.update?.status, "failed");
+      assert.equal(
+        state.update?.status === "failed" ? state.update.reason : undefined,
+        "db-owner-busy",
+      );
+      assert.equal(yield* fs.readFileString(databasePath), "desktop data");
+      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
+    }),
+  );
+
+  it.effect("keeps a rollback pending until the owner lock frees up", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-pending-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      const lockDir = path.dirname(databasePath);
+      const backupDir = path.join(root, "runtime", "db-backup", "update-1");
+      yield* fs.makeDirectory(lockDir, { recursive: true });
+      yield* fs.makeDirectory(backupDir, { recursive: true });
+      yield* fs.writeFileString(databasePath, "trial migration");
+      yield* fs.writeFileString(path.join(backupDir, "database"), "before trial");
+      // The launcher had backed up at this generation and decided to roll back.
+      const backup = tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1");
+      assert.isDefined(backup);
+      backup.release();
+      yield* fs.writeFileString(path.join(backupDir, "owner-generation"), `${backup.generation}\n`);
+      yield* fs.writeFileString(path.join(backupDir, ".rollback-pending"), "");
+      yield* writeUpdateRuntimes(fs, path, root, databasePath, "  process.exit(1);");
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+          update: {
+            id: "update-1",
+            fromVersion: "1.0.0",
+            targetVersion: "1.1.0",
+            dbPath: databasePath,
+            status: "pending",
+          },
+        }),
+      );
+
+      // A trial process that has not let go yet still holds the lock.
+      const lingering = tryAcquireServerOwnerLock(lockDir, "service-trial:update-1");
+      assert.isDefined(lingering);
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const running = launcher.run();
+      yield* Effect.promise(() => launcher.stop("SIGTERM"));
+      yield* Effect.promise(() => running);
+      const waiting = yield* Effect.promise(() => readServiceState(statePath));
+      assert.equal(waiting.update?.status, "pending");
+      assert.equal(yield* fs.readFileString(databasePath), "trial migration");
+      assert.isTrue(yield* fs.exists(path.join(backupDir, ".rollback-pending")));
+
+      lingering.release();
+      const state = yield* runUntilActiveExits(root, statePath);
+      assert.equal(state.update?.status, "failed");
+      assert.equal(
+        state.update?.status === "failed" ? state.update.reason : undefined,
+        "rollback-interrupted",
+      );
+      assert.equal(yield* fs.readFileString(databasePath), "before trial");
+      assert.isFalse(yield* fs.exists(backupDir));
     }),
   );
 });
