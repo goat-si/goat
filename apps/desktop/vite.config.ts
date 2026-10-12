@@ -111,8 +111,12 @@ export default defineConfig({
       deps: {
         // Sandboxed Electron preloads cannot reliably resolve package imports
         // from inside the packaged ASAR. Bundle Clerk's preload bridge into the
-        // preload artifact instead of leaving a runtime require() behind.
-        alwaysBundle: (id) => id === "@clerk/electron" || id.startsWith("@clerk/electron/"),
+        // preload artifact instead of leaving a runtime require() behind, and the
+        // dependency-free legacy name table the localStorage merge reads.
+        alwaysBundle: (id) =>
+          id === "@clerk/electron" ||
+          id.startsWith("@clerk/electron/") ||
+          id === "@goat/contracts/legacyT3Names",
       },
     },
     {
