@@ -403,8 +403,9 @@ summary, excerpt, prUrl?, launcherThreadId, at }`, where `event` is
 `x-goat-event`, `x-goat-delivery` (the stable `id`), and, with a secret,
 `x-goat-signature: sha256=<hex HMAC-SHA256 of the body>`. Network errors, 408,
 429, and 5xx retry with the launch watch backoff, up to six attempts; turning
-the setting off stops retries. Delivery is at least once across server
-restarts, so receivers dedupe on `x-goat-delivery`.
+the setting off stops retries. Delivery is best effort: a report still
+retrying when the server stops is lost, and a crash right after a wake can
+repeat a report, so receivers dedupe on `x-goat-delivery`.
 
 ### `goat_thread_list`
 

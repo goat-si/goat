@@ -16,7 +16,10 @@ import { backoffMs, type LaunchWatch } from "./launchWatch.ts";
 /**
  * Posts launch watch reports to the `completionWebhook` server setting, so an
  * agent outside GOAT hears what the launcher thread hears. Delivery runs on its
- * own fiber and never holds back the wake.
+ * own fiber and never holds back the wake. It is best effort: a report whose
+ * POST has not succeeded when the server stops is lost, and one whose wake is
+ * replayed after a crash before the watch state was saved can post twice under
+ * the same id.
  */
 
 export type CompletionWebhookEvent = "run.completed" | "question" | "host.unavailable";
@@ -196,7 +199,8 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (!remember(report.id)) return;
       const at = yield* Clock.currentTimeMillis;
-      yield* deliver(watch, report, at).pipe(Effect.forkIn(scope));
+      // Reports arrive from the launch watch's uninterruptible section; shutdown must still end retries.
+      yield* deliver(watch, report, at).pipe(Effect.interruptible, Effect.forkIn(scope));
     });
 
   return CompletionWebhook.of({ notify });

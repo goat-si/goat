@@ -44,11 +44,12 @@ unreachable. An agent outside GOAT (for example Grok Bot) that drives work throu
 - **D6 Never blocks the wake.** A new `CompletionWebhook` service (`completionWebhook.ts`) forks each delivery into its
   own scope and returns at once; `deliver()` ignores its outcome.
 - **D7 Retry and dedupe.** 2xx succeeds. Network errors, timeouts (10 s), 408, 429 and 5xx retry with the launch watch
-  backoff (`backoffMs`: 30 s doubling to 15 min), at most 6 attempts; other statuses stop. Settings are re-read before
-  each attempt, so disabling or rotating the secret applies to retries. An in-memory set of the last 500 delivery ids
-  drops a second POST for the same run (or question, or outage episode) in this process. Across a restart delivery is
-  at least once: a wake replayed after a crash can post again with the same `id`, so receivers dedupe on
-  `x-goat-delivery`. Retries in flight at shutdown are dropped.
+  backoff (`backoffMs`: 30 s, 60 s, 120 s, 240 s, 480 s between the 6 attempts); other statuses stop. Settings are
+  re-read before each attempt, so disabling or rotating the secret applies to retries. An in-memory set of the last 500
+  delivery ids drops a second POST for the same run (or question, or outage episode) in this process. Delivery is best
+  effort and not part of the watch's state write: a report whose POST has not succeeded when the server stops is lost
+  (the run is already settled, so it is not replayed), and a wake replayed after a crash between dispatch and the state
+  write can post again with the same `id`, so receivers dedupe on `x-goat-delivery`. No outbox, by choice.
 - **D8 Thread-less launchers are out of scope.** A launch from an MCP client without a GOAT thread records no watch
   today (`caller === undefined`), so it gets no webhook either. Supporting it needs watches without a launcher thread
   (wake skipped, runtime ceiling stored on the watch). Follow-up if wanted; the external agent should launch through
