@@ -44,11 +44,11 @@ describe("Pierre file icons", () => {
   });
 
   it("extends Pierre with T3-specific exact filename icons", () => {
-    assert.equal(resolvePierreIconForEntry("AGENTS.md", "file")?.name, "t3-file-icon-agents");
-    assert.equal(resolvePierreIconForEntry("pnpm-lock.yaml", "file")?.name, "t3-file-icon-pnpm");
+    assert.equal(resolvePierreIconForEntry("AGENTS.md", "file")?.name, "goat-file-icon-agents");
+    assert.equal(resolvePierreIconForEntry("pnpm-lock.yaml", "file")?.name, "goat-file-icon-pnpm");
     assert.equal(
       resolvePierreIconForEntry("pnpm-workspace.yaml", "file")?.name,
-      "t3-file-icon-pnpm",
+      "goat-file-icon-pnpm",
     );
   });
 
