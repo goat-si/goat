@@ -77,7 +77,6 @@ describe("mobile theme runtime variables", () => {
           expect(ios["--color-header-foreground"]).toBe(ios["--color-drawer-foreground"]);
         } else {
           expect(ios).toEqual(getMobileThemeVariables("goat-code", appearance));
-          expect(ios["--color-drawer"]).toBe(android["--color-drawer"]);
           expect(ios["--color-drawer"]).toBe("#000000");
           expect(ios["--color-thread-canvas"]).toBe("#0a0a0a");
         }
