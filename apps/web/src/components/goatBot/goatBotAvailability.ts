@@ -88,7 +88,8 @@ export function environmentSupportsChannelLedger(
 }
 
 /** How the bot thread on screen was taken away, if it was. */
-export type GoatBotRemoval = "archived" | "deleted" | null;
+/** "unchecked" means the archived-thread check failed, so the chat may or may not still be the bot. */
+export type GoatBotRemoval = "archived" | "deleted" | "unchecked" | null;
 
 /**
  * An archived bot is still the bot and comes back by unarchiving it. A deleted one is replaced by

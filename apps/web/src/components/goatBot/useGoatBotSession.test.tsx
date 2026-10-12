@@ -47,7 +47,9 @@ const state = vi.hoisted(() => ({
   paramsReads: vi.fn(),
   archiveReads: vi.fn(),
   archiveRefresh: vi.fn(),
-  unarchive: vi.fn(async () => {}),
+  unarchive: vi.fn(async (): Promise<{ _tag: "Success" | "Failure"; value?: undefined }> => ({
+    _tag: "Success",
+  })),
 }));
 vi.mock("./goatBotHooks", () => ({
   useGoatBotEnvironments: () => state.environments,
@@ -336,7 +338,7 @@ beforeEach(() => {
   state.archiveReads.mockClear();
   state.archiveRefresh.mockClear();
   state.unarchive.mockReset();
-  state.unarchive.mockImplementation(async () => {});
+  state.unarchive.mockImplementation(async () => ({ _tag: "Success" as const }));
   items = [];
   permission = true;
   dual = false;
@@ -916,6 +918,7 @@ it.each([false, true])(
     expect(state.archiveRefresh).toHaveBeenCalledExactlyOnceWith(environmentId);
     state.unarchive.mockImplementation(async () => {
       state.botArchived = false;
+      return { _tag: "Success" as const };
     });
     await act(() =>
       Array.from(container.querySelectorAll("button"))
@@ -945,7 +948,7 @@ it("asks the server once for a replacement when the confirmed bot was deleted", 
   expect(container.textContent).toContain("This chat was deleted");
   expect(container.querySelector('a[href="/bot"]')).toBeNull();
   expect(textarea().disabled).toBe(true);
-  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat.");
   await act(() =>
     Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent === "Try again")!
@@ -1000,7 +1003,7 @@ it.each(["error", "legacy_active"])(
     state.botDeleted = true;
     await render(false, false, true);
     expect(port.ensureBot).toHaveBeenCalledTimes(2);
-    expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+    expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat.");
     expect(container.textContent).not.toContain("GOAT Bot is starting a new chat.");
     expect(textarea().disabled).toBe(true);
     await render(false, false, true);
@@ -1037,24 +1040,22 @@ it("shows replacement progress only while ensure is pending, then shows failure 
       projectId: ProjectId.make("project"),
     }),
   );
-  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat");
+  expect(container.textContent).toContain("Couldn't start a new GOAT Bot chat.");
   expect(port.ensureBot).toHaveBeenCalledTimes(2);
 });
 
-it.each(["loading", "error", "missing snapshot"])(
+it.each(["loading", "missing snapshot"])(
   "waits for an archived snapshot with %s before replacing a missing seen bot",
   async (kind) => {
     await render(false, false, true);
     expect(state.archiveReads).not.toHaveBeenCalled();
     state.botDeleted = true;
     state.archiveLoading = kind === "loading";
-    state.archiveError = kind === "error" ? "snapshot unavailable" : null;
     state.archiveMissingSnapshot = kind === "missing snapshot";
     await render(false, false, true);
     expect(port.ensureBot).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("This chat was deleted");
     state.archiveLoading = false;
-    state.archiveError = null;
     state.archiveMissingSnapshot = false;
     await render(false, false, true);
     expect(port.ensureBot).toHaveBeenCalledTimes(2);
@@ -1062,6 +1063,45 @@ it.each(["loading", "error", "missing snapshot"])(
     expect(state.archiveRefresh).toHaveBeenCalledTimes(1);
   },
 );
+
+it("stops sending and offers Check again when the archived snapshot fails", async () => {
+  await render(false, false, true);
+  state.botDeleted = true;
+  state.archiveError = "snapshot unavailable";
+  // Like the real query, the error stays until someone refreshes the snapshot.
+  state.archiveRefresh.mockImplementation(() => {
+    if (state.archiveRefresh.mock.calls.length > 1) state.archiveError = null;
+  });
+  await render(false, false, true);
+  expect(container.textContent).toContain("Couldn't check this chat");
+  expect(textarea().disabled).toBe(true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(1);
+  const checkAgain = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Check again",
+  );
+  await act(() => checkAgain?.click());
+  await render(false, false, true);
+  expect(state.archiveRefresh).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("This chat was deleted");
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+});
+
+it("treats an archived bot that later leaves the archive as deleted", async () => {
+  state.botArchived = true;
+  await render(false, false, true);
+  expect(container.textContent).toContain("This chat is archived");
+  state.botArchived = false;
+  state.botDeleted = true;
+  state.archiveRefresh.mockClear();
+  const unarchive = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Unarchive",
+  );
+  await act(async () => unarchive?.click());
+  await render(false, false, true);
+  expect(state.archiveRefresh).toHaveBeenCalled();
+  expect(container.textContent).toContain("This chat was deleted");
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+});
 
 it("does not offer Unarchive without permission or ask for an archived bot replacement", async () => {
   state.botArchived = true;

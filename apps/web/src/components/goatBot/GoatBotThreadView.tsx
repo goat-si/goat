@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   refreshArchivedThreadsForEnvironment,
@@ -17,6 +17,7 @@ import {
 import { threadEnvironment } from "~/state/threads";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 
+import { toastManager } from "../ui/toast";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { resolveGoatBotRemoval, type GoatBotRemoval } from "./goatBotAvailability";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
@@ -85,6 +86,11 @@ function GoatBotThreadSession({
     if (!shellSeen) setShellSeen(true);
     if (resolvedRemoval !== null) setRemoval(null);
   }
+  // An archived bot was the bot here, so if it disappears from the archive too it was deleted.
+  const resolveRemoval = useCallback((next: GoatBotRemoval) => {
+    if (next === "archived") setShellSeen(true);
+    setRemoval(next);
+  }, []);
   const canOpenCurrentBot = session.confirmedBot !== null && !confirmedHere;
   // Keep the resolved removal while ensure is pending or failed, when confirmedHere is false.
   const removal =
@@ -105,7 +111,7 @@ function GoatBotThreadSession({
           environmentId={environmentId}
           threadId={threadId}
           shellSeen={shellSeen}
-          onResolve={setRemoval}
+          onResolve={resolveRemoval}
         />
       ) : null}
       <GoatBotChatView
@@ -116,9 +122,21 @@ function GoatBotThreadSession({
         onUnarchive={
           removal === "archived" && session.canOperate
             ? () =>
-                void unarchive({ environmentId, input: { threadId } }).then(() =>
-                  refreshArchivedThreadsForEnvironment(environmentId),
-                )
+                void unarchive({ environmentId, input: { threadId } }).then((result) => {
+                  if (result._tag === "Failure") {
+                    toastManager.add({
+                      type: "error",
+                      title: "Couldn't unarchive GOAT Bot",
+                      description: "It may have been deleted. Check again in a moment.",
+                    });
+                  }
+                  refreshArchivedThreadsForEnvironment(environmentId);
+                })
+            : undefined
+        }
+        onCheckAgain={
+          removal === "unchecked"
+            ? () => refreshArchivedThreadsForEnvironment(environmentId)
             : undefined
         }
         legacyAgentRoute={legacyAgentRoute}
@@ -151,6 +169,10 @@ function GoatBotRemovalProbe({
     !refreshed || isLoading || error !== null || snapshot === undefined
       ? null
       : snapshot.threads.some((thread) => thread.id === threadId);
+  const failed = refreshed && !isLoading && error !== null;
+  useEffect(() => {
+    if (failed) onResolve("unchecked");
+  }, [failed, onResolve]);
   useEffect(() => {
     if (archived === null) return;
     onResolve(

@@ -32,6 +32,8 @@ export interface GoatBotChatViewProps {
   readonly legacyAgentRoute: GlobalAgentLegacyRoute | null;
   /** The bot thread was archived or deleted, here or on another device. */
   readonly removal?: GoatBotRemoval | undefined;
+  /** Checks the archive again after that check failed. */
+  readonly onCheckAgain?: (() => void) | undefined;
   /** Brings an archived bot chat back. */
   readonly onUnarchive?: (() => void) | undefined;
   /** Only offer navigation when this connection confirmed a different bot chat. */
@@ -50,6 +52,7 @@ export function GoatBotChatView({
   removal = null,
   canOpenCurrentBot = false,
   onUnarchive,
+  onCheckAgain,
 }: GoatBotChatViewProps) {
   const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
@@ -66,7 +69,9 @@ export function GoatBotChatView({
                 ? "Archived"
                 : removal === "deleted"
                   ? "Deleted"
-                  : statusLine(availability)}
+                  : removal === "unchecked"
+                    ? "Couldn't check this chat"
+                    : statusLine(availability)}
             </p>
           </div>
         </div>
@@ -103,6 +108,7 @@ export function GoatBotChatView({
           onRetryAvailability={onRetryAvailability}
           canOpenCurrentBot={canOpenCurrentBot}
           onUnarchive={onUnarchive}
+          onCheckAgain={onCheckAgain}
         />
       ) : (
         <GoatBotNotice
@@ -131,13 +137,37 @@ function GoatBotRemovedNotice({
   onRetryAvailability,
   canOpenCurrentBot,
   onUnarchive,
+  onCheckAgain,
 }: {
   readonly removal: Exclude<GoatBotRemoval, null>;
   readonly availability: GoatBotAvailability;
   readonly onRetryAvailability: (() => void) | undefined;
   readonly canOpenCurrentBot: boolean;
   readonly onUnarchive: (() => void) | undefined;
+  readonly onCheckAgain: (() => void) | undefined;
 }) {
+  if (removal === "unchecked") {
+    return (
+      <Empty className="min-h-0 flex-1">
+        <EmptyHeader className="max-w-md">
+          <GoatBotAvatar size="lg" className="mx-auto mb-4" />
+          <EmptyTitle>Couldn't check this chat</EmptyTitle>
+          <EmptyDescription>
+            It may have been archived or deleted. Check again to find out.
+          </EmptyDescription>
+        </EmptyHeader>
+        {onCheckAgain !== undefined ? (
+          <EmptyContent>
+            <div className="flex justify-center">
+              <Button size="sm" variant="outline" onClick={onCheckAgain}>
+                Check again
+              </Button>
+            </div>
+          </EmptyContent>
+        ) : null}
+      </Empty>
+    );
+  }
   const replacementFailed =
     removal === "deleted" &&
     !canOpenCurrentBot &&
@@ -149,7 +179,7 @@ function GoatBotRemovedNotice({
     : removal === "archived"
       ? "Unarchive it to keep chatting with GOAT Bot here."
       : replacementFailed
-        ? "Couldn't start a new GOAT Bot chat"
+        ? "Couldn't start a new GOAT Bot chat."
         : availability.kind === "connecting"
           ? "GOAT Bot is starting a new chat."
           : "Reconnect to start a new GOAT Bot chat.";
