@@ -417,7 +417,13 @@ export function makeHarness(
     Layer.provideMerge(layerLaunch),
     Layer.provideMerge(EffectOutbox.layer.pipe(Layer.provide(layerDatabase))),
   );
-  return { layer, world, slackSent, slackFailures, script, launch, providerCalls };
+  /** Removes a project from this machine's catalog, as if it was deleted while work waited. */
+  const removeProject = (id: ProjectId) => {
+    const index = shells.findIndex((shell) => shell.id === id);
+    if (index !== -1) shells.splice(index, 1);
+  };
+
+  return { layer, world, slackSent, slackFailures, script, launch, providerCalls, removeProject };
 }
 
 /** A new process owner over the caller's existing ledger and worker services, in its child scope. */

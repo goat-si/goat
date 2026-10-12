@@ -46,6 +46,7 @@ in the current generation that names one of its projects decides, so an answer t
 ("try again" after the machine was unreachable) keeps the project chosen before it, naming another
 replaces it. A retry, or an answer that picks something else (a machine, or a project on this
 machine, matched the way reception records it), ends the reach of older answers and asks again.
+If the project chosen here has since left the catalog, only the newest answer counts.
 
 ## Who runs the workers
 

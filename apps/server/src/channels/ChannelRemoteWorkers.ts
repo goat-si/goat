@@ -441,7 +441,9 @@ const make = Effect.gen(function* () {
         meansThisMachine(raw) ||
         (hint.hosts ?? []).some((host) => answer.includes(host.toLowerCase())) ||
         (hint.localProjects ?? []).some(
-          (project) => project.id === raw.trim() || answer.includes(project.title.toLowerCase()),
+          (project) =>
+            project.id === raw.trim() ||
+            (project.title !== "" && answer.includes(project.title.toLowerCase())),
         );
       if (choseOtherwise) break;
     }
@@ -494,18 +496,23 @@ const make = Effect.gen(function* () {
       if (projects.length === 0) {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
-      const answers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
+      const recentAnswers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
+      // Answers are ordered against the choices here by matching today's catalog. When the
+      // project chosen here is gone from it, when it was chosen can no longer be told, so only
+      // the newest answer counts and anything less clear is asked again.
+      const localProjects = [
+        ...(local.localProjects ?? []),
+        ...(task.projectId === undefined ? [] : [{ id: task.projectId, title: "" }]),
+      ];
+      const chosenHereIsGone =
+        task.projectId !== undefined &&
+        !(local.localProjects ?? []).some((project) => project.id === task.projectId);
+      const answers = chosenHereIsGone ? recentAnswers.slice(0, 1) : recentAnswers;
       const chosen = chooseProject(projects, {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
-        ...(answers.length === 0
-          ? {}
-          : {
-              answers,
-              hosts,
-              ...(local.localProjects === undefined ? {} : { localProjects: local.localProjects }),
-            }),
+        ...(answers.length === 0 ? {} : { answers, hosts, localProjects }),
         ...(local.requireNamedProject === true ? { requireNamed: true } : {}),
       });
       if (chosen === undefined) {
