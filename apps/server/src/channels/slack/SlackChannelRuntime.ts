@@ -13,6 +13,7 @@ import type {
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
   SlackChannelStatusEvent,
+  SlackChannelSettingsError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -38,6 +39,7 @@ import {
   type SlackConnectionOwner,
   type SlackDeliveryFailureReport,
 } from "./SlackChannelAdapter.ts";
+import type { SlackRevocationEvent } from "./slackEventMapping.ts";
 import * as SlackSdk from "./SlackSdk.ts";
 
 export interface SlackRuntimeConnection {
@@ -49,6 +51,15 @@ export interface SlackRuntimeConnection {
   /** The workspace saved when the tokens were validated. */
   readonly expectedTeamId: string | undefined;
   readonly owner: SlackConnectionOwner | undefined;
+  readonly botUserId?: string;
+  readonly revoked?: "bot_revoked" | "app_uninstalled";
+  readonly onRevoked?: (
+    event: SlackRevocationEvent,
+    generation: number,
+  ) => Effect.Effect<
+    "active" | "blocked" | "uninstalled" | "ignored" | "stale",
+    SlackChannelSettingsError
+  >;
 }
 
 export interface SlackRuntimeStatus {
@@ -70,6 +81,7 @@ export class SlackChannelRuntime extends Context.Service<
   {
     /** Replaces the connection's session with one for this configuration. */
     readonly apply: (connection: SlackRuntimeConnection) => Effect.Effect<void>;
+    readonly isCurrent: (connectionId: string, generation: number) => Effect.Effect<boolean>;
     readonly remove: (connectionId: string) => Effect.Effect<void>;
     readonly status: (connectionId: string) => Effect.Effect<SlackRuntimeStatus>;
     /** Every connection's current status once, then only changes. */
@@ -139,6 +151,7 @@ const make = Effect.gen(function* () {
   const statusLock = yield* Semaphore.make(1);
   const generations = yield* Ref.make(0);
   const supervisors = yield* Ref.make<ReadonlyMap<string, Supervisor>>(new Map());
+  const currentGenerations = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const activeSessions = yield* Ref.make<ReadonlyMap<string, SlackActiveSession>>(new Map());
   const stopSignals = yield* Ref.make<
     ReadonlyMap<
@@ -160,7 +173,20 @@ const make = Effect.gen(function* () {
         const statuses = new Map(state.statuses).set(connectionId, next);
         const revision = state.revision + 1;
         yield* Ref.set(statusState, { revision, statuses });
-        yield* PubSub.publish(statusChanges, { revision, event: toEvent(connectionId, next) });
+        const event = toEvent(connectionId, next);
+        const previous = state.statuses.get(connectionId);
+        if (
+          previous === undefined ||
+          !(
+            previous.status === next.status &&
+            previous.lastError === next.lastError &&
+            previous.lastDeliveryError?.code === next.lastDeliveryError?.code &&
+            previous.lastDeliveryError?.at === next.lastDeliveryError?.at &&
+            previous.lastDeliveryError?.channelId === next.lastDeliveryError?.channelId
+          )
+        ) {
+          yield* PubSub.publish(statusChanges, { revision, event });
+        }
       }),
     );
 
@@ -196,14 +222,44 @@ const make = Effect.gen(function* () {
       }),
     ]);
 
+  const isCurrent = (connectionId: string, generation: number) =>
+    Effect.map(Ref.get(currentGenerations), (all) => all.get(connectionId) === generation);
+
+  const dropDelivery = (connectionId: string, generation: number) =>
+    Ref.update(activeSessions, (sessions) => {
+      if (sessions.get(connectionId)?.generation !== generation) return sessions;
+      const next = new Map(sessions);
+      next.delete(connectionId);
+      return next;
+    });
+
   const attempt = (
-    connection: SlackRuntimeConnection & { appToken: string; botToken: string },
+    connection: SlackRuntimeConnection & { appToken: string },
     owner: SlackConnectionOwner,
     generation: number,
+    blocked: Ref.Ref<string | undefined>,
+    savedIdentity: Ref.Ref<SlackSdk.SlackAuthIdentity | undefined>,
   ) =>
     Effect.gen(function* () {
-      const botApi = sdk.botApi({ botToken: connection.botToken });
-      const identity = yield* SlackSdk.slackCall("auth.test", botApi.authTest);
+      const botApi =
+        connection.botToken === undefined
+          ? undefined
+          : sdk.botApi({ botToken: connection.botToken });
+      const receiveOnly = (yield* Ref.get(blocked)) !== undefined;
+      const remembered = yield* Ref.get(savedIdentity);
+      if (receiveOnly && remembered === undefined)
+        return { _tag: "stopped", lastError: "missing_identity" } satisfies AttemptEnd;
+      if (!receiveOnly && botApi === undefined)
+        return { _tag: "stopped", lastError: "missing_token" } satisfies AttemptEnd;
+      const identity =
+        receiveOnly && remembered !== undefined
+          ? remembered
+          : botApi === undefined
+            ? yield* Effect.fail(
+                new SlackSdk.SlackSdkFailure({ operation: "auth.test", category: "auth_invalid" }),
+              )
+            : yield* SlackSdk.slackCall("auth.test", botApi.authTest);
+      yield* Ref.set(savedIdentity, identity);
       if (
         connection.expectedTeamId !== undefined &&
         identity.teamId !== connection.expectedTeamId
@@ -221,14 +277,53 @@ const make = Effect.gen(function* () {
       yield* Ref.update(stopSignals, (signals) =>
         new Map(signals).set(connection.connectionId, { generation, end }),
       );
-      yield* Ref.update(activeSessions, (sessions) =>
-        new Map(sessions).set(connection.connectionId, {
-          generation,
-          teamId: identity.teamId,
-          botUserId: identity.botUserId,
-          botApi,
-        }),
+      const activate = Ref.update(activeSessions, (sessions) =>
+        botApi === undefined
+          ? sessions
+          : new Map(sessions).set(connection.connectionId, {
+              generation,
+              teamId: identity.teamId,
+              botUserId: identity.botUserId,
+              botApi,
+            }),
       );
+      const envelopeLock = yield* Semaphore.make(1);
+      const terminateAfterAck = yield* Ref.make(false);
+      const onRevocation = (event: SlackRevocationEvent) =>
+        Effect.gen(function* () {
+          if (!(yield* isCurrent(connection.connectionId, generation))) return true;
+          yield* Ref.set(terminateAfterAck, false);
+          const previous = yield* Ref.get(blocked);
+          const reason =
+            previous === "app_uninstalled" || event.kind === "app_uninstalled"
+              ? "app_uninstalled"
+              : "token_revoked";
+          yield* Ref.set(blocked, reason);
+          yield* dropDelivery(connection.connectionId, generation);
+          yield* setPhase(connection.connectionId, "error", reason);
+          if (connection.onRevoked === undefined) return false;
+          const result = yield* Effect.exit(connection.onRevoked(event, generation));
+          if (Exit.isFailure(result)) {
+            yield* Effect.logWarning(
+              "Slack revocation cleanup failed; leaving the event unacknowledged.",
+            );
+            return false;
+          }
+          if (result.value === "ignored") return true;
+          if (result.value === "stale" && previous !== undefined) {
+            yield* Ref.set(blocked, previous);
+            yield* setPhase(connection.connectionId, "error", previous);
+          } else if (result.value === "active" || result.value === "stale") {
+            yield* Ref.set(blocked, undefined);
+            yield* activate;
+            yield* setPhase(connection.connectionId, "connected");
+          } else if (result.value === "uninstalled") {
+            yield* Ref.set(terminateAfterAck, true);
+            yield* Ref.set(blocked, "app_uninstalled");
+            yield* setPhase(connection.connectionId, "error", "app_uninstalled");
+          }
+          return true;
+        });
 
       // Event handlers live in this attempt's scope and stop with it.
       const runFork = yield* FiberSet.makeRuntime();
@@ -238,15 +333,32 @@ const make = Effect.gen(function* () {
         allowedChannelIds: new Set(connection.allowedChannelIds),
       };
       const handleEnvelope = (envelope: SlackSdk.SlackSocketEnvelope) =>
-        handleSlackEnvelope(envelope, {
-          connectionId: connection.connectionId,
-          classifier,
-          owner,
-        }).pipe(
-          Effect.flatMap((outcome) =>
-            outcome.handling === "team_mismatch"
-              ? Deferred.succeed(end, { _tag: "stopped", lastError: "workspace_mismatch" })
-              : Effect.void,
+        envelopeLock.withPermits(1)(
+          handleSlackEnvelope(envelope, {
+            connectionId: connection.connectionId,
+            classifier,
+            owner,
+            onRevocation,
+            receiveOnly: Effect.map(Ref.get(blocked), (reason) => reason !== undefined),
+          }).pipe(
+            Effect.flatMap((outcome) =>
+              Effect.gen(function* () {
+                if (outcome.handling === "team_mismatch") {
+                  yield* dropDelivery(connection.connectionId, generation);
+                  yield* setPhase(connection.connectionId, "error", "workspace_mismatch");
+                  yield* Deferred.succeed(end, {
+                    _tag: "stopped",
+                    lastError: "workspace_mismatch",
+                  });
+                } else if (
+                  outcome.handling === "revocation" &&
+                  outcome.acked &&
+                  (yield* Ref.get(terminateAfterAck))
+                ) {
+                  yield* Deferred.succeed(end, { _tag: "stopped", lastError: "app_uninstalled" });
+                }
+              }),
+            ),
           ),
         );
 
@@ -292,21 +404,35 @@ const make = Effect.gen(function* () {
         }),
       );
       yield* Ref.set(connected, true);
-      yield* setPhase(connection.connectionId, "connected");
+      const reason = yield* Ref.get(blocked);
+      if (reason === undefined) {
+        yield* activate;
+        yield* setPhase(connection.connectionId, "connected");
+      } else yield* setPhase(connection.connectionId, "error", reason);
       return yield* Deferred.await(end);
     }).pipe(Effect.scoped);
 
   /** The reconnect loop for a connection that has passed {@link prepare}. */
   const supervise = (
-    connection: SlackRuntimeConnection & { appToken: string; botToken: string },
+    connection: SlackRuntimeConnection & { appToken: string },
     owner: SlackConnectionOwner,
     generation: number,
   ) =>
     Effect.gen(function* () {
       const { connectionId } = connection;
       let failures = 0;
+      const blocked = yield* Ref.make<string | undefined>(
+        connection.revoked === "bot_revoked" ? "token_revoked" : undefined,
+      );
+      const savedIdentity = yield* Ref.make<SlackSdk.SlackAuthIdentity | undefined>(
+        connection.expectedTeamId !== undefined && connection.botUserId !== undefined
+          ? { teamId: connection.expectedTeamId, botUserId: connection.botUserId, botId: undefined }
+          : undefined,
+      );
       while (true) {
-        const exit = yield* Effect.exit(attempt(connection, owner, generation));
+        const exit = yield* Effect.exit(
+          attempt(connection, owner, generation, blocked, savedIdentity),
+        );
         yield* forgetSession(connectionId, generation);
         let waitSeconds: number;
         if (Exit.isSuccess(exit)) {
@@ -341,7 +467,8 @@ const make = Effect.gen(function* () {
             Effect.annotateLogs({ category }),
           );
         }
-        yield* setPhase(connectionId, "reconnecting");
+        const reason = yield* Ref.get(blocked);
+        yield* setPhase(connectionId, reason === undefined ? "reconnecting" : "error", reason);
         yield* Effect.sleep(Duration.seconds(waitSeconds));
       }
     }).pipe(
@@ -360,7 +487,15 @@ const make = Effect.gen(function* () {
         yield* updateStatus(connectionId, () => DISABLED);
         return Option.none();
       }
-      if (appToken === undefined || botToken === undefined) {
+      if (connection.revoked === "app_uninstalled") {
+        yield* setPhase(connectionId, "error", "app_uninstalled");
+        return Option.none();
+      }
+      const receiveOnly =
+        connection.revoked === "bot_revoked" &&
+        connection.expectedTeamId !== undefined &&
+        connection.botUserId !== undefined;
+      if (appToken === undefined || (!receiveOnly && botToken === undefined)) {
         yield* setPhase(connectionId, "error", "missing_token");
         return Option.none();
       }
@@ -368,13 +503,22 @@ const make = Effect.gen(function* () {
         yield* setPhase(connectionId, "error", "owner_missing");
         return Option.none();
       }
-      yield* setPhase(connectionId, "connecting");
+      yield* setPhase(
+        connectionId,
+        receiveOnly ? "error" : "connecting",
+        receiveOnly ? "token_revoked" : undefined,
+      );
       return Option.some({ connection: { ...connection, appToken, botToken }, owner });
     });
 
   /** Stops the current supervisor and waits for its socket to be released. */
   const retire = (connectionId: string) =>
     Effect.gen(function* () {
+      yield* Ref.update(currentGenerations, (all) => {
+        const next = new Map(all);
+        next.delete(connectionId);
+        return next;
+      });
       const current = (yield* Ref.get(supervisors)).get(connectionId);
       if (current === undefined) return;
       yield* Fiber.interrupt(current.fiber);
@@ -393,6 +537,9 @@ const make = Effect.gen(function* () {
         const ready = yield* prepare(connection);
         if (Option.isNone(ready)) return;
         const generation = yield* Ref.updateAndGet(generations, (value) => value + 1);
+        yield* Ref.update(currentGenerations, (all) =>
+          new Map(all).set(connection.connectionId, generation),
+        );
         const fiber = yield* Effect.forkIn(
           supervise(ready.value.connection, ready.value.owner, generation),
           layerScope,
@@ -416,18 +563,17 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const signal = (yield* Ref.get(stopSignals)).get(connectionId);
       if (signal === undefined || signal.generation !== generation) return;
-      if (report.code === "token_revoked" || report.code === "invalid_auth") {
-        yield* Deferred.succeed(signal.end, {
-          _tag: "stopped",
-          lastError: report.code === "token_revoked" ? "token_revoked" : "invalid_token",
-        });
-        return;
-      }
       const at = DateTime.formatIso(yield* DateTime.now);
       yield* updateStatus(connectionId, (previous) => ({
         ...previous,
         lastDeliveryError: { code: report.code, at, channelId: report.channelId },
       }));
+      if (report.code === "token_revoked" || report.code === "invalid_auth") {
+        const lastError = report.code === "token_revoked" ? "token_revoked" : "invalid_token";
+        yield* dropDelivery(connectionId, generation);
+        yield* setPhase(connectionId, "error", lastError);
+        yield* Deferred.succeed(signal.end, { _tag: "stopped", lastError });
+      }
     });
 
   yield* registry.register(
@@ -437,6 +583,8 @@ const make = Effect.gen(function* () {
           Option.fromNullishOr(sessions.get(connectionId)),
         ),
       reportFailure,
+      status: (connectionId) =>
+        Effect.map(Ref.get(statusState), (state) => state.statuses.get(connectionId) ?? DISABLED),
     }),
   );
 
@@ -452,6 +600,7 @@ const make = Effect.gen(function* () {
 
   return SlackChannelRuntime.of({
     apply,
+    isCurrent,
     remove,
     status: (connectionId) =>
       Effect.map(Ref.get(statusState), (state) => state.statuses.get(connectionId) ?? DISABLED),

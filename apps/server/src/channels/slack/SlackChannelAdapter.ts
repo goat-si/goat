@@ -22,6 +22,7 @@ import {
   slackReplyAddress,
   toSlackInboundMessage,
   type SlackClassifierConfig,
+  type SlackRevocationEvent,
 } from "./slackEventMapping.ts";
 import { formatSlackOutboundText } from "./slackMessageFormatting.ts";
 import {
@@ -42,6 +43,7 @@ function slackIngressContext(
 }
 
 export type SlackEnvelopeHandling =
+  | "revocation"
   | "ignored"
   | "team_mismatch"
   | "ingested"
@@ -71,6 +73,8 @@ export const handleSlackEnvelope = (
     readonly connectionId: string;
     readonly classifier: SlackClassifierConfig;
     readonly owner: SlackConnectionOwner;
+    readonly receiveOnly?: Effect.Effect<boolean>;
+    readonly onRevocation?: (event: SlackRevocationEvent) => Effect.Effect<boolean>;
   },
 ): Effect.Effect<SlackEnvelopeOutcome, never, ChannelGateway.ChannelGateway> =>
   Effect.gen(function* () {
@@ -83,55 +87,66 @@ export const handleSlackEnvelope = (
 
     let handling: SlackEnvelopeHandling;
     let exit: Exit.Exit<unknown, ChannelGatewayError> = Exit.void;
-    switch (classification._tag) {
-      case "ignored":
-        handling = classification.reason === "team_mismatch" ? "team_mismatch" : "ignored";
-        break;
-      case "message": {
-        const receivedAt = yield* nowIso;
-        handling = "ingested";
-        exit = yield* Effect.exit(
-          gateway.ingest(
-            toSlackInboundMessage(classification.event, {
-              connectionId: input.connectionId,
-              receivedAt,
-            }),
-            context,
-          ),
-        );
-        break;
+    if (classification._tag === "revocation") {
+      if (input.onRevocation === undefined || !(yield* input.onRevocation(classification.event))) {
+        return { acked: false, handling: "redeliver" } satisfies SlackEnvelopeOutcome;
       }
-      case "link":
-        handling = "linked";
-        exit = yield* Effect.exit(
-          gateway.linkIdentity(
-            {
-              connectionId: input.connectionId,
-              externalActorId: classification.event.userId,
-              code: classification.code,
-              idempotencyKey: classification.event.dedupeKey,
-              replyAddress: slackReplyAddress(classification.event, input.connectionId),
-            },
-            context,
-          ),
-        );
-        break;
-      case "link_notice":
-        handling = "noticed";
-        exit = yield* Effect.exit(
-          gateway.requestNotice(
-            {
-              connectionId: input.connectionId,
-              idempotencyKey: classification.event.dedupeKey,
-              replyAddress: slackReplyAddress(classification.event, input.connectionId),
-              actor: slackActor(classification.event),
-              notice: classification.notice,
-            },
-            context,
-          ),
-        );
-        break;
-    }
+      handling = "revocation";
+    } else if (input.receiveOnly !== undefined && (yield* input.receiveOnly)) {
+      yield* Effect.logInfo("Slack receive-only event dropped.").pipe(
+        Effect.annotateLogs({ count: 1 }),
+      );
+      handling = "ignored";
+    } else
+      switch (classification._tag) {
+        case "ignored":
+          handling = classification.reason === "team_mismatch" ? "team_mismatch" : "ignored";
+          break;
+        case "message": {
+          const receivedAt = yield* nowIso;
+          handling = "ingested";
+          exit = yield* Effect.exit(
+            gateway.ingest(
+              toSlackInboundMessage(classification.event, {
+                connectionId: input.connectionId,
+                receivedAt,
+              }),
+              context,
+            ),
+          );
+          break;
+        }
+        case "link":
+          handling = "linked";
+          exit = yield* Effect.exit(
+            gateway.linkIdentity(
+              {
+                connectionId: input.connectionId,
+                externalActorId: classification.event.userId,
+                code: classification.code,
+                idempotencyKey: classification.event.dedupeKey,
+                replyAddress: slackReplyAddress(classification.event, input.connectionId),
+              },
+              context,
+            ),
+          );
+          break;
+        case "link_notice":
+          handling = "noticed";
+          exit = yield* Effect.exit(
+            gateway.requestNotice(
+              {
+                connectionId: input.connectionId,
+                idempotencyKey: classification.event.dedupeKey,
+                replyAddress: slackReplyAddress(classification.event, input.connectionId),
+                actor: slackActor(classification.event),
+                notice: classification.notice,
+              },
+              context,
+            ),
+          );
+          break;
+      }
 
     if (shouldRedeliver(exit)) {
       yield* Effect.logWarning("Slack event not stored; leaving it for Slack to redeliver.");
@@ -167,10 +182,7 @@ export interface SlackActiveSession {
 
 /** Delivery failures the connection's status should show, or that end the connection. */
 export interface SlackDeliveryFailureReport {
-  readonly code: Extract<
-    ChannelDeliveryErrorCode,
-    "token_revoked" | "invalid_auth" | "not_in_channel" | "channel_not_found"
-  >;
+  readonly code: ChannelDeliveryErrorCode;
   readonly channelId: string;
 }
 
@@ -194,7 +206,8 @@ export function slackDeliveryError(failure: SlackSdkFailure): ChannelGatewayErro
     case "platform":
       return deliveryFailed("not_sent", "unknown");
     case "network":
-      return deliveryFailed("unknown", "network");
+    case "timeout":
+      return deliveryFailed("unknown", failure.category);
     case "http":
     case "unconfirmed":
     case "unknown":
@@ -207,23 +220,6 @@ const deliveryFailed = (
   deliveryErrorCode: ChannelDeliveryErrorCode,
 ) => new ChannelGatewayError({ reason: "delivery_failed", deliveryOutcome, deliveryErrorCode });
 
-const failureReport = (
-  failure: SlackSdkFailure,
-  channelId: string,
-): SlackDeliveryFailureReport | undefined => {
-  switch (failure.category) {
-    case "auth_revoked":
-      return { code: "token_revoked", channelId };
-    case "auth_invalid":
-      return { code: "invalid_auth", channelId };
-    case "not_in_channel":
-    case "channel_not_found":
-      return { code: failure.category, channelId };
-    default:
-      return undefined;
-  }
-};
-
 /**
  * The one Slack transport. It routes each delivery to the connection named in its reply
  * address, posting into the original thread and tagging the requester.
@@ -232,6 +228,9 @@ export function makeSlackChannelTransport(input: {
   readonly activeSession: (
     connectionId: string,
   ) => Effect.Effect<Option.Option<SlackActiveSession>>;
+  readonly status?: (
+    connectionId: string,
+  ) => Effect.Effect<{ readonly status: string; readonly lastError?: string }>;
   /** Ignored by the runtime unless `generation` is still the connection's current one. */
   readonly reportFailure: (
     connectionId: string,
@@ -249,6 +248,23 @@ export function makeSlackChannelTransport(input: {
         }
         const session = yield* input.activeSession(destination.connectionId);
         if (Option.isNone(session)) {
+          const status =
+            input.status === undefined ? undefined : yield* input.status(destination.connectionId);
+          if (status?.status === "connecting" || status?.status === "reconnecting") {
+            return yield* new ChannelGatewayError({
+              reason: "delivery_failed",
+              deliveryOutcome: "not_sent",
+            });
+          }
+          if (
+            status?.status === "error" &&
+            ["token_revoked", "app_uninstalled", "invalid_token"].includes(status.lastError ?? "")
+          ) {
+            return yield* deliveryFailed(
+              "not_sent",
+              status.lastError === "invalid_token" ? "invalid_auth" : "token_revoked",
+            );
+          }
           return yield* new ChannelGatewayError({ reason: "adapter_unavailable" });
         }
         const active = session.value;
@@ -265,12 +281,13 @@ export function makeSlackChannelTransport(input: {
           active.botApi.postMessage(post),
         ).pipe(
           Effect.catch((failure) => {
-            const report = failureReport(failure, destination.channelId);
-            return (
-              report === undefined
-                ? Effect.void
-                : input.reportFailure(destination.connectionId, active.generation, report)
-            ).pipe(Effect.andThen(Effect.fail(slackDeliveryError(failure))));
+            const error = slackDeliveryError(failure);
+            return input
+              .reportFailure(destination.connectionId, active.generation, {
+                code: error.deliveryErrorCode ?? "unknown",
+                channelId: destination.channelId,
+              })
+              .pipe(Effect.andThen(Effect.fail(error)));
           }),
         );
         return {

@@ -30,6 +30,7 @@ const SlackEventCallback = Schema.Struct({
   team_id: SlackId,
   event_id: SlackEventId,
   event: Schema.Unknown,
+  event_time: Schema.optionalKey(Schema.Number),
 });
 
 const SlackMessageEvent = Schema.Struct({
@@ -44,6 +45,19 @@ const SlackMessageEvent = Schema.Struct({
   ts: Schema.optionalKey(Schema.String),
   thread_ts: Schema.optionalKey(Schema.String),
 });
+
+const SlackRevocation = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("tokens_revoked"),
+    tokens: Schema.Struct({ bot: Schema.optionalKey(Schema.Array(Schema.String)) }),
+  }),
+  Schema.Struct({ type: Schema.Literal("app_uninstalled") }),
+]);
+const decodeRevocation = Schema.decodeUnknownOption(SlackRevocation);
+export interface SlackRevocationEvent {
+  readonly kind: "tokens_revoked" | "app_uninstalled";
+  readonly eventTime: number;
+}
 
 const decodeEventCallback = Schema.decodeUnknownOption(SlackEventCallback);
 const decodeMessageEvent = Schema.decodeUnknownOption(SlackMessageEvent);
@@ -92,6 +106,7 @@ export type SlackIgnoredReason =
 
 export type SlackEventClassification =
   | { readonly _tag: "ignored"; readonly reason: SlackIgnoredReason }
+  | { readonly _tag: "revocation"; readonly event: SlackRevocationEvent }
   | { readonly _tag: "message"; readonly event: SlackClassifiedMessage }
   /** `link CODE` sent to the bot in a DM. */
   | { readonly _tag: "link"; readonly event: SlackClassifiedMessage; readonly code: string }
@@ -124,11 +139,21 @@ export function classifySlackEvent(
     return ignored(type === "event_callback" ? "malformed" : "not_event_callback");
   }
   const { team_id: teamId, event_id: eventId } = callback.value;
+  if (teamId !== config.teamId) return ignored("team_mismatch");
+  const revocation = decodeRevocation(callback.value.event);
+  if (Option.isSome(revocation)) {
+    const eventTime = callback.value.event_time;
+    if (eventTime === undefined || !Number.isFinite(eventTime) || eventTime < 0)
+      return ignored("malformed");
+    const event = revocation.value;
+    if (event.type === "tokens_revoked" && !event.tokens.bot?.includes(config.botUserId))
+      return ignored("unsupported_event");
+    return { _tag: "revocation", event: { kind: event.type, eventTime } };
+  }
   const decodedEvent = decodeMessageEvent(callback.value.event);
   if (Option.isNone(decodedEvent)) return ignored("unsupported_event");
   const event = decodedEvent.value;
 
-  if (teamId !== config.teamId) return ignored("team_mismatch");
   if (event.bot_id !== undefined || event.subtype === "bot_message") return ignored("bot_message");
   if (event.user === config.botUserId) return ignored("own_bot");
   if (event.subtype !== undefined) return ignored("subtype");

@@ -239,7 +239,7 @@ describe("SlackChannelRuntime", () => {
         assert.equal((yield* Effect.flip(send(h.registry))).deliveryErrorCode, "token_revoked");
         yield* awaitStatus("error", "token_revoked");
         assert(h.sdk.calls.includes(`disconnect:${index}`));
-        assert.equal((yield* Effect.flip(send(h.registry))).reason, "adapter_unavailable");
+        assert.equal((yield* Effect.flip(send(h.registry))).deliveryErrorCode, "token_revoked");
         yield* TestClock.adjust("10 minutes");
         yield* flushScheduled;
         assert.equal(h.sdk.sessions.length, index + 1);
@@ -449,5 +449,153 @@ describe("statusEventsAfter", () => {
         ["connected", "disabled"],
       );
     }),
+  );
+});
+
+describe("Slack delivery status", () => {
+  it.effect.each([
+    ["rate_limited", "rate_limited"],
+    ["auth_revoked", "token_revoked"],
+    ["auth_invalid", "invalid_auth"],
+    ["not_in_channel", "not_in_channel"],
+    ["channel_not_found", "channel_not_found"],
+    ["network", "network"],
+    ["timeout", "timeout"],
+    ["unknown", "unknown"],
+  ] as const)("publishes every failure code as lastDeliveryError: %j", ([category, code]) => {
+    const h = harness();
+    return run(
+      h,
+      Effect.gen(function* () {
+        yield* apply(connection());
+        yield* awaitStatus("connected");
+        h.sdk.script.postMessage = () =>
+          Promise.reject(h.sdk.failure("chat.postMessage", category));
+        const error = yield* Effect.flip(send(h.registry));
+        assert.equal(error.deliveryErrorCode, code);
+        const status = yield* statusOf;
+        assert.equal(status.lastDeliveryError?.code, code);
+        assert.equal(status.lastDeliveryError?.channelId, "C0ALLOWED");
+        assert.match(status.lastDeliveryError?.at ?? "", /^\d{4}-\d{2}-\d{2}T/);
+      }),
+    );
+  });
+
+  it.effect("connecting and reconnecting delivery is retryable not_sent without a code", () => {
+    const h = harness();
+    h.sdk.holdStarts();
+    return run(
+      h,
+      Effect.gen(function* () {
+        yield* apply(connection());
+        yield* Effect.promise(() => h.sdk.waitForCall("start:0"));
+        const connecting = yield* Effect.flip(send(h.registry));
+        assert.equal(connecting.reason, "delivery_failed");
+        assert.equal(connecting.deliveryOutcome, "not_sent");
+        assert.equal(connecting.deliveryErrorCode, undefined);
+        h.sdk.pendingStarts[0]!.resolve();
+        yield* awaitStatus("connected");
+        latestSession(h.sdk).emitLifecycle("disconnected");
+        yield* awaitStatus("reconnecting");
+        const reconnecting = yield* Effect.flip(send(h.registry));
+        assert.equal(reconnecting.reason, "delivery_failed");
+        assert.equal(reconnecting.deliveryOutcome, "not_sent");
+        assert.equal(reconnecting.deliveryErrorCode, undefined);
+        assert.equal(h.sdk.posted.length, 0);
+      }),
+    );
+  });
+
+  it.effect.each(["auth_revoked", "auth_invalid"] as const)(
+    "blocks delivery and publishes error before slow teardown: %s",
+    (category) => {
+      const h = harness();
+      return run(
+        h,
+        Effect.gen(function* () {
+          yield* apply(connection());
+          yield* awaitStatus("connected");
+          const release = h.sdk.holdDisconnects();
+          h.sdk.script.postMessage = () =>
+            Promise.reject(h.sdk.failure("chat.postMessage", category));
+          yield* Effect.flip(send(h.registry));
+          yield* Effect.promise(() => h.sdk.waitForCall("disconnect:0"));
+          const next = yield* Effect.flip(send(h.registry));
+          assert.equal(next.reason, "delivery_failed");
+          assert.equal(next.deliveryOutcome, "not_sent");
+          assert.equal(
+            next.deliveryErrorCode,
+            category === "auth_invalid" ? "invalid_auth" : "token_revoked",
+          );
+          assert.equal((yield* statusOf).status, "error");
+          assert.equal(h.sdk.posted.length, 1);
+          release();
+        }),
+      );
+    },
+  );
+
+  it.effect("suppresses identical public status events for a connection", () => {
+    const h = harness();
+    return run(
+      h,
+      Effect.gen(function* () {
+        const runtime = yield* SlackChannelRuntime.SlackChannelRuntime;
+        yield* apply(connection({ enabled: false }));
+        const subscribed = yield* Deferred.make<void>();
+        const collected = yield* Effect.forkChild(
+          runtime.streamStatus.pipe(
+            Stream.tap(() => Deferred.succeed(subscribed, undefined)),
+            Stream.takeUntil((event) => event.status === "connected"),
+            Stream.runCollect,
+          ),
+        );
+        yield* Deferred.await(subscribed);
+        yield* apply(connection({ enabled: false }));
+        yield* apply(connection({ enabled: false }));
+        yield* apply(connection());
+        const events = yield* Fiber.join(collected);
+        assert.deepEqual(
+          Array.from(events, (event) => event.status),
+          ["disabled", "connecting", "connected"],
+        );
+      }),
+    );
+  });
+
+  it.effect(
+    "receive-only reconnect authentication failure stops without calling revocation cleanup",
+    () => {
+      const h = harness();
+      let cleanup = 0;
+      return run(
+        h,
+        Effect.gen(function* () {
+          yield* apply(
+            connection({
+              revoked: "bot_revoked",
+              botToken: undefined,
+              botUserId: "U0BOT",
+              onRevoked: () =>
+                Effect.sync(() => {
+                  cleanup += 1;
+                  return "blocked" as const;
+                }),
+            }),
+          );
+          yield* Effect.promise(() => h.sdk.waitForCall("start:0"));
+          latestSession(h.sdk).emitLifecycle("disconnected");
+          yield* Effect.promise(() => h.sdk.waitForCall("disconnect:0"));
+          h.sdk.script.start = () => Promise.reject(h.sdk.failure("socket.start", "auth_invalid"));
+          yield* TestClock.adjust("1 second");
+          yield* awaitStatus("error", "invalid_token");
+          yield* TestClock.adjust("10 minutes");
+          yield* flushScheduled;
+          assert.equal(cleanup, 0);
+          assert.equal(h.sdk.calls.filter((call) => call === "authTest").length, 0);
+          assert.equal(h.sdk.sessions.length, 2);
+        }),
+      );
+    },
   );
 });

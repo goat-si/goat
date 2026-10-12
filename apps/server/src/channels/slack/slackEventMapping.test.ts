@@ -212,3 +212,20 @@ describe("classifySlackEvent", () => {
     });
   });
 });
+
+describe("revocation classification", () => {
+  const config = { teamId: "T0TEAM", botUserId: "U0BOT", allowedChannelIds: new Set<string>() };
+  it.each([
+    [{ type: "tokens_revoked", tokens: { bot: ["U0BOT"] } }, "revocation"],
+    [{ type: "tokens_revoked", tokens: { bot: ["U0OTHER"] } }, "ignored"],
+    [{ type: "tokens_revoked", tokens: { oauth: ["U0BOT"] } }, "ignored"],
+    [{ type: "app_uninstalled" }, "revocation"],
+  ])("classifies only our bot revocation and keeps outer event_time: %j", (event, tag) => {
+    const result = classifySlackEvent(envelope(event, { event_time: 1234 }), config);
+    expect(result._tag).toBe(tag);
+    if (result._tag === "revocation") expect(result.event.eventTime).toBe(1234);
+    expect(
+      classifySlackEvent(envelope(event, { team_id: "T0OTHER", event_time: 1234 }), config),
+    ).toEqual({ _tag: "ignored", reason: "team_mismatch" });
+  });
+});

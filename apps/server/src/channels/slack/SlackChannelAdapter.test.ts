@@ -3,6 +3,8 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import { describe } from "vite-plus/test";
 
@@ -49,6 +51,72 @@ const envelopeFor = (body: unknown, options: { type?: string; ack?: () => Promis
 };
 
 describe("handleSlackEnvelope", () => {
+  it.effect("ACKs a gateway error without delivery fields during ingest", () => {
+    const gateway = makeFakeGateway();
+    gateway.script.ingest = () =>
+      Effect.fail(new ChannelGatewayError({ reason: "adapter_unavailable" }));
+    const envelope = envelopeFor(eventCallback(channelMention()));
+    return Effect.gen(function* () {
+      const result = yield* handleSlackEnvelope(envelope.envelope, {
+        connectionId,
+        classifier,
+        owner,
+      });
+      assert.equal(result.acked, true);
+      assert.equal(envelope.acks(), 1);
+    }).pipe(Effect.provide(gateway.layer));
+  });
+
+  it.effect(
+    "never logs a link code or forwards it to ingest, including rejected link paths",
+    () => {
+      const gateway = makeFakeGateway();
+      const logs: unknown[] = [];
+      gateway.script.linkIdentity = () =>
+        Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" }));
+      gateway.script.requestNotice = () =>
+        Effect.fail(new ChannelGatewayError({ reason: "invalid_input" }));
+      return Effect.gen(function* () {
+        for (const event of [
+          directMessage({ text: "link CODE_SENTINEL" }),
+          directMessage({ text: "link CODE_SENTINEL extra" }),
+          channelMention({ text: "<@U0BOT> link CODE_SENTINEL" }),
+          directMessage(),
+        ]) {
+          yield* handleSlackEnvelope(envelopeFor(eventCallback(event)).envelope, {
+            connectionId,
+            classifier,
+            owner,
+          });
+        }
+        assert(logs.length > 0);
+        assert(!JSON.stringify(logs).includes("CODE_SENTINEL"));
+        assert(
+          !JSON.stringify(gateway.calls.filter((call) => call.method === "ingest")).includes(
+            "CODE_SENTINEL",
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          Layer.merge(gateway.layer, Logger.layer([Logger.make((entry) => logs.push(entry))])),
+        ),
+      );
+    },
+  );
+
+  it.effect("filters an explicit other-bot message before gateway ingest", () => {
+    const gateway = makeFakeGateway();
+    return Effect.gen(function* () {
+      const result = yield* handleSlackEnvelope(
+        envelopeFor(eventCallback(directMessage({ user: "U0OTHERBOT", bot_id: "B0OTHER" })))
+          .envelope,
+        { connectionId, classifier, owner },
+      );
+      assert.equal(result.acked, true);
+      assert.equal(gateway.calls.length, 0);
+    }).pipe(Effect.provide(gateway.layer));
+  });
+
   it.effect("acknowledges only after the gateway has stored the input", () => {
     const gateway = makeFakeGateway();
     return Effect.gen(function* () {
@@ -352,6 +420,16 @@ describe("makeSlackChannelTransport", () => {
       { deliveryOutcome: "not_sent", deliveryErrorCode: "not_in_channel" },
     ],
     [
+      "unknown channel",
+      new SlackSdkFailure({ operation: "chat.postMessage", category: "channel_not_found" }),
+      { deliveryOutcome: "not_sent", deliveryErrorCode: "channel_not_found" },
+    ],
+    [
+      "request timeout",
+      new SlackSdkFailure({ operation: "chat.postMessage", category: "timeout" }),
+      { deliveryOutcome: "unknown", deliveryErrorCode: "timeout" },
+    ],
+    [
       "explicit rejection",
       new SlackSdkFailure({ operation: "chat.postMessage", category: "platform" }),
       { deliveryOutcome: "not_sent", deliveryErrorCode: "unknown" },
@@ -368,7 +446,7 @@ describe("makeSlackChannelTransport", () => {
     ],
   ] as const)("maps a %s to what the outbox should do", ([_label, failure, expected]) =>
     Effect.gen(function* () {
-      const { transport, posts } = setup(() => Promise.reject(failure));
+      const { transport, posts, reports } = setup(() => Promise.reject(failure));
       const error = yield* Effect.flip(transport.send(message));
       assert.deepEqual<Record<string, unknown>>(
         {
@@ -382,6 +460,17 @@ describe("makeSlackChannelTransport", () => {
       );
       assert.equal(error.reason, "delivery_failed");
       assert.equal(posts.length, 1);
+      assert.deepEqual(reports, [
+        { generation: 7, report: { code: expected.deliveryErrorCode, channelId: "C0ALLOWED" } },
+      ]);
+      if (
+        ["token_revoked", "invalid_auth", "not_in_channel", "channel_not_found"].includes(
+          expected.deliveryErrorCode,
+        )
+      ) {
+        assert.equal(error.deliveryOutcome, "not_sent");
+        assert.equal(error.retryAfterSeconds, undefined);
+      }
     }),
   );
 

@@ -22,8 +22,10 @@ import {
   type SlackChannelSettings as SlackChannelSettingsSnapshot,
   type SlackChannelSettingsErrorReason,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -38,6 +40,7 @@ import * as ServerConfig from "../../config.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
 import type { SlackConnectionOwner } from "./SlackChannelAdapter.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
+import type { SlackRevocationEvent } from "./slackEventMapping.ts";
 import * as SlackSdk from "./SlackSdk.ts";
 
 const StoredOwner = Schema.Struct({
@@ -53,6 +56,9 @@ const StoredConnection = Schema.Struct({
   enabled: Schema.Boolean,
   teamId: Schema.optional(TrimmedNonEmptyString),
   botUserId: Schema.optional(TrimmedNonEmptyString),
+  appTokenSavedAt: Schema.optional(Schema.Number),
+  botTokenSavedAt: Schema.optional(Schema.Number),
+  revoked: Schema.optional(Schema.Literals(["bot_revoked", "app_uninstalled"])),
   allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
   owner: Schema.optional(StoredOwner),
@@ -67,6 +73,7 @@ const SettingsFileJson = Schema.fromJsonString(SettingsFile);
 const decodeSettingsFile = Schema.decodeUnknownEffect(SettingsFileJson);
 const encodeSettingsFile = Schema.encodeEffect(SettingsFileJson);
 
+const REVOCATION_SKEW_MARGIN_SECONDS = 300;
 const SETTINGS_FILE_NAME = "slack-channel-settings.json";
 /** Server-generated connection ids. Only these are ever used in secret file names. */
 const CONNECTION_ID_PATTERN = /^slack-[a-f0-9]{12}$/;
@@ -177,6 +184,9 @@ export const make = Effect.gen(function* () {
         botToken: Option.getOrUndefined(botToken),
         expectedTeamId: connection.teamId,
         owner: connection.owner,
+        ...(connection.botUserId === undefined ? {} : { botUserId: connection.botUserId }),
+        ...(connection.revoked === undefined ? {} : { revoked: connection.revoked }),
+        onRevoked: (event, generation) => onRevoked(connection.connectionId, event, generation),
       } satisfies SlackChannelRuntime.SlackRuntimeConnection;
     });
 
@@ -238,6 +248,73 @@ export const make = Effect.gen(function* () {
       return found === undefined ? fail("not_found") : Effect.succeed(found);
     });
 
+  const deleteRevokedSecrets = (connection: StoredConnection) =>
+    Effect.gen(function* () {
+      if (connection.revoked === undefined) return;
+      yield* secrets
+        .remove(botTokenSecretName(connection.connectionId))
+        .pipe(Effect.catch(persistenceFailed("remove-bot-secret")));
+      if (connection.revoked === "app_uninstalled") {
+        yield* secrets
+          .remove(appTokenSecretName(connection.connectionId))
+          .pipe(Effect.catch(persistenceFailed("remove-app-secret")));
+      }
+    });
+
+  // Acquire interruptibly: configure may be waiting for this handler's socket to stop.
+  // Once acquired, persist the tombstone and deletion together without calling runtime.apply.
+  const onRevoked = (connectionId: string, event: SlackRevocationEvent, generation: number) =>
+    lock.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (!(yield* runtime.isCurrent(connectionId, generation))) return "ignored" as const;
+          const connection = yield* findConnection(connectionId);
+          const savedAt =
+            event.kind === "tokens_revoked"
+              ? (connection.botTokenSavedAt ?? 0)
+              : Math.max(connection.appTokenSavedAt ?? 0, connection.botTokenSavedAt ?? 0);
+          if (event.eventTime < savedAt) return "stale" as const;
+          // More than five minutes of clock skew can still misidentify an old installation's
+          // event and delete replacement tokens; recovery requires entering the tokens again.
+          if (
+            event.eventTime < savedAt + REVOCATION_SKEW_MARGIN_SECONDS &&
+            connection.revoked !== "app_uninstalled" &&
+            !(connection.revoked === "bot_revoked" && event.kind === "tokens_revoked")
+          ) {
+            const token = yield* readSecret(botTokenSecretName(connectionId));
+            if (Option.isNone(token)) return "blocked" as const;
+            const result = yield* Effect.exit(
+              SlackSdk.slackCall("auth.test", () =>
+                sdk.botApi({ botToken: token.value }).authTest(),
+              ),
+            );
+            if (Exit.isSuccess(result)) {
+              return connection.revoked === undefined &&
+                result.value.teamId === connection.teamId &&
+                result.value.botUserId === connection.botUserId
+                ? ("active" as const)
+                : ("blocked" as const);
+            }
+            const error = Exit.findErrorOption(result);
+            if (
+              Option.isSome(error) &&
+              (error.value.category === "auth_revoked" || error.value.category === "auth_invalid")
+            )
+              return "blocked" as const;
+            return yield* fail("adapter_unavailable");
+          }
+          const revoked =
+            connection.revoked === "app_uninstalled" || event.kind === "app_uninstalled"
+              ? ("app_uninstalled" as const)
+              : ("bot_revoked" as const);
+          const next = { ...connection, revoked };
+          yield* saveConnection(next);
+          yield* deleteRevokedSecrets(next);
+          return revoked === "app_uninstalled" ? ("uninstalled" as const) : ("blocked" as const);
+        }),
+      ),
+    );
+
   const newConnectionId = crypto.randomUUIDv4.pipe(
     Effect.map((uuid) =>
       SlackChannelConnectionId.make(`slack-${uuid.replaceAll("-", "").slice(0, 12)}`),
@@ -257,7 +334,14 @@ export const make = Effect.gen(function* () {
       yield* secrets
         .remove(botTokenSecretName(connection.connectionId))
         .pipe(Effect.catch(persistenceFailed("remove-secret")));
-      const { teamId: _teamId, botUserId: _botUserId, ...rest } = connection;
+      const {
+        teamId: _teamId,
+        botUserId: _botUserId,
+        revoked: _revoked,
+        appTokenSavedAt: _appTokenSavedAt,
+        botTokenSavedAt: _botTokenSavedAt,
+        ...rest
+      } = connection;
       const cleared: StoredConnection = { ...rest, enabled: false };
       yield* disable(cleared);
       return cleared;
@@ -275,7 +359,7 @@ export const make = Effect.gen(function* () {
         const resolvedOwner = owner ?? existing?.owner;
         if (resolvedOwner === undefined) return yield* fail("invalid_input");
         const connectionId = existing?.connectionId ?? (yield* newConnectionId);
-        const base: StoredConnection = existing ?? {
+        let base: StoredConnection = existing ?? {
           connectionId,
           enabled: false,
           allowedChannelIds: [],
@@ -310,9 +394,31 @@ export const make = Effect.gen(function* () {
           input.appToken !== undefined || (yield* hasSecret(appTokenSecretName(connectionId)));
         const hasBotToken =
           input.botToken !== undefined || (yield* hasSecret(botTokenSecretName(connectionId)));
-        if (input.enabled && !(hasAppToken && hasBotToken)) return yield* fail("invalid_input");
+        if (
+          input.enabled &&
+          !(
+            hasAppToken &&
+            (hasBotToken ||
+              (base.revoked === "bot_revoked" &&
+                input.appToken === undefined &&
+                input.botToken === undefined))
+          )
+        )
+          return yield* fail("invalid_input");
 
         if (input.appToken !== undefined || input.botToken !== undefined) {
+          const now = Math.floor((yield* Clock.currentTimeMillis) / 1000);
+          const { revoked: _revoked, ...kept } = base;
+          base = {
+            ...kept,
+            enabled: false,
+            ...(input.appToken === undefined
+              ? {}
+              : { appTokenSavedAt: Math.max(now, (base.appTokenSavedAt ?? 0) + 1) }),
+            ...(input.botToken === undefined
+              ? {}
+              : { botTokenSavedAt: Math.max(now, (base.botTokenSavedAt ?? 0) + 1) }),
+          };
           yield* stopForCredentialChange(base);
           if (input.appToken !== undefined) {
             yield* secrets
@@ -362,7 +468,13 @@ export const make = Effect.gen(function* () {
   // Bring saved connections back up. A connection whose secrets cannot be read starts in error.
   if (!loaded.loadFailed) {
     yield* Effect.forEach(loaded.connections, (connection) =>
-      applyToRuntime(connection).pipe(Effect.ignore({ log: true })),
+      deleteRevokedSecrets(connection).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("Slack startup revocation cleanup failed; delivery stays blocked."),
+        ),
+        Effect.andThen(applyToRuntime(connection)),
+        Effect.ignore({ log: true }),
+      ),
     );
   }
 
