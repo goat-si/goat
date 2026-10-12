@@ -102,6 +102,8 @@ it.effect("resolves setup scripts through the standalone project service", () =>
     assert.deepEqual(open.mock.calls[0]?.[0].env, {
       GOAT_PROJECT_ROOT: "/repo",
       GOAT_WORKTREE_PATH: "/repo-worktree",
+      T3CODE_PROJECT_ROOT: "/repo", // goat-rename: legacy
+      T3CODE_WORKTREE_PATH: "/repo-worktree", // goat-rename: legacy
       COLORTERM: "",
       NO_COLOR: "1",
       FORCE_COLOR: "0",
