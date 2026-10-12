@@ -77,6 +77,8 @@ class RemoteMachine {
   readonly calls: Array<{ readonly tool: string; readonly ceiling: string }> = [];
   /** While true, every call fails as if SSH could not reach the host. */
   down = false;
+  /** While true, only goat_environment_read fails, after the projects were listed. */
+  environmentReadDown = false;
   /** Hosts this machine has only seen in known_hosts, never configured. */
   knownHostsOnly: ReadonlyArray<string> = [];
   /** The next launch starts the thread but its answer never arrives. */
@@ -312,6 +314,7 @@ class RemoteMachine {
               case "goat_project_list":
                 return { projects: machine.projects, nextCursor: null };
               case "goat_environment_read":
+                if (machine.environmentReadDown) return yield* machine.unreachable("down");
                 return { environmentId: machine.environmentId };
               case "goat_thread_send": {
                 machine.sends.push(call.arguments);
@@ -1074,6 +1077,33 @@ describe("Slack defaults for work on another machine", () => {
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "d6"), slackContext);
       yield* until("running", (task) => task.status === "running");
       assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps the project the requester chose through a later question", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "c1"), slackContext);
+      yield* until("asked", (task) => task.status === "waiting_input");
+      // The project is chosen, then the machine stops answering before the launch.
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "c2"), slackContext);
+      const unreachable = yield* until(
+        "unreachable",
+        (task) =>
+          task.status === "waiting_input" && (task.openQuestions[0]?.text ?? "").includes("reach"),
+      );
+      assert.strictEqual(machine.launches.length, 0);
+      // "Try again" names no project; the one chosen before still holds.
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: try again", "c3"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
+      assert.notStrictEqual(unreachable.version, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 

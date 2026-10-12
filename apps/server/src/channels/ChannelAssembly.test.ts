@@ -49,7 +49,7 @@ const offeredModels = ["gpt-6.1-sol", "gpt-other", "server-default"];
  * The server's channel graph with the live Slack layers; only the SDK is fake. Providers resolve
  * except the missing instance.
  */
-const liveChannels = (sdk: FakeSlackSdk) =>
+const liveChannels = (sdk: FakeSlackSdk, offered: ReadonlyArray<string> = offeredModels) =>
   ChannelLayers.layerServicesWithSlack.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -68,7 +68,7 @@ const liveChannels = (sdk: FakeSlackSdk) =>
                 : ({
                     snapshot: {
                       getSnapshot: Effect.succeed({
-                        models: offeredModels.map((slug) => ({ slug })),
+                        models: offered.map((slug) => ({ slug })),
                       }),
                     },
                   } as never),
@@ -80,11 +80,13 @@ const liveChannels = (sdk: FakeSlackSdk) =>
     Layer.orDie,
   );
 
-const harnessWithSlack = (options: { readonly projects?: number } = {}) => {
+const harnessWithSlack = (
+  options: { readonly projects?: number; readonly offered?: ReadonlyArray<string> } = {},
+) => {
   const sdk = makeFakeSlackSdk();
   const harness = makeHarness({
     ...options,
-    channelsLayer: liveChannels(sdk),
+    channelsLayer: liveChannels(sdk, options.offered),
     fakeSlackTransport: false,
   });
   return { ...harness, sdk };
@@ -475,6 +477,19 @@ describe("Slack default work target", () => {
       });
       assert.strictEqual(task.status, "running");
       assert.deepStrictEqual(harness.world.launches[0]?.modelSelection, modelSelection);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("asks when neither the Slack model nor the project's is offered", () => {
+    // Only the server default is listed: the project's own model is retired too.
+    const harness = harnessWithSlack({ offered: ["server-default"] });
+    return Effect.gen(function* () {
+      const task = yield* slackTask(harness, {
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "retired" },
+      });
+      assert.strictEqual(task.status, "waiting_input");
+      assert.include(task.openQuestions[0]?.text ?? "", "is not available");
+      assert.strictEqual(harness.world.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 

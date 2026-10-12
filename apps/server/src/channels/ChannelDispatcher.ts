@@ -211,8 +211,7 @@ const make = Effect.gen(function* () {
         });
       }
       const modelSelection = preferred ?? projectModel;
-      const instance = yield* providers.getInstance(modelSelection.instanceId);
-      if (instance === undefined) {
+      if (!(yield* modelOffered(modelSelection))) {
         return {
           type: "question" as const,
           text:

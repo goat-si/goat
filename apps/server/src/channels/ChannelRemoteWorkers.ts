@@ -148,6 +148,20 @@ const RemoteWorkerState = Schema.Struct({
 });
 export type RemoteWorkerState = typeof RemoteWorkerState.Type;
 
+/** The remote project a requester chose for one generation on one host. */
+const RemoteChoice = Schema.Struct({
+  generation: PositiveInt,
+  host: Schema.String,
+  projectId: Schema.String,
+});
+const encodeRemoteChoice = Schema.encodeSync(Schema.fromJsonString(RemoteChoice));
+const decodeRemoteChoiceOption = Schema.decodeUnknownOption(Schema.fromJsonString(RemoteChoice));
+const decodeRemoteChoice = (json: string | undefined) => {
+  if (json === undefined) return undefined;
+  const decoded = decodeRemoteChoiceOption(json);
+  return decoded._tag === "Some" ? decoded.value : undefined;
+};
+
 const encodeState = Schema.encodeSync(Schema.fromJsonString(RemoteWorkerState));
 const decodeStateOption = Schema.decodeUnknownOption(Schema.fromJsonString(RemoteWorkerState));
 const decodeState = (json: string | undefined) => {
@@ -206,7 +220,12 @@ export const meansThisMachine = (text: string) =>
 
 export type RemoteResolution =
   | { readonly type: "target"; readonly target: ChannelDispatchTarget }
-  | { readonly type: "question"; readonly text: string }
+  | {
+      readonly type: "question";
+      readonly text: string;
+      /** The remote project already chosen, kept for the next pass after the answer. */
+      readonly projectId?: string;
+    }
   | { readonly type: "local" }
   | { readonly type: "retry" };
 
@@ -400,6 +419,8 @@ const make = Effect.gen(function* () {
       readonly canonicalKey?: string;
       readonly answer?: string;
       readonly requireNamed?: boolean;
+      /** A project the requester chose here earlier for this generation. */
+      readonly rememberedProjectId?: string;
     },
   ) => {
     const byId = projects.find((project) => project.id === hint.projectId);
@@ -411,6 +432,9 @@ const make = Effect.gen(function* () {
         return named.toSorted((left, right) => right.title.length - left.title.length)[0];
       }
     }
+    // A later answer to another question ("try again") keeps the project chosen before it.
+    const remembered = projects.find((project) => project.id === hint.rememberedProjectId);
+    if (remembered !== undefined) return remembered;
     // The same repository as the local project, by its canonical remote key.
     if (hint.canonicalKey !== undefined) {
       const same = projects.filter((project) => canonicalKeyOf(project) === hint.canonicalKey);
@@ -461,7 +485,13 @@ const make = Effect.gen(function* () {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
       const answer = yield* ledger.latestAnswer(task.taskId);
+      const choice = decodeRemoteChoice(yield* ledger.getRemoteChoice(task.taskId));
+      const remembered =
+        choice !== undefined && choice.generation === task.generation && choice.host === host
+          ? choice.projectId
+          : undefined;
       const chosen = chooseProject(projects, {
+        ...(remembered === undefined ? {} : { rememberedProjectId: remembered }),
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),
         ...(local.canonicalKey === undefined ? {} : { canonicalKey: local.canonicalKey }),
@@ -488,7 +518,11 @@ const make = Effect.gen(function* () {
         authorize,
       ).pipe(Effect.flatMap(decodeEnvironment), Effect.result);
       if (environment._tag === "Failure") {
-        return { type: "question", text: REMOTE_COPY.unreachable(host) } as const;
+        return {
+          type: "question",
+          text: REMOTE_COPY.unreachable(host),
+          projectId: chosen.id,
+        } as const;
       }
       const target: ChannelDispatchTarget = {
         environmentId: environment.success.environmentId,
@@ -1358,7 +1392,21 @@ const make = Effect.gen(function* () {
         if (!(yield* ledger.isOwner(owner))) return;
         const reread = yield* ledger.getTask(taskId);
         if (reread === undefined || reread.task.version !== stored.task.version) return;
-        if (resolved.type === "question") return yield* askAgain(owner, reread, resolved.text);
+        if (resolved.type === "question") {
+          if (resolved.projectId !== undefined) {
+            yield* ledger.setRemoteChoice({
+              owner,
+              taskId,
+              valueJson: encodeRemoteChoice({
+                generation: reread.task.generation,
+                host: reread.task.host ?? "",
+                projectId: resolved.projectId,
+              }),
+              now: yield* nowIso,
+            });
+          }
+          return yield* askAgain(owner, reread, resolved.text);
+        }
         const claimedAt = yield* nowIso;
         const claimed = yield* commitTransition(
           ledger,

@@ -308,7 +308,9 @@ export function makeHarness(
       listShells: () => Effect.succeed(shells as never),
     }),
     Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-      getInstance: () => Effect.succeed({} as never),
+      // Every instance exists and lists no models, so any model counts as offered.
+      getInstance: () =>
+        Effect.succeed({ snapshot: { getSnapshot: Effect.succeed({ models: [] }) } } as never),
     }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(environmentId),
