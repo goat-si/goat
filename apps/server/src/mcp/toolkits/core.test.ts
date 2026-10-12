@@ -211,7 +211,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_list",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(98);
+  expect(names.size).toBe(99);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);

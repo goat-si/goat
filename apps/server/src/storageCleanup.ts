@@ -591,7 +591,9 @@ const make = Effect.gen(function* () {
   ) {
     if (days === null || !(yield* fs.exists(root))) return removed;
     const realRoot = yield* fs.realPath(root);
-    if (realRoot !== path.resolve(root)) return removed;
+    // A symlinked ancestor (a linked drive, macOS /var) is fine; a symlinked root is not.
+    const realParent = yield* fs.realPath(path.dirname(path.resolve(root)));
+    if (realRoot !== path.join(realParent, path.basename(root))) return removed;
     const visit = Effect.fn("StorageCleanup.visitFiles")(function* (
       directory: string,
     ): Effect.fn.Return<void, PlatformError | ServerSettingsError> {
