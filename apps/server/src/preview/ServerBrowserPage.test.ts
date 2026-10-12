@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - existence of Playwright's browser binary is a Node filesystem check.
+import * as NodeFS from "node:fs";
+
 import {
   chromium,
   type Browser,
@@ -10,7 +13,18 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { presentAsChrome } from "./ServerBrowserContexts.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
-describe("server browser element refs", () => {
+// Playwright does not download a browser with the package. Linux CI installs
+// one; a Mac checkout often has not. Skip the live browser cases instead of
+// failing the file. The drag case below does not launch anything.
+const chromiumInstalled = (() => {
+  try {
+    return NodeFS.existsSync(chromium.executablePath());
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
