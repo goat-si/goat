@@ -12,6 +12,16 @@ import type { KeepRule, PathRule, TextRule } from "./engine.ts";
  * that GOAT does not run stay byte-identical so upstream syncs merge cleanly.
  */
 export const isExempt = (path: string): boolean =>
+  // Recorded protocols and generated/binary assets are upstream input, not rename output.
+  /\.ndjson$|\.(?:png|jpg|jpeg|ico|icns|woff2?|ttf|wasm|pdf|svg)$/.test(path) ||
+  path === "pnpm-lock.yaml" ||
+  path.startsWith("apps/marketing/") ||
+  path.startsWith("infra/") ||
+  path.startsWith(".devcontainer/") ||
+  path.startsWith(".cursor/") ||
+  path.startsWith(".github/ISSUE_TEMPLATE/") ||
+  path === ".github/TRIAGE_EXEMPTIONS.td" ||
+  path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
   path.startsWith("devlog/") ||
   path.startsWith("scripts/lib/goat-rename/") ||
@@ -22,6 +32,11 @@ export const isExempt = (path: string): boolean =>
   (path.startsWith(".github/workflows/") && !path.startsWith(".github/workflows/goat-")) ||
   // AUR packaging is published only by the disabled upstream workflow.
   path.startsWith("packaging/aur/");
+
+export const isTest = (path: string): boolean =>
+  /\.(?:test|testkit)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
+    path,
+  );
 
 const inLintPlugin = (path: string) => path.startsWith("oxlint-plugin-");
 
@@ -107,6 +122,73 @@ const LINT_RULE_IDS =
   "namespace-node-imports|no-global-process-runtime|no-hermes-unsupported-apis|no-inline-schema-compile|no-manual-effect-runtime-in-tests|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-raw-mcp-registration|no-raw-resize-observer|no-rpc-permission-bypass|no-test-in-loop|no-unscoped-has|prefer-catch-tags|require-centered-scroll-gutter|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
+  {
+    id: "local-home-fields",
+    category: "local-names",
+    find: /\bt3Home\b/g,
+    replace: "goatHome",
+    // These consumers use GOAT_HOME, not the D17 desktop bootstrap payload.
+    scope: (path) =>
+      /^scripts\/(?:dev-runner|install)\./.test(path) ||
+      /^apps\/desktop\/src\/app\/Desktop(?:Config|Environment|StatePaths|CliShim|EarlyElectronStartup)(?:\.test)?\.ts$/.test(
+        path,
+      ) ||
+      /^apps\/server\/src\/cli\/(?:app|config)\.ts$/.test(path),
+  },
+  ...[
+    ["parentEnvWithoutT3Home", "parentEnvWithoutGoatHome"],
+    ["envT3Home", "envGoatHome"],
+    ["resolvedT3Home", "resolvedGoatHome"],
+    ["t3_exit", "goat_exit"],
+    ["t3_codepage", "goat_codepage"],
+    ["t3-kernel32", "goat-kernel32"],
+    ["t3-user32", "goat-user32"],
+  ].map(([from, to]): TextRule => ({
+    id: `local:${to}`,
+    category: "local-names",
+    find: new RegExp(`\\b${from}\\b`, "g"),
+    replace: to!,
+  })),
+  {
+    id: "powershell-namespace",
+    category: "local-names",
+    find: /(?<=-Namespace )T3\b|(?<=\[)T3(?=\.Env\])/g,
+    replace: "Goat",
+    scope: (path) => path.endsWith("DesktopCliCommand.ts"),
+  },
+  {
+    id: "preview-guest-css",
+    category: "preview",
+    find: /--t3-/g,
+    replace: "--goat-",
+    scope: (path) =>
+      path.startsWith("apps/desktop/src/preview/") &&
+      !path.endsWith("AnnotationStyles.generated.ts"),
+  },
+  {
+    id: "preview-session-ids",
+    category: "preview",
+    find: /(?<=["'`])t3-preview(?=["'`-])/g,
+    replace: "goat-preview",
+    scope: (path) =>
+      /apps\/desktop\/src\/preview\/(?:CdpRelay|DesktopBrowserHost)(?:\.test)?\.ts$/.test(path),
+  },
+  {
+    id: "web-dom-ids",
+    category: "dom",
+    find: /t3-(?=draft-hero-transition|file-icon-|ghostty-input)/g,
+    replace: "goat-",
+    scope: (path) =>
+      path.startsWith("apps/web/") || path === "apps/mobile/scripts/sync-pierre-file-icons.mjs",
+  },
+  {
+    id: "preview-guest-attributes",
+    category: "preview",
+    find: /data-t3code-(?=annotation-|recording-)/g,
+    replace: "data-goat-",
+    scope: (path) => path.startsWith("apps/desktop/src/preview/"),
+  },
+
   // Packages (plan D4). Every workspace package is private; GOAT publishes no npm package.
   { id: "package-scope", category: "packages", find: /@t3tools\//g, replace: "@goat/" },
   {
@@ -218,7 +300,8 @@ export const TEXT_RULES: readonly TextRule[] = [
     // Disposable temp directories: `prefix: "t3-..."` options and `mkdtemp(... "t3-...")` calls.
     id: "temp-prefixes",
     category: "fixtures",
-    find: /(?<=(?:prefix:\s*|mkdtemp(?:Sync)?\(.*)["'`]\.?)t3(?:code)?-(?=[a-z])/g,
+    find: /(?<=(?:prefix\s*[:=]\s*|mkdtemp(?:Sync)?\(.*|makeTempDir\(.*)["'`]\.?)t3(?:code)?-(?=[a-z$])|(?<=["'`])t3(?:code)?-(?=(?:git-manager|codex-home|claude-home|workspace|codex-shared|codex-shadow-root|acp)-)|(?<=prefix\s*[:=]\s*["'`])t3-(?=\$\{input\.kind\}-vcs-contract-)/g,
+    scope: (path) => isTest(path) || path.endsWith("VcsDriverContractHarness.ts"),
     replace: "goat-",
   },
   {
@@ -249,6 +332,50 @@ export const PATH_RULES: readonly PathRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "legacy-test-inputs",
+    pattern:
+      /(?:[Tt]3(?:CODE|_CODE)?_[A-Za-z0-9_]+|t3code[:.][A-Za-z0-9_:.-]+|\.t3(?:code)?\b|t3\.json|t3-(?:thread|context|citation):\/\/|t3Home|t3McpApp|__t3McpAppReceive|t3SessionLoadReady|\/\.well-known\/t3\/|t3-context-fragment|t3-desktop-bootstrap:|urn:t3:params:oauth:token-type:environment-bootstrap|refs\/t3(?:code)?\/[^\s"'`]+|t3\/[A-Za-z0-9_/-]+|t3-(?:chat|code)\b)/g,
+    scope: isTest,
+    reason:
+      "Tests deliberately exercise legacy storage, env, homes and peer contracts (D5–D17); expectations must stay legacy.",
+  },
+  {
+    id: "test-repository-names",
+    pattern:
+      /(?:t3tools\/t3code|(?:pingdotgg|octocat)\/t3code|(?:\/work|\/workspace|\/repo|\/home\/replay-user)\/t3code)\b/g,
+    scope: isTest,
+    reason: "Fixture repository names and URLs are test input, not GOAT-owned product names.",
+  },
+  {
+    id: "shipped-native-binaries",
+    pattern: /t3-(?:resource-monitor|browser-secret|hyprland-snap-shot|kde-snap-shot)/g,
+    reason:
+      "Installed native executable names require coordinated packaging and upgrade discovery (D16).",
+  },
+  {
+    id: "desktop-runtime-identities",
+    pattern: /\bt3code(?:-dev)?\b|--t3code-(?:dev-root|preview-passkey-bridge)/g,
+    scope: (path) =>
+      /(?:ElectronProtocol|DesktopEarlyElectronStartup|DesktopEnvironment|DesktopLegacyLocalStorage|compileCache|GuestProtocol|electron-launcher|dev-electron)\./.test(
+        path,
+      ),
+    reason:
+      "Electron origins, WM class, compile cache, V1 profiles and bridge arguments remain compatible (D13).",
+  },
+  {
+    id: "observability-services",
+    pattern: /t3code-(?:desktop|server)|t3-server|(?<="service.namespace": ")t3code/g,
+    reason:
+      "Operator dashboard service names remain stable; coordinate an observability follow-up.",
+  },
+  {
+    id: "legacy-profile-storage",
+    pattern: /t3code:[a-z0-9:-]+|t3\.backgroundActivity\.clientId/g,
+    scope: (path) => path === "apps/desktop/src/legacyLocalStorageMerge.ts",
+    reason: "V1 profile merge must read the exact persisted upstream keys (D10/D13).",
+  },
+
   {
     id: "attribution",
     pattern: /pingdotgg\/t3code|t3\.codes|T3 Code|T3 Connect|T3 Chat|t3\.chat/g,
@@ -315,7 +442,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "mobile-native",
     pattern:
-      /font-t3-[a-z]+|t3-(?:agent-notifications|composer-editor|markdown-text|native-controls|review-diff|subscription-widget|terminal|widget-expiry)|\bT3(?:ComposerEditor|KeyboardCommands|NativeControls|MarkdownText|ReviewDiff|Terminal|SelectableMarkdownText|WidgetExpiry|AgentNotifications|DeviceStream|PreviewStream|Showcase|Demo|Mark|FrostedCutout|LayoutMetrics|NativeFile|NativePresentation|NativeVideo|WorkspaceOrientation|ContextChip)\w*|react-native-screens-[\d.]+-t3\.\d+|t3_terminal\w*|t3(?:agentnotifications|composereditor|markdowntext|nativecontrols|reviewdiff|terminal|widgetexpiry)/g,
+      /font-t3-[a-z]+|t3-(?:source-text|agent-alert|agent-activity|agent-notifications|composer-editor|markdown-text|native-controls|review-diff|subscription-widget|terminal|widget-expiry)|\bT3(?:SourceText|MenuDismissTouchGate|WorkspaceNavigation|PresentationSources|ComposerEditor|KeyboardCommands|NativeControls|MarkdownText|ReviewDiff|Terminal|SelectableMarkdownText|WidgetExpiry|AgentNotifications|DeviceStream|PreviewStream|Showcase|Demo|Mark|FrostedCutout|LayoutMetrics|NativeFile|NativePresentation|NativeVideo|WorkspaceOrientation|ContextChip)\w*|react-native-screens-[\d.]+-t3\.\d+|t3_terminal\w*|t3(?:agentnotifications|composereditor|markdowntext|nativecontrols|reviewdiff|terminal|widgetexpiry)/g,
     reason:
       "Mobile native module, view and font names; renaming needs a native build host (plan D18).",
   },

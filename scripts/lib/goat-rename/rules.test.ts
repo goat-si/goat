@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyTextRules } from "./engine.ts";
-import { TEXT_RULES } from "./rules.ts";
+import { applyTextRules, findResidue } from "./engine.ts";
+import { TEXT_RULES, KEEP_RULES, isExempt } from "./rules.ts";
 
 const server = (source: string) => applyTextRules("apps/server/src/x.ts", source, TEXT_RULES).text;
 
@@ -97,5 +97,113 @@ describe("client dotted ids", () => {
     expect(web('source === "t3.json"')).toBe('source === "t3.json"');
     const kept = 'fixture("t3.chat"); key("t3.pullRequests.preferences");';
     expect(web(kept)).toBe(kept);
+  });
+});
+
+describe("wp9 internal names", () => {
+  const rename = (path: string, source: string) => applyTextRules(path, source, TEXT_RULES).text;
+
+  it("renames local home configuration without changing the bootstrap payload", () => {
+    expect(rename("apps/desktop/src/app/DesktopStatePaths.ts", "input.t3Home")).toBe(
+      "input.goatHome",
+    );
+    expect(rename("apps/server/src/cli/config.ts", "env.t3Home; bootstrap.t3Home")).toBe(
+      "env.goatHome; bootstrap.goatHome",
+    );
+    expect(rename("packages/contracts/src/desktopBootstrap.ts", "t3Home")).toBe("t3Home");
+    expect(
+      rename(
+        "apps/desktop/src/backend/DesktopBackendConfiguration.test.ts",
+        "config.bootstrap.t3Home",
+      ),
+    ).toBe("config.bootstrap.t3Home");
+    expect(rename("apps/desktop/src/app/DesktopCliShim.ts", "%t3_exit% %t3_codepage%")).toBe(
+      "%goat_exit% %goat_codepage%",
+    );
+  });
+
+  it("renames guest CSS and attributes with their producers and consumers", () => {
+    expect(
+      rename(
+        "apps/desktop/src/preview/PickPreload.ts",
+        "var(--t3-primary) data-t3code-annotation-tool",
+      ),
+    ).toBe("var(--goat-primary) data-goat-annotation-tool");
+    expect(
+      rename("apps/desktop/src/preview/RecordingCursor.ts", "data-t3code-recording-agent-cursor"),
+    ).toBe("data-goat-recording-agent-cursor");
+    expect(rename("apps/desktop/src/preview/CdpRelay.ts", '"t3-preview-page"')).toBe(
+      '"goat-preview-page"',
+    );
+    expect(rename("apps/web/src/browser/x.ts", '"persist:t3-preview-work"')).toBe(
+      '"persist:t3-preview-work"',
+    );
+  });
+
+  it("renames DOM ids and the mobile icon generator together", () => {
+    expect(rename("apps/web/src/pierre-icons.ts", "t3-file-icon-agents")).toBe(
+      "goat-file-icon-agents",
+    );
+    expect(rename("apps/mobile/scripts/sync-pierre-file-icons.mjs", "t3-file-icon-agents")).toBe(
+      "goat-file-icon-agents",
+    );
+    expect(rename("apps/web/src/x.ts", "t3-draft-hero-transition t3-ghostty-input")).toBe(
+      "goat-draft-hero-transition goat-ghostty-input",
+    );
+  });
+
+  it("renames helper temp prefixes and the VCS harness template", () => {
+    expect(rename("apps/server/src/x.test.ts", 'makeTempDir("t3code-codex-home-")')).toBe(
+      'makeTempDir("goat-codex-home-")',
+    );
+    expect(
+      rename("apps/server/src/x.test.ts", 'prefix: opts?.prefix ?? "t3code-workspace-entries-"'),
+    ).toBe('prefix: opts?.prefix ?? "goat-workspace-entries-"');
+    expect(
+      rename(
+        "apps/server/src/vcs/testing/VcsDriverContractHarness.ts",
+        "prefix = `t3-${input.kind}-vcs-contract-`",
+      ),
+    ).toBe("prefix = `goat-${input.kind}-vcs-contract-`");
+  });
+});
+
+describe("wp9 compatibility scopes", () => {
+  it("keeps recorded input and upstream/generated assets out of apply and check", () => {
+    for (const path of [
+      "apps/server/replay/a.ndjson",
+      "pnpm-lock.yaml",
+      "apps/marketing/a.ts",
+      "infra/relay/a.ts",
+      ".devcontainer/devcontainer.json",
+      ".cursor/rules/a.mdc",
+      "assets/icon.svg",
+    ]) {
+      expect(isExempt(path)).toBe(true);
+    }
+    expect(isExempt("apps/server/src/a.ts")).toBe(false);
+  });
+
+  it("keeps legacy test input only inside test scopes", () => {
+    const source = "T3CODE_HOME t3code:draft:v1 .t3 t3-thread:// t3Home t3McpApp octocat/t3code";
+    expect(findResidue("apps/server/src/a.test.ts", source, KEEP_RULES)).toEqual([]);
+    expect(findResidue("apps/server/src/a.ts", source, KEEP_RULES)).toHaveLength(1);
+  });
+
+  it("keeps native identities and operator services", () => {
+    expect(
+      findResidue(
+        "apps/mobile/a.ts",
+        "t3-source-text T3SourceTextView T3MenuDismissTouchGate T3WorkspaceNavigationView T3PresentationSources t3-agent-alert t3-agent-activity",
+        KEEP_RULES,
+      ),
+    ).toEqual([]);
+    expect(
+      findResidue(
+        "apps/desktop/a.ts",
+        't3-resource-monitor t3-browser-secret t3code-desktop "service.namespace": "t3code"',
+        KEEP_RULES,
+      ),
+    ).toEqual([]);
   });
 });
