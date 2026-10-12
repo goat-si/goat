@@ -55,7 +55,7 @@ export const connectionAtomRuntime: Atom.AtomRuntime<
   Layer.Success<ConnectionLayerSource>,
   Layer.Error<ConnectionLayerSource>
 > = hotSwappableAtomRuntime({
-  id: "t3.mobile.connection-runtime",
+  id: "goat.mobile.connection-runtime",
   hotModule: typeof module === "undefined" ? undefined : module.hot,
   registry: appAtomRegistry,
   layer: layerConnection,
