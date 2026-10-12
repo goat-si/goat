@@ -24,7 +24,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-import { legacyEnvName } from "@goat/contracts/legacyT3Names";
+import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -786,9 +786,12 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
             .join(":")
         : value;
   }
-  if (Option.isSome(bundledArchiveDirectory)) {
-    forwardedEnvNames.push("GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR");
-  }
+  // A WSL runtime installed by an older build reads the legacy spelling here too.
+  const bundledArchiveEnv = Option.match(bundledArchiveDirectory, {
+    onNone: (): Record<string, string> => ({}),
+    onSome: (directory) => withLegacyEnvNames({ GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: directory }),
+  });
+  forwardedEnvNames.push(...Object.keys(bundledArchiveEnv));
   const wslEnv = mergeWslEnv(parentEnvWithoutT3Home.WSLENV, forwardedEnvNames);
 
   const baseConfig = {
@@ -802,9 +805,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...forwardedEnv,
       // wsl.exe receives Windows env; /mnt/... is already a Linux path. WSLENV
       // forwards this value without /p, avoiding a second path conversion.
-      ...(Option.isSome(bundledArchiveDirectory)
-        ? { GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: bundledArchiveDirectory.value }
-        : {}),
+      ...bundledArchiveEnv,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus GOAT_HOME; pass it

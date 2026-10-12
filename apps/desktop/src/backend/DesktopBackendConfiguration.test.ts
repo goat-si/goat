@@ -1199,10 +1199,17 @@ describe("DesktopBackendConfiguration", () => {
                     yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
                   const config = yield* configuration.resolveWsl({ port: 5050, distro: "Ubuntu" });
                   assert.equal(config.env[name], translationSucceeds ? translated : undefined);
+                  // A WSL runtime installed by an older build reads the legacy spelling.
+                  const legacy = "T3CODE_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR"; // goat-rename: legacy
+                  assert.equal(config.env[legacy], translationSucceeds ? translated : undefined);
                   const entries = (config.env.WSLENV ?? "").split(":");
                   assert.deepEqual(
                     entries.filter((entry) => entry.trim().split("/")[0] === name),
                     translationSucceeds ? [name] : [],
+                  );
+                  assert.deepEqual(
+                    entries.filter((entry) => entry.trim().split("/")[0] === legacy),
+                    translationSucceeds ? [legacy] : [],
                   );
                   assert.equal(entries.slice(0, 4).join(":"), "GOPATH/p:EMPTY::KEEP/w");
                 }),
@@ -1262,7 +1269,7 @@ describe("DesktopBackendConfiguration", () => {
           // already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:GOAT_OTLP_HEADERS:T3CODE_OTLP_HEADERS:GOAT_OTLP_PROTOCOL:T3CODE_OTLP_PROTOCOL:GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR", // goat-rename: legacy,
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:GOAT_OTLP_HEADERS:T3CODE_OTLP_HEADERS:GOAT_OTLP_PROTOCOL:T3CODE_OTLP_PROTOCOL:GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR:T3CODE_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR", // goat-rename: legacy,
           );
         }).pipe(
           Effect.provide(
