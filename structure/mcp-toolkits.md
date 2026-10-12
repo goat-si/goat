@@ -30,6 +30,23 @@ Names are not one prefix.
 notifications are left on. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
 and [`ssh.md`](ssh.md).
 
+`goat_thread_send` from an agent in another thread is delivered like steering, whichever mode the
+caller named except `restart`. `OrchestratorMcpService` passes the call through
+`threadSendMode` in `apps/server/src/orchestration-v2/ThreadManagementService.ts`, which returns
+`steer_when_ready` for that case and for every `auto` send. The message joins a running turn,
+waits for a turn that is still starting, or starts an idle thread. A provider that cannot steer,
+a turn that is already finishing, and the slash commands `/compact`, `/logout`, and `/goal` take
+it as the next turn. A thread sending to itself, and a client that is not inside a GOAT thread,
+keep an explicit `queue` or `steer`. A send to another host rewrites those two modes to `auto`
+in `apps/server/src/mcp/HostThreadsMcpService.ts`, because the remote sees an outside client and
+`auto` there is `steer_when_ready`.
+
+A `goat_thread_launch` that asks for a new worktree calls `ThreadLaunchService.checkWorktreeBase`
+before a thread exists (`apps/server/src/mcp/toolkits/project/handlers.ts`).
+`ThreadLaunchBranchError` in `apps/server/src/orchestration-v2/ThreadLaunchService.ts` refuses a
+branch that already exists. When that branch is already checked out, the error names the checkout.
+No thread is created.
+
 ## Tool names
 
 The registered names are the `goat_*` forms above, plus the unprefixed and `channel_*` / `preview_*`

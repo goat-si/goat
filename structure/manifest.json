@@ -168,6 +168,10 @@
         "apps/server/src/mcp/",
         "apps/server/src/mcp/McpHttpServer.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
+        "apps/server/src/mcp/HostThreadsMcpService.ts",
+        "apps/server/src/mcp/toolkits/project/handlers.ts",
+        "apps/server/src/orchestration-v2/ThreadManagementService.ts",
+        "apps/server/src/orchestration-v2/ThreadLaunchService.ts",
         "apps/server/src/mcp/toolkits/project/tools.ts",
         "apps/server/src/mcp/toolkits/orchestrator/tools.ts",
         "apps/server/src/mcp/toolkits/ssh/tools.ts",
@@ -251,6 +255,7 @@
         "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts",
         "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
         "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
         "packages/contracts/src/remoteReports.ts"
@@ -331,7 +336,8 @@
         "apps/server/src/persistence/initializeV2Database.ts",
         "apps/server/src/persistence/Migrations/064_ChannelLedger.ts",
         "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
-        "apps/server/src/persistence/Migrations/062_RemoteReports.ts"
+        "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts"
       ]
     }
   ],
