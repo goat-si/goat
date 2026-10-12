@@ -293,6 +293,26 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
       if (stored === undefined) return;
+      // A generation that may already run on another machine never starts anywhere else.
+      if (stored.task.status === "received" || stored.task.status === "dispatching") {
+        const elsewhere = yield* remoteWorkers.attemptedElsewhere(stored);
+        if (elsewhere !== undefined) {
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.failed",
+              payload: {
+                generation: stored.task.generation,
+                reason: "launch_uncertain",
+                summary: ChannelRemoteWorkers.REMOTE_COPY.launchUncertain(elsewhere),
+              },
+            },
+            { owner, narrate: true },
+          );
+          return;
+        }
+      }
       if (stored.task.status === "dispatching") {
         if (stored.task.target?.remote !== undefined) {
           return yield* remoteWorkers.launch(taskId, owner);

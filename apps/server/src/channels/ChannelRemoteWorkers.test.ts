@@ -79,12 +79,20 @@ class RemoteMachine {
   replayReports = false;
   /** Launch attempts that fail on the wire before the remote stores anything. */
   failBeforeBinding = 0;
+  /** The project is deleted there right after a failed launch attempt. */
+  dropProjectsOnFailedLaunch = false;
   /** The next launch stores its binding, then its answer is lost before the thread exists. */
   slowThreadCreation = false;
   /** Every launch is refused outright with this text (nothing is stored). */
   refuseLaunchWith: string | undefined;
   /** Waits on this binding block until `release` completes. */
   holdWaitsFor: string | undefined;
+  /** goat_thread_send fails with this remote code. */
+  refuseSendWith: string | undefined;
+  /** goat_thread_send names a run that never exists. */
+  sendNamesMissingRun = false;
+  /** After the answer's run, another run starts at once and asks this. */
+  questionInRunAfterAnswer: string | undefined;
   readonly release = Deferred.makeUnsafe<void>();
   private readonly pendingThreads = new Map<string, string>();
   private readonly everFiled = new Map<string, Array<RemoteReport>>();
@@ -153,7 +161,7 @@ class RemoteMachine {
     return new SshRemoteDispatch.SshRemoteDispatchError({ reason: "host_unavailable", message });
   }
 
-  private refused(code: string) {
+  refused(code: string) {
     return new SshRemoteDispatch.SshRemoteDispatchError({
       reason: "remote_refused",
       message: code,
@@ -219,6 +227,7 @@ class RemoteMachine {
             const report = input.report!;
             if (machine.failBeforeBinding > 0) {
               machine.failBeforeBinding -= 1;
+              if (machine.dropProjectsOnFailedLaunch) machine.projects = [];
               return yield* new SshRemoteDispatch.SshRemoteDispatchError({
                 reason: "ssh_failed",
                 message: "connection reset",
@@ -294,6 +303,9 @@ class RemoteMachine {
                 return { environmentId: machine.environmentId };
               case "goat_thread_send": {
                 machine.sends.push(call.arguments);
+                if (machine.refuseSendWith !== undefined) {
+                  return yield* machine.refused(machine.refuseSendWith);
+                }
                 const threadId = call.arguments.threadId as string;
                 const correlationId = [...machine.bindings].find(
                   ([, b]) => b.threadId === threadId,
@@ -302,6 +314,15 @@ class RemoteMachine {
                 const runId = machine.startRun(correlationId);
                 if (machine.staleQuestionOnSend) {
                   machine.report(correlationId, "needs_input", "Stale question?", previous);
+                }
+                if (machine.questionInRunAfterAnswer !== undefined) {
+                  // The answer's run ends at once and a continuation asks again.
+                  machine.finishRun(correlationId, "completed", "Handed on.");
+                  machine.startRun(correlationId);
+                  machine.report(correlationId, "needs_input", machine.questionInRunAfterAnswer);
+                }
+                if (machine.sendNamesMissingRun) {
+                  return { runId: runId + ":missing", messageId: "remote-message" };
                 }
                 return { runId, messageId: "remote-message" };
               }
@@ -810,6 +831,133 @@ describe("launches and observers on another machine", () => {
       machine.finishRun(correlationId, "interrupted", null);
       const ended = yield* until("failed", (task) => task.status === "failed");
       assert.strictEqual(ended.resultSummary, "The coding thread ended with interrupted.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("answers and settlement on another machine", () => {
+  const askAndAnswer = (machine: RemoteMachine, key: string) =>
+    Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: ask me", key + "-1"), rpcContext);
+      yield* until("running", (task) => task.status === "running");
+      const correlationId = correlationOf(machine);
+      machine.report(correlationId, "needs_input", "Which one?");
+      machine.finishRun(correlationId, "completed", "Asked.");
+      yield* until("question", (task) => task.status === "waiting_input");
+      yield* gateway.ingest(goatInput("answer: the first", key + "-2"), rpcContext);
+      return correlationId;
+    });
+
+  it.effect("asks again when the remote refuses the answer for the thread's modes", () => {
+    const { machine, harness } = remoteHarness();
+    machine.refuseSendWith = "runtime_mode_escalation_denied";
+    return Effect.gen(function* () {
+      yield* askAndAnswer(machine, "m");
+      const asked = yield* until(
+        "asked again",
+        (task) =>
+          task.status === "waiting_input" &&
+          task.openQuestions.length === 1 &&
+          machine.sends.length > 0,
+      );
+      assert.strictEqual(
+        asked.openQuestions[0]?.text,
+        REMOTE_COPY.answerRefused(machine.host, "the first"),
+      );
+      yield* settle(40);
+      assert.strictEqual(machine.sends.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("follows a newer run than the answer's and takes its question", () => {
+    const { machine, harness } = remoteHarness();
+    machine.questionInRunAfterAnswer = "And the colour?";
+    return Effect.gen(function* () {
+      const correlationId = yield* askAndAnswer(machine, "c");
+      const asked = yield* until(
+        "second question",
+        (task) =>
+          task.status === "waiting_input" && task.openQuestions[0]?.text === "And the colour?",
+      );
+      assert.strictEqual(asked.worker?.runId, machine.runs(correlationId)[2]?.runId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("follows the newest run when the answer's run never shows up", () => {
+    const { machine, harness } = remoteHarness();
+    machine.sendNamesMissingRun = true;
+    return Effect.gen(function* () {
+      const correlationId = yield* askAndAnswer(machine, "r");
+      const followed = yield* until(
+        "newest run",
+        (task) =>
+          task.status === "running" && task.worker?.runId === machine.runs(correlationId)[1]?.runId,
+      );
+      machine.finishRun(correlationId, "completed", "Done anyway.");
+      const done = yield* until("completed", (task) => task.status === "completed", 400);
+      assert.strictEqual(done.worker?.runId, followed.worker?.runId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "does not settle a finished run when a continuation starts during the second look",
+    () => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(goatInput("do@mac-studio: continues", "k1"), rpcContext);
+        yield* until("running", (task) => task.status === "running");
+        const correlationId = correlationOf(machine);
+        machine.finishRun(correlationId, "completed", "First part.");
+        // The first look at the finished run; the second look is ten seconds away.
+        yield* settle(5, 10);
+        machine.startRun(correlationId);
+        const moved = yield* until(
+          "continuation",
+          (task) => task.worker?.runId === machine.runs(correlationId)[1]?.runId,
+        );
+        assert.strictEqual(moved.status, "running");
+        machine.finishRun(correlationId, "completed", "Second part.");
+        const done = yield* until("completed", (task) => task.status === "completed", 400);
+        assert.strictEqual(done.resultSummary, "Second part.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("fails as uncertain when a thread the remote was creating never shows up", () => {
+    const { machine, harness } = remoteHarness();
+    machine.slowThreadCreation = true;
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: never", "v1"), rpcContext);
+      yield* settle(20);
+      yield* TestClock.adjust(Duration.minutes(6));
+      const failed = yield* until("failed", (task) => task.status === "failed");
+      assert.strictEqual(failed.resultSummary, REMOTE_COPY.launchUncertain(machine.host));
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("never starts here what may already run on the other machine", () => {
+    const { machine, harness } = remoteHarness();
+    machine.failBeforeBinding = 1;
+    machine.dropProjectsOnFailedLaunch = true;
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: moved", "y1"), rpcContext);
+      // The attempt fails and the project disappears there, so the dispatcher asks; the
+      // requester then picks this machine.
+      yield* until("asked", (task) => task.status === "waiting_input");
+      assert.strictEqual(machine.launches.length, 1);
+      yield* gateway.ingest(goatInput("answer: this machine", "y2"), rpcContext);
+      const failed = yield* until("failed", (task) => task.status === "failed");
+      assert.strictEqual(failed.resultSummary, REMOTE_COPY.launchUncertain(machine.host));
+      assert.strictEqual(harness.world.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 });

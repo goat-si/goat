@@ -46,7 +46,10 @@ import {
 
 const HOST = process.env.GOAT_REMOTE_LIVE_HOST ?? "";
 const PROJECT_ID = process.env.GOAT_REMOTE_LIVE_PROJECT_ID ?? "";
-const DATABASE = NodePath.join(NodeOS.tmpdir(), "goat-remote-live-" + process.pid + ".sqlite");
+// Each run is a new input: the task id, and so the remote binding id, derive from it, and the
+// remote keeps bindings from earlier runs.
+const RUN = process.pid + "-" + NodeOS.uptime().toFixed(0);
+const DATABASE = NodePath.join(NodeOS.tmpdir(), "goat-remote-live-" + RUN + ".sqlite");
 
 const INSTRUCTION = [
   "This is a connectivity check from another machine. Do not create, change, or delete any files.",
@@ -98,6 +101,15 @@ const waitFor = (label: string, check: (task: ChannelTask) => boolean, minutes: 
       });
       const task = page.tasks[0];
       if (task !== undefined && check(task)) return task;
+      if (
+        task !== undefined &&
+        task.status !== "completed" &&
+        ["failed", "cancelled"].includes(task.status)
+      ) {
+        return yield* Effect.die(
+          new Error(label + ": the task ended " + task.status + ": " + task.resultSummary),
+        );
+      }
       yield* Effect.sleep(Duration.seconds(2));
     }
     const task = yield* onlyTask;
@@ -115,7 +127,7 @@ describe.skipIf(HOST === "" || PROJECT_ID === "")("a task on a real second machi
         const first = yield* Effect.gen(function* () {
           yield* setupBot;
           const gateway = yield* ChannelGateway.ChannelGateway;
-          yield* gateway.ingest(goatInput("live", "live-1"), rpcContext);
+          yield* gateway.ingest(goatInput("live", "live-" + RUN), rpcContext);
           const running = yield* waitFor("running", (task) => task.status === "running", 5);
           yield* Effect.logInfo("live: running on " + HOST, running.worker);
           return yield* waitFor(

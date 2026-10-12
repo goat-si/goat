@@ -113,6 +113,12 @@ export const REMOTE_COPY = {
   outage: (host: string) =>
     "I can't reach " + host + " right now. The work keeps running there; I'll reconnect.",
   reconnected: (host: string) => "Reconnected to " + host + ".",
+  answerRefused: (host: string, answer: string) =>
+    "The coding thread on " +
+    host +
+    " now runs above what this task may use, so I didn’t pass on your answer (“" +
+    answer +
+    "”). Lower the thread’s mode there and answer again, or answer in the thread.",
   inboxOverflow: (count: number) =>
     String(count) + " older progress reports from the other machine were dropped.",
 } as const;
@@ -244,6 +250,13 @@ export class ChannelRemoteWorkers extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    /**
+     * The machine an earlier attempt of this generation may already run on, when the task now
+     * points elsewhere. Starting it anywhere else could run it twice.
+     */
+    readonly attemptedElsewhere: (
+      stored: ChannelLedger.ChannelStoredTask,
+    ) => Effect.Effect<string | undefined, ChannelLedger.ChannelLedgerError>;
     /** Starts an observer for every running remote task that has none. Returns how many. */
     readonly ensure: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
   }
@@ -531,7 +544,12 @@ const make = Effect.gen(function* () {
       { owner, narrate: true },
     ).pipe(Effect.asVoid);
 
-  const askAgain = (owner: string, stored: ChannelLedger.ChannelStoredTask, text: string) =>
+  const askAgain = (
+    owner: string,
+    stored: ChannelLedger.ChannelStoredTask,
+    text: string,
+    options: { readonly clearPendingAnswer?: boolean } = {},
+  ) =>
     Effect.gen(function* () {
       const askedAt = yield* nowIso;
       yield* commitTransition(
@@ -550,7 +568,11 @@ const make = Effect.gen(function* () {
             },
           },
         },
-        { owner, narrate: true },
+        {
+          owner,
+          narrate: true,
+          ...(options.clearPendingAnswer ? { pendingAnswerMessageId: null } : {}),
+        },
       );
     });
 
@@ -1366,6 +1388,20 @@ const make = Effect.gen(function* () {
         authorityFor(stored.task.taskId, stored.task.generation, owner),
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
+        const code = remoteCode(sent.failure);
+        if (
+          code === "runtime_mode_escalation_denied" ||
+          code === "interaction_mode_escalation_denied"
+        ) {
+          // The remote thread's modes went above the requester's ceiling: keep the answer's intent.
+          yield* askAgain(
+            owner,
+            stored,
+            REMOTE_COPY.answerRefused(state.host, event.payload.answer),
+            { clearPendingAnswer: true },
+          );
+          return yield* ledger.completeForward({ owner, sequence: pending.sequence });
+        }
         // Left pending; the next pass sends it again with the same request id.
         yield* Effect.logWarning("channel remote answer not sent", {
           taskId: stored.task.taskId,
@@ -1408,7 +1444,28 @@ const make = Effect.gen(function* () {
       return started;
     });
 
-  return ChannelRemoteWorkers.of({ knownHosts, resolve, launch, dispatch, forward, ensure });
+  const attemptedElsewhere: ChannelRemoteWorkers["Service"]["attemptedElsewhere"] = (stored) =>
+    Effect.gen(function* () {
+      const state = yield* readState(stored.task.taskId);
+      if (state === undefined || state.generation !== stored.task.generation) return undefined;
+      if (state.attempts === 0) return undefined;
+      const remote = stored.task.target?.remote;
+      // The requested machine changed (to this one or another), or a claim points elsewhere.
+      const moved =
+        stored.task.host !== state.host ||
+        (remote !== undefined && (remote.host !== state.host || remote.cwd !== state.cwd));
+      return moved ? state.host : undefined;
+    });
+
+  return ChannelRemoteWorkers.of({
+    knownHosts,
+    resolve,
+    launch,
+    dispatch,
+    forward,
+    ensure,
+    attemptedElsewhere,
+  });
 });
 
 /** Progress goes first, then the oldest of the rest. */
