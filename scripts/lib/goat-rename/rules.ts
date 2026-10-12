@@ -194,6 +194,18 @@ export const TEXT_RULES: readonly TextRule[] = [
       path.startsWith("apps/web/src/") || path.startsWith("packages/client-runtime/src/"),
   },
   {
+    // Dotted client ids such as "t3.backgroundActivity.clientId" or Symbol.for("t3.mobile...").
+    // Not "t3.json", which names the project file source.
+    id: "client-dotted-ids",
+    category: "env",
+    find: /(?<=["'`])t3\.(?!json\b)(?=[a-zA-Z])/g,
+    replace: "goat.",
+    scope: (path) =>
+      path.startsWith("apps/web/src/") ||
+      path.startsWith("apps/mobile/src/") ||
+      path.startsWith("packages/client-runtime/src/"),
+  },
+  {
     // In-process sentinels and debug globals such as __T3CODE_ENV_PATH_START__ and __T3_DEBUG__.
     id: "env-sentinels",
     category: "env",

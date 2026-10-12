@@ -87,3 +87,13 @@ describe("later env and storage rules", () => {
     expect(applyTextRules("apps/mobile/src/pairing.ts", mobile, TEXT_RULES).text).toBe(mobile);
   });
 });
+
+describe("client dotted ids", () => {
+  it("renames dotted ids but not the t3.json source label", () => {
+    const web = (source: string) => applyTextRules("apps/web/src/x.ts", source, TEXT_RULES).text;
+    expect(web('const KEY = "t3.backgroundActivity.clientId";')).toBe(
+      'const KEY = "goat.backgroundActivity.clientId";',
+    );
+    expect(web('source === "t3.json"')).toBe('source === "t3.json"');
+  });
+});
