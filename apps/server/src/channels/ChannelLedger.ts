@@ -283,7 +283,10 @@ export class ChannelLedger extends Context.Service<
     readonly getRemoteWorker: (
       taskId: ChannelTaskId,
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;
-    /** A task's recorded answers, newest first, which the dispatcher reads when it asked. */
+    /**
+     * The answers recorded in a task's current generation, newest first, which the dispatcher
+     * reads when it asked. A retry starts over: earlier generations' answers are not returned.
+     */
     readonly recentAnswers: (
       taskId: ChannelTaskId,
       limit: number,
@@ -1129,6 +1132,10 @@ const make = Effect.gen(function* () {
       sql<{ readonly event_json: string }>`
         SELECT event_json FROM channel_task_events
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
+          AND sequence > COALESCE((
+            SELECT MAX(sequence) FROM channel_task_events
+            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+          ), 0)
         ORDER BY sequence DESC LIMIT ${limit}
       `.pipe(
         Effect.map((rows) =>

@@ -1144,6 +1144,45 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("asks again in a retried generation instead of reusing an earlier choice", () => {
+    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "g1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      // Generation 1 picks a project, then the machine fails before the launch.
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "g2"), slackContext);
+      yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const waiting = (yield* ledger.getTask((yield* onlyTask).taskId))!;
+      const cancelled = yield* commitTransition(ledger, waiting, {
+        type: "task.cancelled",
+        payload: { reason: "Starting over." },
+      });
+      machine.environmentReadDown = false;
+      yield* commitTransition(ledger, (yield* ledger.getTask(cancelled!.taskId))!, {
+        type: "task.retry.requested",
+        payload: { generation: 2 },
+      });
+      // Generation 2 asks for its own choice; the earlier answer does not launch it.
+      const asked = yield* until(
+        "asked in generation 2",
+        (task) => task.generation === 2 && task.status === "waiting_input",
+      );
+      assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "g3"), slackContext);
+      yield* until("running", (task) => task.generation === 2 && task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {
