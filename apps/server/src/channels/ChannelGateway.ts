@@ -54,6 +54,8 @@ import {
 export const GOAT_CONNECTION_ID = "goat";
 /** The fixed connection id of agent input over MCP; the request namespace scopes it. */
 export const MCP_CONNECTION_ID = "mcp";
+/** The owner's GOAT bot is one conversation, also across a bot thread replaced after deletion. */
+const GOAT_CONVERSATION_KEY = "goat-bot";
 
 export class ChannelGateway extends Context.Service<
   ChannelGateway,
@@ -161,14 +163,17 @@ const ledgerFailure = (cause: ChannelLedger.ChannelLedgerError) =>
 const forbidden = () => new ChannelGatewayError({ reason: "forbidden" });
 
 /**
- * MCP callers share one connection, so the request namespace scopes their conversations and
- * retry keys: two agents sending the same key stay two inputs in two conversations. Applied after
- * the caller check, which ties the reply address to the same namespace.
+ * The keys an input is stored under, applied after the caller check. GOAT bot input belongs to
+ * the owner's one bot conversation whichever bot thread it came from, so a replacement bot keeps
+ * the history and open questions. MCP callers share one connection, so the request namespace
+ * scopes their conversations and retry keys: two agents sending the same key stay two inputs in
+ * two conversations.
  */
 const scopedForCaller = (
   input: ChannelIngestInput,
   context: ChannelIngressContext,
 ): ChannelIngestInput => {
+  if (input.kind === "goat") return { ...input, conversationKey: GOAT_CONVERSATION_KEY };
   if (input.kind !== "mcp" || context.caller.type !== "mcp") return input;
   const namespace = context.caller.requestNamespace;
   const scope = (key: string) => JSON.stringify([namespace, key]);

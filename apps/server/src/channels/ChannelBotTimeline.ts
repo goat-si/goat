@@ -47,7 +47,8 @@ const make = Effect.gen(function* () {
       threads
         .dispatch({
           type: "channel.timeline.record",
-          commandId: timelineIdsFor(input.record.recordKey, input.revision).commandId,
+          commandId: timelineIdsFor(input.threadId, input.record.recordKey, input.revision)
+            .commandId,
           threadId: input.threadId,
           record: input.record,
         })

@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -33,6 +34,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import {
@@ -230,15 +232,28 @@ describe("GOAT bot boundary (scenario 6)", () => {
       });
       assert.strictEqual((yield* bots.ensure({}, owner)).threadId, nextBotId);
 
-      // The question is answered from the new bot and the result arrives there.
+      // A plain reply in the new bot answers the question: reception still sees the task there.
+      const questionId = waiting.openQuestions[0]!.questionId;
+      harness.script.current = (input) =>
+        input.mode === "input" &&
+        input.tasks.some((seen) =>
+          seen.openQuestions.some((question) => question.questionId === questionId),
+        )
+          ? Effect.succeed({
+              replyText: "Passing that on.",
+              action: {
+                type: "answer_question",
+                taskId: task.taskId,
+                questionId,
+                answer: input.inputText ?? "",
+              },
+            })
+          : defaultScript(input);
       yield* gateway.ingest(
         {
           ...goatInput("staging", "replaced-answer"),
           conversationKey: nextBotId,
           replyAddress: { kind: "goat", environmentId, threadId: nextBotId },
-          intent: "answer",
-          taskId: task.taskId,
-          questionId: waiting.openQuestions[0]!.questionId,
         },
         rpcContext,
       );
@@ -252,6 +267,58 @@ describe("GOAT bot boundary (scenario 6)", () => {
       assert.isTrue(
         next.messages.some(
           (message) => message.role === "assistant" && message.text.includes("Shipped to staging."),
+        ),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("replays a delivery recorded in a deleted bot into its replacement", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      const registry = yield* ChannelTransport.ChannelTransportRegistry;
+      const input = yield* gateway.ingest(goatInput("hello", "replayed-reply"), rpcContext);
+      yield* runtime.drain;
+      const nextBotId = botLaunchIdsFor(ownerId, botThreadId).threadId;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-replay-bot"),
+        threadId: nextBotId,
+        projectId: scratchProjectId,
+        title: "GOAT bot",
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "system",
+        creationSource: "server",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("delete-replay-bot"),
+        threadId: botThreadId,
+      });
+      assert.strictEqual((yield* bots.ensure({}, owner)).threadId, nextBotId);
+      // The process died after recording the reply but before the outbox heard back; the retry
+      // goes to the replacement and must not collide with the old record's command.
+      const transport = Option.getOrThrow(yield* registry.resolve("goat"));
+      yield* transport.send({
+        deliveryId: deliveryIdFor("reply:" + input.inputId),
+        destination: { kind: "goat", environmentId, threadId: botThreadId },
+        kind: "receipt",
+        text: "Okay.",
+        inReplyToInputId: input.inputId,
+      });
+      const next = yield* orchestrator.getThreadRecords(nextBotId, ["messages"]);
+      assert.isTrue(
+        next.messages.some(
+          (message) =>
+            message.role === "assistant" && message.channel?.inReplyToInputId === input.inputId,
         ),
       );
     }).pipe(Effect.provide(harness.layer));

@@ -7647,7 +7647,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       const { record } = command;
-      const { messageId, turnItemId } = timelineIdsFor(record.recordKey, "");
+      const { messageId, turnItemId } = timelineIdsFor(command.threadId, record.recordKey, "");
       const existing = yield* projectionStore
         .getTurnItem({ threadId: command.threadId, itemId: turnItemId })
         .pipe(

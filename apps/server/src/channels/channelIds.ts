@@ -83,11 +83,14 @@ export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   messageId: MessageId.make(stableId("channel-answer-message", [eventId])),
 });
 
-/** Timeline ids stay fixed per record; command ids also carry what changed. */
-export const timelineIdsFor = (recordKey: string, revision: string) => ({
-  messageId: MessageId.make(stableId("channel-message", [recordKey])),
-  turnItemId: TurnItemId.make(stableId("channel-item", [recordKey])),
-  commandId: CommandId.make(stableId("channel-record", [recordKey, revision])),
+/**
+ * Timeline ids stay fixed per record in one bot thread; command ids also carry what changed. A
+ * record replayed into a replacement bot gets its own ids there.
+ */
+export const timelineIdsFor = (threadId: ThreadId, recordKey: string, revision: string) => ({
+  messageId: MessageId.make(stableId("channel-message", [threadId, recordKey])),
+  turnItemId: TurnItemId.make(stableId("channel-item", [threadId, recordKey])),
+  commandId: CommandId.make(stableId("channel-record", [threadId, recordKey, revision])),
 });
 
 /** The owner's bot, or the bot that replaces a deleted one: every caller lands on one thread. */
