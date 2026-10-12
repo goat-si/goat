@@ -103,3 +103,66 @@ it.effect.each([false, true, "interrupt"] as const)(
     }).pipe(Effect.provide(layerTest));
   },
 );
+
+it.effect("reads checkpoints a later build wrote under the GOAT namespace", () => {
+  const scope: OrchestrationV2CheckpointScope = {
+    id: CheckpointScopeId.make("checkpoint-scope:goat-refs"),
+    threadId: ThreadId.make("thread:goat-refs"),
+    runId: RunId.make("run:goat-refs:1"),
+    nodeId: NodeId.make("node:goat-refs:1"),
+    parentScopeId: null,
+    providerThreadId: ProviderThreadId.make("provider-thread:goat-refs"),
+    kind: "root_run",
+    ordinalWithinParent: 0,
+    advancesAppRunCount: true,
+    cwd: "/repo",
+    createdAt: DateTime.makeUnsafe("2026-07-28T00:00:00.000Z"),
+  };
+  const stored = new Set<string>();
+  const captureCheckpoint = vi.fn((input: CheckpointStore.RestoreCheckpointInput) =>
+    Effect.sync(() => {
+      stored.add(input.checkpointRef);
+    }),
+  );
+  const diffCheckpoints = vi.fn(
+    (_input: { readonly fromCheckpointRef: string; readonly toCheckpointRef: string }) =>
+      Effect.succeed("1\t0\tsrc/a.ts\n"),
+  );
+  const layerTest = CheckpointService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        IdAllocator.layer,
+        Layer.mock(CheckpointStore.CheckpointStore)({
+          isGitRepository: () => Effect.succeed(true),
+          hasCheckpointRef: (input) => Effect.succeed(stored.has(input.checkpointRef)),
+          captureCheckpoint,
+          diffCheckpoints,
+          listAuthoredPaths: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+    Layer.provideMerge(NodeCrypto.layer),
+  );
+
+  return Effect.gen(function* () {
+    const [, goatBaseline] = yield* CheckpointService.checkpointRefCandidatesForScopeOrdinal({
+      scopeId: scope.id,
+      ordinalWithinScope: 0,
+    });
+    stored.add(goatBaseline);
+    const checkpoints = yield* CheckpointService.CheckpointServiceV2;
+
+    yield* checkpoints.captureBaseline({ scope, ordinalWithinScope: 0 });
+    assert.equal(captureCheckpoint.mock.calls.length, 0);
+
+    yield* checkpoints.capture({
+      scope,
+      ordinalWithinScope: 1,
+      runId: scope.runId!,
+      nodeId: scope.nodeId!,
+      appRunOrdinal: 1,
+      capturedAt: scope.createdAt,
+    });
+    assert.equal(diffCheckpoints.mock.calls[0]?.[0].fromCheckpointRef, goatBaseline);
+  }).pipe(Effect.provide(layerTest));
+});
