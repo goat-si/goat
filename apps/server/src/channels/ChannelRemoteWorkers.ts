@@ -129,6 +129,22 @@ export const REMOTE_COPY = {
     "”). Lower the thread’s mode there and answer again, or answer in the thread.",
   inboxOverflow: (count: number) =>
     String(count) + " older progress reports from the other machine were dropped.",
+  projectModelMissing: (host: string, project: string) =>
+    "The model for " +
+    project +
+    " on " +
+    host +
+    " is not available there. Pick a default model for that project in GOAT on " +
+    host +
+    " and answer here.",
+  defaultModelMissing: (host: string, project: string) =>
+    "This machine's default model is not available on " +
+    host +
+    ". Pick a default model for " +
+    project +
+    " in GOAT on " +
+    host +
+    " and answer here.",
 } as const;
 
 const RemoteWorkerState = Schema.Struct({
@@ -180,6 +196,17 @@ const decodeProjects = Schema.decodeUnknownEffect(
 );
 const decodeEnvironment = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
+);
+/** Only what the model check needs from orchestrator_capabilities, so newer fields never break it. */
+const decodeOffered = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    providers: Schema.Array(
+      Schema.Struct({
+        providerInstanceId: Schema.String,
+        models: Schema.Array(Schema.Struct({ id: Schema.String })),
+      }),
+    ),
+  }),
 );
 const decodeSent = Schema.decodeUnknownEffect(
   Schema.Struct({ runId: RunId, messageId: Schema.String }),
@@ -534,11 +561,50 @@ const make = Effect.gen(function* () {
       if (environment._tag === "Failure") {
         return { type: "question", text: REMOTE_COPY.unreachable(host) } as const;
       }
+      const fallbackModel = chosen.defaultModelSelection ?? local.modelSelection;
+      // Check the model before launching: the remote's refusal would not say why. A machine
+      // that cannot list its models is left to the launch.
+      const offered = yield* callHost(
+        {
+          host,
+          tool: "orchestrator_capabilities",
+          arguments: {},
+          writes: false,
+          timeoutMs: READ_TIMEOUT_MS,
+        },
+        authorize,
+      ).pipe(Effect.flatMap(decodeOffered), Effect.option);
+      const isOffered = (model: ModelSelection) =>
+        offered._tag === "None" ||
+        offered.value.providers.some(
+          (provider) =>
+            provider.providerInstanceId === model.instanceId &&
+            provider.models.some((entry) => entry.id === model.model),
+        );
+      const preferred = local.preferredModelSelection;
+      // A Slack connection's model is a preference, as on this machine: when that machine does
+      // not offer it, the project's model runs the work instead of a question nobody can act on.
+      const usePreferred = preferred !== undefined && isOffered(preferred);
+      if (preferred !== undefined && !usePreferred) {
+        yield* Effect.logWarning("channel default model not offered on the other machine", {
+          taskId: task.taskId,
+          host,
+        });
+      }
+      const modelSelection = usePreferred ? preferred : fallbackModel;
+      if (!isOffered(modelSelection)) {
+        return {
+          type: "question",
+          text:
+            chosen.defaultModelSelection !== undefined && chosen.defaultModelSelection !== null
+              ? REMOTE_COPY.projectModelMissing(host, chosen.title)
+              : REMOTE_COPY.defaultModelMissing(host, chosen.title),
+        } as const;
+      }
       const target: ChannelDispatchTarget = {
         environmentId: environment.success.environmentId,
         projectId: chosen.id,
-        modelSelection:
-          local.preferredModelSelection ?? chosen.defaultModelSelection ?? local.modelSelection,
+        modelSelection,
         runtimeMode: local.runtimeMode,
         interactionMode: "default",
         // A repository gets its own worktree per task, as on this machine.

@@ -99,6 +99,8 @@ class RemoteMachine {
   holdWaitsFor: string | undefined;
   /** goat_thread_send fails with this remote code. */
   refuseSendWith: string | undefined;
+  /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
+  offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
   /** goat_thread_send names a run that never exists. */
   sendNamesMissingRun = false;
   /** After the answer's run, another run starts at once and asks this. */
@@ -316,6 +318,18 @@ class RemoteMachine {
               case "goat_environment_read":
                 if (machine.environmentReadDown) return yield* machine.unreachable("down");
                 return { environmentId: machine.environmentId };
+              case "orchestrator_capabilities":
+                if (machine.offeredModels === undefined) break;
+                return {
+                  providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
+                    (instance) => ({
+                      providerInstanceId: instance,
+                      models: machine
+                        .offeredModels!.filter((entry) => entry.instance === instance)
+                        .map((entry) => ({ id: entry.model })),
+                    }),
+                  ),
+                };
               case "goat_thread_send": {
                 machine.sends.push(call.arguments);
                 if (machine.refuseSendWith !== undefined) {
@@ -1430,6 +1444,82 @@ describe("Slack defaults for work on another machine", () => {
       yield* gateway.ingest(goatInput("do@mac-studio: build it", "d3"), rpcContext);
       yield* until("running", (task) => task.status === "running");
       assert.deepStrictEqual(machine.launches[0]!.modelSelection, remoteModel);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "runs Slack work on the project's model when that machine lacks the connection's model",
+    () => {
+      const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+      machine.offeredModels = [{ instance: "codex", model: "remote-default" }];
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(slackInput("do@mac-studio: build it", "d4"), slackContext);
+        yield* until("running", (task) => task.status === "running");
+        assert.deepStrictEqual(machine.launches[0]!.modelSelection, remoteModel);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("asks when neither the connection's model nor the project's is offered there", () => {
+    const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+    machine.offeredModels = [{ instance: "codex", model: "something-else" }];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "d5"), slackContext);
+      const asked = yield* until("asked", (task) => task.status === "waiting_input");
+      assert.strictEqual(
+        asked.openQuestions[0]?.text,
+        REMOTE_COPY.projectModelMissing(machine.host, "goat-si/goat"),
+      );
+      assert.strictEqual(machine.launches.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("models the other machine offers", () => {
+  it.effect("asks before launching when that machine lacks this machine's default model", () => {
+    const { machine, harness } = remoteHarness();
+    machine.offeredModels = [{ instance: "codex", model: "something-else" }];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: needs a model", "mm1"), rpcContext);
+      const asked = yield* until("asked", (task) => task.status === "waiting_input");
+      assert.strictEqual(
+        asked.openQuestions[0]?.text,
+        REMOTE_COPY.defaultModelMissing(machine.host, "goat-si/goat"),
+      );
+      assert.strictEqual(machine.launches.length, 0);
+      // Once that machine offers it, the answer sends the work there.
+      machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+      yield* gateway.ingest(goatInput("answer: try again", "mm2"), rpcContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("points to the project's model on that machine when it is missing there", () => {
+    const { machine, harness } = remoteHarness();
+    machine.projects = machine.projects.map((project) => ({
+      ...project,
+      defaultModelSelection: { instanceId: "codex", model: "retired-model" } as never,
+    }));
+    machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(goatInput("do@mac-studio: old model", "mm3"), rpcContext);
+      const asked = yield* until("asked", (task) => task.status === "waiting_input");
+      assert.strictEqual(
+        asked.openQuestions[0]?.text,
+        REMOTE_COPY.projectModelMissing(machine.host, "goat-si/goat"),
+      );
+      assert.strictEqual(machine.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 });
