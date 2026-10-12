@@ -4,10 +4,10 @@ import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import { setThreadChangeRequestSnapshot } from "./ThreadStatusIndicators";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import {
-  dropThreadContext,
-  endThreadContextDrag,
-  moveThreadContextDrag as moveThreadContextDragGhost,
-} from "./chat/threadContextDrag";
+  threadContextDragListProps,
+  useThreadContextDrag,
+  useThreadContextDragHandle,
+} from "./sidebar/useThreadContextDrag";
 import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -228,6 +228,7 @@ import {
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
+  resolveSidebarThreadDragMode,
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
@@ -258,7 +259,11 @@ import {
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
-import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
+import {
+  SIDEBAR_DRAG_DISTANCE,
+  SidebarDragLifecycle,
+  SidebarPointerSensor,
+} from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import {
   ThreadPullRequestBadgeControl,
@@ -599,7 +604,8 @@ function SnoozeMenuButton(props: {
 // on the whole row (no dedicated handle): the pointer sensor's distance
 // constraint keeps plain clicks working, and we skip dnd-kit's aria
 // attributes since there is no keyboard sensor and the row body already
-// carries its own button semantics.
+// carries its own button semantics. Rows that cannot sort get the context
+// drag listener instead, so they still drag out to a composer.
 type SortableThreadRowBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
@@ -607,22 +613,38 @@ type SortableThreadRowBag = Pick<
 
 function SortableThreadRow(props: {
   id: string;
-  disabled: boolean;
+  title: string;
+  section: SidebarSection;
+  reorderable: boolean;
+  renaming: boolean;
+  dropPending: boolean;
   contextDrag: boolean;
   environmentId: EnvironmentId;
   children: (bag: SortableThreadRowBag) => ReactNode;
 }) {
   const canOperateThread = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
+  const dragMode = resolveSidebarThreadDragMode({
+    section: props.section,
+    reorderable: props.reorderable,
+    renaming: props.renaming,
+    dropPending: props.dropPending,
+    canOperate: canOperateThread,
+  });
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
-    disabled: { draggable: props.disabled || !canOperateThread },
+    disabled: { draggable: dragMode !== "sort" },
     animateLayoutChanges: animateSidebarLayoutChanges,
+  });
+  const contextDragListeners = useThreadContextDragHandle({
+    threadKey: props.id,
+    title: props.title,
+    disabled: dragMode !== "context",
   });
   // dnd-kit memoizes each field but not the bag, so the memoized row would
   // rerender on every shell update without this.
   const bag = useMemo(
     () => ({
-      listeners,
+      listeners: dragMode === "sort" ? listeners : contextDragListeners,
       setNodeRef,
       transform: props.contextDrag ? null : transform,
       // The lifted row normally follows the pointer without a transition.
@@ -630,7 +652,16 @@ function SortableThreadRow(props: {
       transition: props.contextDrag && isDragging ? "transform 150ms ease-out" : transition,
       isDragging: isDragging && !props.contextDrag,
     }),
-    [listeners, setNodeRef, transform, transition, isDragging, props.contextDrag],
+    [
+      contextDragListeners,
+      dragMode,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+      props.contextDrag,
+    ],
   );
   return props.children(bag);
 }
@@ -701,10 +732,6 @@ function SidebarSectionPlaceholder(props: {
     </SortableSidebarMarker>
   );
 }
-
-// Pointer travel before a press on a row starts a drag, or a press on its
-// action button starts a sweep. Shorter presses stay clicks.
-const SIDEBAR_DRAG_DISTANCE = 6;
 
 type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 
@@ -2785,6 +2812,7 @@ export default function Sidebar() {
       if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
       // Older servers retain their existing drag actions. Active placement
       // additionally requires its own ordering capability at the drop target.
+      // This gates sorting only: every row can still drag out to a composer.
       if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
         draggable.add(threadKey);
       }
@@ -3493,73 +3521,38 @@ export default function Sidebar() {
   const isContextDrag = dragState?.contextDrag === true;
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
-  const contextDragKeyRef = useRef<string | null>(null);
-  const finishThreadDrag = useCallback((started: boolean) => {
-    dragSensorRef.current = null;
-    contextDragKeyRef.current = null;
-    endThreadContextDrag();
-    if (started) {
-      listMotionRef.current?.release();
-      setDragState(null);
-    }
+  const setContextDrag = useCallback((contextDrag: boolean) => {
+    setDragState((current) =>
+      current === null || current.contextDrag === contextDrag
+        ? current
+        : { ...current, contextDrag },
+    );
   }, []);
+  const threadContextDrag = useThreadContextDrag({ onContextDragChange: setContextDrag });
+  const finishThreadDrag = useCallback(
+    (started: boolean) => {
+      dragSensorRef.current = null;
+      threadContextDrag.end();
+      if (started) {
+        listMotionRef.current?.release();
+        setDragState(null);
+      }
+    },
+    [threadContextDrag],
+  );
   const attachDragSensor = useCallback((sensor: SidebarPointerSensor) => {
     dragSensorRef.current = sensor;
   }, []);
   const cancelThreadDrag = useCallback(() => {
     dragSensorRef.current?.cancel();
   }, []);
-  // Dragged threads: the multi-selection when the picked-up row is part of it.
-  const contextDragThreads = useCallback((): ReadonlyArray<ScopedThreadRef> => {
-    const key = contextDragKeyRef.current;
-    if (key === null) return [];
-    const selected = useThreadSelectionStore.getState().selectedThreadKeys;
-    const keys = selected.has(key) ? [...selected] : [key];
-    return keys.flatMap((candidate) => {
-      const ref = parseScopedThreadKey(candidate);
-      return ref ? [ref] : [];
-    });
-  }, []);
-  const pointerOutsideThreadList = useCallback((point: { x: number; y: number }) => {
-    const bounds = threadListRef.current?.getBoundingClientRect();
-    return bounds !== undefined && (point.x < bounds.left || point.x > bounds.right);
-  }, []);
-  const moveThreadContextDrag = useCallback(
-    (point: { x: number; y: number }) => {
-      const contextDrag = pointerOutsideThreadList(point);
-      setDragState((current) =>
-        current === null || current.contextDrag === contextDrag
-          ? current
-          : { ...current, contextDrag },
-      );
-      if (!contextDrag) {
-        endThreadContextDrag();
-        return false;
-      }
-      const threads = contextDragThreads();
-      const title =
-        threadByKeyRef.current.get(contextDragKeyRef.current ?? "")?.title.trim() || "Thread";
-      moveThreadContextDragGhost(point, { title, count: threads.length });
-      return true;
-    },
-    [contextDragThreads, pointerOutsideThreadList],
-  );
-  const dropThreadContextDrag = useCallback(
-    (point: { x: number; y: number }) => {
-      if (!pointerOutsideThreadList(point)) return false;
-      dropThreadContext(point, contextDragThreads());
-      // Releasing outside the list never reorders, whether or not a composer took the drop.
-      return true;
-    },
-    [contextDragThreads, pointerOutsideThreadList],
-  );
   const dndSensors = useSensors(
     useSensor(SidebarPointerSensor, {
       distance: SIDEBAR_DRAG_DISTANCE,
       onAttach: attachDragSensor,
       onFinish: finishThreadDrag,
-      onMove: moveThreadContextDrag,
-      onDrop: dropThreadContextDrag,
+      onMove: threadContextDrag.move,
+      onDrop: threadContextDrag.drop,
     }),
   );
   const sectionByThreadKey = useMemo(() => {
@@ -3778,7 +3771,11 @@ export default function Sidebar() {
   const handleThreadDragStart = useCallback(
     (event: DragStartEvent) => {
       const activeKey = String(event.active.id);
-      contextDragKeyRef.current = activeKey;
+      threadContextDrag.begin({
+        key: activeKey,
+        title: threadByKey.get(activeKey)?.title ?? "",
+        list: threadListRef.current,
+      });
       const activeSection = sectionByThreadKey.get(activeKey);
       if (activeSection === undefined || activeSection === "priority") return;
       // Stop normal section motion before dnd-kit measures the picked-up row.
@@ -3803,7 +3800,7 @@ export default function Sidebar() {
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
     },
-    [sectionByThreadKey],
+    [sectionByThreadKey, threadByKey, threadContextDrag],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -5380,6 +5377,7 @@ export default function Sidebar() {
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
                   <ul
                     ref={attachListMotionRef}
+                    {...threadContextDragListProps()}
                     // VoiceOver treats an exposed list as an interaction boundary,
                     // which hides its rows from ordinary linear navigation. A
                     // presentational list also makes its implicit listitems
@@ -5525,14 +5523,13 @@ export default function Sidebar() {
                           <SortableThreadRow
                             key={threadKey}
                             id={threadKey}
+                            title={thread.title}
+                            section={section}
+                            reorderable={draggableThreadKeys.has(threadKey)}
+                            renaming={renamingThreadKey === threadKey}
+                            dropPending={optimisticDrop !== null}
                             contextDrag={isContextDrag}
                             environmentId={thread.environmentId}
-                            disabled={
-                              renamingThreadKey === threadKey ||
-                              section === "priority" ||
-                              !draggableThreadKeys.has(threadKey) ||
-                              optimisticDrop !== null
-                            }
                           >
                             {(bag) => renderThreadRowInner(thread, section, bag)}
                           </SortableThreadRow>

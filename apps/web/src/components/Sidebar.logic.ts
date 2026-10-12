@@ -313,6 +313,28 @@ export type SidebarThreadDropPlan =
     Priority and snoozed rows, which cannot be drop targets. */
 export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
 
+/** How a pressed sidebar row may drag. "sort" moves it within the list and
+    drags it out to a composer past the list edge; "context" only drags it
+    out. Handing a thread to a composer reads it and writes nothing, so it
+    never depends on the section, the server's ordering support, or operate
+    permission. Only an inline rename blocks both. */
+export type SidebarThreadDragMode = "sort" | "context" | "none";
+
+export function resolveSidebarThreadDragMode(input: {
+  readonly section: SidebarSection;
+  readonly reorderable: boolean;
+  readonly renaming: boolean;
+  readonly dropPending: boolean;
+  readonly canOperate: boolean;
+}): SidebarThreadDragMode {
+  if (input.renaming) return "none";
+  // Priority ranks by attention, so its rows never take a manual order.
+  if (input.section === "priority") return "context";
+  // A drop still writing its order holds every row until the writes land.
+  if (!input.reorderable || !input.canOperate || input.dropPending) return "context";
+  return "sort";
+}
+
 export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,

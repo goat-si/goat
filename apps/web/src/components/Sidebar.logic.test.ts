@@ -51,6 +51,7 @@ import {
   isSidebarThreadWoke,
   resolveSidebarRowAccessibility,
   resolveSidebarThreadStatus,
+  resolveSidebarThreadDragMode,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
   resolveThreadRowClassName,
@@ -1338,6 +1339,42 @@ describe("getSidebarThreadIdsToPrewarm", () => {
 
   it("returns no thread ids when the limit is zero", () => {
     expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
+describe("resolveSidebarThreadDragMode", () => {
+  const sortable = {
+    section: "active",
+    reorderable: true,
+    renaming: false,
+    dropPending: false,
+    canOperate: true,
+  } as const;
+
+  it("sorts rows the server can order", () => {
+    expect(resolveSidebarThreadDragMode(sortable)).toBe("sort");
+    expect(resolveSidebarThreadDragMode({ ...sortable, section: "pinned" })).toBe("sort");
+    expect(resolveSidebarThreadDragMode({ ...sortable, section: "settled" })).toBe("sort");
+  });
+
+  it("keeps context drag for rows that cannot sort", () => {
+    // Priority rows never take a manual order, even on a fully capable server.
+    expect(resolveSidebarThreadDragMode({ ...sortable, section: "priority" })).toBe("context");
+    // Servers without pin ordering (older or remote runtimes).
+    expect(resolveSidebarThreadDragMode({ ...sortable, reorderable: false })).toBe("context");
+    expect(
+      resolveSidebarThreadDragMode({ ...sortable, section: "snoozed", reorderable: false }),
+    ).toBe("context");
+    // Reading a thread into a composer needs no operate permission on its server.
+    expect(resolveSidebarThreadDragMode({ ...sortable, canOperate: false })).toBe("context");
+    expect(resolveSidebarThreadDragMode({ ...sortable, dropPending: true })).toBe("context");
+  });
+
+  it("blocks every drag during an inline rename", () => {
+    expect(resolveSidebarThreadDragMode({ ...sortable, renaming: true })).toBe("none");
+    expect(resolveSidebarThreadDragMode({ ...sortable, section: "priority", renaming: true })).toBe(
+      "none",
+    );
   });
 });
 

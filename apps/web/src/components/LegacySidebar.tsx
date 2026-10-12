@@ -217,6 +217,11 @@ import {
   resolveProjectsViewProjectConnectionStatus,
 } from "./LegacySidebar.logic";
 import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
+import {
+  threadContextDragListProps,
+  useThreadContextDragHandle,
+} from "./sidebar/useThreadContextDrag";
+import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -454,6 +459,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  // Dragging the row past the project list's edge hands it to a composer as context.
+  const contextDragListeners = useThreadContextDragHandle({
+    threadKey,
+    title: thread.title,
+    disabled: renamingThreadKey === threadKey,
+  });
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
     threadId: thread.id,
@@ -781,6 +792,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onDoubleClick={handleRowDoubleClick}
         onKeyDown={handleRowKeyDown}
         onContextMenu={handleRowContextMenu}
+        {...contextDragListeners}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
           {prStatus && pr && (
@@ -3253,7 +3265,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           <div className="mb-1 pl-2 text-xs font-medium text-sidebar-muted-foreground/80">
             Pinned
           </div>
-          <SidebarMenu>
+          <SidebarMenu {...threadContextDragListProps()}>
             <SidebarMenuItem>
               <SidebarProjectItem
                 project={pinnedProject}
@@ -3325,7 +3337,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             onDragEnd={handleProjectDragEnd}
             onDragCancel={handleProjectDragCancel}
           >
-            <SidebarMenu>
+            <SidebarMenu {...threadContextDragListProps()}>
               <SortableContext
                 items={sortedProjects.map((project) => project.projectKey)}
                 strategy={verticalListSortingStrategy}
@@ -3371,7 +3383,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             </SidebarMenu>
           </DndContext>
         ) : (
-          <SidebarMenu ref={attachProjectListAutoAnimateRef}>
+          <SidebarMenu ref={attachProjectListAutoAnimateRef} {...threadContextDragListProps()}>
             {sortedProjects.map((project) => (
               <SidebarProjectListRow
                 key={project.projectKey}
@@ -4132,6 +4144,7 @@ export default function LegacySidebar() {
 
   return (
     <>
+      <ThreadContextDragGhost />
       {prewarmedSidebarThreadRefs.map((threadRef) => (
         <SidebarThreadDetailPrewarmer key={scopedThreadKey(threadRef)} threadRef={threadRef} />
       ))}
