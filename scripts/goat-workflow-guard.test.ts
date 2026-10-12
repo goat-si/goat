@@ -700,7 +700,15 @@ function nightlyJobs(): NightlyJobs {
     prepare: {
       if: prepareGateText,
       "runs-on": runnerLabels,
-      steps: [checkout("${{ steps.resolve.outputs.sha }}"), { run: "echo prepare" }],
+      outputs: {
+        sha: "${{ steps.resolve.outputs.sha }}",
+        skip: "${{ steps.resolve.outputs.skip }}",
+      },
+      steps: [
+        { id: "resolve", run: "echo resolve" },
+        checkout("${{ steps.resolve.outputs.sha }}"),
+        { run: "echo prepare" },
+      ],
     },
     build_mac: {
       needs: ["prepare"],
@@ -769,6 +777,41 @@ describe("goat pre-push nightly workflow guard", () => {
     const result = push(NodeFS.readFileSync(shipped, "utf8"));
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
+  });
+
+  it("allows prose about secrets and include rows that extend a runner axis", () => {
+    const jobs = nightlyJobs();
+    jobs.build_mac = {
+      ...jobs.build_mac,
+      steps: [checkout(), { name: "Rotate secrets documentation", run: "echo docs" }],
+    };
+    jobs.build_other = {
+      ...jobs.build_other,
+      strategy: { matrix: { runner: ["ubuntu-24.04"], include: [{ version: "24" }] } },
+    };
+    const result = push(nightly(jobs));
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("refuses a YAML alias that copies the publish job under another name", () => {
+    const yamlText = [
+      "on:",
+      "  workflow_run: { workflows: [goat-ci], types: [completed], branches: [dev] }",
+      "permissions: { contents: read }",
+      "jobs:",
+      `  prepare: ${JSON.stringify(nightlyJobs().prepare)}`,
+      "  publish: &publisher",
+      "    needs: [prepare]",
+      `    if: "${downstreamGateText}"`,
+      "    runs-on: ubuntu-24.04",
+      "    steps:",
+      "      - uses: actions/create-github-app-token@v2",
+      "  copy_publish: *publisher",
+    ].join("\n");
+    const result = push(yamlText);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("only jobs.publish may create a GitHub App token");
   });
 
   it.each<[string, string, string]>([
@@ -871,6 +914,16 @@ describe("goat pre-push nightly workflow guard", () => {
           "secrets may only be read by jobs.publish",
         ] as [string, string, string],
     ),
+    [
+      "prepare outputs that do not come from the resolve step",
+      withJob("prepare", { outputs: { sha: "main", skip: "false" } }),
+      "jobs.prepare outputs sha and skip must come from its resolve step",
+    ],
+    [
+      "a secret read in an if condition",
+      withJob("build_mac", { if: `${downstreamGateText} && (secrets.GOAT_RELEASES_APP_ID != '')` }),
+      "secrets may only be read by jobs.publish",
+    ],
     [
       "the token action outside publish",
       withJob("build_mac", {

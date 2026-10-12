@@ -28,6 +28,7 @@ describe("sshEnvironment", () => {
         keyOnly: true,
         issuePairingToken: true,
       });
+      if ("type" in result) throw new Error("unexpected pending runtime replacement");
       assert.equal(result.pairingToken, "fixture-token");
     }).pipe(
       Effect.provide(

@@ -207,9 +207,15 @@ function jobRunners(job) {
   const matrix = isMapping(job.strategy) ? job.strategy.matrix : undefined;
   if (!isMapping(matrix)) return [undefined];
   const values = [];
-  if (Array.isArray(matrix.runner)) values.push(...matrix.runner);
+  const axis = Array.isArray(matrix.runner) ? matrix.runner : undefined;
+  if (axis) values.push(...axis);
   if (Array.isArray(matrix.include)) {
-    for (const entry of matrix.include) values.push(isMapping(entry) ? entry.runner : undefined);
+    // An include entry without a runner only extends combinations that already
+    // have an allowed runner from the axis (GitHub's include semantics).
+    for (const entry of matrix.include) {
+      if (!isMapping(entry)) values.push(undefined);
+      else if (Object.hasOwn(entry, "runner") || !axis) values.push(entry.runner);
+    }
   }
   return values.length > 0 ? values : [undefined];
 }
@@ -248,7 +254,9 @@ function validateNightlyWorkflow(source, yaml) {
   if (!isMapping(workflow.jobs) || !isMapping(workflow.jobs.prepare)) {
     return fail("jobs.prepare must exist");
   }
-  const { publish: publishJob, ...rest } = workflow.jobs;
+  const rest = Object.fromEntries(
+    Object.entries(workflow.jobs).filter(([name]) => name !== "publish"),
+  );
   // Any mention of the secrets context counts: secrets.X, secrets['X'], toJSON(secrets),
   // in any case and after any whitespace. Decoded strings are inspected, not JSON text.
   if (mentionsSecrets({ ...workflow, jobs: rest })) {
@@ -273,6 +281,19 @@ function validateNightlyWorkflow(source, yaml) {
       if (normalizeExpression(job.if) !== prepareGate)
         fail("jobs.prepare.if must be the dev-push gate");
       if (Object.hasOwn(job, "needs")) fail("jobs.prepare must not need other jobs");
+      // Downstream checkouts trust needs.prepare.outputs.sha, so it must come from
+      // the resolve step that checks the commit against dev.
+      const outputs = isMapping(job.outputs) ? job.outputs : {};
+      if (
+        outputs.sha !== "${{ steps.resolve.outputs.sha }}" ||
+        outputs.skip !== "${{ steps.resolve.outputs.skip }}" ||
+        !Array.isArray(job.steps) ||
+        !job.steps.some(
+          (step) => isMapping(step) && step.id === "resolve" && Object.hasOwn(step, "run"),
+        )
+      ) {
+        fail("jobs.prepare outputs sha and skip must come from its resolve step");
+      }
     } else {
       const needs = typeof job.needs === "string" ? [job.needs] : job.needs;
       if (!Array.isArray(needs) || !needs.includes("prepare")) {
@@ -304,7 +325,7 @@ function validateNightlyWorkflow(source, yaml) {
       if (!Object.hasOwn(step, "uses")) continue;
       if (!nightlyActions.has(step.uses))
         fail(`jobs.${name} step ${index}.uses is not an allowed action`);
-      if (step.uses === "actions/create-github-app-token@v2" && job !== publishJob) {
+      if (step.uses === "actions/create-github-app-token@v2" && name !== "publish") {
         fail("only jobs.publish may create a GitHub App token");
       }
       if (step.uses === "actions/checkout@v6") {
@@ -321,13 +342,24 @@ function validateNightlyWorkflow(source, yaml) {
 }
 
 /** True when any key or string value inside value mentions the secrets context. */
-function mentionsSecrets(value) {
-  if (typeof value === "string") return /(?:^|[^A-Za-z0-9_-])secrets(?![A-Za-z0-9_-])/i.test(value);
-  if (Array.isArray(value)) return value.some(mentionsSecrets);
-  if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(
-      ([key, item]) => mentionsSecrets(key) || mentionsSecrets(item),
+const secretsContext = /(?:^|[^A-Za-z0-9_-])secrets(?![A-Za-z0-9_-])/i;
+
+/**
+ * True when an expression inside value reads the secrets context: secrets.X,
+ * secrets['X'] or toJSON(secrets), in any case and with any whitespace. Only
+ * expression text counts: ${{ … }} segments anywhere, and whole `if` values,
+ * which GitHub evaluates as expressions without the wrapper.
+ */
+function mentionsSecrets(value, key = "") {
+  if (typeof value === "string") {
+    if (key === "if") return secretsContext.test(value);
+    return [...value.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((match) =>
+      secretsContext.test(match[1] ?? ""),
     );
+  }
+  if (Array.isArray(value)) return value.some((item) => mentionsSecrets(item));
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(([entryKey, item]) => mentionsSecrets(item, entryKey));
   }
   return false;
 }
