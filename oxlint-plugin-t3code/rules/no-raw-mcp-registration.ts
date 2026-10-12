@@ -7,7 +7,7 @@ import { getPropertyName, isIdentifier, unwrapExpression } from "../utils.ts";
 const MCP_SERVER_MODULE = "effect/ai/McpServer";
 const AI_MODULES = new Set(["effect/ai", "effect/ai/index"]);
 // Registering anything straight on the MCP server skips McpToolAccess, where
-// every T3 MCP tool declares who may call it. These are the module functions...
+// every GOAT MCP tool declares who may call it. These are the module functions...
 const MODULE_REGISTRATIONS = new Set([
   "toolkit",
   "registerToolkit",

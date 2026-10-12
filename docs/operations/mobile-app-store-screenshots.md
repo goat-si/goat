@@ -1,8 +1,8 @@
 # Mobile app-store screenshot harness
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using GOAT? See [docs/user](../user/).
 
-The screenshot harness runs the real mobile application against three disposable local T3
+The screenshot harness runs the real mobile application against three disposable local GOAT
 environments. It creates an isolated base directory and server for each environment, real Git
 projects with deterministic content, seeded orchestration projections, and persisted terminal
 history. The app pairs with every server through its normal connection flow and React Navigation

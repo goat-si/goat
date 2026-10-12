@@ -16,7 +16,7 @@ const imageProps = {
 } satisfies Partial<ComponentProps<typeof Image>>;
 ---
 
-<Layout title="Download — T3 Code" description="Download T3 Code for macOS, Windows, or Linux.">
+<Layout title="Download — GOAT" description="Download GOAT for macOS, Windows, or Linux.">
   <div class="download-page" id="download-page" data-channel="stable">
     <!-- The sky lives behind the header and fades to the page. It only shows on the nightly channel. -->
     <header class="download-head">
@@ -26,7 +26,7 @@ const imageProps = {
           <Image class="head-icon--stable" src={iconStable} width={64} height={64} loading="eager" {...imageProps} />
           <Image class="head-icon--nightly" src={iconNightly} width={64} height={64} loading="eager" {...imageProps} />
         </span>
-        <h1 class="heading">Download T3 Code</h1>
+        <h1 class="heading">Download GOAT</h1>
       </div>
       <div class="channel-toggle" role="tablist" aria-label="Release channel" data-rise style="--d:90ms">
         <span class="channel-thumb" aria-hidden="true"></span>
@@ -145,10 +145,10 @@ const imageProps = {
           <svg class="platform-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l5 5-5 5M12 17h7"/></svg>
           <h2 class="platform-name">Terminal</h2>
         </div>
-        <code class="cli-line cli-line--stable">curl -fsSL https://t3.codes/install.sh | sh</code>
-        <code class="cli-line cli-line--stable">irm https://t3.codes/install.ps1 | iex</code>
-        <code class="cli-line cli-line--nightly">curl -fsSL https://t3.codes/install.sh | T3CODE_CHANNEL=nightly sh</code>
-        <code class="cli-line cli-line--nightly">$env:T3CODE_CHANNEL="nightly"; irm https://t3.codes/install.ps1 | iex</code>
+        <code class="cli-line cli-line--stable">curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | sh</code>
+        <code class="cli-line cli-line--stable">irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex</code>
+        <code class="cli-line cli-line--nightly">curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | T3CODE_CHANNEL=nightly sh</code>
+        <code class="cli-line cli-line--nightly">$env:T3CODE_CHANNEL="nightly"; irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex</code>
         <p class="cli-note">Or try it once without installing:</p>
         <code class="cli-line cli-line--stable">npx t3@latest</code>
         <code class="cli-line cli-line--nightly">npx t3@nightly</code>

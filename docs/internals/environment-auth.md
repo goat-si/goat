@@ -25,7 +25,7 @@ vocabulary gives these grants a familiar meaning.
 
 ### MCP clients are a separate audience
 
-Agents T3 Code did not launch sign in to `/mcp` through a narrow OAuth
+Agents GOAT did not launch sign in to `/mcp` through a narrow OAuth
 authorization-code server ([McpOAuth](../../apps/server/src/auth/McpOAuth.ts)).
 It accepts loopback redirect URIs for agents on the user's machine and any
 HTTPS redirect for hosted agents (ChatGPT, bots). An HTTPS redirect means a

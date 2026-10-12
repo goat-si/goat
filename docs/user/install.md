@@ -11,13 +11,13 @@ launch GOAT and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://t3.codes/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://t3.codes/install.ps1 | iex
+irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex
 ```
 
 This installs the `goat` binary to `~/.local/bin`. If your shell reports `command not found`
@@ -41,18 +41,15 @@ If `goat` or `goat start` reports an already running server, connect to that ser
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
-To try T3 Code once without installing it, run `npx t3@latest` instead (needs
-Node.js for `npx`).
-
 ### Intel Macs
 
 There is no `goat` executable for Intel Macs (the desktop app is available). To
 run a server there, build it from source with Node.js 24 and `vp`
-([Install vp](https://github.com/pingdotgg/t3code#install-vp)):
+([Install vp](https://github.com/goat-si/goat#development)):
 
 ```bash
-git clone https://github.com/pingdotgg/t3code
-cd t3code && vp i && vp run build:desktop
+git clone https://github.com/goat-si/goat
+cd goat && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
 
@@ -61,16 +58,8 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download a release from [GitHub Releases](https://github.com/pingdotgg/t3code/releases),
-or use a package manager:
-
-| Platform           | Install                            |
-| ------------------ | ---------------------------------- |
-| Windows            | `winget install T3Tools.T3Code`    |
-| macOS              | `brew install --cask t3-code`      |
-| Debian, Ubuntu     | `sudo apt install ./T3-Code-*.deb` |
-| Arch Linux         | `yay -S t3code-bin`                |
-| Arch Linux nightly | `yay -S t3code-nightly-bin`        |
+Download a release from [GitHub Releases](https://github.com/goat-si/goat-releases/releases).
+On Debian and Ubuntu, install the `.deb` with `sudo apt install ./<file>.deb`.
 
 The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
