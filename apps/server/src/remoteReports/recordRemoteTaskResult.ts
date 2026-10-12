@@ -8,6 +8,7 @@ import {
   RemoteOriginReportsWaitResult,
   RuntimeMode,
   type RemoteObservedRun,
+  type RemoteKnownRun,
   type RemoteReport,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -91,7 +92,7 @@ export const waitForRemoteTask = Effect.fn("remoteReports.waitForRemoteTask")(fu
   readonly reportsSupported: boolean;
   readonly readKey: string;
   readonly afterSequence: number;
-  readonly knownRun: { readonly runId: RunId; readonly status: string } | null;
+  readonly knownRun: RemoteKnownRun | null;
 }) {
   const row = input.row;
   if (row.remoteThreadId === null || row.launchedRunId === null)

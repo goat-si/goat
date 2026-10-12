@@ -18,6 +18,7 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
@@ -31,6 +32,7 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -43,7 +45,34 @@ import * as Orchestrator from "./Orchestrator.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 
-export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart";
+/**
+ * "steer_when_ready" is how another thread's agent talks to a thread: like steering, whatever
+ * mode it asked for. It is server-internal and never crosses the wire.
+ */
+export type ThreadManagementSendMode = "auto" | "queue" | "steer" | "restart" | "steer_when_ready";
+
+/**
+ * How long a send waits inside its call for a starting turn to take steering. MCP clients give a
+ * tool call about a minute; past this the message is queued and still joins the turn once it can.
+ */
+export const STEER_READY_WAIT_MS = 45_000;
+
+/**
+ * The delivery a thread send asks for. Another thread's agent talks like steering whatever mode
+ * it named; a thread's own follow-ups and clients outside GOAT threads keep queue and steer.
+ */
+export function threadSendMode(input: {
+  readonly requested: "auto" | "queue" | "steer" | "restart" | undefined;
+  readonly senderThreadId: ThreadId | undefined;
+  readonly targetThreadId: ThreadId;
+}): ThreadManagementSendMode {
+  const requested = input.requested ?? "auto";
+  if (requested === "restart") return requested;
+  if (requested === "auto") return "steer_when_ready";
+  return input.senderThreadId !== undefined && input.senderThreadId !== input.targetThreadId
+    ? "steer_when_ready"
+    : requested;
+}
 
 export interface ThreadManagementProvenance {
   readonly createdBy: OrchestrationV2Actor;
@@ -228,6 +257,17 @@ export class ThreadManagementNoSteerableRunError extends Schema.TaggedError<Thre
   }
 }
 
+export class ThreadManagementTargetStoppedError extends Schema.TaggedError<ThreadManagementTargetStoppedError>()(
+  "ThreadManagementTargetStoppedError",
+  {
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return `The turn on thread ${this.threadId} was stopped before it could take the message. Send it again to start a new turn.`;
+  }
+}
+
 export class ThreadManagementThreadNotInterruptibleError extends Schema.TaggedError<ThreadManagementThreadNotInterruptibleError>()(
   "ThreadManagementThreadNotInterruptibleError",
   {
@@ -285,6 +325,7 @@ export const ThreadManagementError = Schema.Union([
   ThreadManagementRunNotFoundError,
   ThreadManagementThreadArchivedError,
   ThreadManagementNoSteerableRunError,
+  ThreadManagementTargetStoppedError,
   ThreadManagementThreadNotInterruptibleError,
   ThreadManagementProjectionLoadError,
   ThreadManagementProjectThreadsListError,
@@ -684,53 +725,16 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
+  /** Reads back the run a dispatched message started, joined, or queued behind. */
+  const readDelivery = (
+    input: ThreadManagementSendInput,
+    dispatch: Orchestrator.OrchestratorV2DispatchResult,
+    dispatchType: Extract<
+      OrchestrationV2Command,
+      { readonly type: "message.dispatch" }
+    >["dispatchMode"]["type"],
+  ) =>
     Effect.gen(function* () {
-      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
-      if (target.thread.archivedAt !== null) {
-        return yield* new ThreadManagementThreadArchivedError({
-          threadId: input.threadId,
-        });
-      }
-
-      const steerableRun = latestSteerableRun(target);
-      let dispatchMode: Extract<
-        OrchestrationV2Command,
-        { readonly type: "message.dispatch" }
-      >["dispatchMode"];
-      if (input.mode === "steer" || input.mode === "restart") {
-        if (steerableRun === undefined) {
-          return yield* new ThreadManagementNoSteerableRunError({
-            threadId: input.threadId,
-            mode: input.mode,
-          });
-        }
-        dispatchMode = {
-          type: input.mode === "steer" ? "steer_active" : "restart_active",
-          targetRunId: steerableRun.id,
-        };
-      } else if (input.mode === "auto" && steerableRun !== undefined) {
-        dispatchMode = { type: "steer_active", targetRunId: steerableRun.id };
-      } else {
-        dispatchMode = {
-          type: input.mode === "queue" ? "queue_after_active" : "start_immediately",
-        };
-      }
-
-      const dispatch = yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: input.commandId,
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
-        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
-        text: input.text,
-        attachments: input.attachments,
-        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-        dispatchMode,
-        createdBy: input.createdBy,
-        creationSource: input.creationSource,
-      });
       const projection = yield* getProjectThreadRecords(input, ["runs", "messages", "turnItems"], {
         messageIds: [input.messageId],
         turnItemTypes: ["user_message"],
@@ -766,13 +770,335 @@ const make = Effect.gen(function* () {
           ? "queued"
           : turnItem.inputIntent === "turn_start"
             ? "started"
-            : input.mode === "restart"
+            : dispatchType === "restart_active"
               ? "restarted"
               : "steered";
       return { dispatch, projection, message, run, turnItem, delivery };
     });
 
-  const waitForThread: ThreadManagementServiceShape["waitForThread"] = (input) =>
+  /** Dispatches one message and reads back the run it started, joined, or queued behind. */
+  const dispatchAndRead = (
+    input: ThreadManagementSendInput,
+    commandId: CommandId,
+    dispatchMode: Extract<
+      OrchestrationV2Command,
+      { readonly type: "message.dispatch" }
+    >["dispatchMode"],
+  ) =>
+    Effect.gen(function* () {
+      const dispatch = yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
+        ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+        text: input.text,
+        attachments: input.attachments,
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        dispatchMode,
+        createdBy: input.createdBy,
+        creationSource: input.creationSource,
+      });
+      return yield* readDelivery(input, dispatch, dispatchMode.type);
+    });
+
+  /**
+   * Where a message from another thread's agent goes right now: into the target's running
+   * turn, into a new turn, or after the current one. "wait" means the turn is starting and
+   * will take steering once its provider turn runs.
+   */
+  const decideAgentDelivery = (
+    input: Pick<ThreadManagementSendInput, "projectId" | "threadId" | "text" | "attachments">,
+    observedRunId?: RunId,
+  ) =>
+    Effect.gen(function* () {
+      const records = yield* getProjectThreadRecords(input, [
+        "runs",
+        "providerTurns",
+        "providerThreads",
+        "providerSessions",
+      ]);
+      const stopped = (runId: RunId) =>
+        getProjectThreadRecords(input, ["turnItems"], {
+          turnItemTypes: ["run_interrupt_request"],
+          turnItemRunIds: [runId],
+        }).pipe(Effect.map(({ turnItems }) => turnItems.length > 0));
+      const active = latestActiveRun(records);
+      // Stop reached the turn this message was waiting for: it never starts a new one.
+      if (observedRunId !== undefined) {
+        const observed = records.runs.find((run) => run.id === observedRunId);
+        if (
+          observed?.status === "interrupted" ||
+          observed?.status === "cancelled" ||
+          (yield* stopped(observedRunId))
+        )
+          return { type: "stopped" } as const;
+      }
+      if (active === undefined) return { type: "start" } as const;
+      if (active.id !== observedRunId && (yield* stopped(active.id)))
+        return { type: "stopped" } as const;
+      if (active.status === "waiting" || Orchestrator.isSeparateTurnCommand(input))
+        return { type: "next_turn" } as const;
+      const activeMessage =
+        active.userMessageId === null
+          ? undefined
+          : (yield* getProjectThreadRecords(input, ["messages"], {
+              messageIds: [active.userMessageId],
+            })).messages.find((message) => message.id === active.userMessageId);
+      if (activeMessage !== undefined && Orchestrator.isSeparateTurnCommand(activeMessage))
+        return { type: "next_turn" } as const;
+      const providerThread = records.providerThreads.find(
+        (candidate) => candidate.id === active.providerThreadId,
+      );
+      const capabilities = records.providerSessions.find(
+        (session) => session.id === providerThread?.providerSessionId,
+      )?.capabilities.turns;
+      // A provider steers the way its own steer does: live, or by interrupting and restarting
+      // the turn with the message. One that can do neither takes it as its next turn.
+      if (
+        capabilities !== undefined &&
+        !capabilities.supportsActiveSteering &&
+        !(capabilities.supportsInterrupt && capabilities.supportsSteeringByInterruptRestart)
+      )
+        return { type: "next_turn" } as const;
+      if (capabilities !== undefined && latestSteerableRun(records)?.id === active.id)
+        return { type: "steer", run: active } as const;
+      return { type: "wait", run: active } as const;
+    });
+  type AgentDelivery = Effect.Success<ReturnType<typeof decideAgentDelivery>>;
+
+  const isAgentDeliverySignal = (event: OrchestrationV2DomainEvent) =>
+    event.type === "run.updated" ||
+    event.type === "run-attempt.updated" ||
+    event.type === "provider-turn.updated" ||
+    event.type === "provider-session.attached" ||
+    event.type === "provider-session.updated" ||
+    event.type === "provider-thread.updated" ||
+    (event.type === "turn-item.updated" && event.payload.type === "run_interrupt_request");
+
+  /** Follows the thread after the given sequence, deciding again on every relevant change. */
+  const agentDeliveryChanges = (
+    input: ThreadManagementSendInput,
+    afterSequence: number,
+    observedRunId: RunId,
+  ) =>
+    orchestrator.streamStoredEventsFrom({ threadId: input.threadId, afterSequence }).pipe(
+      Stream.filter((stored) => isAgentDeliverySignal(stored.event)),
+      Stream.mapEffect(() => decideAgentDelivery(input, observedRunId)),
+    );
+
+  /**
+   * A message that had to queue behind a starting turn joins that turn as soon as it can take
+   * steering, also after the send returned. It is never promoted into a turn being stopped or
+   * behind a held queue, and a parent's follow-up to its delegated child keeps its own task.
+   */
+  const promoteWhenSteerable = (
+    input: ThreadManagementSendInput,
+    queuedRunId: RunId,
+    afterSequence: number,
+    observedRunId: RunId,
+  ) => {
+    // A refused promotion keeps its receipt, so each attempt gets its own command id.
+    let attempt = 0;
+    return Stream.concat(
+      Stream.fromEffect(decideAgentDelivery(input, observedRunId)),
+      agentDeliveryChanges(input, afterSequence, observedRunId),
+    ).pipe(
+      Stream.mapEffect((decision) =>
+        Effect.gen(function* () {
+          const { runs } = yield* getProjectThreadRecords(input, ["runs"], {
+            runIds: [queuedRunId],
+          });
+          const queued = runs.find((run) => run.id === queuedRunId);
+          if (
+            queued === undefined ||
+            queued.status !== "queued" ||
+            queued.queueHeld === true ||
+            queued.delegatedTaskId !== undefined
+          )
+            return true;
+          if (decision.type === "wait") return false;
+          if (decision.type !== "steer") return true;
+          attempt += 1;
+          return yield* orchestrator
+            .dispatch({
+              type: "queued-message.promote-to-steer",
+              commandId: CommandId.make("server:agent-steer:" + queuedRunId + ":" + attempt),
+              threadId: input.threadId,
+              queuedRunId,
+              targetRunId: decision.run.id,
+            })
+            .pipe(
+              Effect.as(true),
+              // The target ended or was stopped between reading and the lock; the next
+              // event decides again, and a message that cannot steer runs as the next turn.
+              Effect.catch((error) =>
+                Effect.logInfo("Agent message stays queued after a refused promotion", {
+                  threadId: input.threadId,
+                  queuedRunId,
+                  error,
+                }).pipe(Effect.as(false)),
+              ),
+            );
+        }),
+      ),
+      Stream.takeUntil((done) => done),
+      Stream.runDrain,
+    );
+  };
+
+  /**
+   * Decides and delivers once, from the thread's state after the given sequence. A turn that is
+   * still starting is waited for until the deadline; past that the message is queued durably and
+   * promoted into the turn once it can steer. A steer refused because the turn ended or was
+   * stopped in between is decided once more against that turn, within the same deadline.
+   */
+  const deliverFrom = (
+    input: ThreadManagementSendInput,
+    commandId: CommandId,
+    afterSequence: number,
+    observedRunId: RunId | undefined,
+    deadline: number,
+    redelivery: boolean,
+  ): Effect.Effect<ThreadManagementSendResult, ThreadManagementFailure> =>
+    Effect.gen(function* () {
+      const loadError = (cause: unknown) =>
+        new ThreadManagementProjectionLoadError({
+          projectId: input.projectId,
+          threadId: input.threadId,
+          cause,
+        });
+      const sequence = () =>
+        orchestrator.getThreadEventSequence(input.threadId).pipe(Effect.mapError(loadError));
+      let decision: AgentDelivery = yield* decideAgentDelivery(input, observedRunId);
+      if (decision.type === "wait") {
+        const waitingFor = decision.run.id;
+        const remaining = Math.max(0, deadline - (yield* Clock.currentTimeMillis));
+        const ready = yield* agentDeliveryChanges(input, afterSequence, waitingFor).pipe(
+          Stream.filter((next) => next.type !== "wait"),
+          Stream.runHead,
+          Effect.timeoutOption(Duration.millis(remaining)),
+          Effect.mapError(loadError),
+        );
+        decision =
+          Option.isSome(ready) && Option.isSome(ready.value)
+            ? ready.value.value
+            : yield* decideAgentDelivery(input, waitingFor);
+      }
+      if (decision.type === "stopped")
+        return yield* new ThreadManagementTargetStoppedError({ threadId: input.threadId });
+      if (decision.type === "wait") {
+        // The turn is still starting after the wait a tool call can afford. Queue the message
+        // durably and keep following the turn so it still joins it once it can.
+        const waitingFor = decision.run.id;
+        const queuedSequence = yield* sequence();
+        const queued = yield* dispatchAndRead(input, commandId, { type: "queue_after_active" });
+        if (queued.run.status === "queued") {
+          yield* promoteWhenSteerable(input, queued.run.id, queuedSequence, waitingFor).pipe(
+            Effect.ignoreCause({ log: true }),
+            Effect.forkIn(layerScope),
+          );
+        }
+        return queued;
+      }
+      const targetedRunId = decision.type === "steer" ? decision.run.id : observedRunId;
+      const delivered = dispatchAndRead(
+        input,
+        commandId,
+        decision.type === "steer"
+          ? { type: "steer_active", targetRunId: decision.run.id }
+          : { type: "start_immediately" },
+      );
+      if (redelivery) return yield* delivered;
+      const redeliver = () =>
+        Effect.gen(function* () {
+          return yield* deliverFrom(
+            input,
+            CommandId.make(commandId + ":redelivery"),
+            yield* sequence(),
+            targetedRunId,
+            deadline,
+            true,
+          );
+        });
+      return yield* delivered.pipe(
+        Effect.catchTags({
+          OrchestratorDispatchError: redeliver,
+          OrchestratorCommandPreviouslyRejectedError: redeliver,
+        }),
+      );
+    });
+
+  /**
+   * Delivers a message from another thread's agent like steering, whatever mode its sender
+   * picked: it joins the target's running turn, starts an idle thread, and waits for a turn
+   * that is still starting. A provider that steers by interrupt-and-restart restarts the turn
+   * with it; one that can do neither takes it as the next turn.
+   */
+  const sendAgentMessage = (input: ThreadManagementSendInput) =>
+    Effect.gen(function* () {
+      const target = yield* getProjectThreadRecords(input, ["messages"], {
+        messageIds: [input.messageId],
+      });
+      if (target.thread.archivedAt !== null) {
+        return yield* new ThreadManagementThreadArchivedError({ threadId: input.threadId });
+      }
+      const sequence = yield* orchestrator.getThreadEventSequence(input.threadId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ThreadManagementProjectionLoadError({
+              projectId: input.projectId,
+              threadId: input.threadId,
+              cause,
+            }),
+        ),
+      );
+      // A retry of a send that was already delivered reports that delivery.
+      if (target.messages.some((message) => message.id === input.messageId)) {
+        return yield* readDelivery(input, { sequence, storedEvents: [] }, "steer_active");
+      }
+      const deadline = (yield* Clock.currentTimeMillis) + STEER_READY_WAIT_MS;
+      return yield* deliverFrom(input, input.commandId, sequence, undefined, deadline, false);
+    });
+
+  const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
+    Effect.gen(function* () {
+      if (input.mode === "steer_when_ready") return yield* sendAgentMessage(input);
+      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
+      if (target.thread.archivedAt !== null) {
+        return yield* new ThreadManagementThreadArchivedError({
+          threadId: input.threadId,
+        });
+      }
+
+      const steerableRun = latestSteerableRun(target);
+      let dispatchMode: Extract<
+        OrchestrationV2Command,
+        { readonly type: "message.dispatch" }
+      >["dispatchMode"];
+      if (input.mode === "steer" || input.mode === "restart") {
+        if (steerableRun === undefined) {
+          return yield* new ThreadManagementNoSteerableRunError({
+            threadId: input.threadId,
+            mode: input.mode,
+          });
+        }
+        dispatchMode = {
+          type: input.mode === "steer" ? "steer_active" : "restart_active",
+          targetRunId: steerableRun.id,
+        };
+      } else if (input.mode === "auto" && steerableRun !== undefined) {
+        dispatchMode = { type: "steer_active", targetRunId: steerableRun.id };
+      } else {
+        dispatchMode = {
+          type: input.mode === "queue" ? "queue_after_active" : "start_immediately",
+        };
+      }
+      return yield* dispatchAndRead(input, input.commandId, dispatchMode);
+    });
+
+  const waitForRun: ThreadManagementServiceShape["waitForThread"] = (input) =>
     Effect.gen(function* () {
       const loadError = (cause: unknown) =>
         new ThreadManagementProjectionLoadError({
@@ -892,6 +1218,29 @@ const make = Effect.gen(function* () {
       if (Option.isSome(waited)) return result(waited.value, false);
       const current = yield* reload();
       return result(current, !current.ready);
+    });
+
+  /**
+   * A message queued behind a starting turn may later join that turn as steering. Its queued run
+   * then ends cancelled while the message lives on in the run it joined, so a wait follows it there.
+   */
+  const waitForThread: ThreadManagementServiceShape["waitForThread"] = (input) =>
+    Effect.gen(function* () {
+      const startedAt = yield* Clock.currentTimeMillis;
+      const result = yield* waitForRun(input);
+      const run = result.run;
+      if (run?.status !== "cancelled" || run.userMessageId == null) return result;
+      const { messages } = yield* getProjectThreadRecords(input, ["messages"], {
+        messageIds: [run.userMessageId],
+      });
+      const joinedRunId = messages.find((message) => message.id === run.userMessageId)?.runId;
+      if (joinedRunId == null || joinedRunId === run.id) return result;
+      const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
+      return yield* waitForRun({
+        ...input,
+        runId: joinedRunId,
+        timeoutMs: Math.max(1, input.timeoutMs - elapsed),
+      });
     });
 
   const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(

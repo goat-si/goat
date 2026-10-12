@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  type ChannelAnswerProjectChoice,
   ChannelInboundMessage,
+  ProjectId,
   ChannelOutboundMessage,
   ChannelRequester,
   ChannelTask,
@@ -22,6 +24,7 @@ import {
   taskEventIdFor,
   taskIdFor,
 } from "./channelIds.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 
 const decodeMessage = Schema.decodeUnknownSync(ChannelInboundMessage);
@@ -474,5 +477,107 @@ describe("ChannelLedger identity links", () => {
         yield* ledger.findIdentity({ connectionId: "slack-1", externalActorId: "U1" }),
       );
     }).pipe(Effect.provide(TestLayer)),
+  );
+});
+
+describe("ChannelLedger answer project choices", () => {
+  it.effect(
+    "persists resolutions once, fences writes, and keeps unresolved answers as barriers",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* claimOwner("a", NOW, "2026-10-11T23:59:30.000Z");
+        const accepted = yield* accept();
+        yield* ledger.beginReception({
+          owner: "a",
+          inputId: accepted.inputId,
+          receptionId: "r" as never,
+          readAt: NOW,
+        });
+        const created = newTask(accepted.inputId, accepted.conversationId, accepted.bindingId);
+        yield* ledger.completeReception({
+          owner: "a",
+          inputId: accepted.inputId,
+          receptionId: "r" as never,
+          replyText: "Starting.",
+          decision: { replyText: "Starting.", action: { type: "report_only" } },
+          createdTask: created,
+          deliveries: [],
+          now: NOW,
+        });
+        const answer = (text: string, choice?: ChannelAnswerProjectChoice) =>
+          Effect.gen(function* () {
+            const stored = (yield* ledger.getTask(created.task.taskId))!;
+            yield* commitTransition(ledger, stored, {
+              type: "task.question.opened",
+              payload: {
+                question: { questionId: "q" as never, text: "Which project?", askedAt: NOW },
+              },
+            });
+            const waiting = (yield* ledger.getTask(created.task.taskId))!;
+            yield* commitTransition(ledger, waiting, {
+              type: "task.question.answered",
+              payload: { questionId: "q" as never, answer: text },
+            });
+            const event = (yield* ledger.recentAnswers(created.task.taskId, 1))[0]!;
+            assert.isUndefined(event.payload.projectChoice);
+            if (choice !== undefined)
+              yield* ledger.recordAnswerProjectChoice({
+                owner: "a",
+                eventId: event.eventId,
+                choice,
+              });
+            return event;
+          });
+        const remote = {
+          type: "remote",
+          host: "studio",
+          projectId: ProjectId.make("remote-p"),
+        } as const;
+        const first = yield* answer("P", remote);
+        yield* ledger.recordAnswerProjectChoice({
+          owner: "a",
+          eventId: first.eventId,
+          choice: { type: "none" },
+        });
+        assert.deepStrictEqual(
+          (yield* ledger.recentAnswers(created.task.taskId, 1))[0]?.payload.projectChoice,
+          remote,
+        );
+        yield* answer("try again", { type: "none" });
+        yield* answer("try again", { type: "none" });
+        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(created.task.taskId), remote);
+        const unresolved = yield* answer("unknown while offline");
+        yield* answer("try again", { type: "none" });
+        assert.isUndefined(yield* ledger.rememberedProjectChoice(created.task.taskId));
+        const lost = yield* Effect.flip(
+          ledger.recordAnswerProjectChoice({
+            owner: "other",
+            eventId: unresolved.eventId,
+            choice: remote,
+          }),
+        );
+        assert.strictEqual(lost.reason, "ownership_lost");
+        yield* ledger.recordAnswerProjectChoice({
+          owner: "a",
+          eventId: unresolved.eventId,
+          choice: { type: "local", projectId: ProjectId.make("local-p") },
+        });
+        assert.deepStrictEqual(yield* ledger.rememberedProjectChoice(created.task.taskId), {
+          type: "local",
+          projectId: ProjectId.make("local-p"),
+        });
+        const stored = (yield* ledger.getTask(created.task.taskId))!;
+        yield* commitTransition(ledger, stored, {
+          type: "task.cancelled",
+          payload: { reason: "Restart" },
+        });
+        yield* commitTransition(ledger, (yield* ledger.getTask(created.task.taskId))!, {
+          type: "task.retry.requested",
+          payload: { generation: 2 },
+        });
+        assert.deepStrictEqual(yield* ledger.recentAnswers(created.task.taskId, 1), []);
+        assert.isUndefined(yield* ledger.rememberedProjectChoice(created.task.taskId));
+      }).pipe(Effect.provide(TestLayer)),
   );
 });

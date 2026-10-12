@@ -2413,6 +2413,67 @@ it.effect.each([
   }),
 );
 
+it.effect.each([
+  {
+    name: "is checked out in another worktree",
+    worktreePath: "/worktrees/lane",
+    message: 'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project".',
+  },
+  {
+    name: "already exists",
+    worktreePath: null,
+    message:
+      'Branch "lane/fix" already exists in project "Project" (/repo), and a new worktree needs a new branch.',
+  },
+])("refuses a new worktree whose branch $name", (testCase) =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      hasCommit: () => Effect.succeed(true),
+      git: {
+        branchWorktreePath: ({ branch }) =>
+          Effect.succeed(branch === "lane/fix" ? testCase.worktreePath : null),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const error = yield* launches
+        .checkWorktreeBase({
+          projectId,
+          workspaceStrategy: {
+            type: "worktree",
+            baseRef: "origin/lane/fix",
+            branch: "lane/fix",
+            startFromOrigin: true,
+          },
+        })
+        .pipe(Effect.flip);
+      assert.deepInclude(error, {
+        _tag: "ThreadLaunchBranchError",
+        projectId,
+        branch: "lane/fix",
+        worktreePath: testCase.worktreePath,
+      });
+      assert.equal(error.message, testCase.message);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("leaves a new branch name to the launch", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      hasCommit: ({ refName }) => Effect.succeed(!refName.startsWith("refs/heads/")),
+      git: { branchWorktreePath: () => Effect.die("a missing branch has no worktree") },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.checkWorktreeBase({
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "lane/new" },
+      });
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("records launcher before preparation and preserves it on receipt replay", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();

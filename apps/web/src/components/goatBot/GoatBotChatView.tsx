@@ -17,7 +17,7 @@ import {
   canSendToGoatBot,
   type GoatBotAvailability,
   type GoatBotRemoval,
-} from "./goatBotAvailability";
+} from "@t3tools/client-runtime/goatBot";
 
 const GOAT_BOT_TITLE = "GOAT Bot";
 

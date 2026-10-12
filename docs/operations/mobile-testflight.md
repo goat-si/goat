@@ -17,7 +17,13 @@ whole path; the bundle ids and names come from
    App Store Connect API key (App Manager or Admin role): set `ASC_KEY_PATH` (the `.p8` file),
    `ASC_KEY_ID` and `ASC_ISSUER_ID`. Keep the key outside the repository.
 2. Install CocoaPods (`brew install cocoapods`).
-3. Create the app record in [App Store Connect](https://appstoreconnect.apple.com/apps): **Apps > + >
+3. Register at least one iPhone with the team. Automatic signing archives with a development profile
+   before the export re-signs for the App Store, and Apple creates a development profile only for a
+   team with a registered device. Connect an unlocked iPhone to the Mac by cable and trust it; the
+   script passes `-allowProvisioningDeviceRegistration`, so the first archive registers it. Without
+   one the archive stops with "Your team has no devices from which to generate a provisioning
+   profile".
+4. Create the app record in [App Store Connect](https://appstoreconnect.apple.com/apps): **Apps > + >
    New App**, platform iOS, name GOAT, bundle id `si.goat.mobile`, any SKU. The bundle id appears in
    the list after the first archive registers it through automatic signing; if it does not, register
    it under **Certificates, Identifiers & Profiles > Identifiers**. An upload to a bundle id without an

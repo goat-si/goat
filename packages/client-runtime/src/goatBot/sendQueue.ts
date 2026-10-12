@@ -1,6 +1,6 @@
 import * as DateTime from "effect/DateTime";
 
-import type { GoatBotRef } from "./types.ts";
+import type { GoatBotRef } from "./availability.ts";
 import type { GoatBotPendingInput } from "./rows.ts";
 
 type EntryState = "queued" | "sending" | "accepted" | "failed";

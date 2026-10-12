@@ -81,16 +81,16 @@ export function isProjectsViewPinnedThread(
 
 /**
  * Rows under a project: live, unpinned, and never a subagent in any state. An open
- * subagent shows beneath its owner row instead.
+ * subagent shows beneath its owner row instead. An archived owner stays when it
+ * still carries a child's request or the open subagent.
  */
 export function isProjectsViewListedThread(
   thread: Pick<SidebarThreadSummary, "pinnedAt" | "archivedAt" | "deletedAt" | "lineage">,
+  retainArchived = false,
 ) {
-  return (
-    thread.archivedAt === null &&
-    thread.lineage.relationshipToParent !== "subagent" &&
-    !isProjectsViewPinnedThread(thread)
-  );
+  if (thread.lineage.relationshipToParent === "subagent") return false;
+  if (thread.archivedAt !== null) return retainArchived && thread.deletedAt === null;
+  return !isProjectsViewPinnedThread(thread);
 }
 
 /**

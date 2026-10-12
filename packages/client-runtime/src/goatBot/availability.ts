@@ -4,11 +4,7 @@ import {
   type ExecutionEnvironmentCapabilities,
   type ThreadId,
 } from "@t3tools/contracts";
-import {
-  pickGoatBotHomeCandidate,
-  resolveGoatBotHome,
-  type GoatBotHomeTarget,
-} from "@t3tools/client-runtime/goatBot/home";
+import { pickGoatBotHomeCandidate, resolveGoatBotHome, type GoatBotHomeTarget } from "./home.ts";
 
 /** One machine as GOAT Bot sees it. */
 export interface GoatBotEnvironmentInput {

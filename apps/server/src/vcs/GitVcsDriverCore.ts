@@ -4013,23 +4013,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
-  const listWorktreePaths: GitVcsDriver.GitVcsDriver["Service"]["listWorktreePaths"] = (cwd) =>
-    runGitStdout("GitVcsDriver.listWorktreePaths", cwd, [
-      "worktree",
-      "list",
-      "--porcelain",
-      "-z",
-    ]).pipe(
-      // One record per worktree, each ended by an empty field. A `prunable`
-      // record's directory is gone, and another checkout may now sit there.
+  // One record per worktree, each ended by an empty field.
+  const readWorktreeRecords = (operation: string, cwd: string) =>
+    runGitStdout(operation, cwd, ["worktree", "list", "--porcelain", "-z"]).pipe(
       Effect.map((stdout) =>
         stdout.split("\0\0").flatMap((record) => {
           const fields = record.split("\0");
           const worktree = fields.find((field) => field.startsWith("worktree "));
-          return worktree === undefined || fields.some((field) => field.startsWith("prunable"))
-            ? []
-            : [path.resolve(cwd, worktree.slice("worktree ".length))];
+          if (worktree === undefined) return [];
+          return [
+            {
+              path: path.resolve(cwd, worktree.slice("worktree ".length)),
+              branch: fields.find((field) => field.startsWith("branch "))?.slice("branch ".length),
+              prunable: fields.some((field) => field.startsWith("prunable")),
+            },
+          ];
         }),
+      ),
+    );
+
+  // A `prunable` record's directory is gone, and another checkout may now sit there.
+  const listWorktreePaths: GitVcsDriver.GitVcsDriver["Service"]["listWorktreePaths"] = (cwd) =>
+    readWorktreeRecords("GitVcsDriver.listWorktreePaths", cwd).pipe(
+      Effect.map((records) => records.flatMap((record) => (record.prunable ? [] : [record.path]))),
+    );
+
+  // A prunable worktree still holds its branch until `git worktree prune` runs.
+  const branchWorktreePath: GitVcsDriver.GitVcsDriver["Service"]["branchWorktreePath"] = (input) =>
+    readWorktreeRecords("GitVcsDriver.branchWorktreePath", input.cwd).pipe(
+      Effect.map(
+        (records) =>
+          records.find((record) => record.branch === `refs/heads/${input.branch}`)?.path ?? null,
       ),
     );
 
@@ -4104,5 +4118,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     initRepo: initRepoWithListRefsInvalidation,
     listLocalBranchNames,
     listWorktreePaths,
+    branchWorktreePath,
   });
 });

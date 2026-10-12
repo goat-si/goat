@@ -18,6 +18,7 @@ const dayFormatter = new Intl.DateTimeFormat(undefined, {
 const availabilityCopy = {
   ready: "Answers here, works in its own threads",
   connecting: "Connecting to GOAT Bot…",
+  home_offline: "GOAT Bot’s computer is offline.",
   offline: "GOAT Bot's computer is offline. Messages will be available when it reconnects.",
   unsupported: "Update the server to use GOAT Bot here.",
   permission: "This connection does not have permission to message GOAT Bot.",
@@ -212,9 +213,11 @@ export function GoatBotScreen(props: {
       {session.availability !== "ready" ? (
         <View accessibilityRole="alert" className="gap-2 border-b border-border px-4 py-3">
           <Text className="text-sm text-foreground-muted">
-            {session.availability === "error"
-              ? (session.error ?? availabilityCopy.error)
-              : availabilityCopy[session.availability]}
+            {session.availability === "home_offline"
+              ? `GOAT Bot runs on ${session.homeLabel}. It will continue when that computer connects.`
+              : session.availability === "error"
+                ? (session.error ?? availabilityCopy.error)
+                : availabilityCopy[session.availability]}
           </Text>
           {session.availability === "error" || session.availability === "legacy_active" ? (
             <Pressable

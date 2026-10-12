@@ -1,4 +1,5 @@
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -93,6 +94,8 @@ const runService = <A, E>(
     readonly taskThread?: boolean;
     readonly onResume?: (host: string, id: string) => void;
     readonly hosts?: ReadonlyArray<string>;
+    /** The machine the caller was launched from, when it has a report binding. */
+    readonly originLabel?: string;
     readonly hostCall: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -102,6 +105,16 @@ const runService = <A, E>(
   const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
   const rearms: Array<Parameters<LaunchWatchService.LaunchWatchServiceShape["rearm"]>[0]> = [];
   const layer = HostThreadsMcpService.layer.pipe(
+    Layer.provide(
+      Layer.mock(RemoteReportService.RemoteReportService)({
+        origin: () =>
+          Effect.succeed(
+            options.originLabel === undefined
+              ? null
+              : { originLabel: options.originLabel, originThreadId: ThreadId.make("origin") },
+          ),
+      }),
+    ),
     Layer.provide(
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         rearm: (input) => Effect.sync(() => void rearms.push(input)),
@@ -150,6 +163,46 @@ const runService = <A, E>(
 };
 
 describe("HostThreadsMcpService", () => {
+  it.effect.each([
+    ["orchestrator-laptop", true],
+    [undefined, false],
+  ] as const)(
+    "names the launching machine (%s) when a send names a host this one cannot reach",
+    ([originLabel, mentionsOrigin]) =>
+      Effect.gen(function* () {
+        const { result } = yield* runService(
+          {
+            interactionMode: "default",
+            ...(originLabel === undefined ? {} : { originLabel }),
+            hostCall: () =>
+              Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unknown",
+                  message: "juns-macbook-pro is not in this machine's SSH config or known_hosts.",
+                }),
+              ),
+          },
+          (service) =>
+            service.sendToThread(scope, {
+              host: "juns-macbook-pro",
+              threadId: ThreadId.make("merge-manager"),
+              message: "PR #48 is open.",
+            } as never),
+        );
+        expect(result._tag).toBe("Failure");
+        if (result._tag !== "Failure") return;
+        expect(result.failure).toBeInstanceOf(OrchestratorMcpFailure);
+        expect(result.failure.code).toBe("invalid_request");
+        expect(result.failure.message).toContain("is not in this machine's SSH config");
+        if (mentionsOrigin) {
+          expect(result.failure.message).toContain("started from orchestrator-laptop");
+          expect(result.failure.message).toContain("goat_origin_report");
+        } else {
+          expect(result.failure.message).not.toContain("goat_origin_report");
+        }
+      }),
+  );
+
   it.effect("refuses to change a thread on another machine from a plan-mode caller", () =>
     Effect.gen(function* () {
       const sent: string[] = [];

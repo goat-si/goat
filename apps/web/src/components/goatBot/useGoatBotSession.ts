@@ -30,7 +30,7 @@ import {
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "./goatBotAvailability";
+} from "@t3tools/client-runtime/goatBot";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 

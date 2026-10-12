@@ -24,8 +24,8 @@ import {
   persistClientSettingsPatch,
   persistClientSettingsUpdate,
   resolveEnvironmentIdentificationMode,
-  resolveSidebarViewIsProjects,
 } from "./useSettings";
+import { resolveSidebarViewIsProjects } from "../components/Sidebar.logic";
 
 beforeEach(() => {
   persistenceMocks.getClientSettings.mockReset().mockResolvedValue(null);
@@ -454,30 +454,55 @@ describe("onboarding completion persistence", () => {
 });
 
 describe("Projects view hydration policy", () => {
-  it.each([true, false])("uses Projects before hydration even when the snapshot is %s", (value) => {
-    expect(resolveSidebarViewIsProjects({ hydrated: false, value })).toBe(true);
+  it("holds the sidebar until settings resolve when no view was saved", () => {
+    expect(
+      resolveSidebarViewIsProjects({ status: "pending", value: true, synchronousValue: null }),
+    ).toBeNull();
+    expect(
+      resolveSidebarViewIsProjects({ status: "retrying", value: false, synchronousValue: null }),
+    ).toBeNull();
   });
+
+  it.each([true, false])("paints a synchronous last view of %s before hydration", (value) => {
+    expect(
+      resolveSidebarViewIsProjects({ status: "pending", value: !value, synchronousValue: value }),
+    ).toBe(value);
+  });
+
   it.each([true, false])("preserves a hydrated choice of %s", (value) => {
-    expect(resolveSidebarViewIsProjects({ hydrated: true, value })).toBe(value);
+    expect(resolveSidebarViewIsProjects({ status: "ready", value, synchronousValue: !value })).toBe(
+      value,
+    );
   });
+
   it("uses Projects with no saved settings", async () => {
     await ensureClientSettingsHydrated();
     expect(
       resolveSidebarViewIsProjects({
-        hydrated: true,
+        status: "ready",
         value: getClientSettings().legacySidebarEnabled,
+        synchronousValue: null,
       }),
     ).toBe(true);
   });
-  it("uses Projects after hydration fails", async () => {
+
+  it("uses Projects after hydration fails and keeps a synchronous Activity choice", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     persistenceMocks.getClientSettings.mockRejectedValueOnce(new Error("read failed"));
     await expect(ensureClientSettingsHydrated()).rejects.toThrow("read failed");
     expect(
       resolveSidebarViewIsProjects({
-        hydrated: false,
+        status: "failed",
         value: getClientSettings().legacySidebarEnabled,
+        synchronousValue: null,
       }),
     ).toBe(true);
+    expect(
+      resolveSidebarViewIsProjects({
+        status: "failed",
+        value: true,
+        synchronousValue: false,
+      }),
+    ).toBe(false);
   });
 });

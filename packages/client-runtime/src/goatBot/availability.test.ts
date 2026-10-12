@@ -10,7 +10,7 @@ import {
   resolveGoatBotAvailability,
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
-} from "./goatBotAvailability";
+} from "./availability.ts";
 
 const primary = EnvironmentId.make("primary");
 const remote = EnvironmentId.make("remote");
