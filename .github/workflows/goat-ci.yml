@@ -80,8 +80,12 @@ jobs:
         if: matrix.task == 'check' || matrix.task == 'typecheck' || matrix.task == 'test' || matrix.task == 'test-desktop' || matrix.task == 'build'
         run: vp run --filter @t3tools/desktop ensure:electron
 
+      # Playwright 1.60 has no ubuntu26.04 browser build. The linux64 shell is the
+      # zip it installs for ubuntu24.04, which is what these runners can run.
       - name: Install Chromium for server browser tests
         if: matrix.task == 'test-server'
+        env:
+          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
         run: node apps/server/node_modules/playwright-core/cli.js install --only-shell chromium
 
       - name: Check
