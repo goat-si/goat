@@ -138,6 +138,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                   projectId: null,
                   title: input.title,
                   runId: result.runId === null ? null : RunId.make(result.runId),
+                  notifyWebhook: input.notifyWebhook ?? false,
                 }),
               ),
               Effect.as(true),

@@ -1285,6 +1285,7 @@ it.effect.each([false, true])(
                 ...input,
                 host: input.host ?? null,
                 incarnation: "test",
+                notifyWebhook: input.notifyWebhook ?? false,
                 now: 0,
               });
             }),
@@ -1321,6 +1322,7 @@ it.effect.each([false, true])(
                 projectId: null,
                 title: "Remote",
                 runId: null,
+                notifyWebhook: false,
               },
             ]
           : [],

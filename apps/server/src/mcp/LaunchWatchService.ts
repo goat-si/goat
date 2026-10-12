@@ -28,6 +28,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import { localQuestionLauncher } from "../orchestration-v2/QuestionEscalationService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
@@ -102,6 +103,8 @@ export interface LaunchWatchServiceShape {
       readonly projectId: ProjectId | null;
       readonly title: string | null;
       readonly runId: RunId | null;
+      /** Also post reports to the completion webhook. Omitted keeps an existing watch's choice. */
+      readonly notifyWebhook?: boolean;
     },
   ) => Effect.Effect<LaunchWatch, LaunchWatchStoreError>;
   /** Adds a run to an existing watch; without a watch it does nothing. */
@@ -141,9 +144,16 @@ interface Details {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly excerpt: string | null;
+  readonly prUrl: string | null;
 }
 
-const noDetails: Details = { title: null, branch: null, worktreePath: null, excerpt: null };
+const noDetails: Details = {
+  title: null,
+  branch: null,
+  worktreePath: null,
+  excerpt: null,
+  prUrl: null,
+};
 
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
 
@@ -187,6 +197,7 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const config = yield* ServerConfig.ServerConfig;
+  const webhook = yield* CompletionWebhook.CompletionWebhook;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
@@ -459,6 +470,7 @@ export const make = Effect.gen(function* () {
         branch: shell?.branch ?? null,
         worktreePath: shell?.worktreePath ?? null,
         excerpt: lastText(records.messages.map((message) => message.text)),
+        prUrl: shell?.linkedPullRequest?.url ?? null,
       } satisfies Details;
     });
 
@@ -499,6 +511,7 @@ export const make = Effect.gen(function* () {
         branch: head.thread.branch,
         worktreePath: head.thread.worktreePath,
         excerpt: lastText(texts),
+        prUrl: head.thread.linkedPullRequest?.url ?? null,
       } satisfies Details;
     });
 
@@ -536,9 +549,31 @@ export const make = Effect.gen(function* () {
    * Sends a wake. A refusal the orchestrator will repeat settles it, with a
    * warning; any other failure (a storage failure, or a command id the
    * orchestrator recorded as rejected) leaves it owed, with the attempt
-   * counted so the retry uses a fresh id.
+   * counted so the retry uses a fresh id. A settled wake that carries a
+   * report also goes to the completion webhook, which never holds it back.
    */
   const deliver = (
+    watch: LaunchWatch,
+    message: LaunchWatchWake,
+    report?: Pick<
+      CompletionWebhook.CompletionWebhookReport,
+      "event" | "runId" | "requestId" | "status" | "title" | "prUrl"
+    >,
+  ): Effect.Effect<{ readonly delivered: boolean; readonly watch: LaunchWatch }> =>
+    settleWake(watch, message).pipe(
+      Effect.tap((sent) =>
+        sent.delivered && report !== undefined
+          ? webhook.notify(watch, {
+              ...report,
+              id: message.commandId,
+              summary: message.notification.summary,
+              excerpt: message.notification.detail ?? null,
+            })
+          : Effect.void,
+      ),
+    );
+
+  const settleWake = (
     watch: LaunchWatch,
     message: LaunchWatchWake,
   ): Effect.Effect<{ readonly delivered: boolean; readonly watch: LaunchWatch }> =>
@@ -624,15 +659,22 @@ export const make = Effect.gen(function* () {
           switch (result._tag) {
             case "Terminal": {
               missingEscalations.delete(watchId);
+              const title = details.title ?? watch.title;
               const sent = yield* deliver(
                 watch,
                 finishedWake({ watch, runId, status: result.status, ...details }),
+                {
+                  event: "run.completed",
+                  runId,
+                  status: result.status,
+                  title,
+                  prUrl: details.prUrl,
+                },
               );
               if (!sent.delivered) {
                 yield* keep(sent.watch);
                 return RETRY_MS;
               }
-              const title = details.title ?? watch.title;
               yield* keep({ ...settleRun(recordContact(sent.watch, now), runId, now), title });
               return 0;
             }
@@ -697,6 +739,14 @@ export const make = Effect.gen(function* () {
                     kind: question.kind,
                     title: null,
                   }),
+                  {
+                    event: "question",
+                    runId,
+                    requestId: question.id,
+                    status: "waiting",
+                    title: next.title,
+                    prUrl: null,
+                  },
                 );
                 next = sent.delivered ? recordQuestion(sent.watch, key, now) : sent.watch;
                 if (sent.delivered) missing.delete(key);
@@ -730,20 +780,26 @@ export const make = Effect.gen(function* () {
             case "CallerChanged":
               return RETRY_MS;
             case "Unreachable":
-              return yield* retryLater(watch, result.error);
+              return yield* retryLater(watch, runId, result.error);
           }
         }),
       ),
     );
 
   /** Records a failed contact, telling the launcher once per outage. Call with the lock held. */
-  const retryLater = (watch: LaunchWatch, error: string) =>
+  const retryLater = (watch: LaunchWatch, runId: RunId, error: string) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
       const { next, notify } = recordFailure(watch, now, error);
       let saved = next;
       if (notify && next.outage !== null) {
-        const sent = yield* deliver(next, outageWake({ watch: next, outage: next.outage }));
+        const sent = yield* deliver(next, outageWake({ watch: next, outage: next.outage }), {
+          event: "host.unavailable",
+          runId,
+          status: "unreachable",
+          title: next.title,
+          prUrl: null,
+        });
         saved = sent.delivered
           ? sent.watch
           : { ...sent.watch, outage: { ...next.outage, notified: false } };
@@ -868,12 +924,14 @@ export const make = Effect.gen(function* () {
                   new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
               ),
             ),
+            notifyWebhook: input.notifyWebhook ?? false,
             now,
           });
         const withMeta = {
           ...base,
           projectId: base.projectId ?? input.projectId,
           title: input.title ?? base.title,
+          notifyWebhook: input.notifyWebhook ?? base.notifyWebhook,
         };
         const watch = input.runId === null ? withMeta : addPendingRun(withMeta, input.runId, now);
         yield* save((map) => map.set(id, watch));

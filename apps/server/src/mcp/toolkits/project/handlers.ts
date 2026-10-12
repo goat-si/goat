@@ -278,6 +278,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                     projectId: thread.projectId,
                     title: thread.title,
                     runId: run?.id ?? null,
+                    notifyWebhook: input.notifyWebhook ?? false,
                   }),
                 ),
                 Effect.as(true),

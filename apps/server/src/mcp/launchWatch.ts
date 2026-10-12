@@ -58,6 +58,8 @@ export const LaunchWatch = Schema.Struct({
   deliveryAttempts: Schema.Record(Schema.String, Schema.Number).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Whether reports also go to the completion webhook (`completionWebhook` server setting). */
+  notifyWebhook: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });
@@ -113,6 +115,7 @@ export function newLaunchWatch(input: {
   readonly projectId: ProjectId | null;
   readonly title: string | null;
   readonly incarnation: string;
+  readonly notifyWebhook: boolean;
   readonly now: number;
 }): LaunchWatch {
   return {
@@ -129,6 +132,7 @@ export function newLaunchWatch(input: {
     lastEpisode: 0,
     outage: null,
     deliveryAttempts: {},
+    notifyWebhook: input.notifyWebhook,
     createdAt: input.now,
     updatedAt: input.now,
   };
