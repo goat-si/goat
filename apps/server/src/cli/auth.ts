@@ -262,7 +262,7 @@ const sessionCommand = Command.make("session").pipe(
 
 /** The subject `/mcp` admits from outside a thread; see EnvironmentAuth. */
 const MCP_CLIENT_SUBJECT = "mcp-client";
-const MCP_CLIENT_TOKEN_TTL = Duration.days(365);
+const MCP_CLIENT_TOKEN_TTL = Duration.days(90);
 
 const clientCreateCommand = Command.make("create", {
   ...authLocationFlags,
@@ -286,7 +286,7 @@ const clientCreateCommand = Command.make("create", {
   ),
   ttl: Flag.String("ttl").pipe(
     Flag.withSchema(DurationFromString),
-    Flag.withDescription("Token lifetime, for example `30d`. Defaults to 365 days."),
+    Flag.withDescription("Token lifetime, for example `30d`. Defaults to 90 days."),
     Flag.optional,
   ),
   runtimeModeCeiling: runtimeModeCeilingFlag,

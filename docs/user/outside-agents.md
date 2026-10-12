@@ -98,7 +98,7 @@ Create it on the host:
 goat auth client create --name "Grok Bot" --runtime-mode-ceiling approval-required --token-only
 ```
 
-Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 365
+Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
 days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
 you choose on the sign-in page. Without it, the client gets **Supervised**.
 
