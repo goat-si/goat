@@ -1077,6 +1077,39 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("does not let the remote's only project stand in for a project named here", () => {
+    const { machine, harness } = defaultsHarness({});
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      // A local project (no counterpart there by title or repository) named with the work.
+      harness.script.current = (input) =>
+        input.mode === "input" && (input.inputText ?? "").startsWith("do@")
+          ? Effect.succeed({
+              replyText: "On it.",
+              action: {
+                type: "create_task" as const,
+                title: "build it",
+                instruction: "build it",
+                host: "mac-studio",
+                projectId: ProjectId.make("project:channel-work"),
+              },
+            })
+          : remoteScript(input);
+      yield* gateway.ingest(
+        slackInput("do@mac-studio: build it in Channel work", "n1"),
+        slackContext,
+      );
+      const asked = yield* until("asked", (task) => task.status === "waiting_input");
+      assert.include(asked.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "n2"), slackContext);
+      yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("keeps the remote project's model without a Slack default", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {

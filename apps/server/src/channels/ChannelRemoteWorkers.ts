@@ -421,7 +421,15 @@ const make = Effect.gen(function* () {
       const same = projects.filter((project) => project.title.toLowerCase() === title);
       if (same.length === 1) return same[0];
     }
-    return projects.length === 1 && hint.requireNamed !== true ? projects[0] : undefined;
+    // The only project stands in only when no project was asked for: a project named here or a
+    // channel default that is gone must match (by id, answer, repository, or title), or the
+    // requester is asked. An answer alone may be about something else, such as the machine.
+    const askedForOne =
+      hint.requireNamed === true ||
+      hint.projectId !== undefined ||
+      hint.localTitle !== undefined ||
+      hint.canonicalKey !== undefined;
+    return projects.length === 1 && !askedForOne ? projects[0] : undefined;
   };
 
   const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local) =>
