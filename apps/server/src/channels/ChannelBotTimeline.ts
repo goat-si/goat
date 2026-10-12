@@ -84,16 +84,21 @@ export const layerGoatTransport = Layer.effectDiscard(
     const timeline = yield* ChannelBotTimeline;
     const ledger = yield* ChannelLedger.ChannelLedger;
 
-    const conversationOf = (message: ChannelOutboundMessage) =>
+    /** The conversation and owner a delivery belongs to, from the task or input it answers. */
+    const sourceOf = (message: ChannelOutboundMessage) =>
       Effect.gen(function* () {
-        if (message.chip !== undefined) return message.chip.conversationId;
+        const taskId = message.chip?.taskId ?? message.taskId;
         if (message.inReplyToInputId !== undefined) {
           const input = yield* ledger.getInput(message.inReplyToInputId);
-          if (input !== undefined) return input.snapshot.conversationId;
+          if (input !== undefined) {
+            return { conversationId: input.snapshot.conversationId, ownerId: input.ownerId };
+          }
         }
-        if (message.taskId !== undefined) {
-          const task = yield* ledger.getTask(message.taskId);
-          if (task !== undefined) return task.task.conversationId;
+        if (taskId !== undefined) {
+          const task = yield* ledger.getTask(taskId);
+          if (task !== undefined) {
+            return { conversationId: task.task.conversationId, ownerId: task.ownerId };
+          }
         }
         return undefined;
       }).pipe(Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })));
@@ -104,12 +109,24 @@ export const layerGoatTransport = Layer.effectDiscard(
         if (destination.kind !== "goat") {
           return yield* new ChannelGatewayError({ reason: "invalid_input" });
         }
+        const source = yield* sourceOf(message);
+        // An owner has one bot. A delivery addressed to a bot that was deleted and replaced since
+        // goes to the current one, so outstanding work still reports back.
+        const current =
+          source === undefined
+            ? undefined
+            : yield* ledger
+                .getBot(source.ownerId)
+                .pipe(
+                  Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+                );
+        const threadId = current?.bot.threadId ?? destination.threadId;
         if (message.kind === "task_chip") {
           if (message.chip === undefined) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
           yield* timeline.record({
-            threadId: destination.threadId,
+            threadId,
             record: {
               recordKey: "task-chip:" + message.chip.taskId,
               entry: { type: "task_chip", chip: message.chip },
@@ -117,12 +134,11 @@ export const layerGoatTransport = Layer.effectDiscard(
             revision: "v" + message.chip.taskVersion,
           });
         } else {
-          const conversationId = yield* conversationOf(message);
-          if (conversationId === undefined) {
+          if (source === undefined) {
             return yield* new ChannelGatewayError({ reason: "not_found" });
           }
           const meta: ChannelMessageMeta = {
-            conversationId,
+            conversationId: source.conversationId,
             originKind: "goat",
             kind: messageKindFor(message.kind),
             ...(message.inReplyToInputId === undefined
@@ -131,7 +147,7 @@ export const layerGoatTransport = Layer.effectDiscard(
             ...(message.taskId === undefined ? {} : { taskId: message.taskId }),
           };
           yield* timeline.record({
-            threadId: destination.threadId,
+            threadId,
             record: {
               recordKey: "delivery:" + message.deliveryId,
               entry: { type: "message", role: "assistant", text: message.text, meta },

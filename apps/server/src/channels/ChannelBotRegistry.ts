@@ -83,7 +83,23 @@ const make = Effect.gen(function* () {
   const launchBot = (owner: ChannelConnectionOwner, replacing?: ThreadId) =>
     Effect.gen(function* () {
       const environmentId = yield* environment.getEnvironmentId;
-      const scratch = yield* folders.ensureScratchProject.pipe(Effect.mapError(persistence));
+      const scratch = yield* folders.ensureScratchProject.pipe(
+        Effect.catch((error) =>
+          error._tag === "ScratchUnavailableError"
+            ? // The bot lives in Scratch, which is off while the data directory is inside a Git
+              // work tree (a dev worktree's .t3, a dotfiles home).
+              Effect.logWarning(
+                "GOAT bot is unavailable: the Scratch project is off because the data directory is inside a Git work tree. Start the server with --home-dir outside the checkout.",
+              ).pipe(
+                Effect.andThen(
+                  Effect.fail(new ChannelGatewayError({ reason: "adapter_unavailable" })),
+                ),
+              )
+            : Effect.logWarning("GOAT bot Scratch project failed", { cause: error }).pipe(
+                Effect.andThen(Effect.fail(persistence())),
+              ),
+        ),
+      );
       const settings = yield* serverSettings.getSettings.pipe(Effect.mapError(persistence));
       const ids = botLaunchIdsFor(owner.ownerId, replacing);
       // No initial message: the bot thread exists only to hold the conversation and chips.

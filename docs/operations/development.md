@@ -29,6 +29,8 @@ Add `--browser` to open a browser automatically.
 Linked worktrees default to their own `.t3/userdata`, even when `T3CODE_HOME` is set.
 The main checkout defaults to `~/.t3/dev/userdata`. An explicit `--home-dir` wins in both cases.
 Never run a development server against the live `~/.t3/userdata`.
+A data directory inside a Git checkout has no Scratch project, so the GOAT bot reports itself
+unavailable there; to try the bot from a worktree, pass a `--home-dir` outside the checkout.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
 Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,

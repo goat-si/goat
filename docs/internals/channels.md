@@ -16,6 +16,11 @@ starts a provider turn there. Replies come from a one-shot, tool-free text gener
 (`generateChannelReception`; Codex and Claude only), not from a session that could queue behind
 work. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
+An owner has one bot, in the Scratch project. If its thread is deleted, the next `ensureBot`
+starts a replacement and records it in its place; deliveries addressed to the old thread go to the
+current bot, and its questions can be answered there, so work started before the deletion still
+reports back.
+
 ## Who runs the workers
 
 Background work (reception, dispatch, answer forwarding, wording task updates, delivery) runs in

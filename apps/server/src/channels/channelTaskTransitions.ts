@@ -15,7 +15,7 @@ const reject = (reason: string): ChannelTaskTransition => ({ ok: false, reason }
 const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskStatus>> = {
   "task.created": [],
   "task.dispatch.claimed": ["received"],
-  "task.worker.bound": ["dispatching", "running"],
+  "task.worker.bound": ["dispatching", "running", "waiting_input"],
   "task.progress": ["running"],
   "task.question.opened": ["received", "dispatching", "running"],
   "task.question.answered": ["waiting_input"],
@@ -80,7 +80,15 @@ export function applyChannelTaskEvent(
         },
       };
     case "task.worker.bound":
-      return { ok: true, task: { ...base, status: "running", worker: event.payload.worker } };
+      // A newer run on a waiting worker does not answer its open questions.
+      return {
+        ok: true,
+        task: {
+          ...base,
+          status: task.status === "waiting_input" ? "waiting_input" : "running",
+          worker: event.payload.worker,
+        },
+      };
     case "task.progress":
       return { ok: true, task: { ...base, resultSummary: event.payload.summary } };
     case "task.question.opened":

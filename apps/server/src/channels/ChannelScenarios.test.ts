@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -18,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
@@ -35,6 +37,7 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import {
   answerForwardIdsFor,
+  botLaunchIdsFor,
   deliveryIdFor,
   taskEventIdFor,
   workerLaunchIdsFor,
@@ -174,6 +177,110 @@ describe("GOAT bot boundary (scenario 6)", () => {
         1,
       );
     }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps work started from a deleted bot reporting to its replacement", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      yield* gateway.ingest(goatInput("do: outlive the bot", "replaced-work"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const workerThreadId = task.worker!.threadId;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("replaced-question"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Choose",
+          question: "Staging or production?",
+        },
+        workerThreadId,
+      );
+      harness.world.setStatus(workerThreadId, 1, "completed");
+      yield* runtime.drain;
+      const waiting = yield* onlyTask;
+
+      // The bot thread is deleted; the next ensure starts its replacement.
+      const nextBotId = botLaunchIdsFor(ownerId, botThreadId).threadId;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-next-bot"),
+        threadId: nextBotId,
+        projectId: scratchProjectId,
+        title: "GOAT bot",
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "system",
+        creationSource: "server",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("delete-first-bot"),
+        threadId: botThreadId,
+      });
+      assert.strictEqual((yield* bots.ensure({}, owner)).threadId, nextBotId);
+
+      // The question is answered from the new bot and the result arrives there.
+      yield* gateway.ingest(
+        {
+          ...goatInput("staging", "replaced-answer"),
+          conversationKey: nextBotId,
+          replyAddress: { kind: "goat", environmentId, threadId: nextBotId },
+          intent: "answer",
+          taskId: task.taskId,
+          questionId: waiting.openQuestions[0]!.questionId,
+        },
+        rpcContext,
+      );
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.sends.length, 1);
+      harness.world.setStatus(workerThreadId, 2, "completed", "Shipped to staging.");
+      yield* runtime.drain;
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "completed");
+      const next = yield* orchestrator.getThreadRecords(nextBotId, ["messages"]);
+      assert.isTrue(
+        next.messages.some(
+          (message) => message.role === "assistant" && message.text.includes("Shipped to staging."),
+        ),
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("reports the bot unavailable when the Scratch project is off", () => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        // As in a dev worktree, whose data directory sits inside the Git checkout.
+        const context = yield* Layer.build(
+          Layer.fresh(
+            ChannelBotRegistry.layer.pipe(
+              Layer.provide(
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/unused",
+                  ensureScratchProject: Effect.fail(
+                    new ManagedProjectFolders.ScratchUnavailableError(),
+                  ),
+                }),
+              ),
+            ),
+          ),
+        );
+        const bots = Context.get(context, ChannelBotRegistry.ChannelBotRegistry);
+        const error = yield* Effect.flip(bots.ensure({}, owner));
+        assert.strictEqual(error.reason, "adapter_unavailable");
+      }),
+    ).pipe(Effect.provide(harness.layer));
   });
 
   it.effect(
@@ -1309,6 +1416,35 @@ describe("completion (scenario 5)", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("ends a waiting task when a newer run on its worker fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("question-before-newer-run"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Need a decision",
+          question: "Staging or production?",
+        },
+        threadId,
+      );
+      harness.world.setStatus(threadId, 1, "completed");
+      yield* runtime.drain;
+      // Someone works in the worker thread directly while the question is open, and it fails.
+      harness.world.addRun(threadId, MessageId.make("typed-in-the-worker"));
+      harness.world.setStatus(threadId, 2, "failed");
+      yield* runtime.drain;
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "failed");
+      assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+      assert.strictEqual(resultsTo(harness.slackSent, "failure").length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("asks again instead of forwarding an answer to a worker raised above the task", () => {
     const harness = makeHarness({ realWorkerLaunch: true });

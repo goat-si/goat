@@ -319,6 +319,7 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const inputOwnerId = stored.ownerId;
       if (action.type === "answer_question") {
         // Judge the answerer as they stand now: a Slack link removed or narrowed since the message
         // arrived counts.
@@ -345,9 +346,15 @@ const make = Effect.gen(function* () {
                   ),
                 };
         const stored = yield* ledger.getTask(action.taskId);
-        const open =
+        // An owner's GOAT bot is one conversation, also across a bot replaced after deletion.
+        const sameConversation =
           stored !== undefined &&
-          stored.task.conversationId === conversationId &&
+          (stored.task.conversationId === conversationId ||
+            (origin.kind === "goat" &&
+              stored.task.originAddress.kind === "goat" &&
+              stored.ownerId === inputOwnerId));
+        const open =
+          sameConversation &&
           stored.task.openQuestions.some((question) => question.questionId === action.questionId);
         if (stored === undefined || !open) {
           replyText = "I couldn't match that to an open question. Which task do you mean?";
