@@ -207,3 +207,64 @@ describe("wp9 compatibility scopes", () => {
     ).toEqual([]);
   });
 });
+
+describe("remaining local symbols and compatibility contracts", () => {
+  it("renames every local producer and consumer with stable suffixes", () => {
+    expect(
+      applyTextRules(
+        "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts",
+        "CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS CLAUDE_T3_MCP_TOOL_TIMEOUT_MS",
+        TEXT_RULES,
+      ).text,
+    ).toBe("CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS");
+    expect(
+      applyTextRules(
+        "apps/server/src/preview/ServerBrowserPage.ts",
+        "window.__t3Recorder",
+        TEXT_RULES,
+      ).text,
+    ).toBe("window.__goatRecorder");
+    expect(
+      applyTextRules(
+        "apps/web/src/index.css",
+        "::highlight(t3-thread-find) @keyframes t3-mobile-composer-old",
+        TEXT_RULES,
+      ).text,
+    ).toBe("::highlight(goat-thread-find) @keyframes goat-mobile-composer-old");
+    expect(
+      applyTextRules("apps/web/src/lib/desktopPasteAsText.ts", '"t3:paste-as-text"', TEXT_RULES)
+        .text,
+    ).toBe('"goat:paste-as-text"');
+    expect(
+      applyTextRules("apps/server/src/git/GitManager.ts", '"t3code-pr-body-"', TEXT_RULES).text,
+    ).toBe('"goat-pr-body-"');
+    expect(
+      applyTextRules("packages/shared/src/otelEnvironment.ts", "t3.value", TEXT_RULES).text,
+    ).toBe("goat.value");
+    expect(
+      applyTextRules("apps/server/scripts/migrate-dev-db.test.ts", "[goatDir, t3Dir]", TEXT_RULES)
+        .text,
+    ).toBe("[goatDir, legacyDir]");
+  });
+
+  it("explains persisted metadata, OS identities and protocol samples", () => {
+    for (const [path, source] of [
+      ["apps/desktop/src/app/DesktopAppIdentity.ts", "t3codeCommitHash"],
+      ["apps/desktop/src/app/DesktopEnvironment.ts", '"com.t3tools.T3Code.Development.desktop"'],
+      ["apps/server/src/cli/invocation.ts", '"./bin/t3.js"'],
+      ["packages/contracts/src/providerSetup.ts", '"t3"'],
+      ["apps/mobile/src/native/a.ts", "RCTT3SourceTextViewProtocol T3PresentationSourceView"],
+      ["apps/mobile/src/features/showcase/showcaseAgentActivity.ts", "t3_kind"],
+      ["packages/shared/src/goatMcpToolPresentation.ts", "t3_thread_start"],
+      ["packages/shared/src/codexAuthHandoff.ts", '"t3code-dev"'],
+    ]) {
+      expect(findResidue(path!, source!, KEEP_RULES)).toEqual([]);
+    }
+  });
+
+  it("still reports a new unclassified product identifier", () => {
+    expect(
+      findResidue("apps/server/src/new.ts", 'const t3NewFeature = "t3-new-feature";', KEEP_RULES),
+    ).toHaveLength(1);
+  });
+});

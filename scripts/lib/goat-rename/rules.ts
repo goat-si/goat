@@ -34,7 +34,7 @@ export const isExempt = (path: string): boolean =>
   path.startsWith("packaging/aur/");
 
 export const isTest = (path: string): boolean =>
-  /\.(?:test|testkit)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
+  /\.(?:test|testkit|fixture|bench)\.[^/]+$|(?:^|\/)(?:__tests__|testkit|testFixtures|fixtures)(?:\/|$)/.test(
     path,
   );
 
@@ -122,6 +122,105 @@ const LINT_RULE_IDS =
   "namespace-node-imports|no-global-process-runtime|no-hermes-unsupported-apis|no-inline-schema-compile|no-manual-effect-runtime-in-tests|no-mobile-uniwind-theme-escape-hatches|no-native-title-tooltip|no-outset-state-indicators|no-raw-mcp-registration|no-raw-resize-observer|no-rpc-permission-bypass|no-test-in-loop|no-unscoped-has|prefer-catch-tags|require-centered-scroll-gutter|require-suppression-reason";
 
 export const TEXT_RULES: readonly TextRule[] = [
+  {
+    id: "local-plugin-names",
+    category: "local-names",
+    find: /t3code:(?=dev-compression|third-party-licenses)/g,
+    replace: "goat:",
+    scope: (path) =>
+      path === "apps/web/vite.config.ts" || path === "scripts/lib/third-party-licenses.ts",
+  },
+  {
+    id: "favicon-placeholder-origin",
+    category: "local-names",
+    find: /t3\.invalid/g,
+    replace: "goat.invalid",
+    scope: (path) => path === "packages/shared/src/projectFavicon.ts",
+  },
+  {
+    id: "runtime-temporary-names",
+    category: "fixtures",
+    find: /t3(?:code)?-(?=pr-body-|checkpoint-index-|kde-activate-|background-suite-)|(?<=prefix: [`"'])t3code-(?=\$)/g,
+    replace: "goat-",
+    scope: (path) =>
+      /(?:GitManager|GitVcsDriver|KdeSnapShot|verify-background-live|CodexTextGeneration)\.ts$/.test(
+        path,
+      ),
+  },
+
+  {
+    id: "migration-test-locals",
+    category: "local-names",
+    find: /\bt3Dir\b/g,
+    replace: "legacyDir",
+    scope: (path) => path === "apps/server/scripts/migrate-dev-db.test.ts",
+  },
+  {
+    id: "otel-local-config",
+    category: "local-names",
+    find: /\bt3\b/g,
+    replace: "goat",
+    scope: (path) => path === "packages/shared/src/otelEnvironment.ts",
+  },
+  {
+    id: "server-local-symbols",
+    category: "local-names",
+    find: /(?<=CLAUDE_(?:READ_ONLY_)?)T3_MCP/g,
+    replace: "GOAT_MCP",
+    scope: (path) => path.startsWith("apps/server/"),
+  },
+  {
+    id: "server-guest-globals",
+    category: "local-names",
+    find: /(?<=__)t3(?=Recorder|PreviewClipboard|c\b)/g,
+    replace: "goat",
+    scope: (path) => path.startsWith("apps/server/"),
+  },
+  {
+    id: "installer-local-home",
+    category: "local-names",
+    find: /\bt3_home\b/g,
+    replace: "goat_home",
+    scope: (path) => path === "scripts/install.sh",
+  },
+  {
+    id: "contracts-service-tag",
+    category: "local-names",
+    find: /t3\/contracts\/RpcScopeAuthorization/g,
+    replace: "goat/contracts/RpcScopeAuthorization",
+    scope: (path) => path === "packages/contracts/src/rpc.ts",
+  },
+  {
+    id: "web-local-dom-names",
+    category: "dom",
+    find: /t3-(?=assistant-citation|thread-find|tree-icon-|tree-spin|mobile-composer|mobile-draft-headline|thread-context-drop)/g,
+    replace: "goat-",
+    scope: (path) => path.startsWith("apps/web/"),
+  },
+  {
+    id: "web-sprite-id",
+    category: "dom",
+    find: /t3code-pierre-file-icon-sprite/g,
+    replace: "goat-pierre-file-icon-sprite",
+    scope: (path) => path.startsWith("apps/web/"),
+  },
+  {
+    id: "markdown-parser-prefix",
+    category: "local-names",
+    find: /t3-markdown-inline-prefix:/g,
+    replace: "goat-markdown-inline-prefix:",
+    scope: (path) =>
+      path === "packages/shared/src/markdownListIndentation.ts" ||
+      path === "apps/web/src/markdown-incremental.test.tsx",
+  },
+  {
+    id: "web-local-events",
+    category: "dom",
+    find: /t3:(?=thread-find-open|paste-as-text)/g,
+    replace: "goat:",
+    scope: (path) => path.startsWith("apps/web/"),
+  },
+
   {
     id: "local-home-fields",
     category: "local-names",
@@ -333,6 +432,251 @@ export const PATH_RULES: readonly PathRule[] = [
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
   {
+    id: "credential-owner",
+    pattern: /(?<=["'])t3(?=["'])/g,
+    scope: (path) =>
+      /(?:ProviderCredentialStore|ProviderHost|providerSetup|TestProviderHost|packages\/provider-(?:core|cursor)\/src\/server\/auth)\./.test(
+        path,
+      ) || /packages\/provider-(?:core|cursor)\/src\/server\/auth\.ts$/.test(path),
+    reason:
+      "Credential owner discriminant is persisted in provider setup/auth records and read by existing clients (D17).",
+  },
+  {
+    id: "retained-tool-history",
+    pattern: /t3_[a-z_]+|t3\[-_ \]\?code|t3-code/g,
+    scope: (path) => path === "packages/shared/src/goatMcpToolPresentation.ts",
+    reason: "Presentation aliases recognize tool names in existing thread history (D12).",
+  },
+  {
+    id: "message-attribution",
+    pattern: /t3code/g,
+    scope: (path) =>
+      path === "packages/client-runtime/src/userMessage.ts" || path.endsWith("ThreadFeed.tsx"),
+    reason:
+      "Conversation attribution discriminant is persisted and shared with independently versioned clients (D17).",
+  },
+  {
+    id: "electron-schemes",
+    pattern: /t3code(?:-[a-z]+)?[:\\]|t3code(?:-[a-z]+)?(?=["'])/g,
+    scope: (path) =>
+      /(?:codexAuthHandoff|promptLinks|providerAuthReturnUrl|features\/connection\/pairing)\./.test(
+        path,
+      ),
+    reason:
+      "OAuth/deep links and persisted Electron origins remain usable across installed app versions (D13).",
+  },
+  {
+    id: "upstream-mobile-build-cache",
+    pattern: /t3code|t3_kind/g,
+    scope: (path) =>
+      path.startsWith("apps/mobile/modules/") || path.endsWith("showcaseAgentActivity.ts"),
+    reason:
+      "Upstream native build caches and OS notification payload keys are retained with native modules (D18).",
+  },
+  {
+    id: "showcase-inputs",
+    pattern: /t3code/g,
+    scope: (path) => path.endsWith("showcasePendingTasks.ts"),
+    reason: "Showcase project IDs must match the seeded sample repository fixtures.",
+  },
+  {
+    id: "native-capture-fixtures",
+    pattern: /[Tt]3(?:-snap-shot)?/g,
+    scope: (path) =>
+      path === "native/hyprland-snap-shot/src/ipc.rs" ||
+      path === "native/hyprland-snap-shot/src/feedback.rs",
+    reason:
+      "Installed capture helper surface identifiers and its embedded test window identities stay with the native binary (D16).",
+  },
+  {
+    id: "provider-replay-contracts",
+    pattern: /t3\.|t3code-test@example\.com|t3-antigravity-browser-preflight/g,
+    scope: (path) =>
+      path === "packages/provider-pi/src/server/adapter.ts" ||
+      path === "packages/provider-testing/src/replayWorkspace.ts" ||
+      path.endsWith("antigravityAuthSupport.ts"),
+    reason:
+      "Retained Pi extension event filtering, replay commit provenance and provider preflight URL are provider protocol/fixture inputs (D12/D17).",
+  },
+  {
+    id: "upstream-test-release-urls",
+    pattern: /t3-code-v2-beta/g,
+    scope: (path) => path.endsWith("NightlyMobileBeta.tsx"),
+    reason: "Upstream Play beta group URL is an external service identity (D12).",
+  },
+
+  {
+    id: "encoded-payloads",
+    pattern: /[A-Za-z0-9+/]{100,}={0,2}/g,
+    reason: "Embedded base64 image/archive bytes are generated payloads, not branding tokens.",
+  },
+  {
+    id: "provider-and-mcp-peers",
+    pattern:
+      /t3-code(?:-[a-z-]+)?|t3_code|t3code(?=["'])|t3-host-|t3\.(?:ui_request_expired|settle_probe|flush_extension_errors|rollback_barrier)|t3-(?=\$\{nextRequestId)/g,
+    scope: (path) =>
+      path.startsWith("packages/provider-") ||
+      path.startsWith("packages/effect-acp/") ||
+      /(?:ProviderCredentialStore|McpApp|mcpApps\/host|ProviderHost|providerSetup|MessagesTimeline|threadActivity|thread-work-log|goatMcpToolPresentation)/.test(
+        path,
+      ),
+    reason:
+      "Provider identities, credential ownership, persisted tool presentation and MCP/Pi extension messages are consumed by retained providers or embedded peers (D12/D17).",
+  },
+  {
+    id: "installed-native-and-helper-state",
+    pattern:
+      /t3-chrome-headless-shell|t3-snap-shot-|t3_capture_|t3_\$\{|t3-(?:capture|permission-check|kde-bus)|t3_chats|t3_pull_requests|t3-preview-|t3-context-content|t3-showcase-(?:scene|ready)|t3_subscription_widget_enabled/g,
+    scope: (path) =>
+      path.startsWith("native/") ||
+      path.startsWith("apps/mobile/modules/") ||
+      path.startsWith("apps/desktop/src/snapShot/") ||
+      path === "apps/server/src/preview/PreviewBrowserHost.ts" ||
+      path === "scripts/mobile-showcase.ts",
+    reason:
+      "Installed capture shortcut/config identities, AppArmor profile and native helper resources/protocol files require coordinated migration/rebuild (D16/D18).",
+  },
+  {
+    id: "retained-browser-and-device-state",
+    pattern:
+      /t3-\$\{(?:hash|generation)|t3-page\.localhost|t3-html-render-overflow|t3:(?=\"navigated)|t3-upload-|t3-pierre-(?:dark|light)|\[t3-\$\{namespace\}/g,
+    scope: (path) =>
+      path.startsWith("apps/mobile/") ||
+      path === "apps/server/src/device/AgentDeviceTarget.ts" ||
+      path === "apps/server/src/preview/ServerBrowserPage.ts" ||
+      path === "apps/server/src/htmlRender/headlessChrome.ts",
+    reason:
+      "Native caches and embedded browser/device handles can outlive this build or be read by another client; preserve origin/handle contracts (D17/D18).",
+  },
+  {
+    id: "legacy-safety-and-peer-protocol",
+    pattern:
+      /urn:t3:params:oauth:token-type:environment-bootstrap|\/\.well-known\/t3\/|T3B|run-t3\.retained|t3_write_pty|t3-acp-\(\\d\+\)-/g,
+    reason:
+      "OAuth and SSH peer output, retained runner files, bundled Ghostty wasm ABI and stale cgroup discovery stay compatible (D17).",
+  },
+  {
+    id: "legacy-artifacts",
+    pattern:
+      /t3code@users\.noreply\.github\.com|t3 (?:snapshot|checkpoint) ref=|t3-runtime|t3-link-|t3code\/custom-io-ordered-feed|t3-agent/g,
+    scope: (path) =>
+      /(?:GitVcsDriver|build-cli-archive|htmlRender|third-party-licenses|AgentScope)\./.test(path),
+    reason:
+      "Checkpoint provenance, archive manifest identity, stored HTML and vendored upstream source references preserve historical artifacts (D12/D17).",
+  },
+  {
+    id: "upstream-mobile-attribution",
+    pattern: /T3 Tools|t3tools\.com|\bT3Code\b|t3code: repair cached CocoaPods/g,
+    scope: (path) => path.startsWith("apps/mobile/"),
+    reason:
+      "Upstream native attribution and build host/cache markers are deferred with native modules (D18).",
+  },
+  {
+    id: "showcase-and-release-fixtures",
+    pattern: /[A-Za-z0-9_]*[Tt]3[A-Za-z0-9_]*(?:[-.:/][A-Za-z0-9_-]+)*/g,
+    scope: (path) =>
+      /(?:mobile-showcase-environment|release-smoke|acp-mock-agent|codexReplayRecordingRecords)\.ts$/.test(
+        path,
+      ),
+    reason:
+      "Historical release and replay/sample repository inputs are fixtures, not product names.",
+  },
+  {
+    id: "t1-skills",
+    pattern: /test-t3-(?:app|mobile)/g,
+    scope: (path) => path.startsWith(".agents/"),
+    reason:
+      "Repository skill names and references are contributor prose/tooling owned by T1 (D15).",
+  },
+
+  {
+    id: "peer-wire-and-history",
+    pattern:
+      /t3McpApp|__t3McpAppReceive|t3Home|t3SessionLoadReady|t3-(?:thread|context|citation):\/\/|data-t3-context-fragment|application\/x-t3code-[a-z-]+|t3code_no_provider|unknown-t3|t3_code_(?:orchestration|runtime|tools|instructions|orchestration_instructions)|t3_thread_read|__t3DesktopPreviewRecordingCapture/g,
+    reason:
+      "Bootstrap, stored conversation/credential attribution, drag/clipboard and embedded peer payload spellings remain readable across builds (D12/D17).",
+  },
+  {
+    id: "installed-desktop-metadata",
+    pattern:
+      /t3codeCommitHash|t3codeWebAuthn|T3 Tools|LICENSE-T3CODE\.txt|t3-black-[a-z0-9-]+|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+    scope: (path) =>
+      /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
+        path,
+      ) || path.startsWith(".github/workflows/"),
+    reason:
+      "Packaged build metadata, asset references and installed OS/cache identities are consumed by installed helpers and older builds (D13/D16).",
+  },
+  {
+    id: "upstream-provider-contracts",
+    pattern:
+      /t3-code(?:-[a-z-]+)?|t3-pi-mcp|t3-acp-cli-[a-z-]+|t3_code|_t3_unknown|_t3\/session-mode|\$t3:jsonrpc:|msg_t3_(?:turn|steer)_|t3-term-|t3-acp-(?:cgroup-wrapper|\\?d|\$)|t3-\d+|t3-tools/g,
+    scope: (path) =>
+      path.startsWith("packages/provider-") ||
+      path.startsWith("packages/effect-acp/") ||
+      /(?:Antigravity|AcpMcpStdioBridge|PiAdapterV2|goatMcpToolPresentation|mcpApps\/host)/.test(
+        path,
+      ),
+    reason:
+      "Provider client identity, session/config ids and replay normalization are read by independently versioned provider runtimes and retained sessions (D12/D17).",
+  },
+  {
+    id: "persisted-files-and-refs",
+    pattern:
+      /\.t3(?:code)?\b|t3-(?:composer-attachments|composer-paste|favicon-thumbnail|acp-registry-icons-v1)|t3\.pullRequests\.[a-z]+|refs\/t3\/review-guide|t3code\/pr-|t3-runtime-archive|t3-theme/g,
+    reason:
+      "Existing homes, attachment/cache files, review refs, pull-request preferences and saved HTML artifacts must survive upgrades (D8/D10/D17).",
+  },
+  {
+    id: "operator-span-names",
+    pattern: /t3\.runtime\.[A-Za-z.]+/g,
+    scope: (path) => path.startsWith("packages/ssh/"),
+    reason:
+      "SSH acquisition observability names feed operator dashboards; coordinate with service-name follow-up.",
+  },
+  {
+    id: "legacy-cli-package",
+    pattern: /\bt3\b|@t3code\/t3-|t3code\/t3|t3code\\\/t3/g,
+    scope: (path) =>
+      /(?:invocation|build-npm-platform-packages|package\.json|install\.|npmRelease|versionSkew|legacyCliLauncher)/.test(
+        path,
+      ),
+    reason: "Legacy npm package and CLI alias remain installable and discoverable (D4/D12).",
+  },
+
+  {
+    id: "test-fixture-values",
+    pattern: /[A-Za-z0-9_]*[Tt]3[A-Za-z0-9_]*(?:[-.:/][A-Za-z0-9_-]+)*/g,
+    scope: isTest,
+    reason:
+      "Opaque test fixture paths, mock process/app/repository identities and historical release URLs; these are input samples, not product identifiers.",
+  },
+  {
+    id: "relay-identities",
+    pattern:
+      /T3Connect[A-Za-z]*|T3Connect|t3-(?:env|cloud|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
+    reason:
+      "T3 Connect account names, public client ids, JWT and hosted routing contracts belong to the upstream relay (D12/D14).",
+  },
+  {
+    id: "native-upstream-types",
+    pattern:
+      /T3ComposerClipboard\w*|RCTT3SourceText\w*|T3PresentationSource\w*|T3ContextSheetSize\w*|t3FirstResponder|t3_(?:chats|pull_requests|subscription_widget_enabled)|T3\$\{name\}Stream|react-native-enriched-markdown-[\d.]+-t3\.\d+/g,
+    reason:
+      "Upstream native clipboard and generated device stream bridges require a coordinated native rebuild (D18).",
+  },
+  {
+    id: "legacy-project-source",
+    pattern: /t3\.json/g,
+    reason:
+      "Legacy project filename and source labels remain accepted and emitted for peers and existing checkouts (D9/D17).",
+  },
+  {
+    id: "false-positive-types",
+    pattern: /\b(?:Object3D|Digit3|u?int3(?:2|64)?(?:_t)?)\b/g,
+    reason: "Three.js, keyboard and numeric type spellings are unrelated to T3 branding.",
+  },
+  {
     id: "legacy-test-inputs",
     pattern:
       /(?:[Tt]3(?:CODE|_CODE)?_[A-Za-z0-9_]+|t3code[:.][A-Za-z0-9_:.-]+|\.t3(?:code)?\b|t3\.json|t3-(?:thread|context|citation):\/\/|t3Home|t3McpApp|__t3McpAppReceive|t3SessionLoadReady|\/\.well-known\/t3\/|t3-context-fragment|t3-desktop-bootstrap:|urn:t3:params:oauth:token-type:environment-bootstrap|refs\/t3(?:code)?\/[^\s"'`]+|t3\/[A-Za-z0-9_/-]+|t3-(?:chat|code)\b)/g,
@@ -365,7 +709,8 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "observability-services",
-    pattern: /t3code-(?:desktop|server)|t3-server|(?<="service.namespace": ")t3code/g,
+    pattern:
+      /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code/g,
     reason:
       "Operator dashboard service names remain stable; coordinate an observability follow-up.",
   },
@@ -431,7 +776,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "os-identities",
     pattern:
-      /com\.t3tools\.[A-Za-z.]+|\/com\/t3tools\/\w*|t3code\.service|T3SnapShot\w*|T3Code\.(?:Development\.)?SnapShot/g,
+      /com\.t3tools(?:\.[A-Za-z0-9.]+)?|\/com\/t3tools\/\w*|t3code\.service|T3SnapShot\w*|T3Code\.(?:Development\.)?SnapShot/g,
     reason: "Installed service, launchd, desktop entry and GNOME extension identities (plan D16).",
   },
   {
