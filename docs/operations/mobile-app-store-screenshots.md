@@ -124,7 +124,7 @@ Download `app-store-connect-screenshots` and `google-play-screenshots` from the 
 Artifacts section. Artifacts are retained for 14 days.
 
 The workflow uses the same checked-in device and scene matrix as local capture. Android remains
-ARM64 by default for local Apple Silicon development; CI sets `T3_SHOWCASE_ANDROID_ABI=x86_64` so the
+ARM64 by default for local Apple Silicon development; CI sets `GOAT_SHOWCASE_ANDROID_ABI=x86_64` so the
 debug APK matches its accelerated emulator.
 
 ## Fast iteration

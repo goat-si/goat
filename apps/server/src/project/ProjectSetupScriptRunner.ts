@@ -129,7 +129,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
  * the PTY stream. Each run gets its own random token so script output cannot
  * spoof completion, and the sentinel pattern is built per run from it.
  */
-const COMPLETION_SENTINEL_PREFIX = "__T3_SETUP_DONE__";
+const COMPLETION_SENTINEL_PREFIX = "__GOAT_SETUP_DONE__";
 const OUTPUT_LINE_MAX_LENGTH = 400;
 /** A partial line longer than this is a byte stream, not a line. Keep only the tail. */
 const PARTIAL_LINE_MAX_LENGTH = 4_096;

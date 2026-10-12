@@ -86,7 +86,7 @@ export async function buildDevRuntimeArchive(input: {
     resolveRuntimeArchiveHome({
       cwd: input.cwd ?? buildRoot,
       homeDir: input.homeDir,
-      ambientHome: env.T3CODE_HOME,
+      ambientHome: env.GOAT_HOME,
     }).pipe(Effect.provide(NodeServices.layer)),
   );
   const directory = NodePath.join(home, "runtime", "archives");

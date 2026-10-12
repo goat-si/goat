@@ -5,23 +5,23 @@
 #   curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | sh
 #
 # Environment:
-#   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
+#   GOAT_CHANNEL           release train to follow: stable, nightly, or preview
 #                            (default: nightly, the only train GOAT publishes so
 #                            far; preview is a maintainers' test train)
-#   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
-#   T3CODE_HOME              T3 home directory (default: ~/.t3)
-#   T3CODE_INSTALL_BIN_DIR   where the `goat` symlink goes (default: ~/.local/bin)
-#   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   GOAT_VERSION           exact version to install (overrides GOAT_CHANNEL)
+#   GOAT_HOME              T3 home directory (default: ~/.t3)
+#   GOAT_INSTALL_BIN_DIR   where the `goat` symlink goes (default: ~/.local/bin)
+#   GOAT_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
-# The archive is unpacked into $T3CODE_HOME/runtime/goat/versions/<version>, the
+# The archive is unpacked into $GOAT_HOME/runtime/goat/versions/<version>, the
 # same layout `goat service install` uses, so the service reuses this download
 # instead of fetching the release again.
 set -eu
 
 repo="goat-si/goat-releases"
-base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
-t3_home="${T3CODE_HOME:-$HOME/.t3}"
-bin_dir="${T3CODE_INSTALL_BIN_DIR:-$HOME/.local/bin}"
+base_url="${GOAT_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
+t3_home="${GOAT_HOME:-$HOME/.t3}"
+bin_dir="${GOAT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {
   printf '\nt3 install: %s\n' "$1" >&2
@@ -144,8 +144,8 @@ else
 fi
 
 # GOAT ships nightlies only until the stable (latest) channel opens.
-channel="${T3CODE_CHANNEL:-nightly}"
-version="${T3CODE_VERSION:-}"
+channel="${GOAT_CHANNEL:-nightly}"
+version="${GOAT_VERSION:-}"
 if [ -z "$version" ]; then
   # Tags are v<semver>; the channel is the prerelease identifier, or none for
   # stable. Only tags of the requested train are considered, so a stable
@@ -153,20 +153,20 @@ if [ -z "$version" ]; then
   case "$channel" in
     stable) tag_pattern='v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)' ;;
     nightly | preview) tag_pattern="v\([0-9][^\"]*-${channel}\.[0-9]*\.[0-9]*\)" ;;
-    *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
+    *) fail "GOAT_CHANNEL must be stable, nightly, or preview" ;;
   esac
   tmp_index="$(mktemp)"
   # Anonymous release listing allows 60 requests an hour per IP, and a
   # transient failure here is the most common install failure, so retry.
   attempt=1
   until fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"; do
-    [ "$attempt" -lt 3 ] || { rm -f "$tmp_index"; fail "could not list ${repo} releases (GitHub API limit or network); set T3CODE_VERSION=<version>"; }
+    [ "$attempt" -lt 3 ] || { rm -f "$tmp_index"; fail "could not list ${repo} releases (GitHub API limit or network); set GOAT_VERSION=<version>"; }
     sleep "$((attempt * 2))"
     attempt=$((attempt + 1))
   done
   version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
   rm -f "$tmp_index"
-  [ -n "$version" ] || fail "could not find a ${channel} release; set T3CODE_VERSION=<version>"
+  [ -n "$version" ] || fail "could not find a ${channel} release; set GOAT_VERSION=<version>"
 fi
 case "$version" in
   *-preview.*)
@@ -174,8 +174,8 @@ case "$version" in
       "goat ${version} is a preview build." \
       "  Preview builds are cut by maintainers from unreleased branches to exercise the release" \
       "  pipeline. They can be broken, receive no fixes, and are never offered as updates." \
-      "  Set T3CODE_CHANNEL=stable (the default) for a supported build." >&2
-    if [ "$channel" != "preview" ] && [ -z "${T3CODE_VERSION:-}" ]; then
+      "  Set GOAT_CHANNEL=stable (the default) for a supported build." >&2
+    if [ "$channel" != "preview" ] && [ -z "${GOAT_VERSION:-}" ]; then
       fail "refusing a preview build that was not explicitly requested"
     fi
     ;;

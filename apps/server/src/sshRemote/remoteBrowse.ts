@@ -41,7 +41,7 @@ const BROWSE_SCRIPT = String.raw`set -u
 NL='
 '
 TAB="$(printf '\t')"
-REQ=@@T3_PATH@@
+REQ=@@GOAT_PATH@@
 case "$REQ" in
   ""|"~") REQ="$HOME" ;;
   "~/"*) REQ="$HOME/$(printf '%s' "$REQ" | cut -c3-)" ;;
@@ -63,13 +63,13 @@ if command -v git >/dev/null 2>&1 && TOP="$(git rev-parse --show-toplevel 2>/dev
   done
 fi
 COUNT=0
-for E in * @@T3_HIDDEN_GLOBS@@; do
+for E in * @@GOAT_HIDDEN_GLOBS@@; do
   case "$E" in
     *"$NL"*|*"$TAB"*|.|..) continue ;;
   esac
   [ -d "$E" ] || continue
   COUNT=$((COUNT + 1))
-  if [ "$COUNT" -gt @@T3_MAX_ENTRIES@@ ]; then
+  if [ "$COUNT" -gt @@GOAT_MAX_ENTRIES@@ ]; then
     printf 'MORE\n'
     break
   fi
@@ -94,9 +94,9 @@ export function buildRemoteBrowseScript(input: {
   const quotedPath = shellSingleQuote(input.path?.trim() ?? "");
   const hiddenGlobs = input.showHidden ? ".[!.]* ..?*" : "";
   const maxEntries = String(Math.max(0, Math.floor(input.maxEntries)));
-  return BROWSE_SCRIPT.replaceAll("@@T3_PATH@@", () => quotedPath)
-    .replaceAll("@@T3_HIDDEN_GLOBS@@", () => hiddenGlobs)
-    .replaceAll("@@T3_MAX_ENTRIES@@", () => maxEntries);
+  return BROWSE_SCRIPT.replaceAll("@@GOAT_PATH@@", () => quotedPath)
+    .replaceAll("@@GOAT_HIDDEN_GLOBS@@", () => hiddenGlobs)
+    .replaceAll("@@GOAT_MAX_ENTRIES@@", () => maxEntries);
 }
 
 const joinRemotePath = (directory: string, name: string) =>

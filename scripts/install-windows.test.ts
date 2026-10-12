@@ -65,11 +65,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
           const before = archiveRequests;
           await powershell(`& ${ps(NodePath.join(import.meta.dirname, "install.ps1"))}`, {
             ...process.env,
-            T3CODE_VERSION: version,
-            T3CODE_CHANNEL: "stable",
-            T3CODE_HOME: home,
-            T3CODE_INSTALL_BIN_DIR: bin,
-            T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+            GOAT_VERSION: version,
+            GOAT_CHANNEL: "stable",
+            GOAT_HOME: home,
+            GOAT_INSTALL_BIN_DIR: bin,
+            GOAT_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
           });
           expect(archiveRequests - before).toBe(cache === "ready" ? 0 : 1);
           expect(

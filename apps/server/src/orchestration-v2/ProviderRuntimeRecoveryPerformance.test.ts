@@ -36,7 +36,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 
 // Startup recovery cost for restart continuation. The default case is small
-// enough for CI and asserts correctness; T3_BENCH_RECOVERY=1 adds the matrix.
+// enough for CI and asserts correctness; GOAT_BENCH_RECOVERY=1 adds the matrix.
 // `it.live` keeps a real clock: each reconcile gets a fresh command id, so the
 // second recover cannot hide behind command receipt dedup.
 
@@ -494,7 +494,7 @@ it.live(
   60_000,
 );
 
-it.live.skipIf(process.env.T3_BENCH_RECOVERY !== "1")(
+it.live.skipIf(process.env.GOAT_BENCH_RECOVERY !== "1")(
   "restart recovery scales with active threads, not settled history",
   () =>
     Effect.gen(function* () {

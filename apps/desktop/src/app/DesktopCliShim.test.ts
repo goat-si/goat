@@ -47,7 +47,7 @@ const run = (shim: string, args: ReadonlyArray<string>, env: NodeJS.ProcessEnv =
 
 /** An app executable that reports its environment and arguments. */
 const REPORTER =
-  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$T3CODE_CLI_PATH home=$T3CODE_HOME"\nprintf "%s\\n" "$@"\nexit 3\n';
+  '#!/bin/sh\necho "node=$ELECTRON_RUN_AS_NODE cli=$GOAT_CLI_PATH home=$GOAT_HOME"\nprintf "%s\\n" "$@"\nexit 3\n';
 
 /**
  * A stand-in AppImage whose image holds the reporter. `--appimage-mount`
@@ -105,7 +105,7 @@ describe("renderCliShim", () => {
                 Layer.provide(
                   Layer.mergeAll(
                     NodeServices.layer,
-                    DesktopConfig.layerTest({ T3CODE_HOME: override }),
+                    DesktopConfig.layerTest({ GOAT_HOME: override }),
                   ),
                 ),
               ),
@@ -126,7 +126,7 @@ describe("renderCliShim", () => {
           expect(result.status).toBe(3);
           expect(result.stdout).toContain(`home=${selected}`);
           expect(
-            run(shim, [], { HOME: root, T3CODE_HOME: `${root}/runtime-override` }).stdout,
+            run(shim, [], { HOME: root, GOAT_HOME: `${root}/runtime-override` }).stdout,
           ).toContain(`home=${root}/runtime-override`);
         }
         expect(NodeFS.readFileSync(old, "utf8")).toBe("upstream data");
@@ -173,7 +173,7 @@ describe("renderCliShim", () => {
     });
     // sudo clears the environment, so the launcher supplies its own.
     expect(run(shim, []).stdout).toContain(`home=${root}/home`);
-    expect(run(shim, [], { T3CODE_HOME: "/elsewhere" }).stdout).toContain("home=/elsewhere");
+    expect(run(shim, [], { GOAT_HOME: "/elsewhere" }).stdout).toContain("home=/elsewhere");
     // Run by a relative path, it still names itself absolutely.
     const relative = NodeChildProcess.spawnSync("./bin/goat", [], { cwd: root, encoding: "utf8" });
     expect(relative.stdout).toContain(`cli=${shim}`);
@@ -226,7 +226,7 @@ describe("renderCliShim", () => {
       (line) => line.includes("whoami") && !/"[^"]*whoami[^"]*"/.test(line),
     );
     expect(bare).toEqual([]);
-    expect(lines).toContain('set "T3CODE_CLI_PATH=C:\\Users\\José\\.t3\\bin\\goat.cmd"');
+    expect(lines).toContain('set "GOAT_CLI_PATH=C:\\Users\\José\\.t3\\bin\\goat.cmd"');
   });
 
   it("switches the Windows console to UTF-8 only when a path needs it", () => {

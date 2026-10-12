@@ -99,10 +99,10 @@ export async function loadMcpBridge(
   await NodeVM.runInNewContext(`${source}\ngoatMcpExtension(pi)`, {
     process: {
       env: {
-        T3_MCP_URL: "http://fixture.invalid/mcp",
-        T3_MCP_BEARER_TOKEN: "fixture-token",
-        T3_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
-        T3_PI_RUNTIME_MODE: options.runtimeMode,
+        GOAT_MCP_URL: "http://fixture.invalid/mcp",
+        GOAT_MCP_BEARER_TOKEN: "fixture-token",
+        GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
+        GOAT_PI_RUNTIME_MODE: options.runtimeMode,
       },
     },
     AbortSignal,

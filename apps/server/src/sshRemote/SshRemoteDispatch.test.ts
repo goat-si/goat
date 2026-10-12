@@ -374,7 +374,7 @@ describe("SSH dispatch release mirror", () => {
         Effect.provideService(
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromEnvRecord({
-            T3CODE_RELEASE_BASE_URL: "  https://mirror.example/goat/  ",
+            GOAT_RELEASE_BASE_URL: "  https://mirror.example/goat/  ",
           }),
         ),
       );
@@ -394,7 +394,7 @@ describe("SSH dispatch release mirror", () => {
           Effect.provideService(
             ConfigProvider.ConfigProvider,
             ConfigProvider.fromEnvRecord(
-              { T3CODE_RELEASE_BASE_URL: value },
+              { GOAT_RELEASE_BASE_URL: value },
               { preserveEmptyStrings: true },
             ),
           ),
@@ -416,9 +416,9 @@ describe("SSH dispatch packaged runtime", () => {
         Effect.provideService(
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromEnvRecord({
-            T3CODE_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR:
+            GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR:
               "  /Applications/GOAT.app/Contents/Resources/ssh-runtime/archives  ",
-            T3CODE_SSH_RUNTIME_ARCHIVE_DIR: "/fixture/user-cache",
+            GOAT_SSH_RUNTIME_ARCHIVE_DIR: "/fixture/user-cache",
           }),
         ),
       );
@@ -436,7 +436,7 @@ describe("SSH dispatch packaged runtime", () => {
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromEnvRecord(
             {
-              T3CODE_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: value,
+              GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: value,
             },
             { preserveEmptyStrings: true },
           ),

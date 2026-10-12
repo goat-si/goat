@@ -7,7 +7,7 @@ import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { T3ConnectUserProfilePage } from "./T3ConnectUserProfilePage";
 
 /** Custom pages in the Clerk account modal, in menu order. */
-export const T3_CONNECT_ACCOUNT_PAGES = [
+export const GOAT_CONNECT_ACCOUNT_PAGES = [
   {
     label: "Mobile clients",
     url: "mobile-clients",
@@ -42,7 +42,7 @@ export function useT3ConnectAccountPage(): {
       setTargets((current) => ({ ...current, [key]: element }));
     clerk.openUserProfile({
       __experimental_startPath: "/t3-connect",
-      customPages: T3_CONNECT_ACCOUNT_PAGES.map((page) => ({
+      customPages: GOAT_CONNECT_ACCOUNT_PAGES.map((page) => ({
         label: page.label,
         url: page.url,
         mount: (element: HTMLDivElement) => setTarget(`content:${page.url}`, element),
@@ -53,7 +53,7 @@ export function useT3ConnectAccountPage(): {
     });
   }, [clerk]);
 
-  const portals = T3_CONNECT_ACCOUNT_PAGES.flatMap((page) => {
+  const portals = GOAT_CONNECT_ACCOUNT_PAGES.flatMap((page) => {
     const content = targets[`content:${page.url}`];
     const icon = targets[`icon:${page.url}`];
     return [

@@ -41,12 +41,12 @@ const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
 const BitbucketApiEnvConfig = Config.all({
-  baseUrl: Config.String("T3CODE_BITBUCKET_API_BASE_URL").pipe(
+  baseUrl: Config.String("GOAT_BITBUCKET_API_BASE_URL").pipe(
     Config.withDefault(DEFAULT_API_BASE_URL),
   ),
-  accessToken: Config.String("T3CODE_BITBUCKET_ACCESS_TOKEN").pipe(Config.option),
-  email: Config.String("T3CODE_BITBUCKET_EMAIL").pipe(Config.option),
-  apiToken: Config.String("T3CODE_BITBUCKET_API_TOKEN").pipe(Config.option),
+  accessToken: Config.String("GOAT_BITBUCKET_ACCESS_TOKEN").pipe(Config.option),
+  email: Config.String("GOAT_BITBUCKET_EMAIL").pipe(Config.option),
+  apiToken: Config.String("GOAT_BITBUCKET_API_TOKEN").pipe(Config.option),
 });
 
 const BitbucketApiOperation = Schema.Literals([

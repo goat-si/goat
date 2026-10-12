@@ -1,4 +1,4 @@
-import { T3_PROJECT_FILE_NAME, type EnvironmentId, type GoatProjectFile } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, type EnvironmentId, type GoatProjectFile } from "@goat/contracts";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { executeAtomQuery } from "@goat/client-runtime/state/runtime";
 
@@ -24,13 +24,13 @@ export async function readGoatProjectFile(
 ): Promise<GoatProjectFile | null> {
   const result = await executeAtomQuery(
     appAtomRegistry,
-    getProjectFileQueryAtom(environmentId, workspaceRoot, T3_PROJECT_FILE_NAME),
+    getProjectFileQueryAtom(environmentId, workspaceRoot, GOAT_PROJECT_FILE_NAME),
     { reportDefect: false, reportFailure: false },
   );
   const data = resolveProjectFileQueryData(
     environmentId,
     workspaceRoot,
-    T3_PROJECT_FILE_NAME,
+    GOAT_PROJECT_FILE_NAME,
     result._tag === "Success" ? result.value : null,
   );
   if (data === null || data.truncated) return null;

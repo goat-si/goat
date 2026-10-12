@@ -213,7 +213,7 @@ describe("SSH archives from locally authenticated gh", () => {
         ]);
         assert.equal(command?.options.shell, false);
         assert.equal(command?.options.env?.GH_PROMPT_DISABLED, "1");
-        assert.equal(command?.options.env?.T3_SSH_AUTH_SECRET, undefined);
+        assert.equal(command?.options.env?.GOAT_SSH_AUTH_SECRET, undefined);
         yield* assertCleanStaging(state);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );

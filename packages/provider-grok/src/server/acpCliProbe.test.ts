@@ -1,7 +1,7 @@
 /**
  * Optional integration check against a real `grok agent stdio` install.
- * Enable with: T3_GROK_ACP_PROBE=1 vp test run GrokAcpCliProbe
- * Set T3_GROK_LIVE_TURN=1 to also send a small prompt to the real model.
+ * Enable with: GOAT_GROK_ACP_PROBE=1 vp test run GrokAcpCliProbe
+ * Set GOAT_GROK_LIVE_TURN=1 to also send a small prompt to the real model.
  *
  * The probe assumes either `XAI_API_KEY` is set in the environment or
  * the user has previously run `grok login`. Without credentials the
@@ -26,7 +26,7 @@ const makeProbeRuntime = makeGrokAcpRuntime({
   clientInfo: { name: "t3-grok-probe", version: "0.0.0" },
 });
 
-describe.runIf(process.env.T3_GROK_ACP_PROBE === "1")("Grok ACP CLI probe", () => {
+describe.runIf(process.env.GOAT_GROK_ACP_PROBE === "1")("Grok ACP CLI probe", () => {
   it.effect("initialize and authenticate against real grok agent stdio", () =>
     Effect.gen(function* () {
       const runtime = yield* makeProbeRuntime;
@@ -67,7 +67,7 @@ describe.runIf(process.env.T3_GROK_ACP_PROBE === "1")("Grok ACP CLI probe", () =
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect.skipIf(process.env.T3_GROK_LIVE_TURN !== "1")(
+  it.effect.skipIf(process.env.GOAT_GROK_LIVE_TURN !== "1")(
     "finishes a real Grok turn and streams its answer",
     () =>
       Effect.gen(function* () {

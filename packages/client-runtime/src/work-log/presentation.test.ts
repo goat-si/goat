@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import { T3_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
+import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
 
 import {
   commandDetailRepeatsCommand,
@@ -271,7 +271,7 @@ describe("summarizeToolGroup", () => {
 
 describe("resolveWorkEntryToolPresentation", () => {
   it("presents and summarizes every T3 tool using the same structured identity", () => {
-    for (const tool of T3_MCP_TOOL_NAMES) {
+    for (const tool of GOAT_MCP_TOOL_NAMES) {
       const entry: WorkLogPresentationEntry = {
         id: tool,
         createdAt: "2026-09-19T00:00:00.000Z",

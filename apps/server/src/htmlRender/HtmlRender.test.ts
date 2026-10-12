@@ -8,7 +8,7 @@ import {
   HTML_RENDER_MEASURE_WIDTHS,
   htmlRenderTheme,
 } from "@goat/shared/htmlRender";
-import { T3_CODE_DARK_THEME_COLORS } from "@goat/shared/themePalettes";
+import { GOAT_DARK_THEME_COLORS } from "@goat/shared/themePalettes";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -28,7 +28,7 @@ import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 
 // Real-browser tests run only when this names a chrome-headless-shell, for
 // example one T3 installed under <T3 home>/tools/chrome-headless-shell.
-const TEST_BROWSER_ENV = "T3CODE_TEST_HEADLESS_SHELL";
+const TEST_BROWSER_ENV = "GOAT_TEST_HEADLESS_SHELL";
 
 const layerHtmlRender = (
   executable?: string,
@@ -277,7 +277,7 @@ describe("HtmlRender", () => {
               { level: "info", text: HTML_RENDER_MEASURE_FONTS.sans },
               {
                 level: "warning",
-                text: htmlRenderTheme(T3_CODE_DARK_THEME_COLORS, "dark").variables["--background"],
+                text: htmlRenderTheme(GOAT_DARK_THEME_COLORS, "dark").variables["--background"],
               },
               { level: "error", text: "boom" },
               {

@@ -16,7 +16,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { T3_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
 import { GoatProjectFileFromJson } from "@goat/shared/goatProjectFile";
 
 const decodeGoatProjectFileJson = Schema.decodeEffect(GoatProjectFileFromJson);
@@ -31,7 +31,7 @@ export class GoatProjectFileLoadError extends Schema.TaggedError<GoatProjectFile
   },
 ) {
   override get message(): string {
-    return `Failed to ${this.operation} ${T3_PROJECT_FILE_NAME} at ${this.filePath}.`;
+    return `Failed to ${this.operation} ${GOAT_PROJECT_FILE_NAME} at ${this.filePath}.`;
   }
 }
 
@@ -66,7 +66,7 @@ export const make = Effect.gen(function* () {
 
   const load: GoatProjectFileLoader["Service"]["load"] = Effect.fn("GoatProjectFileLoader.load")(
     function* (workspaceRoot) {
-      const filePath = path.join(workspaceRoot, T3_PROJECT_FILE_NAME);
+      const filePath = path.join(workspaceRoot, GOAT_PROJECT_FILE_NAME);
       const raw = yield* fileSystem.readFileString(filePath).pipe(
         Effect.asSome,
         Effect.catchTags({

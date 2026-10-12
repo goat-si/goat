@@ -50,7 +50,7 @@ describe("desktop release runtime supply", () => {
         );
         const workflow = yield* decode(raw);
         const step = workflow.jobs.build.steps.find((s) => s.name === "Build desktop artifact")!;
-        assert.equal(step.env?.T3CODE_DESKTOP_MAC_PASSKEYS, "${{ inputs.mac_passkeys }}");
+        assert.equal(step.env?.GOAT_DESKTOP_MAC_PASSKEYS, "${{ inputs.mac_passkeys }}");
         const declaration = yield* Schema.decodeUnknownEffect(
           fromYaml(
             Schema.Struct({
@@ -94,7 +94,7 @@ describe("desktop release runtime supply", () => {
             )
             .replace(
               'vp run dist:desktop:artifact "${args[@]}"',
-              'printf "args=%s\\n" "${args[*]}"; printf "key=%s profile=%s passkeys=%s\\n" "$APPLE_API_KEY" "${T3CODE_MACOS_PROVISIONING_PROFILE:-}" "$T3CODE_DESKTOP_MAC_PASSKEYS"',
+              'printf "args=%s\\n" "${args[*]}"; printf "key=%s profile=%s passkeys=%s\\n" "$APPLE_API_KEY" "${GOAT_MACOS_PROVISIONING_PROFILE:-}" "$GOAT_DESKTOP_MAC_PASSKEYS"',
             );
           const result = NodeChildProcess.spawnSync(
             "bash",
@@ -119,7 +119,7 @@ describe("desktop release runtime supply", () => {
                 APPLE_API_ISSUER: "fixture",
                 APPLE_TEAM_ID: supplied ? "ABC1234567" : "",
                 MACOS_PROVISIONING_PROFILE: supplied ? Buffer.from(profile).toString("base64") : "",
-                T3CODE_DESKTOP_MAC_PASSKEYS: String(enabled),
+                GOAT_DESKTOP_MAC_PASSKEYS: String(enabled),
               },
             },
           );
@@ -135,8 +135,8 @@ describe("desktop release runtime supply", () => {
             { platform: "mac", signed: true, macPasskeys: enabled, version },
             supplied
               ? {
-                  T3CODE_APPLE_TEAM_ID: "ABC1234567",
-                  T3CODE_MACOS_PROVISIONING_PROFILE: `${runner}/goat.provisionprofile`,
+                  GOAT_APPLE_TEAM_ID: "ABC1234567",
+                  GOAT_MACOS_PROVISIONING_PROFILE: `${runner}/goat.provisionprofile`,
                   T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
                 }
               : {},
@@ -272,7 +272,7 @@ describe("desktop release runtime supply", () => {
         }
         const packageStep = steps.find((step) => step.name === "Build desktop artifact")!;
         assert.equal(
-          packageStep.env?.T3CODE_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL,
+          packageStep.env?.GOAT_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL,
           "${{ !inputs.ssh_runtime_bundle }}",
         );
         const decodeCaller = Schema.decodeUnknownEffect(

@@ -7,7 +7,7 @@ turn result, duration, and main-agent token totals when available.
 Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
 
-To disable collection, set `T3CODE_TELEMETRY_ENABLED=false` in the server's environment before
+To disable collection, set `GOAT_TELEMETRY_ENABLED=false` in the server's environment before
 starting it. This stops product events from being recorded or sent.
 
 The desktop app reads the variable from your shell profile (for example `~/.zshrc`) on macOS and
@@ -25,7 +25,7 @@ the signal's currently running endpoint and do not follow redirects. To check a 
 that requires authentication, save it and restart the server first.
 
 `T3CODE_OTLP_*_URL` and standard `OTEL_EXPORTER_OTLP_*` environment variables override the saved
-settings. For endpoints saved here or set with `T3CODE_OTLP_*_URL`, set `T3CODE_OTLP_HEADERS` for
-receivers that need authentication and `T3CODE_OTLP_PROTOCOL=http/protobuf` for receivers that do
+settings. For endpoints saved here or set with `T3CODE_OTLP_*_URL`, set `GOAT_OTLP_HEADERS` for
+receivers that need authentication and `GOAT_OTLP_PROTOCOL=http/protobuf` for receivers that do
 not accept JSON. An endpoint set with `OTEL_EXPORTER_OTLP_*` takes its headers and protocol from
 `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_PROTOCOL` instead.

@@ -16,7 +16,7 @@ import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import { buildRemoteStopScript, buildRemoteGoatRunnerScript } from "./tunnel.ts";
 
 // An absolute default also works in the runner fixture's deliberately minimal PATH.
-const remoteShell = process.env.T3_SSH_TEST_SHELL ?? "/bin/sh";
+const remoteShell = process.env.GOAT_SSH_TEST_SHELL ?? "/bin/sh";
 
 const Started = Schema.Struct({
   pid: Schema.Number,
@@ -49,7 +49,7 @@ const server = net.createServer((socket) => {
 process.on("SIGTERM", () => server.close(() => {
   process.stdout.write("graceful shutdown\\n");
 }));
-server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
+server.listen(Number(process.env.GOAT_TEST_PORT ?? 0), "127.0.0.1", () => {
   process.stdout.write(JSON.stringify({
     pid: process.pid,
     port: server.address().port,
@@ -67,7 +67,7 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
                 cwd: fixture,
                 env: {
                   PATH: bin,
-                  T3_TEST_PORT: String(port),
+                  GOAT_TEST_PORT: String(port),
                 },
                 detached: false,
                 stdin: Stream.make(
@@ -170,8 +170,8 @@ import * as net from "node:net";
 const server = net.createServer((socket) => socket.end());
 let signals = 0;
 process.on("SIGTERM", () => {
-  fs.writeFileSync(process.env.T3_TEST_SIGNAL_PATH, String(++signals));
-  if (process.env.T3_TEST_STOP_MODE !== "timeout" || signals > 1) server.close();
+  fs.writeFileSync(process.env.GOAT_TEST_SIGNAL_PATH, String(++signals));
+  if (process.env.GOAT_TEST_STOP_MODE !== "timeout" || signals > 1) server.close();
 });
 server.listen(Number(process.argv[process.argv.indexOf("--port") + 1]), "127.0.0.1", () => {
   process.stdout.write(JSON.stringify({ pid: process.pid, port: server.address().port, args: process.argv.slice(2) }) + "\\n");
@@ -183,8 +183,8 @@ server.listen(Number(process.argv[process.argv.indexOf("--port") + 1]), "127.0.0
               cwd: fixture,
               env: {
                 HOME: home,
-                T3_TEST_STOP_MODE: mode,
-                T3_TEST_SIGNAL_PATH: signalPath,
+                GOAT_TEST_STOP_MODE: mode,
+                GOAT_TEST_SIGNAL_PATH: signalPath,
               },
               detached: false,
             }),

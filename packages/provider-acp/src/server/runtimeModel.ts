@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
-import { T3_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
+import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -1081,7 +1081,7 @@ function acpMcpFallbackInput(value: string | undefined): Record<string, unknown>
  * its server as "goat", and matches are additionally gated on the known
  * GOAT tool inventory, so the separator match can stay loose.
  */
-const T3_MCP_TITLE_CALL =
+const GOAT_MCP_TITLE_CALL =
   /^(?:mcp[-_]{1,2})?goat[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
 
 /**
@@ -1089,7 +1089,7 @@ const T3_MCP_TITLE_CALL =
  * qwen-code appends ": <args json>" to the same template; Auggie namespaces
  * tool-first as "<tool>_goat".
  */
-const T3_MCP_TITLE_SUFFIX_CALL =
+const GOAT_MCP_TITLE_SUFFIX_CALL =
   /^(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*?)(?: \(goat MCP Server\)(?::|$)|[-_.]goat$)/i;
 
 /**
@@ -1097,7 +1097,7 @@ const T3_MCP_TITLE_SUFFIX_CALL =
  * names; Kimi additionally appends ": <raw args json>". Safe only because the
  * match is gated on the known GOAT tool inventory.
  */
-const T3_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s|$)/;
+const GOAT_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s|$)/;
 
 /**
  * Best-effort recovery of MCP identity from a generic ACP tool call.
@@ -1139,7 +1139,7 @@ export function extractMcpToolCallIdentity(
   const metaServerId = typeof meta?.serverId === "string" ? meta.serverId.trim() : "";
   const metaToolName = typeof meta?.toolName === "string" ? meta.toolName.trim() : "";
   if (/^goat$/i.test(metaServerId) && metaToolName.length > 0) {
-    for (const knownTool of T3_MCP_TOOL_NAMES) {
+    for (const knownTool of GOAT_MCP_TOOL_NAMES) {
       const boundary = metaToolName.length - knownTool.length - 1;
       if (
         metaToolName === knownTool ||
@@ -1183,12 +1183,12 @@ export function extractMcpToolCallIdentity(
     // also reads as server "goat" + tool "thread_send". Try every convention and
     // keep the first one that names a known tool.
     for (const convention of [
-      T3_MCP_TITLE_CALL,
-      T3_MCP_TITLE_SUFFIX_CALL,
-      T3_MCP_BARE_TITLE_CALL,
+      GOAT_MCP_TITLE_CALL,
+      GOAT_MCP_TITLE_SUFFIX_CALL,
+      GOAT_MCP_BARE_TITLE_CALL,
     ]) {
       const candidateTool = convention.exec(trimmed)?.groups?.tool;
-      if (candidateTool !== undefined && T3_MCP_TOOL_NAMES.has(candidateTool)) {
+      if (candidateTool !== undefined && GOAT_MCP_TOOL_NAMES.has(candidateTool)) {
         return { server: "goat", tool: candidateTool };
       }
     }

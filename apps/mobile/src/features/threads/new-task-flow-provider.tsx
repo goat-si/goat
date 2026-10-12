@@ -20,7 +20,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   MessageId,
   repositoryGroupingKeyOf,
-  T3_PROJECT_FILE_NAME,
+  GOAT_PROJECT_FILE_NAME,
   ThreadId,
 } from "@goat/contracts";
 import { sanitizeNewRefName } from "@goat/shared/git";
@@ -509,7 +509,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     canReadFiles && selectedProject !== null && selectedProject.workspaceRoot !== ""
       ? projectEnvironment.readFile({
           environmentId: selectedProject.environmentId,
-          input: { cwd: selectedProject.workspaceRoot, relativePath: T3_PROJECT_FILE_NAME },
+          input: { cwd: selectedProject.workspaceRoot, relativePath: GOAT_PROJECT_FILE_NAME },
         })
       : null,
   );

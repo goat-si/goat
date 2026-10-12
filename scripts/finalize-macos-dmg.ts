@@ -164,7 +164,7 @@ const command = Command.make(
   },
   ({ dir, report }) =>
     Effect.gen(function* () {
-      const identity = yield* Config.NonEmptyString("T3CODE_CLI_MAC_SIGN_IDENTITY");
+      const identity = yield* Config.NonEmptyString("GOAT_CLI_MAC_SIGN_IDENTITY");
       const profile = yield* Config.NonEmptyString("APPLE_KEYCHAIN_PROFILE");
       const keychain = yield* Config.String("APPLE_KEYCHAIN").pipe(Config.option);
       yield* finalizeMacosDmgs(dir, report, {

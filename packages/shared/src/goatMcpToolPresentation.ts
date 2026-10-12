@@ -96,10 +96,10 @@ function tool(
   return { displayName, labels, icon, summaryAction };
 }
 
-const T3_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
+const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
 
 // Cards, activity rows, summaries, and provider identity recovery share this inventory.
-const T3_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
+const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   link_pull_request: tool(
     ["Link", "Linking", "Linked", "a pull request"],
     "link-pr",
@@ -412,7 +412,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
  */
 // Read-side only: persisted activity can retain names from before the GOAT rename.
 // Never use this alias table to register or dispatch a live MCP call.
-const T3_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
+const GOAT_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_attachment_discard: "goat_attachment_discard",
   t3_attachment_prepare_upload: "goat_attachment_prepare_upload",
   t3_environment_preferences_update: "goat_environment_preferences_update",
@@ -458,9 +458,9 @@ const T3_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_worktree_status: "goat_worktree_status",
 };
 
-export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
-  ...Object.keys(T3_MCP_TOOLS),
-  ...Object.keys(T3_MCP_LEGACY_TOOL_ALIASES),
+export const GOAT_MCP_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(GOAT_MCP_TOOLS),
+  ...Object.keys(GOAT_MCP_LEGACY_TOOL_ALIASES),
 ]);
 
 function normalizeGoatMcpToolLabel(value: string): string {
@@ -477,13 +477,13 @@ function normalizeGoatMcpToolLabel(value: string): string {
 function resolveGoatMcpToolName(value: string): string | null {
   const label = normalizeGoatMcpToolLabel(value);
   // Bare goat_* ids are tools themselves, before goat_ is read as a namespace.
-  if (T3_MCP_TOOL_NAMES.has(label)) return label;
+  if (GOAT_MCP_TOOL_NAMES.has(label)) return label;
   const mcpMatch = /^mcp__(?<server>.+?)__(?<tool>.+)$/i.exec(label);
   if (mcpMatch?.groups) {
     const { server, tool } = mcpMatch.groups;
     return server !== undefined &&
       tool !== undefined &&
-      T3_MCP_SERVER_ALIASES.has(server.toLowerCase())
+      GOAT_MCP_SERVER_ALIASES.has(server.toLowerCase())
       ? tool
       : null;
   }
@@ -498,14 +498,14 @@ function resolveGoatMcpToolName(value: string): string | null {
     label,
   );
   const candidate = prefixed?.groups?.tool ?? label;
-  if (T3_MCP_TOOL_NAMES.has(candidate)) return candidate;
+  if (GOAT_MCP_TOOL_NAMES.has(candidate)) return candidate;
   // OpenCode 2 registers `goat-<thread>`; persisted `t3-code-<thread>` names
   // remain readable. Each server joins
   // it to the tool with `_`. Thread ids can hold `_` too, so take the longest
   // known tool name that ends the label.
   if (!/^(?:goat|t3-code)-/i.test(label)) return null;
   let longest: string | null = null;
-  for (const tool of T3_MCP_TOOL_NAMES) {
+  for (const tool of GOAT_MCP_TOOL_NAMES) {
     if (label.endsWith(`_${tool}`) && tool.length > (longest?.length ?? 0)) longest = tool;
   }
   return longest;
@@ -514,16 +514,16 @@ function resolveGoatMcpToolName(value: string): string | null {
 /** The bare T3 tool name (`html_render`) for any provider's spelling of it. */
 export function resolveGoatMcpToolId(toolName: string | null | undefined): string | null {
   const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
-  return name !== null && T3_MCP_TOOL_NAMES.has(name) ? name : null;
+  return name !== null && GOAT_MCP_TOOL_NAMES.has(name) ? name : null;
 }
 
 export function resolveGoatMcpToolDefinition(
   toolName: string | null | undefined,
 ): GoatMcpToolDefinition | null {
   const name = toolName == null ? null : resolveGoatMcpToolName(toolName);
-  const canonicalName = name === null ? null : (T3_MCP_LEGACY_TOOL_ALIASES[name] ?? name);
-  return canonicalName !== null && Object.hasOwn(T3_MCP_TOOLS, canonicalName)
-    ? T3_MCP_TOOLS[canonicalName]!
+  const canonicalName = name === null ? null : (GOAT_MCP_LEGACY_TOOL_ALIASES[name] ?? name);
+  return canonicalName !== null && Object.hasOwn(GOAT_MCP_TOOLS, canonicalName)
+    ? GOAT_MCP_TOOLS[canonicalName]!
     : null;
 }
 

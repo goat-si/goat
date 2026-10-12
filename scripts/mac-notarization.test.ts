@@ -32,7 +32,7 @@ describe("resolveMacNotarizationEnv", () => {
       ...appleIdEnv,
       APPLE_KEYCHAIN_PROFILE: "goat-notary",
       APPLE_KEYCHAIN: "/login.keychain-db",
-      T3CODE_APPLE_TEAM_ID: "TEAMID",
+      GOAT_APPLE_TEAM_ID: "TEAMID",
       CSC_NAME: "Developer ID",
     };
     const result = resolveMacNotarizationEnv(env, requiredMac);
@@ -40,7 +40,7 @@ describe("resolveMacNotarizationEnv", () => {
       env: {
         APPLE_KEYCHAIN_PROFILE: "goat-notary",
         APPLE_KEYCHAIN: "/login.keychain-db",
-        T3CODE_APPLE_TEAM_ID: "TEAMID",
+        GOAT_APPLE_TEAM_ID: "TEAMID",
         CSC_NAME: "Developer ID",
       },
       problem: undefined,
@@ -242,7 +242,7 @@ function signingFixture(
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromEnv({
             env: options.env ?? {
-              T3CODE_CLI_MAC_SIGN_IDENTITY: "Developer ID",
+              GOAT_CLI_MAC_SIGN_IDENTITY: "Developer ID",
               APPLE_KEYCHAIN_PROFILE: "goat-notary",
               APPLE_KEYCHAIN: "/login.keychain-db",
             },
@@ -293,8 +293,8 @@ describe("signMacArchiveContents", () => {
       Effect.gen(function* () {
         for (const env of [
           {},
-          { T3CODE_CLI_MAC_SIGN_IDENTITY: "-", APPLE_KEYCHAIN_PROFILE: "goat-notary" },
-          { T3CODE_CLI_MAC_SIGN_IDENTITY: "Developer ID" },
+          { GOAT_CLI_MAC_SIGN_IDENTITY: "-", APPLE_KEYCHAIN_PROFILE: "goat-notary" },
+          { GOAT_CLI_MAC_SIGN_IDENTITY: "Developer ID" },
         ]) {
           const fixture = signingFixture({ env });
           const error = yield* fixture.run().pipe(Effect.flip);
@@ -306,7 +306,7 @@ describe("signMacArchiveContents", () => {
 
   it.effect("honors required notarization from the environment even without the flag", () =>
     Effect.gen(function* () {
-      const fixture = signingFixture({ env: { T3CODE_REQUIRE_NOTARIZATION: "1" } });
+      const fixture = signingFixture({ env: { GOAT_REQUIRE_NOTARIZATION: "1" } });
       const error = yield* fixture
         .run({ ...signInput, requireNotarization: false })
         .pipe(Effect.flip);
@@ -317,7 +317,7 @@ describe("signMacArchiveContents", () => {
 
   it.effect("preserves optional ad hoc and Developer ID signing without credentials", () =>
     Effect.gen(function* () {
-      for (const env of [{}, { T3CODE_CLI_MAC_SIGN_IDENTITY: "Developer ID" }]) {
+      for (const env of [{}, { GOAT_CLI_MAC_SIGN_IDENTITY: "Developer ID" }]) {
         const fixture = signingFixture({ env });
         yield* fixture.run({ ...signInput, requireNotarization: false });
         assert.isTrue(fixture.commands.every((command) => command.command === "codesign"));

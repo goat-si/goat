@@ -187,7 +187,7 @@ it.layer(NodeServices.layer)("goat release index", (it) => {
       if (Result.isFailure(result)) {
         assert.equal(result.failure.status, 503);
         assert.include(result.failure.message, "HTTP 503");
-        assert.include(result.failure.message, "T3CODE_VERSION");
+        assert.include(result.failure.message, "GOAT_VERSION");
       }
       assert.equal(h.requests.length, 3);
       assert.isFalse(yield* fs.exists(`${baseDir}/cache/release-index.json`));

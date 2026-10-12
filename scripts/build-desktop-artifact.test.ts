@@ -307,34 +307,34 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       for (const env of [
         {
-          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
           GITHUB_REPOSITORY: "goat-si/goat",
-          T3CODE_DESKTOP_UPDATE_REPOSITORY: "",
+          GOAT_DESKTOP_UPDATE_REPOSITORY: "",
         },
         {
-          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
           GITHUB_REPOSITORY: "goat-si/goat",
-          T3CODE_DESKTOP_UPDATE_REPOSITORY: "  ",
+          GOAT_DESKTOP_UPDATE_REPOSITORY: "  ",
         },
         {},
         { GITHUB_REPOSITORY: "pingdotgg/t3code" },
         { GITHUB_REPOSITORY: "goat-si/goat" },
-        { T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true", GITHUB_REPOSITORY: "goat-si/goat" },
-        { T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat" },
-        { T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true", GITHUB_REPOSITORY: "some/fork" },
+        { GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true", GITHUB_REPOSITORY: "goat-si/goat" },
+        { GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat" },
+        { GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true", GITHUB_REPOSITORY: "some/fork" },
         {
-          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
           GITHUB_REPOSITORY: "goat-si/goat",
-          T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
+          GOAT_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
         },
         {
-          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-          T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat/extra",
+          GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat/extra",
         },
         // The private source repository is never a feed: binaries live in goat-releases.
         {
-          T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-          T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
+          GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
+          GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat",
         },
       ]) {
         const config = yield* createBuildConfig(
@@ -394,9 +394,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: " goat-si/goat-releases ",
+              GOAT_DESKTOP_UPDATE_REPOSITORY: " goat-si/goat-releases ",
               GITHUB_REPOSITORY: "some/fork",
-              T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
+              GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
             },
           }),
         ),
@@ -425,8 +425,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     const entitled = resolveOptionalMacPasskeySigningConfiguration(
       { ...local, macPasskeys: true, version: "1.2.3-nightly.20261011.1" },
       {
-        T3CODE_APPLE_TEAM_ID: "ABC1234567",
-        T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/goat.provisionprofile",
+        GOAT_APPLE_TEAM_ID: "ABC1234567",
+        GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/goat.provisionprofile",
         T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
       },
     );
@@ -486,8 +486,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
+                GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
+                GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
               },
             }),
           ),
@@ -498,8 +498,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
+                GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
+                GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
               },
             }),
           ),
@@ -568,8 +568,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true",
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
+              GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true",
+              GOAT_DESKTOP_UPDATE_REPOSITORY: "goat-si/goat-releases",
             },
           }),
         ),
@@ -1225,7 +1225,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           Effect.provide(
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
-                env: { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
+                env: { GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
               }),
             ),
           ),
@@ -1387,7 +1387,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                 ConfigProvider.fromEnv({
                   env: {
                     npm_config_python: pythonPath,
-                    T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true",
+                    GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true",
                   },
                 }),
               ),
@@ -1433,7 +1433,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               spawner,
               ConfigProvider.layer(
                 ConfigProvider.fromEnv({
-                  env: { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
+                  env: { GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
                 }),
               ),
             ),
@@ -2204,8 +2204,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "abc1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      GOAT_APPLE_TEAM_ID: "abc1234567",
+      GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
       T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
     });
 
@@ -2219,8 +2219,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      GOAT_APPLE_TEAM_ID: "ABC1234567",
+      GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
       T3CODE_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
@@ -2322,20 +2322,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     };
 
     const missingProfileError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      GOAT_APPLE_TEAM_ID: "ABC1234567",
       T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
     });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
       missingProfileError.message,
-      "T3CODE_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
+      "GOAT_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
     );
 
     const unsafeDomain =
       "https://domain-user:domain-secret@example.clerk.accounts.dev/path?token=query-secret";
     const invalidDomainError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      GOAT_APPLE_TEAM_ID: "ABC1234567",
+      GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
       T3CODE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
     });
     assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
@@ -2352,15 +2352,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.throws(
       () =>
         resolveMacPasskeySigningConfiguration({
-          T3CODE_APPLE_TEAM_ID: "ABC1234567",
-          T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+          GOAT_APPLE_TEAM_ID: "ABC1234567",
+          GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
         }),
       /Invalid passkey RP domain/u,
     );
     const invalidPublishableKeyError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      GOAT_APPLE_TEAM_ID: "ABC1234567",
+      GOAT_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
       T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
     });
     assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
@@ -2687,8 +2687,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_MAC_PASSKEYS: "true",
-                T3CODE_DESKTOP_SIGNED: "true",
+                GOAT_DESKTOP_MAC_PASSKEYS: "true",
+                GOAT_DESKTOP_SIGNED: "true",
               },
             }),
           ),
@@ -2753,11 +2753,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_SKIP_BUILD: "true",
-                T3CODE_DESKTOP_KEEP_STAGE: "true",
-                T3CODE_DESKTOP_SIGNED: "true",
-                T3CODE_DESKTOP_VERBOSE: "true",
-                T3CODE_DESKTOP_MOCK_UPDATES: "true",
+                GOAT_DESKTOP_SKIP_BUILD: "true",
+                GOAT_DESKTOP_KEEP_STAGE: "true",
+                GOAT_DESKTOP_SIGNED: "true",
+                GOAT_DESKTOP_VERBOSE: "true",
+                GOAT_DESKTOP_MOCK_UPDATES: "true",
               },
             }),
           ),
@@ -3030,10 +3030,10 @@ it.effect.each([
                 mode === "ci" || mode.startsWith("preview-") || mode === "ci-without-bundle"
                   ? "true"
                   : "false",
-              T3CODE_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL: mode.startsWith("preview-")
+              GOAT_DESKTOP_SSH_RUNTIME_BUNDLE_OPTIONAL: mode.startsWith("preview-")
                 ? "true"
                 : "false",
-              ...(mode === "env-override" ? { T3CODE_DESKTOP_VERSION: "9.9.9" } : {}),
+              ...(mode === "env-override" ? { GOAT_DESKTOP_VERSION: "9.9.9" } : {}),
             }),
           ),
         ),

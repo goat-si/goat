@@ -137,7 +137,7 @@ if [ "$ci" = true ]; then
     echo "CSC_KEYCHAIN=$keychain"
     echo "CSC_IDENTITY_AUTO_DISCOVERY=true"
     echo "APPLE_KEYCHAIN=$keychain"
-    echo "T3CODE_CLI_MAC_SIGN_IDENTITY=$identity_name"
+    echo "GOAT_CLI_MAC_SIGN_IDENTITY=$identity_name"
   } >> "$GITHUB_ENV"
   if [ -d "$HOME/.cargo/bin" ] && [ -n "${GITHUB_PATH:-}" ]; then
     echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"

@@ -6,13 +6,13 @@ import { ProjectScriptIcon } from "./project.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
 
 /** File name of the checked-in T3 project file, resolved at the workspace root. */
-export const T3_PROJECT_FILE_NAME = "t3.json";
+export const GOAT_PROJECT_FILE_NAME = "t3.json";
 
 /** Public URL of the published JSON Schema for {@link GoatProjectFile}. */
-export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
+export const GOAT_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
 
-const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
-const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
+const GOAT_PROJECT_FILE_PATH_MAX_LENGTH = 512;
+const GOAT_PROJECT_FILE_MAX_SCRIPTS = 50;
 
 // Annotations go on the encoded (string) side so they survive into the
 // published JSON Schema; decoding still trims and re-validates non-emptiness.
@@ -75,7 +75,7 @@ export type GoatProjectFileScript = typeof GoatProjectFileScript.Type;
 export const GoatProjectFile = Schema.Struct({
   $schema: Schema.optionalKey(
     Schema.String.annotate({
-      description: `URL of the JSON Schema for this file, typically "${T3_PROJECT_FILE_SCHEMA_URL}".`,
+      description: `URL of the JSON Schema for this file, typically "${GOAT_PROJECT_FILE_SCHEMA_URL}".`,
     }),
   ),
   iconPath: Schema.optionalKey(
@@ -84,7 +84,7 @@ export const GoatProjectFile = Schema.Struct({
         description:
           'Workspace-relative path to the project icon (e.g. "assets/logo.svg"). Checked before GOAT\'s built-in icon locations.',
       },
-      T3_PROJECT_FILE_PATH_MAX_LENGTH,
+      GOAT_PROJECT_FILE_PATH_MAX_LENGTH,
     ),
   ),
   defaultThreadEnvMode: Schema.optionalKey(
@@ -104,7 +104,7 @@ export const GoatProjectFile = Schema.Struct({
       .annotate({
         description: "Project scripts shared with everyone who opens this repository in GOAT.",
       })
-      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_SCRIPTS)),
+      .check(Schema.isMaxLength(GOAT_PROJECT_FILE_MAX_SCRIPTS)),
   ),
 }).annotate({
   title: "GOAT project file",

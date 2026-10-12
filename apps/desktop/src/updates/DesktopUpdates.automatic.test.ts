@@ -301,7 +301,7 @@ describe("DesktopUpdates automatic coordinator", () => {
   it.effect("disabled updater retains intent without pretending to restore", () => {
     const harness = makeHarness({
       initialSettings: { ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS, pendingUpdate: pending },
-      env: { T3CODE_DISABLE_AUTO_UPDATE: "true" },
+      env: { GOAT_DISABLE_AUTO_UPDATE: "true" },
     });
     return Effect.scoped(
       Effect.gen(function* () {

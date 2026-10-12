@@ -102,7 +102,7 @@ const writeUpdateRuntimes = (
 import { writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
 ${trialSource}
 } else if (context.update === undefined) {
@@ -256,7 +256,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       yield* fs.writeFileString(databasePath, "before trial");
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   process.send({ type: "prepared", updateId: context.update.id });
   process.on("message", (message) => {
@@ -309,7 +309,7 @@ if (context.update?.status === "pending") {
       yield* fs.writeFileString(databasePath, "before trial");
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   process.send({ type: "prepared", updateId: "wrong-update" });
 } else if (context.update === undefined) {
@@ -367,7 +367,7 @@ if (context.update?.status === "pending") {
 import { writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
-const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   // The trial's own ownership does not stand in the way of its rollback.
   tryAcquireServerOwnerLock(dirname(context.update.dbPath), "service-trial:" + context.update.id);

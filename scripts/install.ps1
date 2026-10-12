@@ -4,23 +4,23 @@
 #   irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex
 #
 # Environment:
-#   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
+#   GOAT_CHANNEL           release train to follow: stable, nightly, or preview
 #                            (default: nightly, the only train GOAT publishes so
 #                            far; preview is a maintainers' test train)
-#   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
-#   T3CODE_HOME              T3 home directory (default: ~\.t3)
-#   T3CODE_INSTALL_BIN_DIR   where goat.exe is linked (default: ~\.local\bin)
-#   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   GOAT_VERSION           exact version to install (overrides GOAT_CHANNEL)
+#   GOAT_HOME              T3 home directory (default: ~\.t3)
+#   GOAT_INSTALL_BIN_DIR   where goat.exe is linked (default: ~\.local\bin)
+#   GOAT_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
 #
-# The archive is unpacked into $T3CODE_HOME\runtime\goat\versions\<version>, the
+# The archive is unpacked into $GOAT_HOME\runtime\goat\versions\<version>, the
 # same layout `goat service install` uses, so the service reuses this download.
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $repo = "goat-si/goat-releases"
-$baseUrl = if ($env:T3CODE_RELEASE_BASE_URL) { $env:T3CODE_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
-$t3Home = if ($env:T3CODE_HOME) { $env:T3CODE_HOME } else { Join-Path $HOME ".t3" }
-$binDir = if ($env:T3CODE_INSTALL_BIN_DIR) { $env:T3CODE_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
+$baseUrl = if ($env:GOAT_RELEASE_BASE_URL) { $env:GOAT_RELEASE_BASE_URL.TrimEnd("/") } else { "https://github.com/$repo/releases/download" }
+$t3Home = if ($env:GOAT_HOME) { $env:GOAT_HOME } else { Join-Path $HOME ".t3" }
+$binDir = if ($env:GOAT_INSTALL_BIN_DIR) { $env:GOAT_INSTALL_BIN_DIR } else { Join-Path $HOME ".local\bin" }
 
 function Fail([string] $message) {
   Write-Error "goat install: $message"
@@ -129,8 +129,8 @@ $arch = switch ($rawArch) {
 }
 
 # GOAT ships nightlies only until the stable (latest) channel opens.
-$channel = if ($env:T3CODE_CHANNEL) { $env:T3CODE_CHANNEL } else { "nightly" }
-$version = $env:T3CODE_VERSION
+$channel = if ($env:GOAT_CHANNEL) { $env:GOAT_CHANNEL } else { "nightly" }
+$version = $env:GOAT_VERSION
 if (-not $version) {
   # Tags are v<semver>; the channel is the prerelease identifier, or none for
   # stable. Only tags of the requested train are considered, so a stable
@@ -139,7 +139,7 @@ if (-not $version) {
     "stable" { '^v\d+\.\d+\.\d+$' }
     "nightly" { '^v\d+\.\d+\.\d+-nightly\.\d+\.\d+$' }
     "preview" { '^v\d+\.\d+\.\d+-preview\.\d+\.\d+$' }
-    default { Fail "T3CODE_CHANNEL must be stable, nightly, or preview" }
+    default { Fail "GOAT_CHANNEL must be stable, nightly, or preview" }
   }
   # Anonymous release listing allows 60 requests an hour per IP, so retry
   # transient failures before giving up.
@@ -148,17 +148,17 @@ if (-not $version) {
     try {
       $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=100" -Headers @{ "User-Agent" = "goat-install" }
     } catch {
-      if ($attempt -ge 3) { Fail "could not list $repo releases (GitHub API limit or network); set T3CODE_VERSION=<version>" }
+      if ($attempt -ge 3) { Fail "could not list $repo releases (GitHub API limit or network); set GOAT_VERSION=<version>" }
       Start-Sleep -Seconds ($attempt * 2)
     }
   }
   $tag = ($releases | Where-Object { -not $_.draft -and $_.tag_name -match $tagPattern } | Select-Object -First 1).tag_name
-  if (-not $tag) { Fail "could not find a $channel release; set T3CODE_VERSION" }
+  if (-not $tag) { Fail "could not find a $channel release; set GOAT_VERSION" }
   $version = $tag.Substring(1)
 }
 if ($version -match '-preview\.') {
-  Write-Warning "goat $version is a preview build. Preview builds are cut by maintainers from unreleased branches to exercise the release pipeline. They can be broken, receive no fixes, and are never offered as updates. Set T3CODE_CHANNEL=stable (the default) for a supported build."
-  if ($channel -ne "preview" -and -not $env:T3CODE_VERSION) {
+  Write-Warning "goat $version is a preview build. Preview builds are cut by maintainers from unreleased branches to exercise the release pipeline. They can be broken, receive no fixes, and are never offered as updates. Set GOAT_CHANNEL=stable (the default) for a supported build."
+  if ($channel -ne "preview" -and -not $env:GOAT_VERSION) {
     Fail "refusing a preview build that was not explicitly requested"
   }
 }

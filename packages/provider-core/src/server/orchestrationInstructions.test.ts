@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  GOAT_ORCHESTRATION_INSTRUCTIONS,
   goatAcpPromptWithInstructions,
   goatOrchestrationPromptForFirstRun,
   goatOrchestrationSystemPrompt,
@@ -9,29 +9,29 @@ import {
 
 describe("T3 orchestration provider instructions", () => {
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level GOAT conversations");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "never use these tools merely");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "cross-provider");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level GOAT conversations");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "never use these tools merely");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "cross-provider");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "call `delegate_task` again");
     assert.include(
-      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      GOAT_ORCHESTRATION_INSTRUCTIONS,
       "Do not use `goat_thread_send` on `childThreadId`",
     );
   });
 
   it("sends goal-owning and looping work to a top-level thread", () => {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bounded child work");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "bounded child work");
     assert.include(
-      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      GOAT_ORCHESTRATION_INSTRUCTIONS,
       "for work that owns a goal, runs a loop (HOTL, `cxc-loop`, repeated PABCD), or spans several cycles",
     );
   });
 
   it("documents structured schedules instead of JSON strings", () => {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "structured object, never as JSON text");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '"everyMs":3600000');
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "bindToCurrentThread=false");
   });
 
   it("injects prompt fallback only for an MCP-enabled first run", () => {
@@ -56,7 +56,7 @@ describe("T3 orchestration provider instructions", () => {
 
   it("only exposes the system prompt when the T3 MCP server is attached", () => {
     assert.equal(goatOrchestrationSystemPrompt(false), undefined);
-    assert.equal(goatOrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+    assert.equal(goatOrchestrationSystemPrompt(true), GOAT_ORCHESTRATION_INSTRUCTIONS);
   });
 
   it("gives ACP sessions provider-neutral mode, browser, and orchestration guidance", () => {
@@ -113,6 +113,6 @@ it("explains question decisions and question-aware waits", () => {
     'SSH-host questions then need `goat_thread_wait({host})` or `goat_pending_request_list({scope:"launched", hosts})`. Approvals are no longer reported; check `goat_thread_read` or tell the user the thread may be waiting.',
     "Forward to the user any decision your own user has not authorized, such as pushing, deploying, sending outside, or starting new work beyond the request.",
   ]) {
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, text);
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
   }
 });

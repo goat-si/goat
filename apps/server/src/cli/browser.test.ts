@@ -48,12 +48,12 @@ it.effect(
       assert.equal(
         yield* resolve(Option.some(path.join(root, "explicit")), {
           SUDO_USER: "alice",
-          T3CODE_HOME: path.join(root, "env"),
+          GOAT_HOME: path.join(root, "env"),
         }),
         path.join(root, "explicit"),
       );
       assert.equal(
-        yield* resolve(Option.none(), { SUDO_USER: "alice", T3CODE_HOME: path.join(root, "env") }),
+        yield* resolve(Option.none(), { SUDO_USER: "alice", GOAT_HOME: path.join(root, "env") }),
         path.join(root, "env"),
       );
       assert.equal(getentCalls, 1);

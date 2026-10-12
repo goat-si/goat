@@ -295,7 +295,7 @@ describe("AcpRegistryAdapterV2", () => {
                     command: process.execPath,
                     args: [mockAgentPath],
                     cwd: input.cwd,
-                    env: { T3_ACP_SESSION_LIFECYCLE: "1" },
+                    env: { GOAT_ACP_SESSION_LIFECYCLE: "1" },
                   },
                   authMethodId: "test",
                 }).pipe(
@@ -364,8 +364,8 @@ describe("AcpRegistryAdapterV2", () => {
         instanceId,
         settings,
         environment: {
-          T3_ACP_SESSION_LIFECYCLE: "1",
-          T3_ACP_COMMAND_ADVERTISEMENT_DELAY_MS: "750",
+          GOAT_ACP_SESSION_LIFECYCLE: "1",
+          GOAT_ACP_COMMAND_ADVERTISEMENT_DELAY_MS: "750",
         },
       }).pipe(
         Effect.provide(

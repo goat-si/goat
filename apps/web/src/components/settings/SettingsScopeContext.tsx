@@ -1,4 +1,4 @@
-import { T3_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, type GoatProjectFile } from "@goat/contracts";
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
@@ -29,7 +29,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
               getProjectFileQueryAtom(
                 member.environmentId,
                 member.workspaceRoot,
-                T3_PROJECT_FILE_NAME,
+                GOAT_PROJECT_FILE_NAME,
               ),
             );
             if (result.waiting) continue;
@@ -39,7 +39,7 @@ function useMemberProjectFiles(scope: ReturnType<typeof resolveSettingsScope>) {
                 optimisticFileAtom(
                   member.environmentId,
                   member.workspaceRoot,
-                  T3_PROJECT_FILE_NAME,
+                  GOAT_PROJECT_FILE_NAME,
                 ),
               )?.data ?? Option.getOrNull(AsyncResult.value(result));
             files.set(

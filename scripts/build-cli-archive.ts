@@ -284,13 +284,13 @@ const stageWebClient = Effect.fn("stageWebClient")(function* (source: string, ta
 });
 
 const MacSigningConfig = Config.all({
-  identity: Config.String("T3CODE_CLI_MAC_SIGN_IDENTITY").pipe(Config.option),
+  identity: Config.String("GOAT_CLI_MAC_SIGN_IDENTITY").pipe(Config.option),
   appleKeychainProfile: Config.String("APPLE_KEYCHAIN_PROFILE").pipe(Config.option),
   appleKeychain: Config.String("APPLE_KEYCHAIN").pipe(Config.option),
   appleApiKey: Config.String("APPLE_API_KEY").pipe(Config.option),
   appleApiKeyId: Config.String("APPLE_API_KEY_ID").pipe(Config.option),
   appleApiIssuer: Config.String("APPLE_API_ISSUER").pipe(Config.option),
-  requireNotarization: Config.String("T3CODE_REQUIRE_NOTARIZATION").pipe(Config.withDefault("0")),
+  requireNotarization: Config.String("GOAT_REQUIRE_NOTARIZATION").pipe(Config.withDefault("0")),
 });
 
 /**
@@ -328,7 +328,7 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
     if (identity === "-") {
       return yield* new CliNotarizationCredentialsMissingError({
         detail:
-          "Required notarization needs a Developer ID in T3CODE_CLI_MAC_SIGN_IDENTITY; ad hoc signing is not allowed.",
+          "Required notarization needs a Developer ID in GOAT_CLI_MAC_SIGN_IDENTITY; ad hoc signing is not allowed.",
       });
     }
     if (!authArgs) {
@@ -364,7 +364,7 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
     );
   }
   if (identity === "-") {
-    yield* Effect.log("[cli-archive] Signed ad hoc (no T3CODE_CLI_MAC_SIGN_IDENTITY).");
+    yield* Effect.log("[cli-archive] Signed ad hoc (no GOAT_CLI_MAC_SIGN_IDENTITY).");
     return;
   }
 

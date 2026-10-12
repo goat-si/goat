@@ -5,7 +5,7 @@
  * dispatches) runs through the real orchestrator and the real GrokAdapterV2;
  * only the ACP runtime's protocol logger is swapped for a tee. Outbound frames
  * are therefore exactly what GOAT sends, and inbound frames exactly what Grok
- * answered. Run from apps/server with the Grok CLI on PATH (or T3_GROK_BIN):
+ * answered. Run from apps/server with the Grok CLI on PATH (or GOAT_GROK_BIN):
  *
  *   node scripts/record-grok-acp-replay-fixture.ts --scenario simple
  */
@@ -223,7 +223,7 @@ function wireToEntries(wire: ReadonlyArray<WireMessage>): {
   return { entries, droppedFrames };
 }
 
-const T3_INSTRUCTIONS_BODY = /<t3_code_instructions>\n[\s\S]*?\n<\/t3_code_instructions>/u;
+const GOAT_INSTRUCTIONS_BODY = /<t3_code_instructions>\n[\s\S]*?\n<\/t3_code_instructions>/u;
 
 /** Replaces T3-owned request content so prompt wording changes do not invalidate recordings. */
 function normalizeOutboundFrame(frame: Record<string, unknown>, runtimeInstructions: string) {
@@ -263,7 +263,7 @@ function normalizeOutboundFrame(frame: Record<string, unknown>, runtimeInstructi
               ? {
                   ...part,
                   text: part.text.replace(
-                    T3_INSTRUCTIONS_BODY,
+                    GOAT_INSTRUCTIONS_BODY,
                     "<t3_code_instructions>\n<any>\n</t3_code_instructions>",
                   ),
                 }
@@ -439,7 +439,7 @@ const recordScenario = Effect.fn("recordGrokScenario")(function* (fixtureName: s
   };
 
   const tee = makeWireTee();
-  const settings = { ...DEFAULT_GROK_SETTINGS, binaryPath: process.env.T3_GROK_BIN ?? "grok" };
+  const settings = { ...DEFAULT_GROK_SETTINGS, binaryPath: process.env.GOAT_GROK_BIN ?? "grok" };
   const layerRegistry = ProviderAdapterRegistry.layerFromAdaptersEffect(
     Effect.gen(function* () {
       const environment = yield* HostProcess.Environment;

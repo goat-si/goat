@@ -97,9 +97,9 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         Layer.provide(
           ConfigProvider.layer(
             ConfigProvider.fromUnknown({
-              T3CODE_TELEMETRY_ENABLED: true,
-              T3CODE_POSTHOG_KEY: "phc_test_key",
-              T3CODE_POSTHOG_HOST: "http://localhost",
+              GOAT_TELEMETRY_ENABLED: true,
+              GOAT_POSTHOG_KEY: "phc_test_key",
+              GOAT_POSTHOG_HOST: "http://localhost",
             }),
           ),
         ),
@@ -140,10 +140,10 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
-          T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 20,
+          GOAT_TELEMETRY_ENABLED: true,
+          GOAT_POSTHOG_KEY: "phc_test_key",
+          GOAT_POSTHOG_HOST: "http://localhost",
+          GOAT_TELEMETRY_FLUSH_BATCH_SIZE: 20,
         }),
       );
       const layerBatchServer = HttpServer.serve(
@@ -241,9 +241,9 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
       const layerConfig = ConfigProvider.layer(
         ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: false,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
+          GOAT_TELEMETRY_ENABLED: false,
+          GOAT_POSTHOG_KEY: "phc_test_key",
+          GOAT_POSTHOG_HOST: "http://localhost",
         }),
       );
       const layerBatchServer = HttpServer.serve(

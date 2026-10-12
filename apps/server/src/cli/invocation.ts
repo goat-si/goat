@@ -154,12 +154,12 @@ const shellWord = (value: string) =>
 /**
  * The launcher a person can type to run this install when `goat` is not on
  * PATH: the desktop app's `goat` shim, which the app and the shim itself name in
- * `T3CODE_CLI_PATH`, or a standalone binary's own path. Script installs (a
+ * `GOAT_CLI_PATH`, or a standalone binary's own path. Script installs (a
  * repo checkout) have no single launcher and keep plain `goat`.
  */
 const resolveInstallLauncher = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+  const shim = (yield* HostProcess.Environment).GOAT_CLI_PATH?.trim();
   if (shim && (yield* fs.exists(shim).pipe(Effect.orElseSucceed(() => false)))) {
     return Option.some(shim);
   }

@@ -7,7 +7,7 @@
  *
  *   node scripts/record-muse-msp-replay-fixture.ts --scenario simple
  *
- * Uses the machine's own `muse login`. `T3_MUSE_BIN` picks the binary. The
+ * Uses the machine's own `muse login`. `GOAT_MUSE_BIN` picks the binary. The
  * recording replays itself through the fixture's assertions before it is
  * written, so a run that fails them never replaces the existing transcript.
  */
@@ -67,8 +67,8 @@ if (fixture === undefined || variant === undefined) {
   throw new Error(`Pass --scenario with a fixture that registers Muse: ${names.join(", ")}`);
 }
 
-const museBinary = process.env.T3_MUSE_BIN ?? "muse";
-// Started as T3 starts it, so Windows needs no T3_MUSE_BIN for Muse's `muse.cmd` launcher.
+const museBinary = process.env.GOAT_MUSE_BIN ?? "muse";
+// Started as T3 starts it, so Windows needs no GOAT_MUSE_BIN for Muse's `muse.cmd` launcher.
 const museStart = Effect.runSync(museLaunch(museBinary));
 const home = process.env.HOME ?? "";
 
@@ -150,7 +150,7 @@ function makeRecordingCreateHost(
       entries.push({ type, ...(label === undefined ? {} : { label }), frame });
     };
     record("expect_outbound", { type: "host_start", args });
-    // The binary named by T3_MUSE_BIN, so the recorded version matches what ran.
+    // The binary named by GOAT_MUSE_BIN, so the recorded version matches what ran.
     const child = NodeChildProcess.spawn(museStart.command, [...museStart.args, ...args], {
       cwd: options.cwd,
       env: options.environment ?? makeMuseEnvironment(),

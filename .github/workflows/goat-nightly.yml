@@ -251,7 +251,7 @@ jobs:
             runner: windows-11-arm
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      T3CODE_DESKTOP_SIGNED: "false"
+      GOAT_DESKTOP_SIGNED: "false"
     defaults:
       run:
         shell: bash
@@ -316,7 +316,7 @@ jobs:
       - name: Build CLI archive
         env:
           APPLE_KEYCHAIN_PROFILE: ${{ matrix.platform == 'mac' && 'goat-notary' || '' }}
-          T3CODE_REQUIRE_NOTARIZATION: ${{ matrix.platform == 'mac' && '1' || '' }}
+          GOAT_REQUIRE_NOTARIZATION: ${{ matrix.platform == 'mac' && '1' || '' }}
         run: |
           set -euo pipefail
           args=(--platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --version "$VERSION"
@@ -365,12 +365,12 @@ jobs:
         arch: [arm64, x64]
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true"
-      T3CODE_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
-      T3CODE_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-mac-${{ matrix.arch }}.json
+      GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true"
+      GOAT_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      GOAT_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-mac-${{ matrix.arch }}.json
       APPLE_KEYCHAIN_PROFILE: goat-notary
-      T3CODE_REQUIRE_NOTARIZATION: "1"
-      T3CODE_APPLE_TEAM_ID: U9ATA49N28
+      GOAT_REQUIRE_NOTARIZATION: "1"
+      GOAT_APPLE_TEAM_ID: U9ATA49N28
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -409,7 +409,7 @@ jobs:
           merge-multiple: true
           path: ssh-runtime-archives
 
-      # Exports CSC_NAME, CSC_KEYCHAIN, APPLE_KEYCHAIN and T3CODE_CLI_MAC_SIGN_IDENTITY.
+      # Exports CSC_NAME, CSC_KEYCHAIN, APPLE_KEYCHAIN and GOAT_CLI_MAC_SIGN_IDENTITY.
       - name: Mac signing preflight
         run: bash scripts/goat-mac-runner/preflight.sh --ci
 
@@ -423,7 +423,7 @@ jobs:
             --output-dir release --verbose
 
       - name: Sign, notarize and staple the DMG
-        run: node scripts/finalize-macos-dmg.ts --dir release --report "$T3CODE_DESKTOP_PAYLOAD_REPORT"
+        run: node scripts/finalize-macos-dmg.ts --dir release --report "$GOAT_DESKTOP_PAYLOAD_REPORT"
 
       - name: Verify signatures and payload
         run: |
@@ -495,10 +495,10 @@ jobs:
             runner: windows-11-arm
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      T3CODE_DESKTOP_SIGNED: "false"
-      T3CODE_DESKTOP_UPDATE_FEED_ENABLED: "true"
-      T3CODE_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
-      T3CODE_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-${{ matrix.platform }}-${{ matrix.arch }}.json
+      GOAT_DESKTOP_SIGNED: "false"
+      GOAT_DESKTOP_UPDATE_FEED_ENABLED: "true"
+      GOAT_DESKTOP_UPDATE_REPOSITORY: goat-si/goat-releases
+      GOAT_DESKTOP_PAYLOAD_REPORT: ${{ github.workspace }}/reports/verify-desktop-${{ matrix.platform }}-${{ matrix.arch }}.json
     defaults:
       run:
         shell: bash

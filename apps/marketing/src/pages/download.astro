@@ -147,8 +147,8 @@ const imageProps = {
         </div>
         <code class="cli-line cli-line--stable">curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | sh</code>
         <code class="cli-line cli-line--stable">irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex</code>
-        <code class="cli-line cli-line--nightly">curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | T3CODE_CHANNEL=nightly sh</code>
-        <code class="cli-line cli-line--nightly">$env:T3CODE_CHANNEL="nightly"; irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex</code>
+        <code class="cli-line cli-line--nightly">curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | GOAT_CHANNEL=nightly sh</code>
+        <code class="cli-line cli-line--nightly">$env:GOAT_CHANNEL="nightly"; irm https://raw.githubusercontent.com/goat-si/goat-releases/main/install.ps1 | iex</code>
         <p class="cli-note">Or try it once without installing:</p>
         <code class="cli-line cli-line--stable">npx t3@latest</code>
         <code class="cli-line cli-line--nightly">npx t3@nightly</code>

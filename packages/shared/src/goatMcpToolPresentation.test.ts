@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  T3_MCP_TOOL_NAMES,
+  GOAT_MCP_TOOL_NAMES,
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolId,
   resolveGoatMcpToolPresentation,
@@ -78,7 +78,7 @@ describe("resolveGoatMcpToolPresentation", () => {
   });
 
   it("recognizes every T3 tool across provider prefixes and completion suffixes", () => {
-    for (const tool of T3_MCP_TOOL_NAMES) {
+    for (const tool of GOAT_MCP_TOOL_NAMES) {
       const presentation = resolveGoatMcpToolPresentation(tool);
       for (const prefix of [
         "mcp__goat__",

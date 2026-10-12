@@ -52,10 +52,10 @@ in [`manifest.json`](manifest.json).
 - **INV-ORCH-01** — `commitCommand` reserves a receipt, appends events, applies projections, and
   enqueues outbox effects inside one database transaction. Subscribers are published after that
   transaction commits. See [command commit](server.md#command-commit).
-- **INV-HOME-01** — An empty server base directory resolves to `~/.t3`. `T3CODE_HOME` and
+- **INV-HOME-01** — An empty server base directory resolves to `~/.t3`. `GOAT_HOME` and
   `--base-dir` override it. See [state roots](settings-and-storage.md#state-roots).
 - **INV-DESKTOP-01** — A packaged desktop build stores its server state under `~/.goat/desktop`.
-  A development desktop build uses `~/.t3` unless `T3CODE_HOME` is set.
+  A development desktop build uses `~/.t3` unless `GOAT_HOME` is set.
 - **INV-SSH-01** — Scripts that launch GOAT on an SSH host set the remote server home to
   `$HOME/.goat` and do not use `$HOME/.t3`.
 - **INV-CKPT-01** — Orchestration v2 checkpoint refs use the prefix

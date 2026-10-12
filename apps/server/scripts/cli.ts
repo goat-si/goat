@@ -132,13 +132,13 @@ const buildExeCmd = Command.make(
           cwd: serverDir,
           env: {
             ...process.env,
-            T3CODE_PACK_EXE: "1",
+            GOAT_PACK_EXE: "1",
             ...Option.match(config.target, {
               onNone: () => ({}),
               onSome: (target) =>
                 target.trim() === "host"
-                  ? { T3CODE_PACK_EXE_TARGET: "" }
-                  : { T3CODE_PACK_EXE_TARGET: target },
+                  ? { GOAT_PACK_EXE_TARGET: "" }
+                  : { GOAT_PACK_EXE_TARGET: target },
             }),
           },
           stdout: config.verbose ? "inherit" : "ignore",

@@ -109,7 +109,7 @@ effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
     Effect.sync(() =>
       vi
         .spyOn(NodeChildProcess, "execFileSync")
-        .mockReturnValue("__T3CODE_ENV_PATH_START__\n/opt/tools/bin\n__T3CODE_ENV_PATH_END__\n"),
+        .mockReturnValue("__GOAT_ENV_PATH_START__\n/opt/tools/bin\n__GOAT_ENV_PATH_END__\n"),
     ),
     (probe) =>
       Effect.gen(function* () {

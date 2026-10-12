@@ -5,7 +5,7 @@
  *
  * GOAT never turns Chrome's sandbox off by itself. A host that cannot give it one
  * gets the command instead, and only the operator's explicit
- * `T3CODE_SERVER_BROWSER_SANDBOX=0` launches without it.
+ * `GOAT_SERVER_BROWSER_SANDBOX=0` launches without it.
  */
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -22,7 +22,7 @@ export const NO_SANDBOX_SIGNATURE = "No usable sandbox";
 
 /** Whether an operator explicitly allowed Chrome to run without its sandbox. */
 export const sandboxDisabled = (env: Readonly<Record<string, string | undefined>>) =>
-  env.T3CODE_SERVER_BROWSER_SANDBOX === "0";
+  env.GOAT_SERVER_BROWSER_SANDBOX === "0";
 
 /** Set on Ubuntu 23.10+: unprivileged user namespaces need an AppArmor profile. */
 const USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";

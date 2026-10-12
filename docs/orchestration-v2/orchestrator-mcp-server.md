@@ -63,10 +63,10 @@ overrides:
 
 ```text
 -c mcp_servers.goat.url=http://127.0.0.1:<port>/mcp
--c mcp_servers.goat.bearer_token_env_var="T3_MCP_BEARER_TOKEN"
+-c mcp_servers.goat.bearer_token_env_var="GOAT_MCP_BEARER_TOKEN"
 ```
 
-The provider-session token is placed in `T3_MCP_BEARER_TOKEN`. Both the
+The provider-session token is placed in `GOAT_MCP_BEARER_TOKEN`. Both the
 production Codex launcher and the injectable test launcher use the same
 projection helper.
 
@@ -155,8 +155,8 @@ extension into the server cache and spawns
 `pi --mode rpc --extension <cache>/pi-t3-mcp-extension.ts` with:
 
 ```text
-T3_MCP_URL=http://127.0.0.1:<port>/mcp
-T3_MCP_BEARER_TOKEN=<provider-session-token>
+GOAT_MCP_URL=http://127.0.0.1:<port>/mcp
+GOAT_MCP_BEARER_TOKEN=<provider-session-token>
 ```
 
 The extension registers each tool once under `mcp__goat__`. The public and
