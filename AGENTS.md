@@ -119,6 +119,7 @@ For authorized mobile verification, a missing or outdated native client is a bui
 Most code changes do not need an internal documentation change. Agents can read the code.
 
 - `docs/internals/` is for architectural decisions and their reasons, constraints that span components, and implementation traps that are hard to discover from the source. Before adding a paragraph, ask what a maintainer would get wrong without it. If reading the relevant code answers the question, leave it out.
+- The current-shape map for this tree is [structure/INDEX.md](structure/INDEX.md). Update the subsystem doc and `structure/manifest.json` when a contract changes. User workflows stay in `docs/user/`.
 - Do not document every feature, enumerate fields or methods, narrate control flow, maintain file catalogs, or append PR summaries. Types, tests, and code already record the implementation. The glossary defines shared vocabulary; it is not a feature index.
 - Keep a local implementation explanation in a nearby code comment. Use an internal doc when the reasoning crosses boundaries or needs context the code cannot carry well. Link to the relevant source instead of copying it.
 - When a documented decision or constraint changes, rewrite or remove the affected text. Do not append another account of the new behavior. A new internal page needs a distinct, durable reason to exist.
