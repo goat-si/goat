@@ -84,12 +84,12 @@ const MAX_PROJECT_PAGES = 5;
 
 /** What the requester reads. Fixed text: remote error text never reaches a channel. */
 /**
- * How many of a task's answers the remote project choice reads, newest first: the newest, and
- * the one before it when the newest chose nothing ("try again"). Reading further back would let
- * a choice whose provenance the catalog no longer shows (a renamed or deleted project) be skipped
- * and an older answer win.
+ * How many of a task's answers the remote project choice reads: only the newest of the current
+ * generation. Free text cannot show whether an older answer was overtaken (a later choice may
+ * name a project that has since been renamed or removed), so an older choice is asked for again
+ * rather than revived.
  */
-const MAX_ANSWERS_READ = 2;
+const MAX_ANSWERS_READ = 1;
 
 export const REMOTE_COPY = {
   unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
@@ -431,9 +431,8 @@ const make = Effect.gen(function* () {
   ) => {
     const byId = projects.find((project) => project.id === hint.projectId);
     if (byId !== undefined) return byId;
-    // The newest answer naming one of its projects decides; an answer to a later question that
-    // chose nothing ("try again") keeps the project named just before it. An answer that picked
-    // something else (a machine, or a project on this machine) is the newer choice.
+    // The newest answer naming one of its projects decides. An answer that picked something else
+    // (a machine, or a project on this machine) is the newer choice and names none here.
     for (const raw of hint.answers ?? []) {
       const answer = raw.toLowerCase();
       const named = projects.filter((project) => answer.includes(project.title.toLowerCase()));

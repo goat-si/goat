@@ -41,13 +41,11 @@ to change the model; the model finally used must still be one the provider lists
 is asked. Defaults pick where and with what model; the requester's ceiling still bounds the rest.
 
 On another machine the remote's only project stands in only when no project was asked for: a
-project named here, or a default that is gone, must match one of its projects. The newest answer
-in the current generation that names one of its projects decides, and an answer that chose nothing
-("try again" after the machine was unreachable) keeps the project named in the answer just before
-it. Nothing older counts: whether an older answer was overtaken can only be told from today's
-catalog, and a renamed or deleted project would hide that. An answer that picks something else (a
-machine, or a project on this machine, matched the way reception records it) asks again, and so
-does a retry.
+project named here, or a default that is gone, must match one of its projects, or the requester is
+asked. Only the newest answer of the current generation can name the project there; an answer
+that chose nothing ("try again" after the machine was unreachable) asks again, because free text
+cannot show whether an older answer was overtaken by a choice whose project has since been renamed
+or removed.
 
 ## Who runs the workers
 

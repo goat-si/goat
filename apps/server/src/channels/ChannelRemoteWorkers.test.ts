@@ -1080,67 +1080,34 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("keeps the project the requester chose through a later question", () => {
+  it.effect("asks for the project again when the newest answer names none", () => {
     const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkSlackUser();
       const gateway = yield* ChannelGateway.ChannelGateway;
       yield* gateway.ingest(slackInput("do@mac-studio: build it", "c1"), slackContext);
-      yield* until("asked", (task) => task.status === "waiting_input");
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
       // The project is chosen, then the machine stops answering before the launch.
       machine.environmentReadDown = true;
       yield* gateway.ingest(slackInput("answer: goat-si/goat", "c2"), slackContext);
-      const unreachable = yield* until(
+      const second = yield* until(
         "unreachable",
-        (task) =>
-          task.status === "waiting_input" && (task.openQuestions[0]?.text ?? "").includes("reach"),
+        (task) => task.status === "waiting_input" && task.version > first.version,
       );
-      assert.strictEqual(machine.launches.length, 0);
-      // "Try again" names no project; the one chosen before still holds.
       machine.environmentReadDown = false;
+      // Free text cannot show that "try again" kept the earlier choice rather than replacing it
+      // with a project that has since been renamed, so the project is asked for again.
       yield* gateway.ingest(slackInput("answer: try again", "c3"), slackContext);
+      const third = yield* until(
+        "asked for the project",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      assert.include(third.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "c4"), slackContext);
       yield* until("running", (task) => task.status === "running");
       assert.strictEqual(machine.launches.length, 1);
-      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
-      assert.notStrictEqual(unreachable.version, 0);
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("lets a newer project answer replace an older one across failed lookups", () => {
-    const { machine, harness } = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
-    machine.projects = [
-      ...machine.projects,
-      {
-        id: "remote-project:other",
-        title: "goat-si/other",
-        workspaceRoot: "/Users/jun/developer/goat-si/other",
-        repositoryIdentity: { canonicalKey: "github.com/goat-si/other" },
-        defaultModelSelection: null,
-      },
-    ];
-    return Effect.gen(function* () {
-      yield* setupBot;
-      yield* linkSlackUser();
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      yield* gateway.ingest(slackInput("do@mac-studio: build it", "r1"), slackContext);
-      const first = yield* until("asked", (task) => task.status === "waiting_input");
-      const askedAfter = (version: number) =>
-        until("asked again", (task) => task.status === "waiting_input" && task.version > version);
-      // The first project is chosen, but the machine fails before the launch.
-      machine.environmentReadDown = true;
-      yield* gateway.ingest(slackInput("answer: goat-si/goat", "r2"), slackContext);
-      const second = yield* askedAfter(first.version);
-      // A different project is named while the machine cannot even list projects.
-      machine.down = true;
-      yield* gateway.ingest(slackInput("answer: goat-si/other", "r3"), slackContext);
-      yield* askedAfter(second.version);
-      machine.down = false;
-      machine.environmentReadDown = false;
-      yield* gateway.ingest(slackInput("answer: try again", "r4"), slackContext);
-      yield* until("running", (task) => task.status === "running");
-      assert.strictEqual(machine.launches.length, 1);
-      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/other");
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -1286,55 +1253,6 @@ describe("Slack defaults for work on another machine", () => {
       assert.strictEqual(third.projectId, "project:channel-work");
       assert.include(third.openQuestions[0]?.text ?? "", "Which project on mac-studio");
       assert.strictEqual(machine.launches.length, 0);
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect("keeps a remote project answered after the work named a project here", () => {
-    const { machine, harness } = defaultsHarness({});
-    machine.projects = [
-      ...machine.projects,
-      {
-        id: "remote-project:channel-work",
-        title: "Channel work",
-        workspaceRoot: "/Users/jun/developer/channel-work",
-        repositoryIdentity: { canonicalKey: "github.com/jun/channel-work" },
-        defaultModelSelection: null,
-      },
-    ];
-    return Effect.gen(function* () {
-      yield* setupBot;
-      yield* linkSlackUser();
-      const gateway = yield* ChannelGateway.ChannelGateway;
-      // The work names a project here; the machine cannot be reached at first.
-      harness.script.current = (input) =>
-        input.mode === "input" && (input.inputText ?? "").startsWith("do@")
-          ? Effect.succeed({
-              replyText: "On it.",
-              action: {
-                type: "create_task" as const,
-                title: "build it",
-                instruction: "build it",
-                host: "mac-studio",
-                projectId: ProjectId.make("project:channel-work"),
-              },
-            })
-          : remoteScript(input);
-      machine.down = true;
-      yield* gateway.ingest(slackInput("do@mac-studio: build it", "p1"), slackContext);
-      const first = yield* until("unreachable", (task) => task.status === "waiting_input");
-      machine.down = false;
-      // A remote project is answered, then the machine fails before the launch.
-      machine.environmentReadDown = true;
-      yield* gateway.ingest(slackInput("answer: goat-si/goat", "p2"), slackContext);
-      const second = yield* until(
-        "unreachable again",
-        (task) => task.status === "waiting_input" && task.version > first.version,
-      );
-      machine.environmentReadDown = false;
-      // A remark with no choice in it keeps the newer remote answer over the older project.
-      yield* gateway.ingest(slackInput("answer: try again", "p3"), slackContext);
-      yield* until("running", (task) => task.status === "running" && task.version > second.version);
-      assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
     }).pipe(Effect.provide(harness.layer));
   });
 
