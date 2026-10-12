@@ -35,7 +35,7 @@ if [ -z "${GOAT_HOME:-}" ] && [ ! -d "$HOME/.goat/userdata" ] && [ -d "$HOME/.t3
   GOAT_HOME="$HOME/.t3"
 fi
 # goat-rename: legacy-end
-t3_home="${GOAT_HOME:-$HOME/.goat}"
+goat_home="${GOAT_HOME:-$HOME/.goat}"
 bin_dir="${GOAT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {
@@ -198,7 +198,7 @@ esac
 
 stem="goat-${version}-${platform}-${arch}"
 archive="${stem}.tar.gz"
-versions_dir="${t3_home}/runtime/goat/versions"
+versions_dir="${goat_home}/runtime/goat/versions"
 target_dir="${versions_dir}/${version}"
 
 if [ -x "${target_dir}/goat" ] &&

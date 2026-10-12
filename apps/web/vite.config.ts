@@ -132,7 +132,7 @@ const devProxyTarget = resolveDevProxyTarget(process.env.GOAT_PORT, configuredWs
 // (quality 11) would trade the transfer stall for an equally long encode stall.
 function devCompressionPlugin(): Plugin {
   return {
-    name: "t3code:dev-compression",
+    name: "goat:dev-compression",
     apply: "serve",
     configureServer(server) {
       // compression() is typed against Express's req/res, which extend the

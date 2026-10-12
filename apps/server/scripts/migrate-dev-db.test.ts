@@ -312,10 +312,10 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const goatDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-goat-" });
-      const t3Dir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-t3-" });
+      const legacyDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-t3-" });
       const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-home-dest-" });
       const goatSource = yield* createFixtureSource(goatDir);
-      const t3Source = yield* createFixtureSource(t3Dir);
+      const t3Source = yield* createFixtureSource(legacyDir);
       yield* withDatabase(
         goatSource,
         Effect.gen(function* () {
@@ -333,7 +333,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
 
       const fromGoat = yield* runMigrateDevDb(
         { baseDir: destDir, projects: 1, threadsPerProject: 1 },
-        { sourceHomes: [goatDir, t3Dir] },
+        { sourceHomes: [goatDir, legacyDir] },
       );
       assert.equal(fromGoat.projects[0]?.title, "From Goat");
 
@@ -343,7 +343,7 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       });
       const fromT3 = yield* runMigrateDevDb(
         { baseDir: fallbackDir, projects: 1, threadsPerProject: 1 },
-        { sourceHomes: [goatDir, t3Dir] },
+        { sourceHomes: [goatDir, legacyDir] },
       );
       assert.equal(fromT3.projects[0]?.title, "From T3");
 
@@ -364,12 +364,12 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const goatDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-protect-goat-" });
-      const t3Dir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-protect-t3-" });
-      const source = yield* createFixtureSource(t3Dir);
+      const legacyDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-protect-t3-" });
+      const source = yield* createFixtureSource(legacyDir);
 
       const error = yield* runMigrateDevDb(
         { baseDir: goatDir, source, projects: 1, threadsPerProject: 1 },
-        { sourceHomes: [goatDir, t3Dir] },
+        { sourceHomes: [goatDir, legacyDir] },
       ).pipe(Effect.flip);
       assert.equal(error._tag, "MigrateDevDbSharedHomeError");
     }),
