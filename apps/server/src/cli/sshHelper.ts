@@ -259,22 +259,26 @@ export const readLiveSshRuntimeProtocol = async (
     damaged = true;
   }
   let rememberedPid = 0;
+  let rememberedDisagrees = false;
   try {
     if (port === 0) port = rememberedInteger(portFile);
     rememberedPid = rememberedInteger(pidFile);
     const rememberedPort = rememberedInteger(portFile);
-    if (
+    rememberedDisagrees =
       record !== undefined &&
       ((rememberedPort > 0 && rememberedPort !== record.port) ||
-        (rememberedPid > 0 && rememberedPid !== record.pid))
-    )
-      damaged = true;
+        (rememberedPid > 0 && rememberedPid !== record.pid));
     if (port > 65535) throw new Error("Invalid remembered port");
   } catch {
     damaged = true;
     port = 0;
   }
   const rememberedAlive = rememberedPid > 0 && processExists(rememberedPid);
+  // Launch files left by an earlier server (or another client's earlier launch)
+  // are stale once their PID is gone; the live record and descriptor decide.
+  // They never grant ownership: the launch script requires its PID file to
+  // name the live PID. A remembered PID that is still alive is a second claim.
+  if (rememberedDisagrees && rememberedAlive) damaged = true;
   const unknown = { status: "unknown", pid, port } as const;
   if (port === 0)
     return damaged || rememberedAlive ? unknown : ({ status: "none", pid: 0, port: 0 } as const);

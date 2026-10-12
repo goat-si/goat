@@ -30,6 +30,28 @@ is `ssh -L` onto the remote loopback port. The embedded launch script sets
 `apps/server/src/sshRemote/SshWorkspaceSync.ts` prints the label `GOAT_HOME` followed by `$HOME`
 when it fetches a branch back. That label is not an environment variable `resolveBaseDir` reads.
 
+### Shared runtime
+
+One host user runs one SSH-managed server, and every client shares it. The launch, pairing, MCP
+session, stop, and log scripts keep their ownership records (`pid`, `port`, `managed`, `identity`,
+`run-t3.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
+`packages/ssh/src/command.ts`), whatever alias, hostname, or port the client dialled. A client that
+finds a compatible live server attaches to it, so threads started from any client live in that
+server's state and every client sees them.
+
+The live `~/.goat/userdata/server-runtime.json` record and the server's descriptor decide identity.
+Remembered launch files whose PID has exited are stale and do not block attaching
+(`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
+authority either, because the launch script requires its PID file to name the live PID.
+
+The stop script and the replacement path signal a server only after its `/.well-known/t3/activity`
+answers `idle` for that PID. `busy` or no answer leaves it running. A startup refresh replaces a
+compatible runtime only when it is older on the same release train: `0.1.0-dev.*` and
+`0.1.0-nightly.*` have no meaningful SemVer order, so the client attaches instead
+(`releasesOrderable` in `packages/ssh/src/tunnel.ts`).
+
+> Decision record: [ADR-0012](decisions/ADR-0012-shared-ssh-runtime.md)
+
 The desktop app is a second caller of the same package. `apps/desktop/src/ssh/DesktopSshEnvironment.ts`
 discovers hosts and ensures an environment. The server-side caller used by agents is
 `apps/server/src/sshRemote/SshRemoteDispatch.ts`, which imports `@t3tools/ssh/command`,

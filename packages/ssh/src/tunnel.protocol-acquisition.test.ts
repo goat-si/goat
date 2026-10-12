@@ -75,8 +75,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         );
         const scripts = yield* nativeScripts({ nodeScriptPath: cli });
         const key = f.state.slice(f.state.lastIndexOf("/") + 1);
-        // nativeScripts' default key is an existing fixture constant; preserve all other script bytes.
-        const script = scripts[entry].split("711bc738002d72fd").join(key);
+        const script = scripts[entry];
         const before = yield* f.snapshot;
         const child = yield* f.realSpawner.spawn(
           ChildProcess.make(remoteShell, ["-s", "--", key], {

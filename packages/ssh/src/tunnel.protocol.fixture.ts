@@ -9,7 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { remoteStateKey } from "./command.ts";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   remoteShell,
@@ -162,7 +162,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   const fs = yield* FileSystem.FileSystem;
   const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-protocol-" });
-  const key = yield* remoteStateKey(uploadTarget);
+  const key = REMOTE_RUNTIME_STATE_KEY;
   const state = `${home}/.goat/ssh-launch/${key}`;
   const test = `${home}/.test`;
   const old = `${home}/.goat/runtime/goat/versions/${input.oldVersion}`;

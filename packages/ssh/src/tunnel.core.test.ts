@@ -20,7 +20,7 @@ import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as SshAuth from "./auth.ts";
-import { remoteStateKey } from "./command.ts";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import { SshCommandError, SshLaunchError } from "./errors.ts";
 import * as SshTunnel from "./tunnel.ts";
 import baseline from "./fixtures/remote-runner-baseline.json" with { type: "json" };
@@ -989,7 +989,7 @@ describe("runtime preparation", () => {
       const fs = yield* FileSystem.FileSystem;
       const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-retained-preparation-" });
-      const stateKey = yield* remoteStateKey(uploadTarget);
+      const stateKey = REMOTE_RUNTIME_STATE_KEY;
       const state = `${root}/.goat/ssh-launch/${stateKey}`;
       const retainedVersion = mode === "invalid" ? "01.2.3" : "1.2.2-preview.20260910.1";
       const retainedScript =
@@ -1145,7 +1145,7 @@ else exit 2; fi
       const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-managed-preparation-" });
       const runtime = `${root}/.goat/runtime/goat/versions/${ARCHIVE.archiveVersion}`;
-      const state = `${root}/.goat/ssh-launch/711bc738002d72fd`;
+      const state = `${root}/.goat/ssh-launch/${REMOTE_RUNTIME_STATE_KEY}`;
       yield* fs.makeDirectory(runtime, { recursive: true });
       yield* fs.makeDirectory(state, { recursive: true });
       const cli = `${runtime}/goat`;
@@ -2323,7 +2323,7 @@ describe("bundled runtime acquisition", () => {
         const bundleArchiveBefore = (yield* fs.exists(`${bundle}/${asset}`))
           ? yield* fs.readFile(`${bundle}/${asset}`)
           : null;
-        const stateKey = yield* remoteStateKey(uploadTarget);
+        const stateKey = REMOTE_RUNTIME_STATE_KEY;
         const retainedVersion = "1.2.2-preview.20260910.1";
         const installedVersion = mode === "retained" ? retainedVersion : ARCHIVE.archiveVersion;
         const runtime = `${home}/.goat/runtime/goat/versions/${installedVersion}`;
@@ -2560,6 +2560,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ? "T3_NODE_SCRIPT_PATH='$(touch \"$HOME/.test/evaluated\")'\n"
             : SshTunnel.buildRemoteT3RunnerScript({ nodeScriptPath: entry }),
         );
+        if (mode !== "runner code") {
+          // Stop asks the runner for activity and signals only an idle server.
+          yield* fs.chmod(runner, 0o700);
+          yield* fs.writeFileString(
+            `${bin}/node`,
+            '#!/bin/sh\ncase "$*" in *"__ssh-helper activity"*) echo idle; exit 0 ;; esac\nexit 2\n',
+          );
+          yield* fs.chmod(`${bin}/node`, 0o700);
+        }
         const nodeIdentity = [
           "node",
           "absolute node",

@@ -10,7 +10,6 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { remoteStateKey } from "./command.ts";
 import * as SshTunnel from "./tunnel.ts";
 import { uploadTarget, installArchivePsDouble } from "./tunnel.fixture.ts";
 import { protocolExecutable } from "./tunnel.protocol.fixture.ts";
@@ -307,11 +306,6 @@ case "$3" in */replacement.lock)
         });
         yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
         const other = { ...uploadTarget, alias: "other-alias" };
-        const otherKey = yield* remoteStateKey(other);
-        const otherState = `${f.home}/.goat/ssh-launch/${otherKey}`;
-        yield* f.fs.makeDirectory(otherState);
-        for (const name of ["run-t3.sh", "pid", "port", "managed", "identity"])
-          yield* f.fs.copyFile(`${f.state}/${name}`, `${otherState}/${name}`);
         yield* pauseFirstLock(f, "replacement.lock");
         const first = yield* Effect.forkChild(
           f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true }),

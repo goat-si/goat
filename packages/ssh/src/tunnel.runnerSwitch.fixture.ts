@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import {
   remoteShell,
   ARCHIVE,
@@ -17,7 +18,7 @@ import {
   installArchivePsDouble,
 } from "./tunnel.fixture.ts";
 
-export const stateKey = "711bc738002d72fd";
+export const stateKey = REMOTE_RUNTIME_STATE_KEY;
 export const oldVersion = "1.2.2-preview.20260910.1";
 export const nextVersion = ARCHIVE.archiveVersion;
 

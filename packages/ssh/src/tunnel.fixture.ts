@@ -11,6 +11,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import * as SshTunnel from "./tunnel.ts";
 
 // Select the shell for every real remote-script fixture, including direct runner-file execution.
@@ -193,7 +194,7 @@ export const nativeScriptsBatch = Effect.fn("test.nativeScriptsBatch")(function*
   const moduleUrl = new URL("./tunnel.ts", import.meta.url).href;
   const script = `import * as t from ${JSON.stringify(moduleUrl)};
 const requests = ${JSON.stringify(requests)};
-console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.buildRemoteT3RunnerScript(input), launch: t.buildRemoteLaunchScript(input, selection), pairing: t.buildRemotePairingScript("711bc738002d72fd", input, selection), mcp: t.buildRemoteMcpSessionScript("711bc738002d72fd", { label: "fixture", ttl: "1h", runtimeModeCeiling: null }, input, selection), probe: t.buildRemoteRuntimeProbeScript(input.archiveVersion ?? "", "711bc738002d72fd", true), upload: input.nodeScriptPath ? null : t.buildRemoteT3UploadInstallerScript(input, "A".repeat(64)) }))));`;
+console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.buildRemoteT3RunnerScript(input), launch: t.buildRemoteLaunchScript(input, selection), pairing: t.buildRemotePairingScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, input, selection), mcp: t.buildRemoteMcpSessionScript(${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, { label: "fixture", ttl: "1h", runtimeModeCeiling: null }, input, selection), probe: t.buildRemoteRuntimeProbeScript(input.archiveVersion ?? "", ${JSON.stringify(REMOTE_RUNTIME_STATE_KEY)}, true), upload: input.nodeScriptPath ? null : t.buildRemoteT3UploadInstallerScript(input, "A".repeat(64)) }))));`;
   const child = yield* spawner.spawn(
     ChildProcess.make(process.execPath, ["--input-type=module", "-e", script]),
   );

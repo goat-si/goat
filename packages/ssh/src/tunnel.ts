@@ -46,7 +46,7 @@ import {
   buildSshHostSpecEffect,
   collectProcessOutput,
   getLastNonEmptyOutputLine,
-  remoteStateKey,
+  REMOTE_RUNTIME_STATE_KEY,
   resolveSshCommand,
   resolveSshTarget,
   runSshCommand,
@@ -1527,6 +1527,18 @@ if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
   valid_positive "$REMOTE_PID" || ownership_unverified
   if kill -0 "$REMOTE_PID" 2>/dev/null; then
     verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
+    # Other clients share this server, and its threads outlive any one tunnel:
+    # stopping is only safe when the server itself reports no active work.
+    STOP_ACTIVITY=unknown
+    if [ -x "$STATE_DIR/run-t3.sh" ]; then
+      STOP_ACTIVITY="$("$STATE_DIR/run-t3.sh" __ssh-helper activity --port "$REMOTE_PORT" --pid "$REMOTE_PID" --shell 2>/dev/null || true)"
+    fi
+    if [ "$STOP_ACTIVITY" != idle ]; then
+      case "$STOP_ACTIVITY" in busy) ;; *) STOP_ACTIVITY=unknown ;; esac
+      printf '{"stopped":false,"activity":"%s"}\\n' "$STOP_ACTIVITY"
+      exit 0
+    fi
+    verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
     kill "$REMOTE_PID" 2>/dev/null || true
     WAIT_COUNT=0
     while kill -0 "$REMOTE_PID" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do
@@ -1911,6 +1923,20 @@ const decodeRemoteRuntimeProbe = Schema.decodeEffect(
   ),
 );
 
+/**
+ * SemVer orders prerelease trains of one core version alphabetically, so
+ * `0.1.0-nightly.*` sorts above `0.1.0-dev.*` even when the dev build is newer.
+ * Such a pair has no meaningful order, so a compatible runtime from the other
+ * train is attached as-is instead of being refreshed.
+ */
+const releasesOrderable = (left: string, right: string) => {
+  const parse = (version: string) => /^([^-+]+)(?:-([0-9A-Za-z-]+))?/.exec(version);
+  const a = parse(left);
+  const b = parse(right);
+  if (a === null || b === null || a[1] !== b[1]) return true;
+  return a[2] === undefined || b[2] === undefined || a[2] === b[2];
+};
+
 const runtimePreparationError = (cause: unknown) =>
   cause instanceof SshLaunchError
     ? cause
@@ -1997,6 +2023,7 @@ export const prepareRemoteRuntime = (
       probe.liveOwned === true &&
       probe.identityAbsent !== true &&
       probe.liveVersion !== undefined &&
+      releasesOrderable(probe.liveVersion, version) &&
       compareSemverVersions(probe.liveVersion, version) < 0;
     if (adoptLegacy || refreshIfIdle) {
       exact = {
@@ -2179,7 +2206,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     SshCommandError | SshInvalidTargetError | SshLaunchError,
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
-    const stateKey = yield* remoteStateKey(target);
+    const stateKey = REMOTE_RUNTIME_STATE_KEY;
     yield* Effect.logInfo("ssh.remoteServer.launch.start", {
       ...sshTargetLogFields(target),
       ...sshRunnerLogFields(runner),
@@ -2276,7 +2303,7 @@ export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingT
   SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
-  const stateKey = yield* remoteStateKey(target);
+  const stateKey = REMOTE_RUNTIME_STATE_KEY;
   yield* Effect.logDebug("ssh.remoteServer.pairingToken.start", {
     ...sshTargetLogFields(target),
     stateKey,
@@ -2348,7 +2375,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
     SshCommandError | SshInvalidTargetError | SshPairingError | SshLaunchError,
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
-    const stateKey = yield* remoteStateKey(target);
+    const stateKey = REMOTE_RUNTIME_STATE_KEY;
     const selected =
       prepared ??
       (yield* prepareRemoteRuntime(
@@ -2407,12 +2434,12 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   SshCommandError | SshInvalidTargetError,
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
-  const stateKey = yield* remoteStateKey(target);
+  const stateKey = REMOTE_RUNTIME_STATE_KEY;
   yield* Effect.logInfo("ssh.remoteServer.stop.start", {
     ...sshTargetLogFields(target),
     stateKey,
   });
-  yield* runSshCommand(target, {
+  const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
     stdin: buildRemoteStopScript(stateKey),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
@@ -2427,6 +2454,15 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
       }),
     ),
   );
+  const preserved = /"stopped":false,"activity":"(busy|unknown)"/.exec(result.stdout)?.[1];
+  if (preserved !== undefined) {
+    yield* Effect.logInfo("ssh.remoteServer.stop.preserved", {
+      ...sshTargetLogFields(target),
+      stateKey,
+      activity: preserved,
+    });
+    return;
+  }
   yield* Effect.logInfo("ssh.remoteServer.stop.succeeded", {
     ...sshTargetLogFields(target),
     stateKey,
@@ -2443,7 +2479,7 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
 > {
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
-    stdin: buildRemoteLogTailScript(yield* remoteStateKey(target)),
+    stdin: buildRemoteLogTailScript(REMOTE_RUNTIME_STATE_KEY),
     timeoutMs: 10_000,
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),

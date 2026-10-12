@@ -244,9 +244,7 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
               },
               extendEnv: false,
               stdin: {
-                stream: Stream.make(
-                  new TextEncoder().encode(scripts[entry].split("711bc738002d72fd").join(key)),
-                ),
+                stream: Stream.make(new TextEncoder().encode(scripts[entry])),
                 endOnDone: true,
               },
             }),

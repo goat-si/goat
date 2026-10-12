@@ -1,0 +1,151 @@
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@t3tools/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import * as SshTunnel from "./tunnel.ts";
+import { remoteShell } from "./tunnel.fixture.ts";
+import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+
+const current = {
+  ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+  orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+};
+// The same host as `uploadTarget`, dialled by a second client under another name.
+const secondClient = {
+  alias: "mac-studio",
+  hostname: "mac-studio.tailnet.ts.net",
+  username: "jun",
+  port: null,
+};
+
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "SSH runtime shared between clients",
+  () => {
+    it.live("a second client attaches to the runtime another client launched", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          ...current,
+        });
+        const before = yield* f.snapshot;
+        const second = yield* SshTunnel.launchOrReuseRemoteServer(secondClient, {}, f.runner).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+        );
+        assert.equal(second.status, "ready");
+        if (second.status !== "ready") return;
+        // Same server and the same ownership record: threads launched by either
+        // client live in that server's state and are visible to both.
+        assert.equal(second.remotePort, f.port);
+        assert.equal(second.remoteServerKind, "managed");
+        const first = yield* f.run("launch");
+        assert.isTrue(Result.isSuccess(first));
+        if (Result.isSuccess(first)) assert.equal(first.success.port, f.port);
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isTrue(f.state.endsWith(`/ssh-launch/${REMOTE_RUNTIME_STATE_KEY}`));
+        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("stale launch files from an earlier server do not block attaching", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          ...current,
+        });
+        const exited = yield* f.realSpawner.spawn(ChildProcess.make("true"));
+        assert.equal(Number(yield* exited.exitCode), 0);
+        const deadPid = Number(exited.pid);
+        yield* f.fs.writeFileString(`${f.state}/pid`, `${deadPid}\n`);
+        yield* f.fs.writeFileString(`${f.state}/port`, `${f.port + 1}\n`);
+        const result = yield* SshTunnel.launchOrReuseRemoteServer(secondClient, {}, f.runner).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+          Effect.result,
+        );
+        if (Result.isFailure(result)) throw result.failure;
+        assert.equal(result.success.status, "ready");
+        if (result.success.status !== "ready") return;
+        assert.equal(result.success.remotePort, f.port);
+        // The stale record never grants kill authority over the live server.
+        assert.equal(result.success.remoteServerKind, "external");
+        yield* Effect.sync(() => process.kill(f.pid, 0));
+        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live("a compatible runtime from another release train is attached, never replaced", () =>
+      Effect.gen(function* () {
+        // SemVer sorts "dev" below "preview", which used to read as an older runtime.
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.3-dev.d9bdcfc89",
+          ...current,
+        });
+        const before = yield* f.snapshot;
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+        });
+        if (Result.isFailure(result)) throw result.failure;
+        assert.equal(result.success.version, "1.2.3-dev.d9bdcfc89");
+        assert.equal(result.success.port, f.port);
+        assert.isUndefined(result.success.refresh);
+        assert.deepEqual(yield* f.snapshot, before);
+        assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
+        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live.each(["busy", "unknown", "idle"] as const)(
+      "stop signals a shared server only when it reports idle: %s",
+      (activity) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: "1.2.2",
+            ...current,
+          });
+          yield* f.fs.writeFileString(`${f.test}/activity`, activity);
+          const before = yield* f.snapshot;
+          const stop = yield* f.realSpawner.spawn(
+            ChildProcess.make(
+              remoteShell,
+              ["-c", SshTunnel.buildRemoteStopScript(REMOTE_RUNTIME_STATE_KEY)],
+              {
+                env: {
+                  HOME: f.home,
+                  PATH: f.withPortShim(`${f.test}/identity-bin:${process.env.PATH ?? ""}`),
+                  LC_ALL: "C",
+                },
+                extendEnv: false,
+              },
+            ),
+          );
+          const output = yield* stop.stdout.pipe(Stream.decodeText(), Stream.mkString);
+          assert.equal(Number(yield* stop.exitCode), 0);
+          const stopped = (yield* f.fs.readFileString(`${f.test}/events`)).includes(
+            '"type":"stop"',
+          );
+          if (activity === "idle") {
+            assert.include(output, '{"stopped":true}');
+            assert.isTrue(stopped);
+          } else {
+            assert.include(output, `{"stopped":false,"activity":"${activity}"}`);
+            assert.isFalse(stopped);
+            yield* Effect.sync(() => process.kill(f.pid, 0));
+            assert.deepEqual(yield* f.snapshot, before);
+          }
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  },
+);

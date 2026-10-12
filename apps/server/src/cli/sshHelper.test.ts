@@ -139,6 +139,7 @@ describe("SSH live identity and bounded responses", () => {
         "stale version",
         "stale protocol",
         "remembered mismatch",
+        "remembered stale",
         "origin",
         "origin port",
         "string",
@@ -207,18 +208,34 @@ describe("SSH live identity and bounded responses", () => {
       if (!["missing", "remembered alive"].includes(mode))
         NodeFS.writeFileSync(file, mode === "broken" ? "{" : JSON.stringify(state));
       NodeFS.writeFileSync(ports, String(port));
-      if (mode === "remembered alive" || mode === "remembered mismatch")
+      if (
+        mode === "remembered alive" ||
+        mode === "remembered mismatch" ||
+        mode === "remembered stale"
+      )
         NodeFS.writeFileSync(
           pids,
-          String(mode === "remembered mismatch" ? process.pid + 1 : process.pid),
+          // A living second claim is ambiguous; an exited one is left over from an earlier server.
+          String(
+            mode === "remembered mismatch"
+              ? process.ppid
+              : mode === "remembered stale"
+                ? 2147483647
+                : process.pid,
+          ),
         );
       const started = performance.now();
       const result = await readLiveSshRuntimeProtocol(file, ports, pids);
-      const live = ["missing", "remembered alive", "dead PID", "service", "split UTF8"].includes(
-        mode,
-      );
+      const live = [
+        "missing",
+        "remembered alive",
+        "remembered stale",
+        "dead PID",
+        "service",
+        "split UTF8",
+      ].includes(mode);
       expect(result.status).toBe(live ? "live" : "unknown");
-      if (live && mode !== "split UTF8") expect(result.pid).toBe(0);
+      if (live && mode !== "split UTF8" && mode !== "remembered stale") expect(result.pid).toBe(0);
       if (mode === "held" || mode === "oversized")
         expect(performance.now() - started).toBeLessThan(3500);
     } finally {

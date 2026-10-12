@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeNet from "node:net";
 
-import { remoteStateKey } from "./command.ts";
+import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import { buildRemoteStopScript, buildRemoteT3RunnerScript } from "./tunnel.ts";
 
 // An absolute default also works in the runner fixture's deliberately minimal PATH.
@@ -147,13 +147,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const fixture = yield* fs.makeTempDirectoryScoped({ prefix: "t3-stop-" });
           const home = path.join(fixture, "home");
           const baseDir = path.join(home, ".goat");
-          const stateKey = yield* remoteStateKey({
-            alias: "fixture",
-            hostname: "fixture",
-            username: null,
-            port: null,
-          });
-          const stateDir = path.join(baseDir, "ssh-launch", stateKey);
+          const stateDir = path.join(baseDir, "ssh-launch", REMOTE_RUNTIME_STATE_KEY);
           yield* fs.makeDirectory(stateDir, { recursive: true });
           const signalPath = path.join(fixture, "signals");
           const cliPath = path.join(fixture, "installed cli.mjs");
@@ -217,7 +211,14 @@ server.listen(Number(process.argv[process.argv.indexOf("--port") + 1]), "127.0.0
           for (const [name, contents] of Object.entries(savedState)) {
             yield* fs.writeFileString(path.join(stateDir, name), contents);
           }
-          const script = buildRemoteStopScript(stateKey);
+          // Stop signals only a server that reports itself idle through the runner.
+          const runnerPath = path.join(stateDir, "run-t3.sh");
+          yield* fs.writeFileString(
+            runnerPath,
+            '#!/bin/sh\n[ "$1 $2" = "__ssh-helper activity" ] && { echo idle; exit 0; }\nexit 2\n',
+          );
+          yield* fs.chmod(runnerPath, 0o700);
+          const script = buildRemoteStopScript(REMOTE_RUNTIME_STATE_KEY);
           const runStop = Effect.fn("test.remoteStop")(function* () {
             const stop = yield* spawner.spawn(
               ChildProcess.make(remoteShell, ["-s"], {
