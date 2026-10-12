@@ -10,7 +10,7 @@
  */
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
 
-export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
+export const PI_GOAT_MCP_EXTENSION_FILENAME = "pi-goat-mcp-extension.ts";
 
 export const GOAT_MCP_URL_ENV = "GOAT_MCP_URL";
 export const GOAT_MCP_BEARER_ENV = "GOAT_MCP_BEARER_TOKEN";
@@ -23,7 +23,7 @@ export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
  */
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
-export const PI_T3_MCP_EXTENSION_SOURCE = `\
+export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";

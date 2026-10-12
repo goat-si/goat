@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 
-const OPENER_STORAGE_KEY = "t3code:prompt-link-opener";
+const OPENER_STORAGE_KEY = "goat:prompt-link-opener";
 const Opener = Schema.NullOr(Schema.Literals(["app", "browser"]));
 const DOWNLOAD_URL = "https://github.com/goat-si/goat-releases/releases";
 

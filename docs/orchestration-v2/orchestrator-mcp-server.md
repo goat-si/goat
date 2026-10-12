@@ -152,7 +152,7 @@ the injected endpoint and credential and forwards Pi's cancellation signal.
 
 When a provider session credential exists, the adapter writes a GOAT-owned
 extension into the server cache and spawns
-`pi --mode rpc --extension <cache>/pi-t3-mcp-extension.ts` with:
+`pi --mode rpc --extension <cache>/pi-goat-mcp-extension.ts` with:
 
 ```text
 GOAT_MCP_URL=http://127.0.0.1:<port>/mcp

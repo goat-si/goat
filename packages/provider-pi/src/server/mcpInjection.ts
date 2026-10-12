@@ -5,8 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import { legacyEnvName, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import {
-  PI_T3_MCP_EXTENSION_FILENAME,
-  PI_T3_MCP_EXTENSION_SOURCE,
+  PI_GOAT_MCP_EXTENSION_FILENAME,
+  PI_GOAT_MCP_EXTENSION_SOURCE,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
@@ -233,7 +233,7 @@ function withoutToolSelectionArgs(args: ReadonlyArray<string>): ReadonlyArray<st
 }
 
 function piGoatMcpExtensionDestPath(cacheDir: string): string {
-  return `${cacheDir.replace(/\\/g, "/")}/${PI_T3_MCP_EXTENSION_FILENAME}`;
+  return `${cacheDir.replace(/\\/g, "/")}/${PI_GOAT_MCP_EXTENSION_FILENAME}`;
 }
 
 export const materializePiGoatMcpExtension = Effect.fn("materializePiGoatMcpExtension")(function* (
@@ -243,8 +243,8 @@ export const materializePiGoatMcpExtension = Effect.fn("materializePiGoatMcpExte
   yield* fs.makeDirectory(cacheDir, { recursive: true });
   const dest = piGoatMcpExtensionDestPath(cacheDir);
   const existing = yield* fs.readFileString(dest).pipe(Effect.orElseSucceed(() => ""));
-  if (existing !== PI_T3_MCP_EXTENSION_SOURCE) {
-    yield* fs.writeFileString(dest, PI_T3_MCP_EXTENSION_SOURCE);
+  if (existing !== PI_GOAT_MCP_EXTENSION_SOURCE) {
+    yield* fs.writeFileString(dest, PI_GOAT_MCP_EXTENSION_SOURCE);
   }
   return dest;
 });

@@ -37,8 +37,8 @@ describe("client storage namespace migration", () => {
   it("prefers an empty new value and leaves unrelated keys alone", () => {
     const base = memory([
       ["goat:theme", ""],
-      ["t3code:theme", "old"],
-    ]); // goat-rename: legacy
+      ["t3code:theme", "old"], // goat-rename: legacy
+    ]);
     const storage = migratingStorage(base);
     expect(storage.getItem("goat:theme")).toBe("");
     expect(storage.getItem("other")).toBeNull();

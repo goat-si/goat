@@ -566,7 +566,7 @@ function credentialFrom(input: {
 }
 
 /**
- * Credentials saved in settings win over the `T3CODE_BITBUCKET_*` environment variables, which
+ * Credentials saved in settings win over the `GOAT_BITBUCKET_*` environment variables, which
  * stay as a fallback. Within each source the access token wins.
  */
 function resolveCredential(
@@ -607,7 +607,7 @@ function authFromCredential(credential: BitbucketCredential | null): SourceContr
     account: Option.none(),
     host: Option.some("bitbucket.org"),
     detail: Option.some(
-      "Add a Bitbucket token in Settings → Source Control, or set the T3CODE_BITBUCKET_* environment variables on the server.",
+      "Add a Bitbucket token in Settings → Source Control, or set the GOAT_BITBUCKET_* environment variables on the server.",
     ),
   };
 }

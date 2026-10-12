@@ -407,13 +407,13 @@ describe("OtelEnvironment", () => {
     });
     it.each([
       {
-        name: "T3CODE_OTLP_*_URL wins over an OTEL endpoint",
+        name: "GOAT_OTLP_*_URL wins over an OTEL endpoint",
         otel: withLogs(otelExport),
         goatUrl: "http://t3:4318/v1/logs",
         expected: { url: "http://t3:4318/v1/logs", export: goatExport },
       },
       {
-        name: "T3CODE_OTLP_*_URL wins over a signal the OTEL variables turned off",
+        name: "GOAT_OTLP_*_URL wins over a signal the OTEL variables turned off",
         otel: withLogs(OtelEnvironment.OtelSignal.Off()),
         goatUrl: "http://t3:4318/v1/logs",
         expected: { url: "http://t3:4318/v1/logs", export: goatExport },

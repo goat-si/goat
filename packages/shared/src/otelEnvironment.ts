@@ -366,7 +366,7 @@ export interface SignalEndpoint {
 }
 
 /**
- * Where one signal exports and how. `T3CODE_OTLP_*_URL` wins outright with
+ * Where one signal exports and how. `GOAT_OTLP_*_URL` wins outright with
  * GOAT's own export, then an OTEL endpoint with its own headers and
  * protocol, since `GOAT_OTLP_HEADERS` was written for a different
  * collector, then the first of `fallbackUrls` with GOAT's own export.
