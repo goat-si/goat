@@ -1,4 +1,5 @@
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import {
   OrchestratorMcpFailure,
   OrchestratorMcpThreadInterruptResult,
@@ -22,6 +23,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -206,6 +208,8 @@ const make = Effect.gen(function* () {
   const local = yield* OrchestratorMcpService.OrchestratorMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+  // Only words an error better, so a layer without report bindings goes without.
+  const reports = yield* Effect.serviceOption(RemoteReportService.RemoteReportService);
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
 
@@ -248,6 +252,32 @@ const make = Effect.gen(function* () {
             ),
           );
 
+  /**
+   * A thread started from another machine names hosts as that machine knows them.
+   * One this machine cannot reach may still be reachable from there, so say where
+   * this thread came from and how to hand the call back.
+   */
+  const unknownHostFailure = (
+    scope: McpInvocationScope,
+    host: string,
+    error: SshRemoteDispatch.SshRemoteDispatchError,
+  ) =>
+    (scope.thread === undefined || Option.isNone(reports)
+      ? Effect.succeed(null)
+      : reports.value.origin(scope.thread.threadId).pipe(Effect.orElseSucceed(() => null))
+    ).pipe(
+      Effect.flatMap((origin) =>
+        Effect.fail(
+          origin === null
+            ? hostFailure(error)
+            : failure(
+                "invalid_request",
+                `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
+              ),
+        ),
+      ),
+    );
+
   const call = (
     scope: McpInvocationScope,
     input: {
@@ -273,8 +303,12 @@ const make = Effect.gen(function* () {
         ),
       )
       .pipe(
-        Effect.mapError((error) =>
-          error instanceof SshRemoteDispatch.SshRemoteDispatchError ? hostFailure(error) : error,
+        Effect.catch((error) =>
+          !(error instanceof SshRemoteDispatch.SshRemoteDispatchError)
+            ? Effect.fail(error)
+            : error.reason === "host_unknown"
+              ? unknownHostFailure(scope, input.host, error)
+              : Effect.fail(hostFailure(error)),
         ),
       );
 
