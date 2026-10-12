@@ -855,6 +855,20 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
+/**
+ * An outbound webhook that also receives launch watch reports (a launched thread's run ended, it
+ * waits on a question, or its host stays unreachable), for agents outside GOAT. A watch posts only
+ * when its launch passed `notifyWebhook: true`, or for every watch with `allLaunches`. The secret
+ * signs each body (`x-goat-signature: sha256=<hex>`); the server keeps it in its secret store.
+ */
+export const CompletionWebhookSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  url: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  secret: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  allLaunches: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type CompletionWebhookSettings = typeof CompletionWebhookSettings.Type;
+
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",
   "conventional_commits",
@@ -1308,6 +1322,7 @@ export const ServerSettings = Schema.Struct({
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   bitbucket: BitbucketSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   github: GitHubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  completionWebhook: CompletionWebhookSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1571,6 +1586,15 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       hosts: Schema.optionalKey(Schema.Record(GitHubHost, GitHubHostSettings)),
       tokens: Schema.optionalKey(Schema.Record(GitHubHost, TrimmedString)),
+    }),
+  ),
+  /** An empty secret clears it; an omitted one keeps what the server has. */
+  completionWebhook: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      url: Schema.optionalKey(TrimmedString),
+      secret: Schema.optionalKey(TrimmedString),
+      allLaunches: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

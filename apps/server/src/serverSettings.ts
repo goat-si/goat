@@ -162,6 +162,7 @@ const BITBUCKET_SECRET_NAMES = {
   apiToken: "bitbucket-api-token",
 } as const;
 const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
+const COMPLETION_WEBHOOK_SECRET_NAME = "completion-webhook-secret";
 
 /** Hosts are case-insensitive; a patch can arrive before decoding lowercased its keys. */
 function gitHubTokenSecretName(host: string): string {
@@ -217,7 +218,18 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       Object.entries(settings.github.tokens).map(([host, token]) => [host, redactSecret(token)]),
     ),
   };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket, github };
+  const completionWebhook = {
+    ...settings.completionWebhook,
+    secret: redactSecret(settings.completionWebhook.secret),
+  };
+  return {
+    ...settings,
+    providerInstances,
+    usageLimitSources,
+    bitbucket,
+    github,
+    completionWebhook,
+  };
 }
 
 export function applyProviderInstanceMutation(
@@ -766,7 +778,26 @@ const make = Effect.gen(function* () {
         tokens[host] = SECRET_REDACTED;
         moved = true;
       }
-      return moved ? { ...settings, bitbucket, github: { ...settings.github, tokens } } : settings;
+      const completionWebhook = { ...settings.completionWebhook };
+      if (completionWebhook.secret.length > 0 && completionWebhook.secret !== SECRET_REDACTED) {
+        const stored = yield* secretStore
+          .set(COMPLETION_WEBHOOK_SECRET_NAME, textEncoder.encode(completionWebhook.secret))
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning(
+                "failed to move the completion webhook secret into the secret store",
+              ).pipe(Effect.as(false)),
+            ),
+          );
+        if (stored) {
+          completionWebhook.secret = SECRET_REDACTED;
+          moved = true;
+        }
+      }
+      return moved
+        ? { ...settings, bitbucket, github: { ...settings.github, tokens }, completionWebhook }
+        : settings;
     });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
@@ -960,12 +991,24 @@ const make = Effect.gen(function* () {
           );
         tokens[host] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
+      const completionWebhook = { ...settings.completionWebhook };
+      if (completionWebhook.secret === SECRET_REDACTED) {
+        const secret = yield* secretStore
+          .get(COMPLETION_WEBHOOK_SECRET_NAME)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        completionWebhook.secret = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
         bitbucket,
         github: { ...settings.github, tokens },
+        completionWebhook,
       };
     });
 
@@ -1159,6 +1202,30 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const completionWebhook = { ...next.completionWebhook };
+      const inlineWebhookSecret = current.completionWebhook.secret;
+      // The marker keeps what is saved; a hand-edited plaintext secret moves into the store.
+      const webhookSecret =
+        completionWebhook.secret === SECRET_REDACTED &&
+        inlineWebhookSecret !== SECRET_REDACTED &&
+        inlineWebhookSecret.length > 0
+          ? inlineWebhookSecret
+          : completionWebhook.secret;
+      if (webhookSecret.length === 0) {
+        changes.push({
+          kind: "remove",
+          secretName: COMPLETION_WEBHOOK_SECRET_NAME,
+          operation: "remove-secret",
+        });
+      } else if (webhookSecret !== SECRET_REDACTED) {
+        changes.push({
+          kind: "write",
+          secretName: COMPLETION_WEBHOOK_SECRET_NAME,
+          value: textEncoder.encode(webhookSecret),
+        });
+        completionWebhook.secret = SECRET_REDACTED;
+      }
+
       return {
         settings: {
           ...next,
@@ -1166,6 +1233,7 @@ const make = Effect.gen(function* () {
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,
           github: { ...next.github, tokens },
+          completionWebhook,
         },
         changes,
       };
