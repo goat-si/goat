@@ -105,3 +105,51 @@ describe("client storage namespace migration", () => {
     await expect(storage.getItem("goat:theme")).rejects.toThrow("blocked");
   });
 });
+
+describe("migration under pressure", () => {
+  it("drops the retained legacy copy when the current value no longer fits", () => {
+    const base = memory([["t3code:composer-drafts:v1", "large legacy draft"]]); // goat-rename: legacy
+    let quota = 1;
+    base.setItem.mockImplementation((key: string, value: string) => {
+      if (base.values.size >= quota && !base.values.has(key)) throw new Error("QuotaExceededError");
+      base.values.set(key, value);
+    });
+    const storage = migratingStorage(base);
+    // Adoption cannot duplicate the legacy draft, but reading still works.
+    expect(storage.getItem("goat:composer-drafts:v1")).toBe("large legacy draft");
+    storage.setItem("goat:composer-drafts:v1", "edited draft");
+    expect(base.values.get("goat:composer-drafts:v1")).toBe("edited draft");
+    expect(base.values.has("t3code:composer-drafts:v1")).toBe(false); // goat-rename: legacy
+    quota = 0;
+    expect(() => storage.setItem("goat:other", "x")).toThrow("QuotaExceededError");
+  });
+
+  it("lets a clear that starts after a pending read win", async () => {
+    const values = new Map([["t3code.cloud.relay-token", "legacy token"]]); // goat-rename: legacy
+    let releaseRead: () => void = () => undefined;
+    const slowRead = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const base = {
+      getItem: async (key: string) => {
+        // The backend answers with the value it saw when the read started.
+        const value = values.get(key) ?? null;
+        if (key === "goat.cloud.relay-token") await slowRead;
+        return value;
+      },
+      setItem: async (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: async (key: string) => {
+        values.delete(key);
+      },
+    };
+    const storage = migratingStorage(base);
+    const read = storage.getItem("goat.cloud.relay-token");
+    const clear = storage.removeItem("goat.cloud.relay-token");
+    releaseRead();
+    expect(await read).toBe("legacy token");
+    await clear;
+    expect(await storage.getItem("goat.cloud.relay-token")).toBeNull();
+  });
+});

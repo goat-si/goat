@@ -154,7 +154,11 @@ export const make = Effect.gen(function* () {
     );
     const marker = yield* decodeMarker(raw);
     if (marker.version !== version) return false;
-    if (isLegacy) yield* fs.writeFileString(markerPath, raw);
+    if (isLegacy) {
+      // Publish the GOAT marker atomically: a partial one would hide the legacy marker.
+      yield* fs.writeFileString(`${markerPath}.tmp`, raw);
+      yield* fs.rename(`${markerPath}.tmp`, markerPath);
+    }
     return true;
   }).pipe(Effect.orElseSucceed(() => false));
 

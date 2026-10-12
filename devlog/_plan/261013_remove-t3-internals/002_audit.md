@@ -129,3 +129,12 @@ Statuses assess the revised roadmap, not an implemented migration.
 | 5   | Reconstructed baseline checkpoint refs were read only under the legacy namespace. | `checkpointRefCandidatesForScopeOrdinal`; baseline materialization and diffs take the first that exists. |
 
 Non-blocking: D8's one-time log of the legacy-home fallback is not emitted; left out as noise.
+
+## wp7/wp8a review — gpt-6.1-sol (task t2-wp78-review-1) — VERDICT: FAIL → folded
+
+| #   | Finding                                                                                  | Fold                                                                                                     |
+| --- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | Duplicating large legacy drafts can exhaust localStorage, after which draft writes fail. | Over quota, the adapter drops that key's retained legacy copy and retries once, then surfaces the error. |
+| 2   | A pending async adoption could land after a newer write or clear.                        | Async operations are serialized per key.                                                                 |
+
+Non-blocking folds: a negative cache keeps a miss at one backing read; WSL marker promotion publishes through a temp file and rename.

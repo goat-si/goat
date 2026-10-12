@@ -354,7 +354,7 @@ export const buildWslRuntimeInstallScript = (
     "if runtime_is_ready; then",
     // Promote a recognized legacy marker once. Warm launches read only GOAT.
     `  if [ "$ready_marker" != "$runtime_root/${WSL_RUNTIME_READY_MARKER}" ]; then`,
-    `    cp "$ready_marker" "$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
+    `    cp "$ready_marker" "$runtime_root/${WSL_RUNTIME_READY_MARKER}.tmp" && mv -f "$runtime_root/${WSL_RUNTIME_READY_MARKER}.tmp" "$runtime_root/${WSL_RUNTIME_READY_MARKER}"`,
     "  fi",
     `  touch "$runtime_root/${WSL_RUNTIME_SELECTED_MARKER}"`,
     `  printf 'runtimeRoot:%s\\n' "$runtime_root"`,

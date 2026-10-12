@@ -22,8 +22,31 @@ export function migratingStorage<R>(storage: StorageAdapter<R>): StorageAdapter<
 export function migratingStorage(storage: StorageAdapter): StorageAdapter {
   const cached = wrappers.get(storage);
   if (cached) return cached;
+  // Keys whose legacy value is known to be absent: a miss then costs one backing read.
+  const noLegacy = new Set<string>();
+  // Async backends run one operation per key at a time, so a pending adoption can never
+  // land after a later write or clear.
+  const queues = new Map<string, Promise<unknown>>();
+  const serialized = <T>(key: string, operation: () => T): T => {
+    const previous = queues.get(key);
+    const result =
+      previous === undefined ? operation() : (previous.then(operation, operation) as T);
+    if (result instanceof Promise) {
+      const settled: Promise<unknown> = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      queues.set(key, settled);
+      void settled.then(() => {
+        if (queues.get(key) === settled) queues.delete(key);
+      });
+    }
+    return result;
+  };
   const adopt = (key: string, value: string | null) => {
-    if (value !== null) {
+    if (value === null) {
+      noLegacy.add(key);
+    } else {
       // A quota failure must not hide readable legacy data. Retry on the next read.
       try {
         const write = storage.setItem(key, value);
@@ -42,24 +65,40 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
     if (value !== null)
       return value === REMOVED_STORAGE_VALUE && legacyStorageKey(key) !== undefined ? null : value;
     const legacy = legacyStorageKey(key);
-    if (legacy === undefined) return null;
+    if (legacy === undefined || noLegacy.has(key)) return null;
     const old = storage.getItem(legacy);
     return old instanceof Promise ? old.then((value) => adopt(key, value)) : adopt(key, old);
   };
-  const getItem = (key: string) => {
-    const current = storage.getItem(key);
-    return current instanceof Promise
-      ? current.then((value) => fallback(key, value))
-      : fallback(key, current);
-  };
+  const getItem = (key: string) =>
+    serialized(key, () => {
+      const current = storage.getItem(key);
+      return current instanceof Promise
+        ? current.then((value) => fallback(key, value))
+        : fallback(key, current);
+    });
+  const setItem = (key: string, value: string) =>
+    serialized(key, () => {
+      try {
+        return storage.setItem(key, value);
+      } catch (error) {
+        // Over quota, the retained legacy copy of this key is what crowds out the current
+        // value (a write used to replace it in place): drop that copy and retry once.
+        const legacy = legacyStorageKey(key);
+        if (legacy === undefined || storage.getItem(legacy) === null) throw error;
+        storage.removeItem(legacy);
+        return storage.setItem(key, value);
+      }
+    });
   const wrapper = {
     getItem,
-    setItem: (key: string, value: string) => storage.setItem(key, value),
+    setItem,
     // Removing only the new key would resurrect its retained legacy value on reload.
     removeItem: (key: string) =>
-      legacyStorageKey(key) === undefined
-        ? storage.removeItem(key)
-        : storage.setItem(key, REMOVED_STORAGE_VALUE),
+      serialized(key, () =>
+        legacyStorageKey(key) === undefined
+          ? storage.removeItem(key)
+          : storage.setItem(key, REMOVED_STORAGE_VALUE),
+      ),
   };
   wrappers.set(storage, wrapper);
   wrappers.set(wrapper, wrapper);
