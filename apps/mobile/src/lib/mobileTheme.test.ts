@@ -256,7 +256,7 @@ describe("mobile themes", () => {
   );
 
   it("keeps T3 Chat light grouped cards distinct from the sheet", () => {
-    const variables = getMobileThemeVariables("t3-chat", "light");
+    const variables = getMobileThemeVariables("goat-chat", "light");
     const group = variables["--color-grouped-card"];
     expect(contrastRatio(group, variables["--color-sheet-solid"])).toBeGreaterThanOrEqual(1.1);
     for (const role of ["--color-foreground", "--color-foreground-muted"] as const) {
@@ -273,9 +273,9 @@ describe("mobile themes", () => {
       ).toBeGreaterThanOrEqual(4.5);
       expect(fill).toBe(
         variables[
-          themeId === "t3-chat" && appearance === "dark"
+          themeId === "goat-chat" && appearance === "dark"
             ? "--color-primary-foreground"
-            : themeId === DEFAULT_MOBILE_THEME_ID || themeId === "t3-chat"
+            : themeId === DEFAULT_MOBILE_THEME_ID || themeId === "goat-chat"
               ? "--color-foreground"
               : "--color-primary"
         ],
