@@ -112,6 +112,8 @@ export interface LaunchWatchServiceShape {
   readonly list: (
     launcherThreadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
+  /** Every launcher's watches, most recently updated first. */
+  readonly listAll: Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
 }
 
 export class LaunchWatchService extends Context.Service<
@@ -922,6 +924,12 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const listAll: LaunchWatchServiceShape["listAll"] = locked(ensureLoaded).pipe(
+    Effect.map(() =>
+      [...watches.values()].toSorted((left, right) => right.updatedAt - left.updatedAt),
+    ),
+  );
+
   // ── start ────────────────────────────────────────────────────────────
 
   yield* forkParked(
@@ -935,7 +943,7 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  return LaunchWatchService.of({ register, rearm, unwatch, list });
+  return LaunchWatchService.of({ register, rearm, unwatch, list, listAll });
 });
 
 export const layer = Layer.effect(LaunchWatchService, make);

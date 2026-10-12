@@ -1,4 +1,5 @@
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -1229,6 +1230,7 @@ const layerWsRpc = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+      const remoteLaunchCatalog = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
@@ -2143,6 +2145,7 @@ const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        [WS_METHODS.remoteLaunchesList]: (input) => remoteLaunchCatalog.list(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
@@ -3217,6 +3220,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+    const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3285,6 +3289,7 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
+              Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
