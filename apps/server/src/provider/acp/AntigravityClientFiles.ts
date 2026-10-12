@@ -148,11 +148,11 @@ const OUTSIDE = ${HELPER_EXIT_OUTSIDE};
 const sameEntry = (left, right) => left.dev === right.dev && left.ino === right.ino;
 function write(content) {
   if (content.length !== Number(bytes)) return 1;
-  // The pinned start must still sit at the resolved root, so a root swapped
-  // for a symlink before the helper started cannot become the anchor.
-  const start = fs.realpathSync.native(".");
-  const same = process.platform === "win32" ? start.toLowerCase() === root.toLowerCase() : start === root;
-  if (!same) return OUTSIDE;
+  // The pinned start must still be the resolved root, so a root swapped for a
+  // symlink before the helper started cannot become the anchor. The resolved
+  // root contains no links, and native realpath gives both sides one casing.
+  if (fs.lstatSync(root).isSymbolicLink()) return OUTSIDE;
+  if (fs.realpathSync.native(".") !== fs.realpathSync.native(root)) return OUTSIDE;
   for (const segment of directories) {
     try {
       fs.mkdirSync(segment);
