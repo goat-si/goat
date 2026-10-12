@@ -1,10 +1,13 @@
 name: goat-nightly
 
-# GOAT nightly channel (devlog/_plan/261012_release_nightly/020_wp2_pipeline.md).
+# GOAT release channels (docs/internals/release-channels.md).
 # A successful goat-ci run of a dev push builds every platform from that commit,
 # signs and notarizes macOS on the Mac Studio, verifies everything, and publishes
-# a prerelease to the public goat-si/goat-releases repository. Only the hosted
-# publish job can read the goat-releases App credentials. The pre-push guard
+# a nightly prerelease to the public goat-si/goat-releases repository. A manual
+# run builds a nightly or a stable release of a dev commit. Nothing publishes
+# unless the repository variable GOAT_RELEASES_PUBLISH is 'true'; a manual run
+# also needs its publish input. Only the hosted publish job can read the
+# goat-releases App credentials. The pre-push guard
 # (.vite-hooks/goat-workflow-guard.mjs) enforces the gates below.
 on:
   workflow_run:
@@ -17,6 +20,19 @@ on:
         description: dev commit to build (default dev tip)
         required: false
         type: string
+      channel:
+        description: release channel (stable uses the plain version in apps/desktop/package.json)
+        required: false
+        default: nightly
+        type: choice
+        options:
+          - nightly
+          - stable
+      publish:
+        description: publish to goat-releases (also needs repository variable GOAT_RELEASES_PUBLISH=true)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -30,7 +46,8 @@ jobs:
     if: >-
       github.repository == 'goat-si/goat' &&
       (github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (vars.GOAT_RELEASES_PUBLISH == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'dev' &&
       github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))
@@ -43,6 +60,8 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       name: ${{ steps.release.outputs.name }}
+      channel: ${{ steps.release.outputs.channel }}
+      manifest: ${{ steps.release.outputs.manifest }}
     steps:
       # A merge that landed while goat-ci ran makes this run stale; the newer
       # run publishes instead (latest one wins).
@@ -102,16 +121,45 @@ jobs:
         if: steps.resolve.outputs.skip == 'false'
         run: vp install --filter=@t3tools/scripts...
 
-      - name: Resolve nightly version
+      # A nightly is a prerelease of the package version, so once that version
+      # ships as stable, nightlies must wait for the next version bump.
+      - name: Resolve release version
         id: release
         if: steps.resolve.outputs.skip == 'false'
         env:
           SHA: ${{ steps.resolve.outputs.sha }}
+          CHANNEL: ${{ inputs.channel || 'nightly' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           node scripts/check-release-version.ts
-          node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" \
-            --run-number "$GITHUB_RUN_NUMBER" --sha "$SHA" --github-output
+          base="$(node -p 'require("./apps/desktop/package.json").version')"
+          published="$(gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[].tag_name')"
+          if printf '%s\n' "$published" | grep -Fxq "v$base"; then
+            echo "::error::v$base is already published as stable; bump the version in the release manifests first"
+            exit 1
+          fi
+          case "$CHANNEL" in
+            nightly)
+              node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" \
+                --run-number "$GITHUB_RUN_NUMBER" --sha "$SHA" --github-output
+              manifest=nightly
+              ;;
+            stable)
+              {
+                echo "version=$base"
+                echo "tag=v$base"
+                echo "name=GOAT $base (${SHA:0:12})"
+              } >> "$GITHUB_OUTPUT"
+              manifest=latest
+              ;;
+            *)
+              echo "::error::unknown channel '$CHANNEL'"
+              exit 1
+              ;;
+          esac
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
 
   js_bundle:
     name: JS bundle
@@ -120,7 +168,7 @@ jobs:
     runs-on: [self-hosted, linux, x64, goat, epyc]
     timeout-minutes: 30
     concurrency:
-      group: goat-nightly-js-bundle
+      group: goat-nightly-js-bundle-${{ needs.prepare.outputs.channel }}
       cancel-in-progress: true
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -170,7 +218,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     concurrency:
-      group: goat-nightly-cli-${{ matrix.key }}
+      group: goat-nightly-cli-${{ needs.prepare.outputs.channel }}-${{ matrix.key }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -308,7 +356,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, goat, mac-studio]
     timeout-minutes: 90
     concurrency:
-      group: goat-nightly-desktop-mac-${{ matrix.arch }}
+      group: goat-nightly-desktop-mac-${{ needs.prepare.outputs.channel }}-${{ matrix.arch }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -419,7 +467,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 70
     concurrency:
-      group: goat-nightly-desktop-${{ matrix.platform }}-${{ matrix.arch }}
+      group: goat-nightly-desktop-${{ needs.prepare.outputs.channel }}-${{ matrix.platform }}-${{ matrix.arch }}
       cancel-in-progress: true
     strategy:
       fail-fast: false
@@ -621,11 +669,13 @@ jobs:
           path: apps
 
       - name: Merge update manifests
+        env:
+          MANIFEST: ${{ needs.prepare.outputs.manifest }}
         run: |
           set -euo pipefail
-          node scripts/merge-update-manifests.ts --platform mac release/nightly-mac.yml release/nightly-mac-x64.yml
-          node scripts/merge-update-manifests.ts --platform win release/nightly-win-x64.yml release/nightly-win-arm64.yml release/nightly.yml
-          rm -f release/nightly-mac-x64.yml release/nightly-win-x64.yml release/nightly-win-arm64.yml
+          node scripts/merge-update-manifests.ts --platform mac "release/$MANIFEST-mac.yml" "release/$MANIFEST-mac-x64.yml"
+          node scripts/merge-update-manifests.ts --platform win "release/$MANIFEST-win-x64.yml" "release/$MANIFEST-win-arm64.yml" "release/$MANIFEST.yml"
+          rm -f "release/$MANIFEST-mac-x64.yml" "release/$MANIFEST-win-x64.yml" "release/$MANIFEST-win-arm64.yml"
 
       - name: Add installers and notices
         run: |
@@ -646,12 +696,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Publishing is opt-in twice: the repository variable turns the channel on,
+  # and a manual run must also ask for it.
   publish:
     name: Publish to goat-releases
     needs: [prepare, assemble]
     if: >-
       needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
-      (!cancelled() && needs.assemble.result == 'success')
+      (!cancelled() && needs.assemble.result == 'success' &&
+      vars.GOAT_RELEASES_PUBLISH == 'true' &&
+      (github.event_name == 'workflow_run' || inputs.publish))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
@@ -698,7 +752,7 @@ jobs:
           owner: goat-si
           repositories: goat-releases
 
-      - name: Publish prerelease
+      - name: Publish release
         id: publish
         env:
           GOAT_RELEASES_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -707,7 +761,7 @@ jobs:
             --version "$VERSION" --name "$RELEASE_NAME"
 
       - name: Prune old nightlies
-        if: steps.publish.outputs.outcome == 'published'
+        if: steps.publish.outputs.outcome == 'published' && needs.prepare.outputs.channel == 'nightly'
         env:
           GOAT_RELEASES_TOKEN: ${{ steps.app_token.outputs.token }}
           GOAT_PROTECTED_TAGS: ${{ vars.GOAT_PROTECTED_TAGS }}

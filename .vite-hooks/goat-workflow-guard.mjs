@@ -36,7 +36,7 @@ const selfHostedRunners = [
   ["self-hosted", "macos", "arm64", "goat", "mac-studio"],
 ];
 const prepareGate =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
 const downstreamGate = "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const verifiedRef = "${{ needs.prepare.outputs.sha }}";
 const prepareRef = "${{ steps.resolve.outputs.sha }}";
