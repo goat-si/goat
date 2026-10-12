@@ -87,17 +87,35 @@ fi
 # 4. LaunchAgent service. svc.sh refuses to install over an existing plist and
 # records the installed service in .service.
 cd "$dir" 2>/dev/null || [ "$dry_run" = true ]
-service_label=""
 if [ -f "$dir/.service" ] && [ -f "$(cat "$dir/.service")" ]; then
-  service_label="$(basename "$(cat "$dir/.service")" .plist)"
   say "service already installed ($(cat "$dir/.service"))"
 else
   run ./svc.sh install
 fi
-if [ -n "$service_label" ] && launchctl print "gui/$(id -u)/$service_label" >/dev/null 2>&1; then
+
+# svc.sh writes SessionCreate=true, which starts the runner in a new security
+# session where the login keychain reads as locked: codesign and notarytool then
+# fail although the same checks pass in Terminal (measured on the Mac Studio).
+plist=""
+if [ -f "$dir/.service" ]; then plist="$(cat "$dir/.service")"; fi
+if [ -n "$plist" ] && /usr/libexec/PlistBuddy -c 'Print :SessionCreate' "$plist" >/dev/null 2>&1; then
+  run /usr/libexec/PlistBuddy -c 'Delete :SessionCreate' "$plist"
+  if [ "$dry_run" = false ] && launchctl print "gui/$(id -u)/$(basename "$plist" .plist)" >/dev/null 2>&1; then
+    run launchctl bootout "gui/$(id -u)/$(basename "$plist" .plist)"
+  fi
+fi
+
+# svc.sh start can load the agent without running it; kickstart until it runs.
+service_label=""
+if [ -n "$plist" ]; then service_label="$(basename "$plist" .plist)"; fi
+if [ -n "$service_label" ] && launchctl print "gui/$(id -u)/$service_label" 2>/dev/null | grep -q 'state = running'; then
   say "service already running"
 else
   run ./svc.sh start
+  if [ -n "$service_label" ]; then
+    launchctl print "gui/$(id -u)/$service_label" >/dev/null 2>&1 || run launchctl bootstrap "gui/$(id -u)" "$plist"
+    run launchctl kickstart "gui/$(id -u)/$service_label"
+  fi
 fi
 run ./svc.sh status
 say "done. Labels: self-hosted, macOS, ARM64, goat, mac-studio."

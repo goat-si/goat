@@ -62,7 +62,7 @@ bash scripts/goat-mac-runner/install-runner.sh --dry-run   # shows what it will 
 bash scripts/goat-mac-runner/install-runner.sh
 ```
 
-It downloads the pinned Actions runner, checks its SHA-256, registers it on goat-si/goat as `goat-mac-studio` with the labels `goat` and `mac-studio` (the token comes from your `gh` login and reaches the runner through its environment), and installs it as a LaunchAgent. Running it again skips the steps that are already done.
+It downloads the pinned Actions runner, checks its SHA-256, registers it on goat-si/goat as `goat-mac-studio` with the labels `goat` and `mac-studio` (the token comes from your `gh` login and reaches the runner through its environment), and installs it as a LaunchAgent. It removes the `SessionCreate` key that the runner's `svc.sh` writes into that LaunchAgent: with it the runner starts in a new security session where the login keychain reads as locked, so codesign and notarytool fail even though the preflight passes in Terminal. Running it again skips the steps that are already done and repairs an existing LaunchAgent.
 
 ## 6. Keep it running
 
