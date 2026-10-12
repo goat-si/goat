@@ -28,7 +28,8 @@ Names are not one prefix.
 
 `schedule_task` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion
-notifications are left on. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
+notifications are left on; a launch from outside any thread is watched only when the completion
+webhook takes it. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
 and [`ssh.md`](ssh.md).
 
 `goat_thread_send` from an agent in another thread is delivered like steering, whichever mode the

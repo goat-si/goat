@@ -295,21 +295,43 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               });
         const thread = result.projection.thread;
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
+        // A launch another machine's GOAT forwards is watched by that machine.
+        const external =
+          caller === undefined &&
+          input.launchedBy === undefined &&
+          report === undefined &&
+          run !== undefined;
         const watching =
-          caller !== undefined && input.notifyOnCompletion !== false
+          input.notifyOnCompletion !== false && (caller !== undefined || external)
             ? yield* LaunchWatchService.LaunchWatchService.pipe(
                 Effect.flatMap((watches) =>
-                  watches.register({
-                    launcherThreadId: caller.id,
-                    host: null,
-                    threadId: thread.id,
-                    projectId: thread.projectId,
-                    title: thread.title,
-                    runId: run?.id ?? null,
-                    notifyWebhook: input.notifyWebhook ?? false,
-                  }),
+                  caller !== undefined
+                    ? watches
+                        .register({
+                          launcherThreadId: caller.id,
+                          host: null,
+                          threadId: thread.id,
+                          projectId: thread.projectId,
+                          title: thread.title,
+                          runId: run?.id ?? null,
+                          notifyWebhook: input.notifyWebhook ?? false,
+                        })
+                        .pipe(Effect.as(true))
+                    : run === undefined
+                      ? Effect.succeed(false)
+                      : // An outside client's launch is watched only for the completion webhook.
+                        watches
+                          .watchExternal({
+                            host: null,
+                            threadId: thread.id,
+                            projectId: thread.projectId,
+                            title: thread.title,
+                            runId: run.id,
+                            ceiling: context.limits.runtimeMode,
+                            requested: input.notifyWebhook === true,
+                          })
+                          .pipe(Effect.map((watch) => watch !== null)),
                 ),
-                Effect.as(true),
                 // The thread exists either way; a watch that failed to save is reported, not fatal.
                 Effect.catch((error) =>
                   Effect.logWarning("launch watch not recorded", {

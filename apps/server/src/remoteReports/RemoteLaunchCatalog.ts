@@ -63,7 +63,8 @@ export function mergeRemoteLaunches(input: {
     });
   }
   for (const watch of input.watches) {
-    if (watch.host === null) continue;
+    // A launcherless watch, for an outside client's launch, has no launcher thread to show.
+    if (watch.host === null || watch.launcherThreadId === null) continue;
     const key = threadKey(watch.host, watch.threadId);
     const unavailableSince = watch.outage === null ? null : iso(watch.outage.since);
     const existing = entries.get(key);

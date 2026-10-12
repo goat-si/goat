@@ -15,9 +15,13 @@ const launcher = ThreadId.make("launcher");
 const target = ThreadId.make("target");
 const run1 = RunId.make("run-1");
 
-const watchFor = (input: { notifyWebhook: boolean; host?: string | null }): LaunchWatch =>
+const watchFor = (input: {
+  notifyWebhook: boolean;
+  host?: string | null;
+  launcherThreadId?: ThreadId | null;
+}): LaunchWatch =>
   newLaunchWatch({
-    launcherThreadId: launcher,
+    launcherThreadId: input.launcherThreadId === undefined ? launcher : input.launcherThreadId,
     host: input.host ?? null,
     threadId: target,
     projectId: ProjectId.make("project"),
@@ -45,6 +49,7 @@ const enabled = {
   url: "https://agent.example/hooks/goat",
   secret: "s3cret",
   allLaunches: false,
+  externalLaunches: false,
 } satisfies CompletionWebhookSettings;
 
 interface Received {
@@ -424,6 +429,54 @@ describe("CompletionWebhook", () => {
         }),
       );
       expect(h.log).toHaveLength(1);
+    }),
+  );
+
+  it.effect.each([
+    ["by default, even when asked", {}, true, false],
+    ["for a launch that did not ask", enabled, false, false],
+    ["for a launch that asked", enabled, true, true],
+    ["for every launch with externalLaunches", { ...enabled, externalLaunches: true }, false, true],
+    ["for every watch with only allLaunches", { ...enabled, allLaunches: true }, false, false],
+    [
+      "while the webhook is off",
+      { ...enabled, enabled: false, externalLaunches: true },
+      true,
+      false,
+    ],
+    ["without an http(s) url", { ...enabled, url: "file:///hook" }, true, false],
+  ] as const)(
+    "decides whether to watch an outside launch %s",
+    ([, settings, requested, expected]) =>
+      Effect.gen(function* () {
+        const h = yield* harness(settings);
+        const watched = yield* withWebhook(h.layer, (webhook) =>
+          webhook.watchesExternal(requested),
+        );
+        expect(watched).toBe(expected);
+      }),
+  );
+
+  it.effect("posts a launcherless watch's report signed, with a null launcherThreadId", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ ...enabled, externalLaunches: true });
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          // externalLaunches posts for a launcherless watch that did not ask itself.
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, launcherThreadId: null, host: "box" }),
+            runReport(),
+          );
+          const request = yield* Queue.take(h.received);
+          expect(JSON.parse(request.body)).toMatchObject({
+            event: "run.completed",
+            threadId: target,
+            host: "box",
+            launcherThreadId: null,
+          });
+          expect(verifySignature(request, "s3cret")).toBe(true);
+        }),
+      );
     }),
   );
 });

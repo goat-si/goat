@@ -128,21 +128,38 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               : error,
         ),
       );
+      const runId = result.runId === null ? null : RunId.make(result.runId);
       const watching =
-        launcher !== undefined && input.notifyOnCompletion !== false
+        input.notifyOnCompletion !== false && (launcher !== undefined || runId !== null)
           ? yield* LaunchWatchService.LaunchWatchService.pipe(
               Effect.flatMap((watches) =>
-                watches.register({
-                  launcherThreadId: launcher.id,
-                  host: result.host,
-                  threadId: ThreadId.make(result.threadId),
-                  projectId: null,
-                  title: input.title,
-                  runId: result.runId === null ? null : RunId.make(result.runId),
-                  notifyWebhook: input.notifyWebhook ?? false,
-                }),
+                launcher !== undefined
+                  ? watches
+                      .register({
+                        launcherThreadId: launcher.id,
+                        host: result.host,
+                        threadId: ThreadId.make(result.threadId),
+                        projectId: null,
+                        title: input.title,
+                        runId,
+                        notifyWebhook: input.notifyWebhook ?? false,
+                      })
+                      .pipe(Effect.as(true))
+                  : runId === null
+                    ? Effect.succeed(false)
+                    : // An outside client's launch is watched only for the completion webhook.
+                      watches
+                        .watchExternal({
+                          host: result.host,
+                          threadId: ThreadId.make(result.threadId),
+                          projectId: null,
+                          title: input.title,
+                          runId,
+                          ceiling: caller.limits.runtimeMode,
+                          requested: input.notifyWebhook === true,
+                        })
+                        .pipe(Effect.map((watch) => watch !== null)),
               ),
-              Effect.as(true),
               // The remote thread exists either way; a watch that failed to save is reported, not fatal.
               Effect.catch((error) =>
                 Effect.logWarning("launch watch not recorded", {
@@ -158,19 +175,23 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         watching,
         notes: [
           ...result.notes,
-          ...(watching
+          ...(watching && launcher === undefined
             ? [
-                `This machine follows the thread over SSH and wakes this thread when its run ends, when it waits on a question, or if ${result.host} stays unreachable; do not poll it. goat_thread_unwatch stops that.`,
+                `This machine follows the thread over SSH and posts to its completion webhook when the run ends, waits on a question, or if ${result.host} stays unreachable.`,
               ]
-            : scope.thread !== undefined
+            : watching
               ? [
-                  `${
-                    input.notifyOnCompletion === false
-                      ? "Run ends are not followed because completion notifications are disabled."
-                      : "Run ends are not followed because no launch watch was recorded."
-                  }${result.reportsSupported ? " Agent reports still arrive per reportDelivery." : ""}`,
+                  `This machine follows the thread over SSH and wakes this thread when its run ends, when it waits on a question, or if ${result.host} stays unreachable; do not poll it. goat_thread_unwatch stops that.`,
                 ]
-              : []),
+              : scope.thread !== undefined
+                ? [
+                    `${
+                      input.notifyOnCompletion === false
+                        ? "Run ends are not followed because completion notifications are disabled."
+                        : "Run ends are not followed because no launch watch was recorded."
+                    }${result.reportsSupported ? " Agent reports still arrive per reportDelivery." : ""}`,
+                  ]
+                : []),
         ],
       };
     }),

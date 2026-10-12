@@ -25,6 +25,19 @@ The re-arm follows the run that send started or joined. It does not change that 
 The follower reads local projections, or long-polls through `SshRemoteDispatch` when the thread is
 remote. `deliver` dispatches `message.dispatch` onto `watch.launcherThreadId`. A finished run, a
 question the thread is waiting on, and a host that stays unreachable each produce one wake.
+With a report attached, a settled wake also goes to `CompletionWebhook` in
+`apps/server/src/mcp/completionWebhook.ts`, which posts it to the `completionWebhook` server
+setting.
+
+A launch from an MCP client outside any thread has no launcher to wake. `watchExternal` gives it a
+launcherless watch only when the completion webhook takes it: the webhook is on and the launch
+passed `notifyWebhook: true`, or `completionWebhook.externalLaunches` is set. Otherwise it records
+nothing, as before. Such a watch has `launcherThreadId: null` and stores the client's runtime
+mode ceiling in `ceiling`, so its remote reads never go above what that client was approved for.
+Its reports go only to the webhook, with `launcherThreadId: null` in the payload. It is deleted once
+its run is reported or the thread is gone, because no thread can re-arm or unwatch it.
+`listRemote` leaves it out. `goat_thread_launch` skips a launch that another machine's GOAT forwarded
+(`launchedBy` or `report` set), because the dispatching machine watches that launch itself.
 
 > Decision record: [ADR-0009](decisions/ADR-0009-launch-watches.md)
 

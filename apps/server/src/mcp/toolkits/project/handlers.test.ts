@@ -40,14 +40,24 @@ import * as ProjectHandlers from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
+type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
 
 /** Records the launch watches a handler asks for. */
-const launchWatches = (registrations: Array<Registration> = []) =>
+const launchWatches = (
+  registrations: Array<Registration> = [],
+  externalWatches: Array<ExternalWatch> = [],
+  webhookWatchesExternal = false,
+) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
     register: (input) =>
       Effect.sync(() => {
         registrations.push(input);
         return {} as never;
+      }),
+    watchExternal: (input) =>
+      Effect.sync(() => {
+        externalWatches.push(input);
+        return webhookWatchesExternal ? ({} as never) : null;
       }),
   });
 
@@ -60,13 +70,20 @@ const launchFromThread = (params: {
   readonly launchedBy?: ThreadLaunch.ThreadLaunchInput["launchedBy"];
   readonly standingInstructions?: boolean;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  /** An outside MCP client launches instead of a GOAT thread. */
+  readonly outsideClient?: boolean;
+  readonly clientAccess?: "full-access" | "read-only";
+  /** Whether the completion webhook takes an outside client's launch. */
+  readonly webhookWatchesExternal?: boolean;
 }) =>
   Effect.gen(function* () {
-    const { settings, ...input } = params;
+    const { settings, outsideClient, clientAccess, webhookWatchesExternal, ...rest } = params;
     const sourceThreadId = ThreadId.make("source-thread");
     const projectId = ProjectId.make("project");
     const providerInstanceId = ProviderInstanceId.make("codex");
     const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
+    // An outside client has no thread to inherit a project or model from.
+    const input = outsideClient === true ? { ...rest, projectId, modelSelection } : rest;
     const caller = {
       id: sourceThreadId,
       title: "Orchestrator",
@@ -82,20 +99,23 @@ const launchFromThread = (params: {
     let launchedSender: ThreadId | undefined;
     let launchedBy: ThreadLaunch.ThreadLaunchInput["launchedBy"];
     const registrations: Array<Registration> = [];
+    const externalWatches: Array<ExternalWatch> = [];
     let launchedInput: ThreadLaunch.ThreadLaunchInput | undefined;
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(settings),
       NodeCrypto.layer,
-      launchWatches(registrations),
+      launchWatches(registrations, externalWatches, webhookWatchesExternal === true),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
-        thread: {
-          threadId: sourceThreadId,
-          providerSessionId: "session",
-          providerInstanceId,
-        },
-        client: undefined,
+        thread:
+          outsideClient === true
+            ? undefined
+            : { threadId: sourceThreadId, providerSessionId: "session", providerInstanceId },
+        client:
+          outsideClient === true
+            ? { sessionId: "client", label: "Outside agent", access: clientAccess ?? "full-access" }
+            : undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
       }),
@@ -137,20 +157,22 @@ const launchFromThread = (params: {
         ),
       ),
     );
-    const refused = yield* toolkit
-      .handle("goat_thread_launch", {
-        title: "Forged",
-        launchedBy: {
-          kind: "launch" as const,
-          environmentLabel: null,
-          threadTitle: null,
-          threadId: ThreadId.make("foreign-thread"),
-          environmentId: EnvironmentId.make("foreign-env"),
-        },
-      })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
-    expect(refused.at(-1)?.result).toMatchObject({ code: "invalid_request" });
-    expect(launchedInput).toBeUndefined();
+    if (outsideClient !== true) {
+      const refused = yield* toolkit
+        .handle("goat_thread_launch", {
+          title: "Forged",
+          launchedBy: {
+            kind: "launch" as const,
+            environmentLabel: null,
+            threadTitle: null,
+            threadId: ThreadId.make("foreign-thread"),
+            environmentId: EnvironmentId.make("foreign-env"),
+          },
+        })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
+      expect(refused.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+      expect(launchedInput).toBeUndefined();
+    }
     const result = yield* toolkit
       .handle("goat_thread_launch", input)
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layerDependencies));
@@ -160,6 +182,7 @@ const launchFromThread = (params: {
       launchedBy,
       launchedInput,
       registrations,
+      externalWatches,
       sourceThreadId,
       projectId,
       modelSelection,
@@ -279,6 +302,102 @@ it.effect("records a dormant watch for an idle launch, and none when the caller 
     });
     expect(optedOut.result).toMatchObject({ runId: "launched-run", watching: false });
     expect(optedOut.registrations).toEqual([]);
+  }),
+);
+
+it.effect("leaves an outside client's launch unwatched while the webhook does not take it", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      outsideClient: true,
+    });
+    expect(launched.result).toMatchObject({ runId: "launched-run", watching: false });
+    expect(launched.registrations).toEqual([]);
+    expect(launched.externalWatches).toEqual([expect.objectContaining({ requested: false })]);
+  }),
+);
+
+it.effect("watches an outside client's launch for the completion webhook", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyWebhook: true,
+      outsideClient: true,
+      webhookWatchesExternal: true,
+    });
+    expect(launched.result).toMatchObject({ runId: "launched-run", watching: true });
+    expect(launched.registrations).toEqual([]);
+    expect(launched.externalWatches).toEqual([
+      {
+        host: null,
+        threadId: expect.any(String),
+        projectId: launched.projectId,
+        title: "Audit",
+        runId: "launched-run",
+        ceiling: "full-access",
+        requested: true,
+      },
+    ]);
+
+    // An idle launch has no run to report, and opting out of notifications wins.
+    const idle = yield* launchFromThread({
+      title: "Idle",
+      notifyWebhook: true,
+      outsideClient: true,
+      webhookWatchesExternal: true,
+    });
+    const optedOut = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyWebhook: true,
+      notifyOnCompletion: false,
+      outsideClient: true,
+      webhookWatchesExternal: true,
+    });
+    for (const launch of [idle, optedOut]) {
+      expect(launch.result).toMatchObject({ watching: false });
+      expect(launch.externalWatches).toEqual([]);
+    }
+  }),
+);
+
+it.effect("leaves a launch another machine's GOAT forwarded to that machine's watch", () =>
+  Effect.gen(function* () {
+    const forwarded = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyWebhook: true,
+      outsideClient: true,
+      webhookWatchesExternal: true,
+      launchedBy: {
+        kind: "launch",
+        threadId: ThreadId.make("foreign-thread"),
+        environmentId: EnvironmentId.make("foreign-env"),
+        environmentLabel: "studio",
+        threadTitle: "Orchestrator",
+      },
+    });
+    expect(forwarded.launchedBy).toMatchObject({ threadId: "foreign-thread" });
+    expect(forwarded.result).toMatchObject({ watching: false });
+    expect(forwarded.externalWatches).toEqual([]);
+  }),
+);
+
+it.effect("refuses a read-only outside client before launching or watching", () =>
+  Effect.gen(function* () {
+    const refused = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyWebhook: true,
+      outsideClient: true,
+      clientAccess: "read-only",
+      webhookWatchesExternal: true,
+    });
+    expect(refused.result).toMatchObject({ code: "capability_denied" });
+    expect(refused.launchedInput).toBeUndefined();
+    expect(refused.externalWatches).toEqual([]);
   }),
 );
 

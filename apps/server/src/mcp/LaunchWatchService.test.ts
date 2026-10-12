@@ -85,6 +85,8 @@ interface World {
     report: CompletionWebhook.CompletionWebhookReport;
   }>;
   webhookNotify?: Effect.Effect<void>;
+  /** What the completion webhook answers when asked to watch an outside launch. */
+  webhookWatchesExternal: boolean;
 }
 
 const makeWorld = Effect.gen(function* () {
@@ -123,6 +125,7 @@ const makeWorld = Effect.gen(function* () {
     hostCall: (call) => Effect.die(new Error("unexpected host call " + call.tool)),
     hostCalls: [],
     webhookReports: [],
+    webhookWatchesExternal: true,
   };
   return world;
 });
@@ -219,6 +222,7 @@ const layerFor = (world: World, baseDir: string) =>
               world.webhookReports.push({ watch, report });
               return world.webhookNotify ?? Effect.void;
             }),
+          watchesExternal: () => Effect.sync(() => world.webhookWatchesExternal),
         }),
         ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
         NodeCrypto.layer,
@@ -1446,4 +1450,173 @@ const remoteRead = (input: {
   items: input.items ?? [],
   nextPosition: input.nextPosition ?? null,
   hasMore: input.nextPosition !== undefined,
+});
+
+describe("LaunchWatchService launcherless watches", () => {
+  const external = (
+    input: {
+      readonly host?: string;
+      readonly ceiling?: "full-access" | "auto-accept-edits";
+      readonly requested?: boolean;
+    } = {},
+  ) => ({
+    host: input.host ?? null,
+    threadId: target,
+    projectId: input.host === undefined ? projectId : null,
+    title: "Fix the flake",
+    runId: run1,
+    ceiling: input.ceiling ?? ("full-access" as const),
+    requested: input.requested ?? true,
+  });
+
+  const stateFile = (baseDir: string) =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      return path.join(baseDir, "userdata", LaunchWatchService.LAUNCH_WATCH_FILE);
+    });
+
+  const storedWatches = (baseDir: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const raw = yield* fs.readFileString(yield* stateFile(baseDir));
+      return (JSON.parse(raw) as { watches: ReadonlyArray<LaunchWatch> }).watches;
+    });
+
+  /** Makes each webhook report observable as it is handed over. */
+  const reportsQueue = (world: World) =>
+    Effect.gen(function* () {
+      const reported = yield* Queue.unbounded<void>();
+      world.webhookNotify = Queue.offer(reported, undefined).pipe(Effect.asVoid);
+      return reported;
+    });
+
+  it.effect("records nothing for an outside launch the completion webhook does not take", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      world.webhookWatchesExternal = false;
+      const baseDir = yield* tempDir;
+      const watch = yield* withService(world, baseDir, (service) =>
+        service.watchExternal(external()),
+      );
+      expect(watch).toBeNull();
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(yield* stateFile(baseDir))).toBe(false);
+      expect(world.waitCalls).toEqual([]);
+      expect(world.webhookReports).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "reports an outside launch's question and run end only to the webhook, then drops it",
+    () =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const reported = yield* reportsQueue(world);
+        world.assistantMessages.push({ runId: run1, text: "Fixed the flake; tests pass." });
+        const baseDir = yield* tempDir;
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            const watch = yield* service.watchExternal(external());
+            expect(watch).toMatchObject({
+              launcherThreadId: null,
+              pendingRuns: [run1],
+              notifyWebhook: true,
+            });
+            yield* Queue.take(world.waitStarted);
+            world.requests = [{ id: "question-1", status: "pending", kind: "user_input" }];
+            yield* Queue.offer(world.waits, stillRunning(run1));
+            yield* Queue.take(reported);
+            world.requests = [];
+            yield* Queue.offer(world.waits, finished(run1));
+            yield* Queue.take(reported);
+            // listRemote waits for the lock the report and its state change run under.
+            expect(yield* service.listRemote(10)).toEqual([]);
+          }),
+        );
+        expect(
+          world.webhookReports.map(({ watch, report }) => [watch.launcherThreadId, report]),
+        ).toEqual([
+          [
+            null,
+            expect.objectContaining({
+              event: "question",
+              requestId: "question-1",
+              status: "waiting",
+            }),
+          ],
+          [
+            null,
+            expect.objectContaining({
+              event: "run.completed",
+              runId: run1,
+              status: "completed",
+              excerpt: "Fixed the flake; tests pass.",
+            }),
+          ],
+        ]);
+        // No thread was woken or read as a launcher, and nothing is left to follow.
+        expect(world.attempts).toEqual([]);
+        expect(yield* Queue.size(world.launcherReads)).toBe(0);
+        expect(yield* storedWatches(baseDir)).toEqual([]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("follows an outside launch's remote run at its caller's ceiling across a restart", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      world.hostCall = () =>
+        Effect.fail(
+          new SshRemoteDispatch.SshRemoteDispatchError({
+            reason: "host_unavailable",
+            message: "box is unavailable: connection refused",
+          }),
+        );
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(
+            external({ host: "box", ceiling: "auto-accept-edits", requested: false }),
+          );
+          yield* advanceUntil(Queue.take(reported));
+        }),
+      );
+      expect(world.webhookReports.map(({ report }) => report.event)).toEqual(["host.unavailable"]);
+      // The watch survives the restart with its outage, and resumes on first use.
+      expect(yield* storedWatches(baseDir)).toEqual([
+        expect.objectContaining({
+          launcherThreadId: null,
+          ceiling: "auto-accept-edits",
+          pendingRuns: [run1],
+        }),
+      ]);
+      world.hostCall = (call) =>
+        call.tool === "goat_thread_wait"
+          ? Effect.succeed({ threadId: target, runId: run1, status: "completed", timedOut: false })
+          : Effect.succeed(
+              remoteRead({ itemCount: 2, items: [remoteItem(1, run1, "Remote fix pushed.")] }),
+            );
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          expect(yield* service.listRemote(10)).toEqual([]);
+          yield* advanceUntil(Queue.take(reported));
+          yield* service.listRemote(10);
+        }),
+      );
+      expect(world.webhookReports.map(({ report }) => report.event)).toEqual([
+        "host.unavailable",
+        "run.completed",
+      ]);
+      expect(world.webhookReports[1]?.report.excerpt).toBe("Remote fix pushed.");
+      // Reads only, never above what the outside caller was approved for.
+      expect(world.hostCalls.length).toBeGreaterThan(3);
+      expect(
+        world.hostCalls.every(
+          ({ call, ceiling }) => call.writes === false && ceiling === "auto-accept-edits",
+        ),
+      ).toBe(true);
+      expect(world.attempts).toEqual([]);
+      expect(yield* storedWatches(baseDir)).toEqual([]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
