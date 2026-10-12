@@ -59,9 +59,12 @@ import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexA
 import { CodexOrchestratorReplayHarness } from "../orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
 import { threadShellFromProjection } from "../orchestration-v2/ProjectionStore.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ThreadSearch from "../orchestration-v2/ThreadSearch.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
@@ -79,7 +82,6 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -636,7 +638,13 @@ describe("orchestrator MCP toolkit", () => {
           ).pipe(Layer.provide(layerContinuationProbe));
           const layerOrchestration = Layer.merge(
             layerOrchestrator,
-            ThreadManagementService.layer.pipe(Layer.provide(layerOrchestrator)),
+            ThreadManagementService.layer.pipe(
+              Layer.provide(layerOrchestrator),
+              Layer.provide(ServerSettings.layerTest()),
+              Layer.provide(
+                CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+              ),
+            ),
           );
           const layerProviderRegistry = ProviderRegistryMock.layer([
             makeProviderSnapshot({
@@ -717,6 +725,7 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provideMerge(layerOrchestration),
             Layer.provide(layerRegistry),
             Layer.provide(layerProviderRegistry),
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(layerScheduledTaskStub),
             Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
             Layer.provide(
@@ -1461,6 +1470,16 @@ describe("orchestrator MCP toolkit", () => {
               ({ tool }) => tool.name === "goat_thread_read",
             );
             expect(threadReadTool?.tool.annotations?.readOnlyHint).toBe(false);
+            expect(threadReadTool?.tool.inputSchema).toMatchObject({ additionalProperties: false });
+            // GOAT names the unknown parameter before schema decoding would reject it.
+            const unknownPagingParam = yield* invoke("goat_thread_read", {
+              threadId: parentThreadId,
+              cursor: 90,
+            });
+            expect(unknownPagingParam.isError).toBe(true);
+            expect(JSON.stringify(unknownPagingParam.content)).toContain(
+              "goat_thread_read does not take cursor",
+            );
             const threadUpdateTool = server.tools.find(
               ({ tool }) => tool.name === "goat_thread_update",
             );
@@ -3874,7 +3893,13 @@ describe("orchestrator MCP toolkit", () => {
         );
         const layerOrchestration = Layer.merge(
           layerOrchestrator,
-          ThreadManagementService.layer.pipe(Layer.provide(layerOrchestrator)),
+          ThreadManagementService.layer.pipe(
+            Layer.provide(layerOrchestrator),
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+            ),
+          ),
         );
         const layerProviderRegistry = ProviderRegistryMock.layer([
           makeProviderSnapshot({
@@ -3900,6 +3925,7 @@ describe("orchestrator MCP toolkit", () => {
             ),
           ),
           Layer.provide(layerProviderRegistry),
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(layerUnusedScheduledTaskStub),
           Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
           Layer.provideMerge(
@@ -4367,7 +4393,13 @@ it.live("delegate_task wait returns before a child question is answered", () =>
       ).pipe(Layer.provide(continuationProbe));
       const orchestration = Layer.merge(
         runtime,
-        ThreadManagementService.layer.pipe(Layer.provide(runtime)),
+        ThreadManagementService.layer.pipe(
+          Layer.provide(runtime),
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(
+            CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+          ),
+        ),
       );
       const layer = Layer.merge(
         McpHttpServer.layerOrchestratorToolkit,
@@ -4376,6 +4408,7 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         Layer.provide(ThreadResultService.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(orchestration),
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(registry),
         Layer.provide(
           ProviderRegistryMock.layer([
@@ -4571,6 +4604,7 @@ it.effect("goat_thread_wait host result retains pendingRequestIds through MCP re
   Effect.gen(function* () {
     const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
     const layer = McpHttpServer.layerOrchestratorToolkit.pipe(
+      Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),

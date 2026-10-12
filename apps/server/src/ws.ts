@@ -1,4 +1,5 @@
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -106,6 +107,8 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  WsChannelRpcGroup,
+  WsCoreRpcGroup,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -234,15 +237,18 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
+import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
@@ -554,6 +560,9 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+// Handlers register per part of the group; see WsChannelRpcGroup.
+const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
+const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1202,7 +1211,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
@@ -1216,6 +1225,7 @@ const layerWsRpc = (
         | ChannelBotDirectory.ChannelBotDirectory
         | ChannelLedger.ChannelLedger
         | ChannelGateway.ChannelGateway
+        | ServerSettings.ServerSettingsService
       >();
       const channelGateway = yield* ChannelGateway.ChannelGateway;
       const channelLedger = yield* ChannelLedger.ChannelLedger;
@@ -1229,6 +1239,7 @@ const layerWsRpc = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+      const remoteLaunchCatalog = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
       const projectService = yield* ProjectService.ProjectService;
       const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
@@ -1253,6 +1264,7 @@ const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
+      const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
       const deviceHostContext =
@@ -1333,6 +1345,7 @@ const layerWsRpc = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+      const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
           (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
@@ -1350,6 +1363,7 @@ const layerWsRpc = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
+      const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -1842,7 +1856,51 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const channelHandlers = ServerWsChannelRpcGroup.of({
+        [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
+        [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
+        // Waits only for durable storage; the reply arrives later on the bot thread.
+        [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
+          channelGateway.ingest(input, {
+            ...channelOwner,
+            caller: { type: "rpc", clientId: currentSessionId },
+          }),
+        [CHANNEL_GATEWAY_WS_METHODS.getTask]: (input) =>
+          channelLedger.getTask(input.taskId).pipe(
+            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+            Effect.flatMap((stored) =>
+              stored === undefined || stored.ownerId !== channelOwner.ownerId
+                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
+                : Effect.succeed(stored.task),
+            ),
+          ),
+        [CHANNEL_GATEWAY_WS_METHODS.listTasks]: (input) =>
+          channelLedger
+            .listTasks({
+              ownerId: channelOwner.ownerId,
+              statuses: input.status,
+              limit: input.limit ?? 50,
+              cursor: input.cursor,
+            })
+            .pipe(
+              Effect.map((page) => ({
+                tasks: page.tasks,
+                ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+              })),
+              Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+            ),
+        [CHANNEL_GATEWAY_WS_METHODS.getInput]: (input) =>
+          channelGateway.getInput(input.inputId, { ...channelOwner, caller: { type: "rpc" } }),
+        [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: (input) =>
+          channelIdentities.createLink(input, channelOwner),
+        [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: (input) => channelIdentities.unlink(input),
+        [SLACK_CHANNEL_WS_METHODS.getSettings]: () => slackChannelSettings.get(),
+        [SLACK_CHANNEL_WS_METHODS.configure]: (input) =>
+          slackChannelSettings.configure(input, channelOwner),
+        [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
+        [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
+      });
+      const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.connectionCatalogServe]: () =>
           Stream.unwrap(
             requireCatalogHost.pipe(Effect.as(connectionCatalogBroker.attach(connectionId))),
@@ -1901,6 +1959,7 @@ const layerWsRpc = (
                 ),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: (input) => threadManagement.stopWorkflow(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
           readWorkflowScript({ scriptPath: input.scriptPath }),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
@@ -2063,6 +2122,13 @@ const layerWsRpc = (
                         message: "Failed to launch thread",
                         cause,
                       }),
+                    ThreadManagementProviderInstanceDisabledError: (cause) =>
+                      new OrchestrationV2ThreadLaunchError({
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        message: cause.message,
+                        cause,
+                      }),
                   }),
                 ),
             ),
@@ -2098,52 +2164,11 @@ const layerWsRpc = (
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
-        [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
-        // Waits only for durable storage; the reply arrives later on the bot thread.
-        [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
-          channelGateway.ingest(input, {
-            ...channelOwner,
-            caller: { type: "rpc", clientId: currentSessionId },
-          }),
-        [CHANNEL_GATEWAY_WS_METHODS.getTask]: (input) =>
-          channelLedger.getTask(input.taskId).pipe(
-            Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-            Effect.flatMap((stored) =>
-              stored === undefined || stored.ownerId !== channelOwner.ownerId
-                ? Effect.fail(new ChannelGatewayError({ reason: "not_found" }))
-                : Effect.succeed(stored.task),
-            ),
-          ),
-        [CHANNEL_GATEWAY_WS_METHODS.listTasks]: (input) =>
-          channelLedger
-            .listTasks({
-              ownerId: channelOwner.ownerId,
-              statuses: input.status,
-              limit: input.limit ?? 50,
-              cursor: input.cursor,
-            })
-            .pipe(
-              Effect.map((page) => ({
-                tasks: page.tasks,
-                ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-              })),
-              Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
-            ),
-        [CHANNEL_GATEWAY_WS_METHODS.getInput]: (input) =>
-          channelGateway.getInput(input.inputId, { ...channelOwner, caller: { type: "rpc" } }),
-        [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: (input) =>
-          channelIdentities.createLink(input, channelOwner),
-        [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: (input) => channelIdentities.unlink(input),
-        [SLACK_CHANNEL_WS_METHODS.getSettings]: () => slackChannelSettings.get(),
-        [SLACK_CHANNEL_WS_METHODS.configure]: (input) =>
-          slackChannelSettings.configure(input, channelOwner),
-        [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
-        [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
         [WS_METHODS.secretsAnswerRequest]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        [WS_METHODS.remoteLaunchesList]: (input) => remoteLaunchCatalog.list(input),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),
@@ -2490,6 +2515,16 @@ const layerWsRpc = (
           }),
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
+        [WS_METHODS.serverGetHostStatus]: (_input) =>
+          serverEnvironment.getEnvironmentId.pipe(
+            Effect.flatMap((environmentId) =>
+              hostStatus.readForClient({
+                environmentId,
+                sessionId: currentSessionId,
+                reachHosts: currentSession.scopes.includes(AuthOrchestrationOperateScope),
+              }),
+            ),
+          ),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -2497,6 +2532,7 @@ const layerWsRpc = (
         [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,
+        [WS_METHODS.serverCheckOtlpEndpoint]: (input) => otlpEndpointCheck.check(input),
         [WS_METHODS.serverSignalProcess]: (input) => processDiagnostics.signal(input),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
@@ -2567,6 +2603,10 @@ const layerWsRpc = (
           withPullRequestViewer(input, pullRequests.checks(input)),
         [WS_METHODS.pullRequestsActivity]: (input) =>
           withPullRequestViewer(input, pullRequests.activity(input)),
+        [WS_METHODS.pullRequestsReviewGuide]: (input) =>
+          withPullRequestViewer(input, reviewGuides.get(input)),
+        [WS_METHODS.pullRequestsGenerateReviewGuide]: (input) =>
+          withPullRequestViewer(input, reviewGuides.generate(input)),
         [WS_METHODS.pullRequestsThreadComments]: (input) =>
           withPullRequestViewer(input, pullRequests.threadComments(input)),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
@@ -2762,6 +2802,7 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.shellOpenInEditor]: (input) => externalLauncher.launchEditor(input),
+        [WS_METHODS.filesystemGetMetadata]: (input) => workspaceFileSystem.getMetadata(input),
         [WS_METHODS.filesystemBrowse]: (input) =>
           workspaceEntries.browse(input).pipe(
             Effect.mapError(
@@ -3198,7 +3239,10 @@ const layerWsRpc = (
             ),
           ),
       });
-      return handlers;
+      return Layer.mergeAll(
+        ServerWsCoreRpcGroup.toLayer(handlers),
+        ServerWsChannelRpcGroup.toLayer(channelHandlers),
+      );
     }),
   );
 
@@ -3218,6 +3262,9 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
+    const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
+    const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+    const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3286,6 +3333,17 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
+              Layer.provide(OtlpEndpointCheck.layer),
+              // Shared like the pull request service, so concurrent generations single-flight.
+              Layer.provide(
+                Layer.succeed(
+                  PullRequestReviewGuideService.PullRequestReviewGuideService,
+                  reviewGuides,
+                ),
+              ),
+              // The goat_host_status tool's instance, so both share last-known samples.
+              Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
+              Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

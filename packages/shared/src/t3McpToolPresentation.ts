@@ -24,6 +24,7 @@ export type T3McpToolSummaryAction =
   | "thread-unwatch"
   | "thread-watch-list"
   | "thread-interrupt"
+  | "workflow-stop"
   | "thread-configuration"
   | "thread-configure"
   | "thread-fork"
@@ -68,6 +69,8 @@ export type T3McpToolSummaryAction =
   | "list-prs"
   | "watch-pr"
   | "unwatch-pr"
+  | "write-pr-guides"
+  | "read-pr-guide"
   | "browser"
   | "device"
   | "html-preview"
@@ -122,6 +125,16 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "unwatch-pr",
     "pull-request",
   ),
+  write_pull_request_guides: tool(
+    ["Write", "Writing", "Started", "review guides"],
+    "write-pr-guides",
+    "pull-request",
+  ),
+  read_pull_request_guide: tool(
+    ["Read", "Reading", "Read", "a review guide"],
+    "read-pr-guide",
+    "pull-request",
+  ),
   orchestrator_capabilities: tool(
     ["Get", "Getting", "Got", "orchestration capabilities"],
     "capabilities",
@@ -165,6 +178,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   goat_origin_reports_wait: tool(
     ["Wait", "Waiting", "Waited", "for origin reports"],
     "thread-wait",
+  ),
+  goat_workflow_stop: tool(
+    ["Stop", "Stopping", "Requested a stop for", "a workflow"],
+    "workflow-stop",
   ),
   goat_thread_interrupt: tool(
     ["Interrupt", "Interrupting", "Requested an interrupt of", "a GOAT thread"],
@@ -424,6 +441,7 @@ const T3_MCP_LEGACY_TOOL_ALIASES: Readonly<Record<string, string>> = {
   t3_thread_configure: "goat_thread_configure",
   t3_thread_fork: "goat_thread_fork",
   t3_thread_interrupt: "goat_thread_interrupt",
+  t3_workflow_stop: "goat_workflow_stop",
   t3_thread_launch: "goat_thread_launch",
   t3_thread_list: "goat_thread_list",
   t3_thread_merge_back: "goat_thread_merge_back",

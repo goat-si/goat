@@ -51,6 +51,18 @@
       ]
     },
     {
+      "path": "ci.md",
+      "tier": 1,
+      "title": "CI",
+      "scope": "The goat-ci workflow, its pre-push guard, and the PR screenshot gate.",
+      "documents": [
+        ".github/pull_request_template.md",
+        ".github/scripts/pr-screenshot-gate.cjs",
+        ".github/workflows/goat-ci.yml",
+        ".vite-hooks/goat-workflow-guard.mjs"
+      ]
+    },
+    {
       "path": "contracts.md",
       "tier": 2,
       "title": "Contracts",
@@ -192,7 +204,7 @@
         "apps/server/src/channels/slack/SlackChannelAdapter.ts",
         "apps/server/src/channels/slack/SlackChannelRuntime.ts",
         "apps/server/src/channels/slack/SlackChannelSettings.live.ts",
-        "apps/server/src/persistence/Migrations/064_ChannelLedger.ts",
+        "apps/server/src/persistence/Migrations/065_ChannelLedger.ts",
         "apps/server/src/channels/ChannelReceptionService.ts",
         "apps/server/src/channels/ChannelDispatcher.ts",
         "apps/server/src/channels/ChannelBotRegistry.ts",
@@ -253,9 +265,9 @@
         "apps/server/src/mcp/toolkits/ssh/handlers.ts",
         "apps/server/src/mcp/HostThreadsMcpService.ts",
         "apps/server/src/remoteReports/RemoteDispatchCoordinator.ts",
-        "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
-        "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
-        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts",
+        "apps/server/src/persistence/Migrations/064_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/063_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
         "packages/contracts/src/remoteReports.ts"
@@ -334,10 +346,10 @@
         "packages/ssh/src/tunnel.ts",
         "packages/shared/src/devHome.ts",
         "apps/server/src/persistence/initializeV2Database.ts",
-        "apps/server/src/persistence/Migrations/064_ChannelLedger.ts",
-        "apps/server/src/persistence/Migrations/063_RemoteDispatches.ts",
-        "apps/server/src/persistence/Migrations/062_RemoteReports.ts",
-        "apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts"
+        "apps/server/src/persistence/Migrations/065_ChannelLedger.ts",
+        "apps/server/src/persistence/Migrations/064_RemoteDispatches.ts",
+        "apps/server/src/persistence/Migrations/063_RemoteReports.ts",
+        "apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts"
       ]
     }
   ],

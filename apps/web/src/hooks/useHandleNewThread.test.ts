@@ -55,6 +55,13 @@ vi.mock("@effect/atom-react", () => ({
       ["environment-ssh", { settings: testState.settings }],
     ]),
 }));
+vi.mock("@t3tools/shared/projectSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/shared/projectSettings")>()),
+  // The new-project rule has its own tests in projectSettings.test.ts.
+  resolveNewThreadEnvMode: (input: {
+    projectSettings: { settings: { defaultThreadEnvMode: "local" | "worktree" } };
+  }) => input.projectSettings.settings.defaultThreadEnvMode,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useParams: () => null,
   useRouter: () => testState.router,
@@ -89,6 +96,7 @@ vi.mock("../state/entities", () => ({
     },
   ],
   readThreadShell: () => (testState.shellExists ? {} : null),
+  readThreadShells: () => [],
   useProjects: () => [],
   useThreadShell: () => null,
 }));

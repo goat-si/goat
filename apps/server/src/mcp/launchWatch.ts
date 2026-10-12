@@ -5,6 +5,7 @@ import {
   type OrchestrationV2RunStatus,
   ProjectId,
   RunId,
+  RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -15,7 +16,8 @@ import * as Effect from "effect/Effect";
  * tested directly. A launch watch is a launcher thread's standing request to
  * hear about another thread it started (goat_thread_launch,
  * goat_ssh_thread_launch) or asked to watch; LaunchWatchService stores and
- * follows them.
+ * follows them. A launch from outside any thread can opt into a launcherless
+ * watch, which has no thread to wake and reports only to the completion webhook.
  */
 
 export const LaunchWatchOutage = Schema.Struct({
@@ -34,7 +36,13 @@ export const LaunchWatch = Schema.Struct({
   id: Schema.String,
   /** Fresh whenever an absent watch is registered, so a stale follower cannot act on it. */
   incarnation: Schema.String,
-  launcherThreadId: ThreadId,
+  /** Null for a launch from outside any thread, whose reports go only to the completion webhook. */
+  launcherThreadId: Schema.NullOr(ThreadId),
+  /**
+   * The runtime mode a launcherless watch's remote reads run at: what its outside
+   * caller was approved for at launch. A thread launcher's current mode is used instead.
+   */
+  ceiling: Schema.NullOr(RuntimeMode).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** SSH alias of the target's environment; null for this environment. */
   host: Schema.NullOr(Schema.String),
   threadId: ThreadId,
@@ -99,17 +107,18 @@ export function normalizeHost(host: string | null | undefined): string | null {
 }
 
 export function launchWatchId(input: {
-  readonly launcherThreadId: string;
+  readonly launcherThreadId: string | null;
   readonly host: string | null;
   readonly threadId: string;
 }): string {
-  return [input.launcherThreadId, input.host ?? "", input.threadId]
+  return [input.launcherThreadId ?? "", input.host ?? "", input.threadId]
     .map(encodeURIComponent)
     .join(":");
 }
 
 export function newLaunchWatch(input: {
-  readonly launcherThreadId: ThreadId;
+  readonly launcherThreadId: ThreadId | null;
+  readonly ceiling?: RuntimeMode | null;
   readonly host: string | null;
   readonly threadId: ThreadId;
   readonly projectId: ProjectId | null;
@@ -122,6 +131,7 @@ export function newLaunchWatch(input: {
     id: launchWatchId(input),
     incarnation: input.incarnation,
     launcherThreadId: input.launcherThreadId,
+    ceiling: input.ceiling ?? null,
     host: input.host,
     threadId: input.threadId,
     projectId: input.projectId,

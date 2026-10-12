@@ -35,17 +35,23 @@ import * as SshHandlers from "./handlers.ts";
 import { SshToolkit } from "./tools.ts";
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
+type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
 
-const launchFromThread = (
-  options: {
-    readonly notifyOnCompletion?: boolean;
-    readonly notifyWebhook?: boolean;
-    readonly reportsSupported?: boolean;
-    readonly registerError?: LaunchWatchService.LaunchWatchStoreError;
-    /** An outside MCP client launches instead of a GOAT thread. */
-    readonly outsideClient?: boolean;
-  } = {},
-) =>
+type LaunchOptions = {
+  readonly notifyOnCompletion?: boolean;
+  readonly notifyWebhook?: boolean;
+  readonly reportsSupported?: boolean;
+  readonly registerError?: LaunchWatchService.LaunchWatchStoreError;
+  /** An outside MCP client launches instead of a GOAT thread. */
+  readonly outsideClient?: boolean;
+  /** The outside client's approved access; full-access by default. */
+  readonly clientAccess?: "full-access" | "auto" | "read-only";
+  /** Whether the completion webhook takes an outside client's launch. */
+  readonly webhookWatchesExternal?: boolean;
+};
+
+/** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
+const launchRaw = (options: LaunchOptions = {}) =>
   Effect.gen(function* () {
     const callerThreadId = ThreadId.make("caller");
     const providerInstanceId = ProviderInstanceId.make("codex");
@@ -62,6 +68,7 @@ const launchFromThread = (
       deletedAt: null,
     } as OrchestrationV2ThreadShell;
     const registrations: Array<Registration> = [];
+    const externalWatches: Array<ExternalWatch> = [];
     const launchInputs: Array<SshRemoteDispatch.SshLaunchInput> = [];
     const deliveries: Array<string> = [];
     const remoteResult: SshRemoteDispatch.SshLaunchResult = {
@@ -87,7 +94,11 @@ const launchFromThread = (
             : { threadId: callerThreadId, providerSessionId: "session", providerInstanceId },
         client:
           options.outsideClient === true
-            ? { sessionId: "client", label: "Outside agent", access: "full-access" }
+            ? {
+                sessionId: "client",
+                label: "Outside agent",
+                access: options.clientAccess ?? "full-access",
+              }
             : undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration" as const]),
@@ -132,6 +143,20 @@ const launchFromThread = (
               now: 0,
             });
           }),
+        watchExternal: (input) =>
+          Effect.sync(() => {
+            externalWatches.push(input);
+            return options.webhookWatchesExternal === true
+              ? newLaunchWatch({
+                  ...input,
+                  launcherThreadId: null,
+                  host: input.host ?? null,
+                  incarnation: "external-watch",
+                  notifyWebhook: input.requested,
+                  now: 0,
+                })
+              : null;
+          }),
       }),
     );
     const toolkit = yield* SshToolkit.pipe(
@@ -151,17 +176,23 @@ const launchFromThread = (
         ...(options.notifyWebhook === undefined ? {} : { notifyWebhook: options.notifyWebhook }),
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
-    const result = responses.at(-1)?.result;
-    if (result === undefined || !("notes" in result))
-      return yield* Effect.die("Expected a successful SSH launch result.");
     return {
-      result,
+      response: responses.at(-1)?.result,
       registrations,
+      externalWatches,
       launchInputs,
       deliveries,
       callerThreadId,
       remoteResult,
     };
+  });
+
+const launchFromThread = (options: LaunchOptions = {}) =>
+  Effect.gen(function* () {
+    const { response, ...launched } = yield* launchRaw(options);
+    if (response === undefined || !("notes" in response))
+      return yield* Effect.die("Expected a successful SSH launch result.");
+    return { result: response, ...launched };
   });
 
 it.effect("forwards the calling thread and this machine as the remote thread's launcher", () =>
@@ -186,6 +217,68 @@ it.effect("launches for an outside client without naming a launcher", () =>
     expect(launched.launchInputs).toHaveLength(1);
     expect(launched.launchInputs[0]?.launchedBy).toBeUndefined();
     expect(launched.registrations).toEqual([]);
+  }),
+);
+
+it.effect("leaves an outside client's launch unwatched while the webhook does not take it", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({ outsideClient: true });
+    expect(launched.externalWatches).toEqual([expect.objectContaining({ requested: false })]);
+    expect(launched.result).toEqual({
+      ...launched.remoteResult,
+      correlationId: null,
+      watching: false,
+      notes: launched.remoteResult.notes,
+    });
+  }),
+);
+
+it.effect("watches an outside client's launch for the webhook at the client's ceiling", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      outsideClient: true,
+      notifyWebhook: true,
+      webhookWatchesExternal: true,
+    });
+    expect(launched.registrations).toEqual([]);
+    expect(launched.externalWatches).toEqual([
+      {
+        host: "box",
+        threadId: "remote-thread",
+        projectId: null,
+        title: "Audit",
+        runId: "remote-run",
+        ceiling: "full-access",
+        requested: true,
+      },
+    ]);
+    expect(launched.result).toMatchObject({
+      watching: true,
+      notes: expect.arrayContaining([expect.stringContaining("completion webhook")]),
+    });
+
+    const optedOut = yield* launchFromThread({
+      outsideClient: true,
+      notifyWebhook: true,
+      notifyOnCompletion: false,
+      webhookWatchesExternal: true,
+    });
+    expect(optedOut.externalWatches).toEqual([]);
+    expect(optedOut.result).toMatchObject({ watching: false });
+  }),
+);
+
+it.effect("refuses an outside client below full access before launching or watching", () =>
+  Effect.gen(function* () {
+    const refused = yield* launchRaw({
+      outsideClient: true,
+      clientAccess: "auto",
+      notifyWebhook: true,
+      webhookWatchesExternal: true,
+    });
+    expect(refused.response).toMatchObject({ code: "capability_denied" });
+    expect(refused.launchInputs).toEqual([]);
+    expect(refused.externalWatches).toEqual([]);
   }),
 );
 
@@ -358,6 +451,8 @@ const fixture = (sourceFault?: "missing" | "size") =>
                   now: 0,
                 }),
               ),
+            // The completion webhook is off, as by default.
+            watchExternal: () => Effect.succeed(null),
           }),
           Layer.mock(ServerEnvironment.ServerEnvironment)({
             getDescriptor: Effect.succeed({

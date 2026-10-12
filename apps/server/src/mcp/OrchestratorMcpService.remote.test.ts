@@ -34,10 +34,11 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
-import Migration0063 from "../persistence/Migrations/063_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/065_RemoteDispatchQuestions.ts";
+import Migration0063 from "../persistence/Migrations/064_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/066_RemoteDispatchQuestions.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -145,6 +146,7 @@ const fixture = Effect.gen(function* () {
   let afterRegistration: (() => void) | undefined;
   const dependencies = Layer.mergeAll(
     NodeServices.layer,
+    ServerSettings.layerTest(),
     Layer.succeed(SqlClient.SqlClient, sql),
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadRecords: (id) =>

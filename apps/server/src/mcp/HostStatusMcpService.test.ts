@@ -9,6 +9,7 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -232,6 +233,53 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(calls.every((call) => call.arguments.local === true)).toBe(true);
     expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
     expect(refreshes).toEqual(["codex"]);
+  }),
+);
+
+it.effect("reads only this machine for a client session that may not reach hosts", () =>
+  Effect.gen(function* () {
+    const { value, calls, connectedReads } = yield* run(
+      { hosts: ["box"], hostCall: () => Effect.die("read-only session reached SSH") },
+      (service) =>
+        service
+          .readForClient({
+            environmentId: EnvironmentId.make("host-status-test"),
+            sessionId: "web-session",
+            reachHosts: false,
+          })
+          .pipe(Effect.provideService(HostProcess.Platform, "win32")),
+    );
+    expect(connectedReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts).toHaveLength(1);
+    expect(value.success.hosts[0]).toMatchObject({
+      host: null,
+      reachability: "ok",
+      metrics: { platform: "win32", threads: { running: 1, waiting: 1, queued: 1 } },
+    });
+  }),
+);
+
+it.effect("fans out for a client session that may reach hosts, reading only", () =>
+  Effect.gen(function* () {
+    const { value, calls } = yield* run({ hosts: ["box"] }, (service) =>
+      service.readForClient({
+        environmentId: EnvironmentId.make("host-status-test"),
+        sessionId: "web-session",
+        reachHosts: true,
+      }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+      ["box", "ok"],
+    ]);
+    expect(calls).toMatchObject([
+      { host: "box", tool: "goat_host_status", writes: false, arguments: { local: true } },
+    ]);
   }),
 );
 

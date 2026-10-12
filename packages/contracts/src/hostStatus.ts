@@ -67,6 +67,8 @@ export type HostStatusQuota = typeof HostStatusQuota.Type;
 
 export const HostStatusMetrics = Schema.Struct({
   ...HostCapacitySnapshot.fields,
+  /** `process.platform` of that machine (`linux`, `darwin`, `win32`). Older hosts omit it. */
+  platform: Schema.optional(TrimmedNonEmptyString),
   threads: HostThreadCounts,
   quotas: Schema.Array(HostStatusQuota),
 });

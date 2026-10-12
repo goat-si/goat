@@ -1,9 +1,10 @@
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";
-import Migration0062 from "../../../persistence/Migrations/062_RemoteReports.ts";
-import Migration0063 from "../../../persistence/Migrations/063_RemoteDispatches.ts";
-import Migration0065 from "../../../persistence/Migrations/065_RemoteDispatchQuestions.ts";
+import Migration0062 from "../../../persistence/Migrations/063_RemoteReports.ts";
+import Migration0063 from "../../../persistence/Migrations/064_RemoteDispatches.ts";
+import Migration0065 from "../../../persistence/Migrations/066_RemoteDispatchQuestions.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -22,6 +23,7 @@ import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as ProviderAdapterRegistry from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as ProjectSetupScriptRunner from "../../../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as HostResources from "../../../resourceTelemetry/HostResources.ts";
@@ -39,6 +41,7 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
+import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -60,6 +63,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   ServerSettings.layerTest({}),
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
@@ -100,7 +104,12 @@ const decodeToolsListPayload = Schema.decodeUnknownEffect(ToolsListPayload);
 it.effect("production mcp layer lists worktree tools over http", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layerRoutes = McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer));
+      const layerRoutes = McpHttpServer.layer.pipe(
+        Layer.provide(McpHttpServer.layerHostStatusService),
+        Layer.provide(McpSessionRegistry.layer),
+        Layer.provide(LaunchWatchService.layer),
+        Layer.provide(RemoteDispatchCoordinator.layer),
+      );
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
         disableLogger: true,

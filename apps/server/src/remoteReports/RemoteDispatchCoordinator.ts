@@ -204,6 +204,10 @@ export class RemoteDispatchCoordinator extends Context.Service<
       id: ThreadId,
       limit?: number,
     ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
+    /** Every origin's dispatches, most recently updated first. */
+    readonly listRecent: (
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<RemoteDispatchRecord>, RemoteDispatchError>;
     readonly isTaskThread: (
       host: string,
       threadId: string,
@@ -983,6 +987,12 @@ const make = Effect.gen(function* () {
         ORDER BY created_at DESC, correlation_id DESC LIMIT ${limit ?? -1}`).pipe(
           Effect.map((values) => values.map(publicRow)),
         ),
+    ),
+    listRecent: Effect.fn("RemoteDispatchCoordinator.listRecent")((limit: number) =>
+      rows(sql`SELECT * FROM remote_dispatches
+        ORDER BY updated_at DESC, correlation_id DESC LIMIT ${limit}`).pipe(
+        Effect.map((values) => values.map(publicRow)),
+      ),
     ),
   });
 });

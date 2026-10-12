@@ -17,6 +17,7 @@ What GOAT is, which process owns the workspace, and the invariants nothing may b
 | Doc                          | Scope                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | [`overview.md`](overview.md) | Product boundary, the client-to-effect path, and the invariants index. |
+| [`ci.md`](ci.md)             | The goat-ci workflow, its pre-push guard, and the PR screenshot gate.  |
 
 ### Tier 2 — Shared packages
 
@@ -66,6 +67,10 @@ the repository is organised by package. Changing an area requires review of ever
 
 | Source path                                                             | Described by                                                                                                                                           |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.github/pull_request_template.md`                                      | [`ci.md`](ci.md)                                                                                                                                       |
+| `.github/scripts/pr-screenshot-gate.cjs`                                | [`ci.md`](ci.md)                                                                                                                                       |
+| `.github/workflows/goat-ci.yml`                                         | [`ci.md`](ci.md)                                                                                                                                       |
+| `.vite-hooks/goat-workflow-guard.mjs`                                   | [`ci.md`](ci.md)                                                                                                                                       |
 | `apps/desktop`                                                          | [`overview.md`](overview.md)<br>[`desktop.md`](desktop.md)                                                                                             |
 | `apps/desktop/package.json`                                             | [`desktop.md`](desktop.md)                                                                                                                             |
 | `apps/desktop/src/app/DesktopEnvironment.ts`                            | [`desktop.md`](desktop.md)                                                                                                                             |
@@ -131,10 +136,10 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/orchestration-v2/ThreadMessageIntake.ts`               | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/os-jank.ts`                                            | [`settings-and-storage.md`](settings-and-storage.md)                                                                                                   |
 | `apps/server/src/persistence/initializeV2Database.ts`                   | [`settings-and-storage.md`](settings-and-storage.md)                                                                                                   |
-| `apps/server/src/persistence/Migrations/062_RemoteReports.ts`           | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
-| `apps/server/src/persistence/Migrations/063_RemoteDispatches.ts`        | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
-| `apps/server/src/persistence/Migrations/064_ChannelLedger.ts`           | [`channels.md`](channels.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                                                   |
-| `apps/server/src/persistence/Migrations/065_RemoteDispatchQuestions.ts` | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
+| `apps/server/src/persistence/Migrations/063_RemoteReports.ts`           | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
+| `apps/server/src/persistence/Migrations/064_RemoteDispatches.ts`        | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
+| `apps/server/src/persistence/Migrations/065_ChannelLedger.ts`           | [`channels.md`](channels.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                                                   |
+| `apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts` | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
 | `apps/server/src/provider/builtInDrivers.ts`                            | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/provider/Drivers/AntigravityDriver.ts`                 | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/provider/Drivers/ClaudeDriver.ts`                      | [`server.md`](server.md)                                                                                                                               |

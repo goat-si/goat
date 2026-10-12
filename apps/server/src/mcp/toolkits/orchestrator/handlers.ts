@@ -1,3 +1,4 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import type { RunId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -9,7 +10,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
-import { unavailable } from "../../threadAccess.ts";
+import { readCaller, unavailable } from "../../threadAccess.ts";
 
 /** Whether a thread tool call goes to another machine. */
 const reachesHost = <
@@ -63,6 +64,26 @@ const handlers = {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.cancelTask(scope, input);
     }),
+  ),
+  goat_workflow_stop: McpToolAccess.writesThreads(
+    (input) => [input.threadId],
+    (input) =>
+      Effect.gen(function* () {
+        const { threads } = yield* readCaller();
+        return yield* threads.stopWorkflow(input).pipe(
+          Effect.as({}),
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorMcpFailure({
+                code:
+                  cause.reason === "unavailable" || cause.reason === "stop-failed"
+                    ? "orchestration_error"
+                    : "invalid_request",
+                message: cause.message,
+              }),
+          ),
+        );
+      }),
   ),
   schedule_task: McpToolAccess.startsThreads(
     // A scheduled task runs with the caller's own modes.

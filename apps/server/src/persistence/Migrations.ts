@@ -11,6 +11,7 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { reconcileGoatMigrationIds } from "./reconcileGoatMigrationIds.ts";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
@@ -74,12 +75,13 @@ import Migration0057 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0058 from "./Migrations/058_WebhookRelayDeliveries.ts";
 import Migration0059 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
-import Migration0061 from "./Migrations/061_ServerActivityIndexes.ts";
-import Migration0062 from "./Migrations/062_RemoteReports.ts";
-import Migration0063 from "./Migrations/063_RemoteDispatches.ts";
-import Migration0064 from "./Migrations/064_ChannelLedger.ts";
-import Migration0065 from "./Migrations/065_RemoteDispatchQuestions.ts";
-import Migration0066 from "./Migrations/066_ThreadRunResults.ts";
+import Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0062 from "./Migrations/062_ServerActivityIndexes.ts";
+import Migration0063 from "./Migrations/063_RemoteReports.ts";
+import Migration0064 from "./Migrations/064_RemoteDispatches.ts";
+import Migration0065 from "./Migrations/065_ChannelLedger.ts";
+import Migration0066 from "./Migrations/066_RemoteDispatchQuestions.ts";
+import Migration0067 from "./Migrations/067_ThreadRunResults.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -154,12 +156,15 @@ export const migrationEntries = [
   [58, "WebhookRelayDeliveries", Migration0058],
   [59, "McpAppModelContext", Migration0059],
   [60, "ThreadSnapshotWindowIndexes", Migration0060],
-  [61, "ServerActivityIndexes", Migration0061],
-  [62, "RemoteReports", Migration0062],
-  [63, "RemoteDispatches", Migration0063],
-  [64, "ChannelLedger", Migration0064],
-  [65, "RemoteDispatchQuestions", Migration0065],
-  [66, "ThreadRunResults", Migration0066],
+  [61, "PullRequestReviewGuides", Migration0061],
+  // GOAT's own migrations follow upstream's. When an upstream sync claims these ids, move them
+  // up and add the names to GOAT_MIGRATION_NAMES; reconcileGoatMigrationIds fixes old ledgers.
+  [62, "ServerActivityIndexes", Migration0062],
+  [63, "RemoteReports", Migration0063],
+  [64, "RemoteDispatches", Migration0064],
+  [65, "ChannelLedger", Migration0065],
+  [66, "RemoteDispatchQuestions", Migration0066],
+  [67, "ThreadRunResults", Migration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -200,8 +205,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= 55
       ? yield* reconcileV2PreviewMigration()
       : [];
+  const goatMigrations = yield* reconcileGoatMigrationIds(migrationEntries);
   const executedMigrations = [
     ...previewMigrations,
+    ...goatMigrations,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
   ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);

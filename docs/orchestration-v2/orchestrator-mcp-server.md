@@ -246,6 +246,13 @@ that driver; an explicit `providerInstanceId` is honored exactly and fails
 when unavailable. Selecting a different provider without a model uses that
 provider's first advertised model.
 
+A provider runs a runtime mode it does not offer as `approval-required`, so a
+child would ask for approval on every command. `orchestrator_capabilities`
+lists `runtimeModes` only for a provider that offers some of the modes, and
+omits it for a provider that offers all of them. When the target lists
+`runtimeModes`, an explicit `runtimeMode` outside that list is refused, and an
+inherited mode steps down to the broadest mode the target offers.
+
 A local async child outlives an interrupt or Stop of the parent's turn and still wakes
 the parent when it finishes. A local `mode: "wait"` child stops with the turn whose
 blocking call it answers, unless that wait already timed out. `task_cancel` stops
@@ -390,16 +397,27 @@ status list. Run-end notifications are controlled separately by
 ### Completion webhook
 
 The launch watch's reports can also be posted to an agent outside GOAT. Turn on
-the `completionWebhook` server setting (`{ enabled, url, secret, allLaunches }`,
-off by default) and pass `notifyWebhook: true` to `goat_thread_launch` or
-`goat_ssh_thread_launch`; `allLaunches: true` posts for every watch instead. The
-webhook rides on the launch watch, so it needs a calling GOAT thread and
+the `completionWebhook` server setting (`{ enabled, url, secret, allLaunches,
+externalLaunches }`, off by default) and pass `notifyWebhook: true` to
+`goat_thread_launch` or `goat_ssh_thread_launch`; `allLaunches: true` posts for
+every watch instead. The webhook rides on the launch watch, so it needs
 `notifyOnCompletion` left on. The launcher's server posts, also for SSH launches.
+
+A launch from an MCP client outside any GOAT thread has no thread to wake. With
+the webhook on, `notifyWebhook: true` on that launch, or `externalLaunches: true`
+for every such launch, gives it a launcherless watch: its run end, questions, and
+host outages are posted to the webhook only, and the launch returns
+`watching: true`. Without either, nothing changes: the launch returns
+`watching: false` and nothing is posted. The watch follows remote threads at the
+runtime mode the client was approved for and ends once its run is reported.
+`goat_thread_watch`, `goat_thread_unwatch`, and `goat_thread_watch_list` still need
+a thread credential, so a client cannot list or stop these watches.
 
 Each report is one JSON `POST` after the launcher's wake is queued, never
 instead of it: `{ id, event, threadId, runId, requestId?, host, title, status,
 summary, excerpt, prUrl?, launcherThreadId, at }`, where `event` is
-`run.completed`, `question`, or `host.unavailable`. Headers carry
+`run.completed`, `question`, or `host.unavailable`, and `launcherThreadId` is
+`null` for a launcherless watch. Headers carry
 `x-goat-event`, `x-goat-delivery` (the stable `id`), and, with a secret,
 `x-goat-signature: sha256=<hex HMAC-SHA256 of the body>`. Network errors, 408,
 429, and 5xx retry with the launch watch backoff, up to six attempts; turning

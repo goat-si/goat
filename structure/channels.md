@@ -25,7 +25,7 @@ Slack settings for that connection are `slack-channel-settings.json` under the s
 
 > Decision record: [ADR-0011](decisions/ADR-0011-channel-ledger.md)
 
-The ledger migration is `apps/server/src/persistence/Migrations/064_ChannelLedger.ts`. It creates
+The ledger migration is `apps/server/src/persistence/Migrations/065_ChannelLedger.ts`. It creates
 `channel_conversations`, `channel_bindings`, `channel_inbox`, `channel_tasks`,
 `channel_task_events`, `channel_outbox`, `channel_runtime_state`, `channel_identities`, and
 `channel_identity_links`. `ChannelLedger` reads them through `SqlClient`.

@@ -20,7 +20,10 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -115,12 +118,18 @@ const harness = Effect.fn("agentThreadSteeringHarness")(function* (
         };
       }),
   };
-  const layer = Layer.provideMerge(
-    ThreadManagementService.layer,
-    ProviderReplayHarness.layerWithRegistry(
-      { name: "agent-thread-steering-" + name },
-      ProviderAdapterRegistry.layerSingle(adapter),
-      { runEffectWorker: false },
+  const layerDatabase = SqlitePersistence.layerMemory;
+  const layer = ThreadManagementService.layer.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
+        ServerSettings.layerTest(),
+        ProviderReplayHarness.layerWithRegistry(
+          { name: "agent-thread-steering-" + name },
+          ProviderAdapterRegistry.layerSingle(adapter),
+          { databaseLayer: layerDatabase, runEffectWorker: false },
+        ),
+      ),
     ),
   );
   return { cwd, events, started, steered, interrupted, layer };

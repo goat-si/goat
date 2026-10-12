@@ -16,7 +16,8 @@ import { backoffMs, type LaunchWatch } from "./launchWatch.ts";
 /**
  * Posts launch watch reports to the `completionWebhook` server setting, so an
  * agent outside GOAT hears what the launcher thread hears. Delivery runs on its
- * own fiber and never holds back the wake. It is best effort: a report whose
+ * own fiber and never holds back the wake. A launcherless watch, for a launch
+ * from outside any thread, has no wake and reports only here. It is best effort: a report whose
  * POST has not succeeded when the server stops is lost, and one whose wake is
  * replayed after a crash before the watch state was saved can post twice under
  * the same id.
@@ -51,7 +52,8 @@ export interface CompletionWebhookPayload {
   readonly summary: string;
   readonly excerpt: string | null;
   readonly prUrl?: string;
-  readonly launcherThreadId: ThreadId;
+  /** Null when the launch came from outside any GOAT thread. */
+  readonly launcherThreadId: ThreadId | null;
   readonly at: string;
 }
 
@@ -90,8 +92,20 @@ function signCompletionWebhook(body: string, secret: string): string {
 
 function completionWebhookWanted(settings: CompletionWebhookSettings, watch: LaunchWatch): boolean {
   return (
-    settings.enabled && settings.url.length > 0 && (watch.notifyWebhook || settings.allLaunches)
+    settings.enabled &&
+    settings.url.length > 0 &&
+    (watch.notifyWebhook ||
+      settings.allLaunches ||
+      (watch.launcherThreadId === null && settings.externalLaunches))
   );
+}
+
+/** Whether a launch from outside any thread should get a launcherless watch. */
+function completionWebhookWatchesExternal(
+  settings: CompletionWebhookSettings,
+  requested: boolean,
+): boolean {
+  return settings.enabled && isHttpUrl(settings.url) && (requested || settings.externalLaunches);
 }
 
 const isHttpUrl = (url: string) => {
@@ -112,6 +126,11 @@ type Attempt = "delivered" | "retry" | "stop" | "skipped";
 export interface CompletionWebhookShape {
   /** Starts delivering one report in the background; a report id already seen is dropped. */
   readonly notify: (watch: LaunchWatch, report: CompletionWebhookReport) => Effect.Effect<void>;
+  /**
+   * Whether a launch from outside any thread is watched: the webhook is on and
+   * the launch asked for it (notifyWebhook) or the settings watch every such launch.
+   */
+  readonly watchesExternal: (requested: boolean) => Effect.Effect<boolean>;
 }
 
 export class CompletionWebhook extends Context.Service<CompletionWebhook, CompletionWebhookShape>()(
@@ -200,7 +219,19 @@ export const make = Effect.gen(function* () {
       yield* deliver(watch, report, at).pipe(Effect.interruptible, Effect.forkIn(scope));
     });
 
-  return CompletionWebhook.of({ notify });
+  const watchesExternal: CompletionWebhookShape["watchesExternal"] = (requested) =>
+    serverSettings.getSettings.pipe(
+      Effect.map((settings) =>
+        completionWebhookWatchesExternal(settings.completionWebhook, requested),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("completion webhook: settings unreadable", { cause }).pipe(
+          Effect.as(false),
+        ),
+      ),
+    );
+
+  return CompletionWebhook.of({ notify, watchesExternal });
 });
 
 export const layer = Layer.effect(CompletionWebhook, make);

@@ -116,3 +116,41 @@ export const RemoteDispatchView = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type RemoteDispatchView = typeof RemoteDispatchView.Type;
+
+/**
+ * A thread this environment started or watches on another machine over SSH,
+ * from its remote dispatch records and launch watches. `host` is the SSH alias
+ * on this environment, so another client resolves the thread by `threadId`
+ * among the environments it is connected to.
+ */
+export const RemoteLaunch = Schema.Struct({
+  host: Schema.String,
+  /** Null while the launch is in flight, or when its outcome was lost. */
+  threadId: Schema.NullOr(ThreadId),
+  title: Schema.NullOr(Schema.String),
+  /** The thread in this environment that launched or watches it. */
+  launcherThreadId: ThreadId,
+  /** `watch` is a launch watch with no dispatch record, such as goat_thread_watch. */
+  source: Schema.Literals(["thread", "task", "watch"]),
+  state: Schema.NullOr(RemoteDispatchState),
+  latest: RemoteDispatchView.fields.latest,
+  hostUnavailableSince: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+export type RemoteLaunch = typeof RemoteLaunch.Type;
+
+export const REMOTE_LAUNCHES_DEFAULT_LIMIT = 100;
+export const RemoteLaunchesListInput = Schema.Struct({
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+});
+export type RemoteLaunchesListInput = typeof RemoteLaunchesListInput.Type;
+export const RemoteLaunchesListResult = Schema.Struct({
+  /** Newest first. */
+  launches: Schema.Array(RemoteLaunch),
+  truncated: Schema.Boolean,
+});
+export type RemoteLaunchesListResult = typeof RemoteLaunchesListResult.Type;
+export class RemoteLaunchesError extends Schema.TaggedError<RemoteLaunchesError>()(
+  "RemoteLaunchesError",
+  { message: Schema.String },
+) {}

@@ -5,8 +5,9 @@ HTTP server is `layerMcpTransport` in `apps/server/src/mcp/McpHttpServer.ts`: `M
 with `name: "GOAT"`, `path: "/mcp"`, and protocol `McpProtocol.v2025_06_18`. Unauthorized calls
 fail with copy that names a GOAT MCP credential.
 
-`McpHttpServer.layer` merges one toolkit layer per area and provides `LaunchWatchService`,
-`RemoteReportService`, and `RemoteDispatchCoordinator`. Each toolkit is a `tools.ts` that declares
+`McpHttpServer.layer` merges one toolkit layer per area and provides `RemoteReportService` and
+`ThreadResultService`. `apps/server/src/server.ts` provides `LaunchWatchService` and
+`RemoteDispatchCoordinator` once for these tools and the remote-launch catalog. Each toolkit is a `tools.ts` that declares
 `Tool.make` entries and a `handlers.ts` that implements them. Handlers call a service. They do not
 append orchestration events themselves. That write is the [command commit](server.md#command-commit).
 
@@ -27,7 +28,8 @@ Names are not one prefix.
 
 `schedule_task` calls `ScheduledTaskService` through `apps/server/src/mcp/OrchestratorMcpService.ts`.
 `goat_thread_launch` and `goat_ssh_thread_launch` register a launch watch when completion
-notifications are left on. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
+notifications are left on; a launch from outside any thread is watched only when the completion
+webhook takes it. Those two paths are [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)
 and [`ssh.md`](ssh.md).
 
 `goat_thread_send` from an agent in another thread is delivered like steering, whichever mode the

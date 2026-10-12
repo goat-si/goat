@@ -1,9 +1,11 @@
 import {
   GoatHostStatusResult,
   OrchestratorMcpFailure,
+  type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -51,6 +53,17 @@ export interface HostStatusMcpServiceShape {
     scope: McpInvocationScope,
     input: GoatHostStatusInput,
   ) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
+  /**
+   * The same read for a signed-in GOAT client, such as the web Hosts panel.
+   * Connected SSH hosts are reached only with `reachHosts`, which the caller
+   * grants to sessions that may operate threads: like the MCP tool's fan-out,
+   * it uses this machine's SSH keys. Without it, only this machine is read.
+   */
+  readonly readForClient: (client: {
+    readonly environmentId: EnvironmentId;
+    readonly sessionId: string;
+    readonly reachHosts: boolean;
+  }) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
 }
 
 export class HostStatusMcpService extends Context.Service<
@@ -102,6 +115,7 @@ const make = Effect.gen(function* () {
 
   const readLocal = Effect.fn("HostStatus.readLocal")(function* () {
     const snapshot = yield* resources.read;
+    const platform = yield* HostProcess.Platform;
     const shells = yield* threads
       .listProjectThreads({ projectId: undefined, includeSubagents: false })
       .pipe(
@@ -114,6 +128,7 @@ const make = Effect.gen(function* () {
       reachability: "ok" as const,
       metrics: {
         ...snapshot,
+        platform,
         threads: countHostThreads(shells),
         quotas: yield* readQuotas(),
       },
@@ -182,7 +197,23 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return HostStatusMcpService.of({ read });
+  const readForClient: HostStatusMcpServiceShape["readForClient"] = Effect.fn(
+    "HostStatus.readForClient",
+  )(function* (client) {
+    const issuedAt = yield* clock.currentTimeMillis;
+    const scope: McpInvocationScope = {
+      environmentId: client.environmentId,
+      capabilities: new Set(["orchestration"]),
+      issuedAt,
+      requestNamespace: `client-session:${client.sessionId}`,
+      thread: undefined,
+      // Only reads: remote hosts are asked for their own local status with writes off.
+      client: { sessionId: client.sessionId, label: "GOAT client", access: "read-only" },
+    };
+    return yield* read(scope, client.reachHosts ? {} : { local: true });
+  });
+
+  return HostStatusMcpService.of({ read, readForClient });
 });
 
 export const layer = Layer.effect(HostStatusMcpService, make);

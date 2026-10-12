@@ -168,7 +168,7 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     notifyWebhook: Schema.optional(
       Schema.Boolean.annotate({
         description:
-          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the completion webhook configured in server settings, for an agent outside GOAT. Needs the launch watch (notifyOnCompletion not false). Does nothing while the webhook is off. Default false.",
+          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the completion webhook configured in server settings, for an agent outside GOAT. Needs the launch watch (notifyOnCompletion not false). From a client outside any GOAT thread, this asks for a watch that reports only to the webhook; the result says watching:true when one was recorded. Does nothing while the webhook is off. Default false.",
       }),
     ),
     launchedBy: Schema.optional(

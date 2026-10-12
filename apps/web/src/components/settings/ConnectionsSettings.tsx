@@ -90,6 +90,7 @@ import {
   formatDesktopSshTarget,
 } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { HostsSettings } from "./HostsSettings";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 import { Input } from "../ui/input";
@@ -174,6 +175,7 @@ import {
   refreshDesktopNetworkAccessState,
 } from "~/state/desktopNetworkAccess";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
+import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
 import {
   type EnvironmentPresentation,
@@ -4168,6 +4170,16 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
+      {primaryEnvironmentId !== null ? (
+        <HostsSettings
+          environmentId={primaryEnvironmentId}
+          localLabel={primaryEnvironment?.label ?? "This machine"}
+          localKind={
+            primaryServerConfig ? resolveEnvironmentMachineKind(primaryServerConfig) : "desktop"
+          }
+        />
+      ) : null}
+      <RemoteLaunchesSettings />
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
       <GitHubRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>

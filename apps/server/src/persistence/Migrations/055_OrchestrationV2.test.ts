@@ -13,7 +13,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 66 }, (_, index) => index + 1),
+        Array.from({ length: 67 }, (_, index) => index + 1),
       );
     }),
   );
@@ -32,12 +32,13 @@ layer("055_OrchestrationV2", (it) => {
         [58, "WebhookRelayDeliveries"],
         [59, "McpAppModelContext"],
         [60, "ThreadSnapshotWindowIndexes"],
-        [61, "ServerActivityIndexes"],
-        [62, "RemoteReports"],
-        [63, "RemoteDispatches"],
-        [64, "ChannelLedger"],
-        [65, "RemoteDispatchQuestions"],
-        [66, "ThreadRunResults"],
+        [61, "PullRequestReviewGuides"],
+        [62, "ServerActivityIndexes"],
+        [63, "RemoteReports"],
+        [64, "RemoteDispatches"],
+        [65, "ChannelLedger"],
+        [66, "RemoteDispatchQuestions"],
+        [67, "ThreadRunResults"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 
@@ -64,12 +65,13 @@ layer("055_OrchestrationV2", (it) => {
         { migration_id: 58, name: "WebhookRelayDeliveries" },
         { migration_id: 59, name: "McpAppModelContext" },
         { migration_id: 60, name: "ThreadSnapshotWindowIndexes" },
-        { migration_id: 61, name: "ServerActivityIndexes" },
-        { migration_id: 62, name: "RemoteReports" },
-        { migration_id: 63, name: "RemoteDispatches" },
-        { migration_id: 64, name: "ChannelLedger" },
-        { migration_id: 65, name: "RemoteDispatchQuestions" },
-        { migration_id: 66, name: "ThreadRunResults" },
+        { migration_id: 61, name: "PullRequestReviewGuides" },
+        { migration_id: 62, name: "ServerActivityIndexes" },
+        { migration_id: 63, name: "RemoteReports" },
+        { migration_id: 64, name: "RemoteDispatches" },
+        { migration_id: 65, name: "ChannelLedger" },
+        { migration_id: 66, name: "RemoteDispatchQuestions" },
+        { migration_id: 67, name: "ThreadRunResults" },
       ]);
 
       const tables = yield* sql<{ readonly name: string }>`

@@ -28,9 +28,9 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0062 from "../persistence/Migrations/062_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/063_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/065_RemoteDispatchQuestions.ts";
+import Migration0062 from "../persistence/Migrations/063_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/064_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/066_RemoteDispatchQuestions.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Ssh from "../sshRemote/SshRemoteDispatch.ts";
@@ -1629,6 +1629,31 @@ it.effect("limits origin dispatches in SQL while preserving newest-first order",
       assert.notEqual(first.correlationId, second.correlationId);
       assert.include(f.statements.at(-1)!, "LIMIT");
       assert.equal((yield* c.listForOrigin(origin, 0)).length, 0);
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(database)),
+);
+
+it.effect("lists every origin's dispatches by latest update", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    f.supported(false);
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const first = yield* f.launch(c);
+      const second = yield* f.launch(c);
+      yield* f.sql`UPDATE remote_dispatches SET updated_at = '2026-10-11T00:00:00.000Z'`;
+      yield* f.sql`UPDATE remote_dispatches SET origin_thread_id = 'another-origin', updated_at = ${at} WHERE correlation_id = ${first.correlationId}`;
+      assert.deepEqual(
+        (yield* c.listRecent(10)).map((row) => [row.correlationId, row.originThreadId]),
+        [
+          [first.correlationId, "another-origin"],
+          [second.correlationId, origin],
+        ],
+      );
+      assert.deepEqual(
+        (yield* c.listRecent(1)).map((row) => row.correlationId),
+        [first.correlationId],
+      );
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
 );

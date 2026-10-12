@@ -23,8 +23,11 @@ export const unavailable = () =>
   });
 
 /** Decider string rejections are public; wrapped storage and hydration causes are not. */
-export const dispatchFailure = (error: OrchestratorV2Error) =>
-  error._tag === "OrchestratorQuestionAlreadyAnsweredError"
+export const dispatchFailure = (
+  error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
+) =>
+  error._tag === "OrchestratorQuestionAlreadyAnsweredError" ||
+  error._tag === "ThreadManagementProviderInstanceDisabledError"
     ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
     : (error._tag === "OrchestratorDispatchError" ||
           error._tag === "OrchestratorCommandRejectedError") &&

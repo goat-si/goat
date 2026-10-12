@@ -227,7 +227,17 @@ export function makeHarness(
     ]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   );
-  const layerRealThreads = ThreadManagement.layer.pipe(Layer.provide(layerOrchestrator));
+  const layerSettings =
+    options.settingsLayer ??
+    ServerSettings.layerTest({
+      textGenerationModelSelection: modelSelection,
+      defaultRuntimeMode: "full-access",
+    });
+  const layerRealThreads = ThreadManagement.layer.pipe(
+    Layer.provide(layerOrchestrator),
+    Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
+    Layer.provide(layerSettings),
+  );
   const isWorker = (threadId: ThreadId) => world.runs.has(threadId);
 
   const layerThreads = Layer.effect(
@@ -323,11 +333,7 @@ export function makeHarness(
       ensureBotProject: Effect.succeed({ projectId: scratchProjectId }),
       folderForThread: () => Effect.succeed(Option.none()),
     }),
-    options.settingsLayer ??
-      ServerSettings.layerTest({
-        textGenerationModelSelection: modelSelection,
-        defaultRuntimeMode: "full-access",
-      }),
+    layerSettings,
   ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-channel-scenarios-" })),
     Layer.provideMerge(NodeServices.layer),

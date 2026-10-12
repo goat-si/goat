@@ -27,7 +27,7 @@ vi.mock("./ui/sidebar", () => ({
   SidebarInset: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { snapshot: { _tag: "Some" } } }),
+  useEnvironmentQuery: () => ({ data: { status: "live", snapshot: { _tag: "Some" } } }),
 }));
 vi.mock("../state/shell", () => ({ environmentShell: { stateAtom: () => null } }));
 vi.mock("../state/entities", () => ({

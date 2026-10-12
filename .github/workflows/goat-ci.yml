@@ -10,6 +10,9 @@ on:
 
 permissions:
   contents: read
+  # The screenshot-gate task reads the PR, its files, and its label events.
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: goat-ci-${{ github.ref }}
@@ -33,6 +36,7 @@ jobs:
             test-client-runtime,
             test-shared,
             build,
+            screenshot-gate,
           ]
         include:
           # apps/server runs one file at a time. Four duration-balanced shards
@@ -65,7 +69,8 @@ jobs:
         with:
           node-version-file: package.json
           cache: false
-          run-install: true
+          # The screenshot gate only needs Node; skip the dependency install.
+          run-install: ${{ matrix.task != 'screenshot-gate' }}
 
       - name: Toolchain
         run: |
@@ -112,6 +117,16 @@ jobs:
         if: matrix.task == 'test-shared'
         run: vp run --filter @t3tools/shared test
 
+      # Advisory until GOAT_SCREENSHOT_GATE is "enforce". The script reads the live
+      # PR, so re-running only this job picks up a new screenshot or waiver label.
+      # See docs/operations/pr-screenshot-gate.md.
+      - name: PR screenshot gate
+        if: matrix.task == 'screenshot-gate'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GOAT_SCREENSHOT_GATE: ${{ vars.GOAT_SCREENSHOT_GATE }}
+        run: node .github/scripts/pr-screenshot-gate.cjs
+
       - name: Test server
         if: matrix.task == 'test-server'
         run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
@@ -127,6 +142,10 @@ jobs:
         run: >-
           vp test run build-desktop-artifact.test.ts check-release-version.test.ts
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
+
+      - name: Test PR screenshot gate
+        if: matrix.task == 'test'
+        run: node --test .github/scripts/pr-screenshot-gate.test.cjs
 
       - name: Build desktop pipeline
         if: matrix.task == 'build'

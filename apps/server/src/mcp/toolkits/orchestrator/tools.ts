@@ -1,5 +1,6 @@
 import {
   OrchestratorMcpCapabilitiesResult,
+  OrchestrationV2StopWorkflowInput,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpCreateThreadsResult,
   OrchestratorMcpDelegateTaskInput,
@@ -35,6 +36,7 @@ import {
   ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/ai";
+import * as Schema from "effect/Schema";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
@@ -84,7 +86,7 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Needs an agent running inside a GOAT thread. Delegate one bounded task (a research lane, a review round, or one implementation slice) to a GOAT-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Children show under this thread in the sidebar only while they matter to it, and the user may promote one to a top-level thread, which ends the task here; work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles belongs in goat_thread_launch from the start, where the user can see, steer, and resume it. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly GOAT-owned child tasks. For every GOAT delegated review round, call delegate_task again with the original brief, prior findings, responses, and unresolved objections in the task prompt. Track each round by its own taskId and use a distinct clientRequestId per round, stable across retries of that round. The childThreadId is backing storage, not the target for starting another delegated review round through goat_thread_send. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. Prefer mode='async' for long work; mode='wait' releases on completion, timeout, or a pending user-input question in its child thread; pendingRequestIds identifies questions to read and answer or forward, and question release is not waitTimedOut. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn. An async child keeps running when this turn is interrupted or stopped; a mode='wait' child still waiting stops with the turn. task_cancel stops either. To delegate on another machine, pass target.host (SSH alias) and remote.cwd with optional remote.workspace. Needs a full-access/default caller. Models/options are checked on that host. Keep taskId; do not relaunch after an unknown launch outcome. childThreadId is host-qualified and may be null. Parent Stop does not cancel remote tasks; use task_cancel.",
+    "Needs an agent running inside a GOAT thread. Delegate one bounded task (a research lane, a review round, or one implementation slice) to a GOAT-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Children show under this thread in the sidebar only while they matter to it, and the user may promote one to a top-level thread, which ends the task here; work that owns a goal, runs a loop (HOTL, cxc-loop, repeated PABCD), or spans several cycles belongs in goat_thread_launch from the start, where the user can see, steer, and resume it. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly GOAT-owned child tasks. For every GOAT delegated review round, call delegate_task again with the original brief, prior findings, responses, and unresolved objections in the task prompt. Track each round by its own taskId and use a distinct clientRequestId per round, stable across retries of that round. The childThreadId is backing storage, not the target for starting another delegated review round through goat_thread_send. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. A requested runtimeMode must be one the target provider lists in orchestrator_capabilities runtimeModes; an inherited one steps down to the broadest mode it offers. Prefer mode='async' for long work; mode='wait' releases on completion, timeout, or a pending user-input question in its child thread; pendingRequestIds identifies questions to read and answer or forward, and question release is not waitTimedOut. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn. An async child keeps running when this turn is interrupted or stopped; a mode='wait' child still waiting stops with the turn. task_cancel stops either. To delegate on another machine, pass target.host (SSH alias) and remote.cwd with optional remote.workspace. Needs a full-access/default caller. Models/options are checked on that host. Keep taskId; do not relaunch after an unknown launch outcome. childThreadId is host-qualified and may be null. Parent Stop does not cancel remote tasks; use task_cancel.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -119,6 +121,18 @@ const TaskCancelTool = Tool.make("task_cancel", {
   dependencies,
 })
   .annotate(Tool.Title, "Cancel delegated task")
+  .annotate(Tool.Destructive, true);
+
+const WorkflowStopTool = Tool.make("goat_workflow_stop", {
+  description:
+    "Stop one running Claude workflow in a GOAT thread. Use the workflow coordinator's subagentId returned by goat_thread_read with view='activity'. Stops the whole workflow, including its phases and agents. Does not stop the parent thread or other workflows. Individual workflow phases and agents cannot be stopped separately.",
+  parameters: OrchestrationV2StopWorkflowInput,
+  success: Schema.Struct({}),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Stop a workflow")
   .annotate(Tool.Destructive, true);
 
 export const ScheduleTaskTool = Tool.make("schedule_task", {
@@ -222,6 +236,8 @@ const ThreadReadTool = Tool.make("goat_thread_read", {
   dependencies: hostThreadResultDependencies,
 })
   .annotate(Tool.Title, "Read a GOAT thread")
+  // Strict so a misspelled paging param fails instead of silently reading from position 0.
+  .annotate(Tool.Strict, true)
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
@@ -333,6 +349,7 @@ export const OrchestratorToolkit = Toolkit.make(
   DelegateTaskTool,
   TaskStatusTool,
   TaskCancelTool,
+  WorkflowStopTool,
   ScheduleTaskTool,
   ListScheduledTasksTool,
   UpdateScheduledTaskTool,
