@@ -5,6 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelReceptionInput,
   type ChannelTask,
+  ProjectId,
   ProviderInstanceId,
   type RemoteReport,
   type RemoteReportKind,
@@ -1007,7 +1008,10 @@ describe("Slack defaults for work on another machine", () => {
   const remoteModel = { instanceId: ProviderInstanceId.make("codex"), model: "remote-default" };
 
   /** A machine whose project has its own default model, and a Slack connection's defaults. */
-  const defaultsHarness = (defaultTarget: { readonly modelSelection?: typeof slackModel }) => {
+  const defaultsHarness = (defaultTarget: {
+    readonly projectId?: ProjectId;
+    readonly modelSelection?: typeof slackModel;
+  }) => {
     const machine = new RemoteMachine();
     machine.projects = machine.projects.map((project) => ({
       ...project,
@@ -1046,6 +1050,31 @@ describe("Slack defaults for work on another machine", () => {
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "asks instead of letting the other machine pick when the default project is gone",
+    () => {
+      const { machine, harness } = defaultsHarness({
+        projectId: ProjectId.make("project:deleted"),
+      });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(slackInput("do@mac-studio: build it", "d4"), slackContext);
+        const asked = yield* until("asked", (task) => task.status === "waiting_input");
+        assert.include(asked.openQuestions[0]?.text ?? "", "no longer exists");
+        // The other machine has exactly one project; it still was not chosen for them.
+        assert.strictEqual(machine.launches.length, 0);
+        yield* gateway.ingest(
+          slackInput("answer: goat-si/goat", "d5", "1760000000.000100"),
+          slackContext,
+        );
+        yield* until("running", (task) => task.status === "running");
+        assert.strictEqual(machine.launches.length, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("keeps the remote project's model without a Slack default", () => {
     const { machine, harness } = defaultsHarness({});

@@ -34,9 +34,12 @@ can cut a socket mid-close; that only changes which of those two happens.
 
 A Slack connection's default target fills only what the task left open. The project named with the
 work wins over the default project, which wins over the only project; the default model wins over
-the project's (and, on another machine, the remote project's). A missing default project or an
-unavailable default model becomes a question to the requester, never a different choice. Defaults
-pick where and with what model; the requester's ceiling still bounds everything else.
+the project's (and, on another machine, the remote project's). A default project that no longer
+exists becomes a question, on this machine and before choosing one on another machine, never a
+different project. A default model this machine does not offer is skipped with a warning and the
+project's model is used: Slack settings have no control to change the model, so a question would
+leave the requester stuck. Defaults pick where and with what model; the requester's ceiling still
+bounds everything else.
 
 ## Who runs the workers
 

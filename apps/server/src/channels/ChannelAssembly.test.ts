@@ -17,6 +17,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
@@ -40,6 +41,9 @@ import {
 } from "./testkit/ChannelHarness.ts";
 
 const missingInstance = ProviderInstanceId.make("missing");
+const serverModel = { instanceId: ProviderInstanceId.make("codex"), model: "server-default" };
+/** What the fake providers list; anything else counts as not offered. */
+const offeredModels = ["gpt-6.1-sol", "gpt-other", "server-default"];
 
 /**
  * The server's channel graph with the live Slack layers; only the SDK is fake. Providers resolve
@@ -51,8 +55,24 @@ const liveChannels = (sdk: FakeSlackSdk) =>
       Layer.mergeAll(
         sdk.layer,
         ServerSecretStore.layer,
+        // A server default unlike every project's, so tests can tell which one applied.
+        ServerSettings.layerTest({
+          textGenerationModelSelection: serverModel,
+          defaultRuntimeMode: "full-access",
+        }),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-          getInstance: (id) => Effect.succeed(id === missingInstance ? undefined : ({} as never)),
+          getInstance: (id) =>
+            Effect.succeed(
+              id === missingInstance
+                ? undefined
+                : ({
+                    snapshot: {
+                      getSnapshot: Effect.succeed({
+                        models: offeredModels.map((slug) => ({ slug })),
+                      }),
+                    },
+                  } as never),
+            ),
         }),
       ),
     ),
@@ -436,62 +456,25 @@ describe("Slack default work target", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("points to the Slack settings when the default model is unavailable", () => {
+  it.effect("falls back to the project's model when the Slack default provider is gone", () => {
     const harness = harnessWithSlack();
     return Effect.gen(function* () {
       const task = yield* slackTask(harness, {
         modelSelection: { instanceId: missingInstance, model: "gone" },
       });
-      assert.strictEqual(task.status, "waiting_input");
-      assert.include(task.openQuestions[0]?.text ?? "", "Slack settings");
-      assert.strictEqual(harness.world.launches.length, 0);
+      assert.strictEqual(task.status, "running");
+      assert.deepStrictEqual(harness.world.launches[0]?.modelSelection, modelSelection);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
-      // Following the question: fix the default in Slack settings, then answer in the thread.
-      const settings = yield* SlackChannelSettings.SlackChannelSettings;
-      const [connection] = yield* settings.get();
-      yield* settings.configure(
-        {
-          connectionId: connection!.connectionId,
-          enabled: true,
-          defaultTarget: { modelSelection: otherModel },
-        },
-        owner,
-      );
-      yield* settings.streamStatus().pipe(
-        Stream.filter((event) => event.status === "connected"),
-        Stream.runHead,
-      );
-      harness.script.current = (input) =>
-        input.mode === "input"
-          ? Effect.succeed({
-              replyText: "Thanks.",
-              action: {
-                type: "answer_question",
-                taskId: task.taskId,
-                questionId: task.openQuestions[0]!.questionId,
-                answer: "Changed it.",
-              },
-            })
-          : defaultScript(input);
-      yield* emit(
-        harness.sdk,
-        eventCallback(
-          channelMention({
-            text: "<@U0BOT> changed it",
-            ts: "1760000000.000400",
-            thread_ts: slackRoot,
-          }),
-          { event_id: "EvAnswer" },
-        ),
-      );
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      yield* runtime.drain;
-      assert.strictEqual(harness.world.launches.length, 1);
-      assert.deepStrictEqual(harness.world.launches[0]?.modelSelection, otherModel);
-      const ledger = yield* ChannelLedger.ChannelLedger;
-      const [after] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
-      assert.strictEqual(after?.taskId, task.taskId);
-      assert.strictEqual(after?.status, "running");
+  it.effect("falls back to the project's model when the provider no longer lists it", () => {
+    const harness = harnessWithSlack();
+    return Effect.gen(function* () {
+      const task = yield* slackTask(harness, {
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "retired" },
+      });
+      assert.strictEqual(task.status, "running");
+      assert.deepStrictEqual(harness.world.launches[0]?.modelSelection, modelSelection);
     }).pipe(Effect.provide(harness.layer));
   });
 

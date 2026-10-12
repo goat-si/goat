@@ -15,6 +15,7 @@ import {
   type ChannelDispatchTarget,
   type ChannelTask,
   type ChannelTaskId,
+  type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
 } from "@t3tools/contracts";
@@ -145,6 +146,18 @@ const make = Effect.gen(function* () {
       );
     });
 
+  /** Whether this machine has the provider instance and, when it lists models, that model. */
+  const modelOffered = (selection: ModelSelection) =>
+    Effect.gen(function* () {
+      const instance = yield* providers.getInstance(selection.instanceId);
+      if (instance === undefined) return false;
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      return (
+        snapshot.models.length === 0 ||
+        snapshot.models.some((candidate) => candidate.slug === selection.model)
+      );
+    });
+
   /** The launch settings for a task, or the question to ask when they cannot be chosen. */
   const resolveTarget = (stored: ChannelLedger.ChannelStoredTask) =>
     Effect.gen(function* () {
@@ -178,22 +191,34 @@ const make = Effect.gen(function* () {
         yield* serverSettings.getSettings.pipe(Effect.orDie),
         chosen.id,
       ).settings;
-      const modelSelection =
-        defaults?.modelSelection ??
+      const projectModel =
         chosen.defaultModelSelection ??
         settings.defaultModelSelection ??
         settings.textGenerationModelSelection;
+      // The Slack connection's model applies only where it is offered. Slack settings have no
+      // control to change it, so an unavailable one falls back to the project's model with a
+      // warning instead of asking a question the requester cannot act on.
+      const preferred =
+        defaults?.modelSelection === undefined
+          ? undefined
+          : (yield* modelOffered(defaults.modelSelection))
+            ? defaults.modelSelection
+            : undefined;
+      if (defaults?.modelSelection !== undefined && preferred === undefined) {
+        yield* Effect.logWarning("Slack default model is not available here; using the project's", {
+          instanceId: defaults.modelSelection.instanceId,
+          model: defaults.modelSelection.model,
+        });
+      }
+      const modelSelection = preferred ?? projectModel;
       const instance = yield* providers.getInstance(modelSelection.instanceId);
       if (instance === undefined) {
         return {
           type: "question" as const,
           text:
-            defaults?.modelSelection === undefined
-              ? "The model for " +
-                chosen.title +
-                " is not available. Pick a default model for it in GOAT and answer here."
-              : "The default model for work from Slack is not available. Change or clear it in " +
-                "GOAT's Slack settings and answer here.",
+            "The model for " +
+            chosen.title +
+            " is not available. Pick a default model for it in GOAT and answer here.",
         };
       }
       const isGit = yield* fileSystem
@@ -293,6 +318,22 @@ const make = Effect.gen(function* () {
       // The project named with the work, else the Slack connection's default, finds its
       // counterpart on the other machine.
       const named = shells.find((shell) => shell.id === (task.projectId ?? defaults?.projectId));
+      // A default project that is gone must not let the other machine pick one on its own; once
+      // the requester answered, the remote side chooses from that answer.
+      if (
+        task.projectId === undefined &&
+        defaults?.projectId !== undefined &&
+        named === undefined &&
+        (yield* ledger.latestAnswer(task.taskId)) === undefined
+      ) {
+        return {
+          type: "question" as const,
+          text:
+            "The default project for work from Slack no longer exists. Which project on " +
+            task.host +
+            " should I use?",
+        };
+      }
       const identities = yield* Effect.serviceOption(
         RepositoryIdentityResolver.RepositoryIdentityResolver,
       );
@@ -304,7 +345,7 @@ const make = Effect.gen(function* () {
         yield* serverSettings.getSettings.pipe(Effect.orDie),
         named?.id ?? null,
       ).settings;
-      return {
+      const local = {
         modelSelection:
           named?.defaultModelSelection ??
           settings.defaultModelSelection ??
@@ -319,6 +360,7 @@ const make = Effect.gen(function* () {
         ...(named === undefined ? {} : { title: named.title }),
         ...(identity === null ? {} : { canonicalKey: identity.canonicalKey }),
       };
+      return { type: "hints" as const, local };
     });
 
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
@@ -353,7 +395,9 @@ const make = Effect.gen(function* () {
       }
       if (stored.task.status !== "received") return;
       if (stored.task.host !== undefined) {
-        return yield* remoteWorkers.dispatch(taskId, owner, yield* remoteHints(stored));
+        const hints = yield* remoteHints(stored);
+        if (hints.type === "question") return yield* askRequester(stored, hints.text, owner);
+        return yield* remoteWorkers.dispatch(taskId, owner, hints.local);
       }
       const resolved = yield* resolveTarget(stored);
       if (resolved.type === "question") return yield* askRequester(stored, resolved.text, owner);
