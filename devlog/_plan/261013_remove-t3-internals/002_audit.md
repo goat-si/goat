@@ -137,4 +137,4 @@ Non-blocking: D8's one-time log of the legacy-home fallback is not emitted; left
 | 1   | Duplicating large legacy drafts can exhaust localStorage, after which draft writes fail. | Over quota, the adapter drops that key's retained legacy copy and retries once, then surfaces the error. |
 | 2   | A pending async adoption could land after a newer write or clear.                        | Async operations are serialized per key.                                                                 |
 
-Non-blocking folds: a negative cache keeps a miss at one backing read; WSL marker promotion publishes through a temp file and rename.
+Non-blocking: WSL marker promotion publishes through a temp file and rename. A negative cache for absent keys was tried and dropped: it outlived what it described, and the reads it saved are startup-only.

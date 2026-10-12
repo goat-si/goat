@@ -22,8 +22,6 @@ export function migratingStorage<R>(storage: StorageAdapter<R>): StorageAdapter<
 export function migratingStorage(storage: StorageAdapter): StorageAdapter {
   const cached = wrappers.get(storage);
   if (cached) return cached;
-  // Keys whose legacy value is known to be absent: a miss then costs one backing read.
-  const noLegacy = new Set<string>();
   // Async backends run one operation per key at a time, so a pending adoption can never
   // land after a later write or clear.
   const queues = new Map<string, Promise<unknown>>();
@@ -44,9 +42,7 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
     return result;
   };
   const adopt = (key: string, value: string | null) => {
-    if (value === null) {
-      noLegacy.add(key);
-    } else {
+    if (value !== null) {
       // A quota failure must not hide readable legacy data. Retry on the next read.
       try {
         const write = storage.setItem(key, value);
@@ -65,7 +61,7 @@ export function migratingStorage(storage: StorageAdapter): StorageAdapter {
     if (value !== null)
       return value === REMOVED_STORAGE_VALUE && legacyStorageKey(key) !== undefined ? null : value;
     const legacy = legacyStorageKey(key);
-    if (legacy === undefined || noLegacy.has(key)) return null;
+    if (legacy === undefined) return null;
     const old = storage.getItem(legacy);
     return old instanceof Promise ? old.then((value) => adopt(key, value)) : adopt(key, old);
   };
