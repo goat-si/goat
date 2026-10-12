@@ -198,6 +198,8 @@ export function makeHarness(
     readonly realWorkerLaunch?: boolean;
     /** Other machines over SSH; defaults to a machine that knows no SSH hosts. */
     readonly sshRemote?: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch>;
+    /** The state database; defaults to a fresh in-memory one. A file lets a test restart. */
+    readonly databaseLayer?: typeof SqlitePersistence.layerMemory;
   } = {},
 ) {
   const world = new WorkerWorld();
@@ -209,7 +211,7 @@ export function makeHarness(
     afterAccepted: (_input: ThreadLaunch.ThreadLaunchInput): Effect.Effect<void> => Effect.void,
   };
 
-  const layerDatabase = SqlitePersistence.layerMemory;
+  const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
     ProviderAdapterRegistry.layerFromAdapters([
