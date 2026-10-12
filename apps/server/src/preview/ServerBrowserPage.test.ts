@@ -13,6 +13,8 @@ import {
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { presentAsChrome } from "./ServerBrowserContexts.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -34,6 +36,8 @@ const chromiumInstalled = (() => {
       (browser) => browser.name === "chromium-headless-shell",
     )?.revision;
     if (revision === undefined) return false;
+    const platform = HostProcess.Platform.defaultValue();
+    const arch = HostProcess.Architecture.defaultValue();
     const browsersPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
     const registry =
       browsersPath === "0"
@@ -41,25 +45,25 @@ const chromiumInstalled = (() => {
         : browsersPath
           ? NodePath.resolve(process.env.INIT_CWD || process.cwd(), browsersPath)
           : NodePath.join(
-              process.platform === "linux"
+              platform === "linux"
                 ? process.env.XDG_CACHE_HOME || NodePath.join(NodeOS.homedir(), ".cache")
-                : process.platform === "darwin"
+                : platform === "darwin"
                   ? NodePath.join(NodeOS.homedir(), "Library", "Caches")
                   : process.env.LOCALAPPDATA || NodePath.join(NodeOS.homedir(), "AppData", "Local"),
               "ms-playwright",
             );
     const directory = NodePath.join(registry, `chromium_headless_shell-${revision}`);
     const executable =
-      process.platform === "win32"
+      platform === "win32"
         ? ["chrome-headless-shell-win64", "chrome-headless-shell.exe"]
-        : process.platform === "darwin"
+        : platform === "darwin"
           ? [
-              process.arch === "arm64"
+              arch === "arm64"
                 ? "chrome-headless-shell-mac-arm64"
                 : "chrome-headless-shell-mac-x64",
               "chrome-headless-shell",
             ]
-          : process.arch === "arm64"
+          : arch === "arm64"
             ? ["chrome-linux", "headless_shell"]
             : ["chrome-headless-shell-linux64", "chrome-headless-shell"];
     return NodeFS.existsSync(NodePath.join(directory, ...executable));

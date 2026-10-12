@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import { afterEach, expect, it } from "vite-plus/test";
 
+import * as HostProcess from "../HostProcess.ts";
 import { canonicalizeProcessTempDir } from "./longTempDir.ts";
 import { symlinksSupported } from "./symlinks.ts";
 
@@ -19,7 +20,7 @@ afterEach(() => {
   }
 });
 
-it.skipIf(!symlinksSupported || NodeOS.platform() === "win32")(
+it.skipIf(!symlinksSupported || HostProcess.Platform.defaultValue() === "win32")(
   "points TMPDIR at the real path when the temp directory is a symlink",
   () => {
     const real = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "canon-real-"));
