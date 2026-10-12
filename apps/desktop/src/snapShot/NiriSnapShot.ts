@@ -170,7 +170,7 @@ async function activateNiriWindow(path: string, title: string, signal: AbortSign
       } else if (isWindowClosed(value)) {
         windows.delete(value.WindowClosed.id);
       } else return undefined;
-      // Never activate another process's lookalike window, or guess between multiple T3 windows.
+      // Never activate another process's lookalike window, or guess between multiple GOAT windows.
       const matches = [...windows.values()].filter(
         (window) => window.pid === process.pid && window.title === title,
       );

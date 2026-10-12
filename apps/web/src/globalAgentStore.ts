@@ -9,7 +9,7 @@ export const GLOBAL_AGENT_STORAGE_KEY = "t3code:global-agent:v1";
 const GLOBAL_AGENT_STORAGE_VERSION = 2;
 
 /**
- * The one projectless thread T3 opens on launch and from the sidebar logo.
+ * The one projectless thread GOAT opens on launch and from the sidebar logo.
  * Client-local: each installation remembers its own global agent.
  */
 export interface GlobalAgentRef {

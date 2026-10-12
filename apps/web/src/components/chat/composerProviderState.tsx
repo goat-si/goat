@@ -65,7 +65,7 @@ export function getComposerPromptInjectionState(prompt: string): ComposerPromptI
 }
 
 /**
- * Cursor ACP can report `fastMode: true` as the provider default. T3 only
+ * Cursor ACP can report `fastMode: true` as the provider default. GOAT only
  * treats Fast as selected when the user chose it (draft/sticky/settings).
  * Otherwise inject an explicit `false` so new chats stay Normal and the
  * send path can overwrite a prior Fast session — descriptor defaults are

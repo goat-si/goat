@@ -6,7 +6,7 @@ import { DeviceHostsSettings } from "./DeviceHostsSettings";
 import { GoatBotSettings } from "./GoatBotSettings";
 import { SlackChannelSettings } from "./SlackChannelSettings";
 /**
- * Integrations settings - preferences for surfaces T3 Code embeds rather than
+ * Integrations settings - preferences for surfaces GOAT embeds rather than
  * owns. Browser is the first section: the defaults a preview tab opens at,
  * applied to both hand-opened tabs and agent `preview_open` calls that don't
  * state their own size.

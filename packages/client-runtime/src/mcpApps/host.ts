@@ -537,7 +537,7 @@ function readDownloads(contents: unknown): ReadonlyArray<McpAppDownload> | undef
 }
 
 /**
- * Maps T3's resolved theme variables to the spec's standardized style names, so
+ * Maps GOAT's resolved theme variables to the spec's standardized style names, so
  * apps written for any MCP Apps host pick up the thread's colors and fonts.
  */
 export function mcpAppStyleVariables(

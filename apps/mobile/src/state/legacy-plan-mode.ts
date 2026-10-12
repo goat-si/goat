@@ -6,7 +6,7 @@ import {
 
 type InteractionModeProvider = Pick<ServerProvider, "showInteractionModeToggle">;
 
-/** Normalize saved T3 mode choices without changing native slash commands. */
+/** Normalize saved GOAT mode choices without changing native slash commands. */
 export function resolveProviderInteractionMode(
   provider: InteractionModeProvider | null | undefined,
   interactionMode: ProviderInteractionMode | null | undefined,

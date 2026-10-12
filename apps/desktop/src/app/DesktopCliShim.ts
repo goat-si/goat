@@ -8,7 +8,7 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 
 // A desktop install puts no `goat` on PATH, so commands the server asks a person
 // to run (`sudo goat browser setup`) had nothing to call. The app keeps a small
-// launcher for its bundled CLI in the T3 home, which is never on PATH and so
+// launcher for its bundled CLI in the GOAT home, which is never on PATH and so
 // never shadows another `goat`, and the server names it by absolute path in those
 // commands through T3CODE_CLI_PATH. An AppImage mounts somewhere new each run,
 // so its launcher mounts the AppImage itself instead of pointing into it.
@@ -34,7 +34,7 @@ export type CliShimTarget =
 /**
  * The launcher script. Electron runs the server as plain Node with
  * `ELECTRON_RUN_AS_NODE`, which reads the entry from inside the asar archive.
- * The launcher's own path and the app's T3 home are written in, so the command
+ * The launcher's own path and the app's GOAT home are written in, so the command
  * the server shows is absolute and `sudo`, which clears the environment, still
  * runs against this install's home.
  */
@@ -125,7 +125,7 @@ export const renderCliShim = (input: {
   ].join("\n");
 };
 
-/** Where the packaged app keeps its launcher: `<T3 home>/bin/goat`, `goat.cmd` on Windows. */
+/** Where the packaged app keeps its launcher: `<GOAT home>/bin/goat`, `goat.cmd` on Windows. */
 export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
   environment.path.join(
     environment.baseDir,
@@ -134,7 +134,7 @@ export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment[
   );
 
 /**
- * Writes the packaged app's launcher to `<T3 home>/bin` and returns its path
+ * Writes the packaged app's launcher to `<GOAT home>/bin` and returns its path
  * for the backend's T3CODE_CLI_PATH. Development builds run from a checkout
  * and get none.
  */
