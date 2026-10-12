@@ -57,3 +57,4 @@ Research: `001_inventory.md`. Audit record: `002_audit.md`.
 2. Merge that commit into dev instead of the raw tag. Both sides already carry identical renamed lines, so only real conflicts remain.
 3. After resolving, rerun `node scripts/goat-rename.ts --apply` (idempotent) and `--check`. A new upstream T3 name either matches a rule or fails `--check`; add a rule, or a keep entry with a reason.
 4. A new upstream persisted key, wire id or env var that existing data or older peers depend on also gets an entry in `legacyT3Names.ts` and a dual reader.
+5. When a rebase regenerates a script commit, stage with `git add -A -- . ':!.goat' ':!.t3'`. Commits replayed before the `.goat` ignore rule would otherwise pick up a worktree's dev home, secrets included.
