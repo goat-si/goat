@@ -31,6 +31,8 @@ import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
+import { HostStatusToolkit } from "./toolkits/hostStatus/tools.ts";
+import * as HostStatusHandlers from "./toolkits/hostStatus/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
 import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
@@ -50,6 +52,7 @@ import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as CompletionWebhook from "./completionWebhook.ts";
+import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
@@ -937,6 +940,15 @@ export const layerEnvironmentToolkit = toolkitRegistration(
   EnvironmentHandlers.layer,
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
+export const layerHostStatusToolkit = toolkitRegistration(
+  HostStatusToolkit,
+  HostStatusHandlers.layer,
+).pipe(
+  Layer.provide(HostStatusMcpService.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
+
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
@@ -997,6 +1009,7 @@ export const layer = Layer.mergeAll(
   layerChannelToolkit,
   layerProjectRegistration,
   layerEnvironmentToolkit,
+  layerHostStatusToolkit,
   layerPreviewControlsRegistration,
   layerWorktreeToolkitRegistration,
   layerPullRequestsToolkit,

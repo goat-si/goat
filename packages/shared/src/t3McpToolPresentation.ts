@@ -53,6 +53,7 @@ export type T3McpToolSummaryAction =
   | "project-clone"
   | "environment-read"
   | "environment-update"
+  | "host-status"
   | "ssh-host-list"
   | "ssh-browse"
   | "ssh-thread-launch"
@@ -337,6 +338,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
+  goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),
   goat_thread_launch: tool(
     ["Launch", "Launching", "Launched", "a project thread"],
     "thread-create",

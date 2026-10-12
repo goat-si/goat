@@ -152,6 +152,8 @@ export interface HostThreadsMcpServiceShape {
       readonly host: string;
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
+      /** Defaults to the thread-tool deadline. Host status passes a shorter one. */
+      readonly timeoutMs?: number;
       /** Ask the host for a session that may answer approvals; see SshHostToolCall. */
       readonly approvals?: boolean;
     },

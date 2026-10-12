@@ -59,6 +59,7 @@ import { OrchestratorToolkit } from "./orchestrator/tools.ts";
 import { PreviewToolkit } from "./preview/tools.ts";
 import { PreviewControlsToolkit } from "./previewControls/tools.ts";
 import { EnvironmentToolkit } from "./environment/tools.ts";
+import { HostStatusToolkit } from "./hostStatus/tools.ts";
 import * as EnvironmentHandlers from "./environment/handlers.ts";
 import { ProjectToolkit } from "./project/tools.ts";
 import { RemoteReportToolkit } from "./remoteReport/tools.ts";
@@ -117,6 +118,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     AttachmentToolkit,
     ProjectToolkit,
     EnvironmentToolkit,
+    HostStatusToolkit,
     PreviewControlsToolkit,
     DeviceToolkit,
     PullRequestsToolkit,
@@ -155,6 +157,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_connection_remove",
     "goat_environment_preferences_update",
     "goat_environment_read",
+    "goat_host_status",
     "goat_origin_report",
     "goat_origin_reports_wait",
     "goat_pending_request_list",
