@@ -855,12 +855,7 @@ export const make = Effect.gen(function* () {
       { concurrency: "unbounded", discard: true },
     );
 
-    for (const route of connectionRoutes(entry)) {
-      const profile = Option.getOrNull(route.profile);
-      if (profile !== null && isSshConnectionProfile(profile)) {
-        yield* disconnectSsh(environmentId, profile);
-      }
-    }
+    yield* forkSshTeardown(entry);
   });
 
   const remove = Effect.fn("EnvironmentRegistry.remove")(function* (environmentId: EnvironmentId) {
@@ -876,6 +871,31 @@ export const make = Effect.gen(function* () {
         }),
       ),
       Effect.ignore,
+    );
+
+  /**
+   * Stops the managed SSH backends behind an entry without waiting for them.
+   * The desktop disconnect queues behind an in-flight launch and then stops the
+   * remote server over SSH, so it can take as long as the host takes to answer.
+   * Awaiting it would hold this environment's lease lock and the shared catalog
+   * command queue, freezing every environment switch until the window reloads.
+   * `startImmediately` sends the request before the caller returns, so a quick
+   * off-then-on still reaches the desktop in order.
+   */
+  const forkSshDisconnect = (environmentId: EnvironmentId, route: ConnectionRoute) => {
+    const profile = Option.getOrNull(route.profile);
+    return profile !== null && isSshConnectionProfile(profile)
+      ? disconnectSsh(environmentId, profile).pipe(
+          Effect.forkIn(registryScope, { startImmediately: true }),
+          Effect.asVoid,
+        )
+      : Effect.void;
+  };
+  const forkSshTeardown = (entry: ConnectionCatalogEntry) =>
+    Effect.forEach(
+      connectionRoutes(entry),
+      (route) => forkSshDisconnect(entry.target.environmentId, route),
+      { discard: true },
     );
 
   // Plain HTTP routes are unusable from an HTTPS page, which blocks mixed content.
@@ -968,10 +988,7 @@ export const make = Effect.gen(function* () {
         const remaining = routesAfterRemoving(routes, routeId);
         if (remaining.length === 0) return yield* removeLocked(environmentId);
         yield* replaceRoutesLocked(entry, remaining);
-        const profile = Option.getOrNull(route.profile);
-        if (profile !== null && isSshConnectionProfile(profile)) {
-          yield* disconnectSsh(environmentId, profile);
-        }
+        yield* forkSshDisconnect(environmentId, route);
       }),
     );
   });
@@ -1073,12 +1090,7 @@ export const make = Effect.gen(function* () {
         // The supervisor only owns the RPC session. A managed SSH backend and
         // its tunnel outlive it, so switching off tears those down as well.
         if (!enabled) {
-          for (const route of connectionRoutes(entry)) {
-            const profile = Option.getOrNull(route.profile);
-            if (profile !== null && isSshConnectionProfile(profile)) {
-              yield* disconnectSsh(environmentId, profile);
-            }
-          }
+          yield* forkSshTeardown(entry);
         }
       }),
     );

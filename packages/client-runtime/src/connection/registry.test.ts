@@ -164,6 +164,8 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
       target: ConnectionTarget,
     ) => Effect.Effect<ConnectionBlockedError | undefined>;
     readonly initialDisabled?: ReadonlyArray<EnvironmentId>;
+    /** Runs after the SSH gateway records a disconnect; may suspend to stall it. */
+    readonly holdSshDisconnect?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
     /** Direct addresses the connected server reports. */
     readonly directEndpoints?: ServerConfig["directEndpoints"];
   },
@@ -377,7 +379,10 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   const sshGateway = ClientCapabilities.SshEnvironmentGateway.of({
     provision: () => Effect.die(new Error("SSH provisioning is not used.")),
     prepare: () => Effect.die(new Error("SSH preparation is not used.")),
-    disconnect: (target) => Ref.update(disconnectedSshTargets, (current) => [...current, target]),
+    disconnect: (target) =>
+      Ref.update(disconnectedSshTargets, (current) => [...current, target]).pipe(
+        Effect.andThen(options?.holdSshDisconnect?.(target) ?? Effect.void),
+      ),
   });
   const connectedRoutes = yield* Ref.make<ReadonlyArray<string>>([]);
   const checkRoute = (route: ConnectionRoute) =>
@@ -1133,6 +1138,32 @@ describe("EnvironmentRegistry", () => {
         expect(hasRoutes(yield* Ref.get(harness.storedTargets), SSH_CONNECTION.environmentId)).toBe(
           true,
         );
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("switching an SSH environment off does not wait for a stalled teardown", () =>
+    Effect.gen(function* () {
+      // The desktop disconnect queues behind an in-flight launch, so it can
+      // stall for as long as the host does. The switch must not wait for it.
+      const releaseDisconnect = yield* Deferred.make<void>();
+      const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+        holdSshDisconnect: () => Deferred.await(releaseDisconnect),
+      });
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.start;
+
+        yield* registry.setEnabled(SSH_CONNECTION.environmentId, false);
+        expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([SSH_TARGET]);
+
+        // The lease lock is free again, so the same switch can flip back on.
+        yield* registry.setEnabled(SSH_CONNECTION.environmentId, true);
+        expect(
+          (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)?.enabled,
+        ).toBe(true);
+        yield* Deferred.succeed(releaseDisconnect, undefined);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
