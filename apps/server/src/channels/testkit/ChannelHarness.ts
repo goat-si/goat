@@ -423,7 +423,23 @@ export function makeHarness(
     if (index !== -1) shells.splice(index, 1);
   };
 
-  return { layer, world, slackSent, slackFailures, script, launch, providerCalls, removeProject };
+  /** Renames a project in this machine's catalog. */
+  const renameProject = (id: ProjectId, title: string) => {
+    const index = shells.findIndex((shell) => shell.id === id);
+    if (index !== -1) shells[index] = { ...shells[index]!, title };
+  };
+
+  return {
+    layer,
+    world,
+    slackSent,
+    slackFailures,
+    script,
+    launch,
+    providerCalls,
+    removeProject,
+    renameProject,
+  };
 }
 
 /** A new process owner over the caller's existing ledger and worker services, in its child scope. */

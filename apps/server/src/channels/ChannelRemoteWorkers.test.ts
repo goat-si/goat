@@ -1383,6 +1383,82 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  const withOther = (machine: RemoteMachine) => {
+    machine.projects = [
+      ...machine.projects,
+      {
+        id: "remote-project:other",
+        title: "goat-si/other",
+        workspaceRoot: "/Users/jun/developer/goat-si/other",
+        repositoryIdentity: { canonicalKey: "github.com/goat-si/other" },
+        defaultModelSelection: null,
+      },
+    ];
+  };
+
+  /** A, then a newer choice while the machine is down, then the catalog changes, then "try again". */
+  const newerChoiceThenCatalogChange = (
+    newer: string,
+    change: (h: ReturnType<typeof defaultsHarness>) => void,
+  ) => {
+    const context = defaultsHarness({ projectId: ProjectId.make("project:deleted") });
+    const { machine, harness } = context;
+    withOther(machine);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(slackInput("do@mac-studio: build it", "z1"), slackContext);
+      const first = yield* until("asked", (task) => task.status === "waiting_input");
+      machine.environmentReadDown = true;
+      yield* gateway.ingest(slackInput("answer: goat-si/goat", "z2"), slackContext);
+      const second = yield* until(
+        "unreachable",
+        (task) => task.status === "waiting_input" && task.version > first.version,
+      );
+      machine.down = true;
+      yield* gateway.ingest(slackInput("answer: " + newer, "z3"), slackContext);
+      const third = yield* until(
+        "unreachable again",
+        (task) => task.status === "waiting_input" && task.version > second.version,
+      );
+      change(context);
+      machine.down = false;
+      machine.environmentReadDown = false;
+      yield* gateway.ingest(slackInput("answer: try again", "z4"), slackContext);
+      const fourth = yield* until(
+        "asked for a project there",
+        (task) => task.status === "waiting_input" && task.version > third.version,
+      );
+      assert.include(fourth.openQuestions[0]?.text ?? "", "Which project on mac-studio");
+      assert.strictEqual(machine.launches.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  };
+
+  it.effect("asks when the project chosen here was renamed after an older remote answer", () =>
+    newerChoiceThenCatalogChange("Channel work", ({ harness }) =>
+      harness.renameProject(ProjectId.make("project:channel-work"), "Renamed work"),
+    ),
+  );
+
+  it.effect("asks when the newer remote project was removed there", () =>
+    newerChoiceThenCatalogChange("goat-si/other", ({ machine }) => {
+      machine.projects = machine.projects.filter(
+        (project) => project.id !== "remote-project:other",
+      );
+      machine.projects = [
+        ...machine.projects,
+        {
+          id: "remote-project:third",
+          title: "goat-si/third",
+          workspaceRoot: "/Users/jun/developer/goat-si/third",
+          repositoryIdentity: { canonicalKey: "github.com/goat-si/third" },
+          defaultModelSelection: null,
+        },
+      ];
+    }),
+  );
+
   it.effect("does not let the remote's only project stand in for a project named here", () => {
     const { machine, harness } = defaultsHarness({});
     return Effect.gen(function* () {

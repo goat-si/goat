@@ -83,8 +83,13 @@ const INBOX_LIMIT = 200;
 const MAX_PROJECT_PAGES = 5;
 
 /** What the requester reads. Fixed text: remote error text never reaches a channel. */
-/** How many of a task's answers the remote project choice reads, newest first. */
-const MAX_ANSWERS_READ = 20;
+/**
+ * How many of a task's answers the remote project choice reads, newest first: the newest, and
+ * the one before it when the newest chose nothing ("try again"). Reading further back would let
+ * a choice whose provenance the catalog no longer shows (a renamed or deleted project) be skipped
+ * and an older answer win.
+ */
+const MAX_ANSWERS_READ = 2;
 
 export const REMOTE_COPY = {
   unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
@@ -426,10 +431,9 @@ const make = Effect.gen(function* () {
   ) => {
     const byId = projects.find((project) => project.id === hint.projectId);
     if (byId !== undefined) return byId;
-    // The newest answer that names one of its projects decides, so a later answer to another
-    // question ("try again") keeps the project chosen before it, and a newer name replaces it.
-    // An answer that picked something else (a machine, or a project on this machine) is the
-    // newer choice: older answers stop counting, even when they name a project here.
+    // The newest answer naming one of its projects decides; an answer to a later question that
+    // chose nothing ("try again") keeps the project named just before it. An answer that picked
+    // something else (a machine, or a project on this machine) is the newer choice.
     for (const raw of hint.answers ?? []) {
       const answer = raw.toLowerCase();
       const named = projects.filter((project) => answer.includes(project.title.toLowerCase()));
@@ -496,18 +500,12 @@ const make = Effect.gen(function* () {
       if (projects.length === 0) {
         return { type: "question", text: REMOTE_COPY.noProject(host) } as const;
       }
-      const recentAnswers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
-      // Answers are ordered against the choices here by matching today's catalog. When the
-      // project chosen here is gone from it, when it was chosen can no longer be told, so only
-      // the newest answer counts and anything less clear is asked again.
+      const answers = yield* ledger.recentAnswers(task.taskId, MAX_ANSWERS_READ);
+      // The project chosen here stays a barrier by id even after it leaves the catalog.
       const localProjects = [
         ...(local.localProjects ?? []),
         ...(task.projectId === undefined ? [] : [{ id: task.projectId, title: "" }]),
       ];
-      const chosenHereIsGone =
-        task.projectId !== undefined &&
-        !(local.localProjects ?? []).some((project) => project.id === task.projectId);
-      const answers = chosenHereIsGone ? recentAnswers.slice(0, 1) : recentAnswers;
       const chosen = chooseProject(projects, {
         ...(task.projectId === undefined ? {} : { projectId: task.projectId }),
         ...(local.title === undefined ? {} : { localTitle: local.title }),

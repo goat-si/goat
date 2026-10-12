@@ -42,11 +42,12 @@ is asked. Defaults pick where and with what model; the requester's ceiling still
 
 On another machine the remote's only project stands in only when no project was asked for: a
 project named here, or a default that is gone, must match one of its projects. The newest answer
-in the current generation that names one of its projects decides, so an answer to a later question
-("try again" after the machine was unreachable) keeps the project chosen before it, naming another
-replaces it. A retry, or an answer that picks something else (a machine, or a project on this
-machine, matched the way reception records it), ends the reach of older answers and asks again.
-If the project chosen here has since left the catalog, only the newest answer counts.
+in the current generation that names one of its projects decides, and an answer that chose nothing
+("try again" after the machine was unreachable) keeps the project named in the answer just before
+it. Nothing older counts: whether an older answer was overtaken can only be told from today's
+catalog, and a renamed or deleted project would hide that. An answer that picks something else (a
+machine, or a project on this machine, matched the way reception records it) asks again, and so
+does a retry.
 
 ## Who runs the workers
 
