@@ -1834,6 +1834,9 @@ importers:
 
   packages/tailscale:
     dependencies:
+      '@goat/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@goat/shared':
         specifier: workspace:*
         version: link:../shared

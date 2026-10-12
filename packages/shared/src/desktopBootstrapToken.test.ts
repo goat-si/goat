@@ -48,3 +48,9 @@ describe("desktop bootstrap token", () => {
     expect(isValidDesktopBootstrapToken(SECRET, "short", WINDOW)).toBe(false);
   });
 });
+
+it("keeps accepting the token bytes issued before the rename", () => {
+  const legacyToken = "5d78c2ca298011b8e4d1864d152fadd3bc83a0d5432d55cc7e97767a14fa6b02";
+  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).toBe(legacyToken);
+  expect(isValidDesktopBootstrapToken(SECRET, legacyToken, 10 * WINDOW)).toBe(true);
+});

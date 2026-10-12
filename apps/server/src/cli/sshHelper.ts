@@ -1,3 +1,4 @@
+import { LEGACY_ENVIRONMENT_PATH, LEGACY_ACTIVITY_PATH } from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics globalDateInEffect:off
@@ -147,7 +148,7 @@ const readProtocolDescriptor = (port: number) =>
       else resolve(value);
     };
     const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: "/.well-known/t3/environment", timeout: 1000 },
+      { hostname: "127.0.0.1", port, path: LEGACY_ENVIRONMENT_PATH, timeout: 1000 },
       (response) => {
         const chunks: Buffer[] = [];
         let bytes = 0;
@@ -407,7 +408,7 @@ export const readSshServerActivity = async (
       resolve(value);
     };
     const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: "/.well-known/t3/activity" },
+      { hostname: "127.0.0.1", port, path: LEGACY_ACTIVITY_PATH },
       (response) => {
         const chunks: Buffer[] = [];
         let bytes = 0;

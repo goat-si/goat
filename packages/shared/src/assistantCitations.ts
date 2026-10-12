@@ -1,4 +1,8 @@
 import {
+  LEGACY_CITATION_LINK_PROTOCOL,
+  CITATION_LINK_PROTOCOLS,
+} from "@goat/contracts/legacyT3Names";
+import {
   ASSISTANT_CITATION_MAX_COMMENT_LENGTH,
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   AssistantCitation,
@@ -6,13 +10,15 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const CITATION_PROTOCOL = "t3-citation:";
+const CITATION_PROTOCOL = `${LEGACY_CITATION_LINK_PROTOCOL}:`;
 const CITATION_HREF_PREFIX = `${CITATION_PROTOCOL}//v1/`;
+const CITATION_HREF_PREFIXES = CITATION_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
+const CITATION_HREF_PATTERN = `(?:${CITATION_LINK_PROTOCOLS.join("|")})://v1/`;
 // Percent encoding needs up to nine characters per UTF-16 code unit; 16k covers selectors.
 const MAX_CITATION_HREF_LENGTH =
   9 * (ASSISTANT_CITATION_MAX_TEXT_LENGTH + ASSISTANT_CITATION_MAX_COMMENT_LENGTH) + 16_000;
 const CITATION_LINK = new RegExp(
-  String.raw`\[Assistant quote\]\((${CITATION_HREF_PREFIX}[^\s)]{1,${MAX_CITATION_HREF_LENGTH - CITATION_HREF_PREFIX.length}})\)`,
+  String.raw`\[Assistant quote\]\((${CITATION_HREF_PATTERN}[^\s)]{1,${MAX_CITATION_HREF_LENGTH - CITATION_HREF_PREFIX.length}})\)`,
   "g",
 );
 const decodeCitation = Schema.decodeUnknownOption(AssistantCitation);
@@ -51,14 +57,17 @@ export function formatAssistantCitationHref(citation: AssistantCitation): string
 }
 
 export function parseAssistantCitationHref(href: string): AssistantCitation | null {
-  if (!href.startsWith(CITATION_HREF_PREFIX) || href.length > MAX_CITATION_HREF_LENGTH) {
+  if (
+    !CITATION_HREF_PREFIXES.some((prefix) => href.startsWith(prefix)) ||
+    href.length > MAX_CITATION_HREF_LENGTH
+  ) {
     return null;
   }
   try {
     const url = new URL(href);
     const parts = url.pathname.slice(1).split("/");
     if (
-      url.protocol !== CITATION_PROTOCOL ||
+      !CITATION_LINK_PROTOCOLS.some((protocol) => url.protocol === `${protocol}:`) ||
       url.hostname !== "v1" ||
       parts.length !== 3 ||
       url.username ||

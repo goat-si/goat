@@ -1,3 +1,4 @@
+import { LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 /**
  * `goat pair` - mint a pairing token for an already-running server and print it
  * as a QR code, without restarting anything.
@@ -55,7 +56,7 @@ import {
 import { authScopesFlag } from "./authScopes.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
 
-const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+const WELL_KNOWN_ENVIRONMENT_PATH = LEGACY_ENVIRONMENT_PATH;
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
 // Tailscale provisions an HTTPS certificate on the first request to a fresh
 // serve mapping, which can take a few seconds.

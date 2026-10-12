@@ -13,6 +13,7 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
+    "@goat/contracts": "workspace:*",
     "@goat/shared": "workspace:*",
     "effect": "catalog:"
   },

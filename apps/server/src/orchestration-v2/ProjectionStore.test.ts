@@ -1,3 +1,4 @@
+import { createDeterministicAttachmentId } from "../attachmentStore.ts";
 import { assert, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -3444,7 +3445,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         const nodeId = NodeId.make("node:checkpoint-context");
         const scopeId = CheckpointScopeId.make("scope:checkpoint-context");
         const checkpointId = CheckpointId.make("checkpoint:checkpoint-context");
-        const ref = CheckpointRef.make("refs/t3/checkpoint-context/1");
+        const ref = CheckpointRef.make("refs/t3/checkpoint-context/1"); // goat-rename: legacy
         yield* projectionStore.apply({
           id: EventId.make("event:checkpoint-context:thread"),
           type: "thread.created",
@@ -6402,3 +6403,26 @@ it.effect("SQL and memory restrict runtime request reads to explicit question ID
     { discard: true },
   );
 });
+
+// goat-rename: legacy-begin
+it.effect("discovers persisted MCP app attachments under either peer output key", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("peer-apps");
+    const ids: string[] = [];
+    for (const key of ["t3McpApp", "goatMcpApp"]) {
+      const attachmentId = createDeterministicAttachmentId(threadId, key)!;
+      ids.push(attachmentId);
+      const payload = {
+        toolName: "weather.get",
+        output: {
+          [key]: { attachmentId, server: "weather", tool: "get", resourceUri: "ui://weather" },
+        },
+      };
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json) VALUES (${key}, ${threadId}, ${ids.length}, 'dynamic_tool', 'completed', '2026-10-13T00:00:00Z', ${encodeUnknownJsonString(payload)})`;
+    }
+    assert.deepEqual((yield* store.getThreadAttachmentIds(threadId)).toSorted(), ids.toSorted());
+  }).pipe(Effect.provide(layerTest)),
+);
+// goat-rename: legacy-end

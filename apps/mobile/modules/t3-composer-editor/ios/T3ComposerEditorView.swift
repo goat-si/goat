@@ -220,7 +220,8 @@ private final class ComposerTextView: UITextView {
     }
     let pasteboard = UIPasteboard.general
     let context = T3ComposerClipboard.read()
-    if !context["fragment", default: ""].isEmpty || context["html", default: ""].contains("data-t3-context-fragment=") {
+    let html = context["html", default: ""]
+    if !context["fragment", default: ""].isEmpty || html.contains("data-t3-context-fragment=") || html.contains("data-goat-context-fragment=") { // goat-rename: legacy
       onPasteContext?(context)
       return
     }

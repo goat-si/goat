@@ -1,3 +1,4 @@
+import { LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX } from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac or timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
 
@@ -21,7 +22,7 @@ function windowIndex(nowMs: number): number {
 
 function deriveToken(secret: string, window: number): string {
   return NodeCrypto.createHmac("sha256", secret)
-    .update(`t3-desktop-bootstrap:${window}`)
+    .update(`${LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX}${window}`)
     .digest("hex");
 }
 

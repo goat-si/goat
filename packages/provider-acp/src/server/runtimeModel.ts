@@ -1,3 +1,7 @@
+import {
+  LEGACY_SESSION_LOAD_READY_KEY,
+  GOAT_SESSION_LOAD_READY_KEY,
+} from "@goat/contracts/legacyT3Names";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -1355,7 +1359,7 @@ export function syntheticLoadSessionResponseFromInitialize(
   return {
     ...(modes ? { modes } : {}),
     _meta: {
-      t3SessionLoadReady: "replay_idle",
+      [LEGACY_SESSION_LOAD_READY_KEY]: "replay_idle",
     },
   };
 }
@@ -1643,4 +1647,13 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
   }
 
   return { ...(modeId !== undefined ? { modeId } : {}), events };
+}
+
+/** A provider may finish replay under either generation of the session-load metadata key. */
+export function isSessionLoadReplayIdle(meta: unknown): boolean {
+  return (
+    isRecord(meta) &&
+    (meta[GOAT_SESSION_LOAD_READY_KEY] === "replay_idle" ||
+      meta[LEGACY_SESSION_LOAD_READY_KEY] === "replay_idle")
+  );
 }

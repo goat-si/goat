@@ -1,3 +1,4 @@
+import { GOAT_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import {
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -126,8 +127,10 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
     if (data.status === "rolled_back") output.status = "rolled_back";
     const htmlRender = readHtmlRenderReference(data.htmlRender);
     if (htmlRender !== undefined) output.htmlRender = htmlRender;
-    const mcpApp = readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
-    // Kept under its stored key, so the compact wire output reads back the same way.
+    const mcpApp =
+      readMcpAppReference(data[GOAT_MCP_APP_OUTPUT_KEY]) ??
+      readMcpAppReference(data[MCP_APP_OUTPUT_KEY]);
+    // Compact wire output retains the legacy key for older clients.
     if (mcpApp !== undefined) output[MCP_APP_OUTPUT_KEY] = mcpApp;
     const nestedThreadId = Predicate.isObject(data.thread)
       ? boundedId(data.thread.threadId)

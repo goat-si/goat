@@ -1,3 +1,4 @@
+import { LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX } from "@goat/contracts/legacyT3Names";
 import {
   CheckpointId,
   CheckpointRef,
@@ -23,7 +24,7 @@ import { isGitImport, parseTurnDiffFilesFromNumstat } from "../checkpointing/Dif
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
-const CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
+const CHECKPOINT_REFS_PREFIX = LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX;
 const ROOT_CHECKPOINT_SCOPE_NAME = "root";
 
 export class CheckpointRootScopePrepareError extends Schema.TaggedError<CheckpointRootScopePrepareError>()(

@@ -1,3 +1,10 @@
+import {
+  LEGACY_ACTIVITY_PATH,
+  GOAT_ACTIVITY_PATH,
+  LEGACY_ENVIRONMENT_PATH,
+  GOAT_ENVIRONMENT_PATH,
+  GOAT_ORCHESTRATION_PROTOCOL_HEADER,
+} from "@goat/contracts/legacyT3Names";
 import * as Option from "effect/Option";
 import { expect, it } from "@effect/vitest";
 import { describe, vi } from "vite-plus/test";
@@ -163,6 +170,7 @@ describe("browser API CORS", () => {
             "access-control-request-method": "GET",
             "access-control-request-headers": [
               ORCHESTRATION_PROTOCOL_HEADER,
+              GOAT_ORCHESTRATION_PROTOCOL_HEADER,
               "authorization",
               "dpop",
             ].join(", "),
@@ -178,6 +186,7 @@ describe("browser API CORS", () => {
           .map((header) => header.trim().toLowerCase()),
       );
       expect(allowedHeaders.has(ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
+      expect(allowedHeaders.has(GOAT_ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
       expect(allowedHeaders.has("authorization")).toBe(true);
       expect(allowedHeaders.has("dpop")).toBe(true);
     } finally {
@@ -848,6 +857,13 @@ describe("SSH activity HTTP", () => {
       const { EnvironmentHttpApi, EnvironmentId } = await import("@goat/contracts");
       const ServerEnvironment = await import("./environment/ServerEnvironment.ts");
       const Sqlite = await import("./persistence/Sqlite.ts");
+      const descriptor = {
+        environmentId: EnvironmentId.make("test"),
+        label: "Test",
+        platform: { os: "linux" as const, arch: "x64" as const },
+        serverVersion: "1.0.0",
+        capabilities: { repositoryIdentity: false },
+      };
       const layerApp = HttpApiBuilder.layer(
         HttpApi.make("environment").add(EnvironmentHttpApi.groups.metadata),
       ).pipe(
@@ -855,7 +871,7 @@ describe("SSH activity HTTP", () => {
         Layer.provide(
           Layer.succeed(ServerEnvironment.ServerEnvironment, {
             getEnvironmentId: Effect.succeed(EnvironmentId.make("test")),
-            getDescriptor: Effect.die("Activity must not load descriptor"),
+            getDescriptor: Effect.succeed(descriptor),
           }),
         ),
         Layer.provide(Sqlite.layerMemory),
@@ -878,24 +894,28 @@ describe("SSH activity HTTP", () => {
           }),
       });
       try {
-        const response = await handler(
-          new Request("http://127.0.0.1/.well-known/t3/activity"),
-          Context.empty(),
-        );
-        expect(response.status).toBe(status);
-        if (status === 403) {
-          expect(await response.json()).toEqual({
-            _tag: "EnvironmentHttpForbiddenError",
-            message: "SSH activity requires a loopback peer.",
-          });
-          return;
+        for (const route of [LEGACY_ENVIRONMENT_PATH, GOAT_ENVIRONMENT_PATH]) {
+          const response = await handler(new Request(`http://127.0.0.1${route}`), Context.empty());
+          expect(response.status).toBe(200);
+          expect(await response.json()).toEqual(descriptor);
         }
-        expect(await response.json()).toEqual({
-          activity: "idle",
-          serverVersion: (await import("../package.json", { with: { type: "json" } })).default
-            .version,
-          pid: process.pid,
-        });
+        for (const route of [LEGACY_ACTIVITY_PATH, GOAT_ACTIVITY_PATH]) {
+          const response = await handler(new Request(`http://127.0.0.1${route}`), Context.empty());
+          expect(response.status).toBe(status);
+          if (status === 403) {
+            expect(await response.json()).toEqual({
+              _tag: "EnvironmentHttpForbiddenError",
+              message: "SSH activity requires a loopback peer.",
+            });
+            continue;
+          }
+          expect(await response.json()).toEqual({
+            activity: "idle",
+            serverVersion: (await import("../package.json", { with: { type: "json" } })).default
+              .version,
+            pid: process.pid,
+          });
+        }
       } finally {
         await dispose();
       }
@@ -948,9 +968,9 @@ it.effect("serves SSH activity to a real IPv4-mapped loopback peer", () =>
     origin.hostname = "127.0.0.1";
     const client = HttpClient.mapRequest(
       Context.get(services, HttpClient.HttpClient),
-      HttpClientRequest.setUrl(new URL("/.well-known/t3/activity", origin)),
+      HttpClientRequest.setUrl(new URL("/.well-known/t3/activity", origin)), // goat-rename: legacy
     );
-    const response = yield* client.get("/.well-known/t3/activity");
+    const response = yield* client.get("/.well-known/t3/activity"); // goat-rename: legacy
     expect(response.status).toBe(200);
     expect(yield* response.json).toMatchObject({
       activity: "idle",

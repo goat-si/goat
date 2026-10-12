@@ -1,6 +1,14 @@
+import {
+  LEGACY_ENVIRONMENT_PATH,
+  GOAT_ENVIRONMENT_PATH,
+  LEGACY_ACTIVITY_PATH,
+  GOAT_ACTIVITY_PATH,
+  GOAT_ORCHESTRATION_PROTOCOL_HEADER,
+} from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiEndpoint from "effect/http-api/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/http-api/HttpApiGroup";
@@ -77,11 +85,36 @@ const OptionalBearerHeaders = Schema.Struct({
   dpop: Schema.optionalKey(Schema.String),
 });
 
-const OrchestrationProtocolHeaders = Schema.Struct({
+const LegacyOrchestrationProtocolHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
   dpop: Schema.optionalKey(Schema.String),
   [ORCHESTRATION_PROTOCOL_HEADER]: Schema.Literal(ORCHESTRATION_PROTOCOL_VERSION_TEXT),
 });
+
+const OrchestrationProtocolHeaders = Schema.Struct({
+  ...OptionalBearerHeaders.fields,
+  [ORCHESTRATION_PROTOCOL_HEADER]: Schema.optionalKey(Schema.String),
+  [GOAT_ORCHESTRATION_PROTOCOL_HEADER]: Schema.optionalKey(Schema.String),
+})
+  .check(
+    Schema.makeFilter(
+      (headers) =>
+        (headers[GOAT_ORCHESTRATION_PROTOCOL_HEADER] ?? headers[ORCHESTRATION_PROTOCOL_HEADER]) ===
+        ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+    ),
+  )
+  .pipe(
+    Schema.decodeTo(LegacyOrchestrationProtocolHeaders, {
+      decode: SchemaGetter.transform(
+        ({ [GOAT_ORCHESTRATION_PROTOCOL_HEADER]: goatProtocol, ...headers }) => ({
+          ...headers,
+          [ORCHESTRATION_PROTOCOL_HEADER]: (goatProtocol ??
+            headers[ORCHESTRATION_PROTOCOL_HEADER]) as typeof ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+        }),
+      ),
+      encode: SchemaGetter.transform((headers) => headers),
+    }),
+  );
 
 const OptionalDpopProofHeaders = Schema.Struct({
   dpop: Schema.optionalKey(Schema.String),
@@ -454,12 +487,23 @@ export const SshServerActivity = Schema.Struct({
 
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
   .add(
-    HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
+    HttpApiEndpoint.get("descriptor", LEGACY_ENVIRONMENT_PATH, {
       success: ExecutionEnvironmentDescriptor,
     }),
   )
   .add(
-    HttpApiEndpoint.get("sshActivity", "/.well-known/t3/activity", {
+    HttpApiEndpoint.get("sshActivity", LEGACY_ACTIVITY_PATH, {
+      success: SshServerActivity,
+      error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("goatDescriptor", GOAT_ENVIRONMENT_PATH, {
+      success: ExecutionEnvironmentDescriptor,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("goatSshActivity", GOAT_ACTIVITY_PATH, {
       success: SshServerActivity,
       error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
     }),

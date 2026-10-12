@@ -335,30 +335,29 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const descriptor = (endpointName: string) =>
+      Effect.fn("environment.metadata.descriptor")(function* () {
+        yield* annotateEnvironmentRequest(endpointName);
+        return yield* serverEnvironment.getDescriptor;
+      }, traceRelayRequest);
+    const sshActivity = Effect.fn("environment.metadata.sshActivity")(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+      if (remoteAddress !== undefined && !isLoopbackHostname(remoteAddress)) {
+        return yield* new EnvironmentHttpForbiddenError({
+          message: "SSH activity requires a loopback peer.",
+        });
+      }
+      const activity = yield* projections
+        .getServerActivity()
+        .pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
+      return { activity, serverVersion: packageJson.version, pid: process.pid };
+    });
     return handlers
-      .handle(
-        "descriptor",
-        Effect.fn("environment.metadata.descriptor")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          return yield* serverEnvironment.getDescriptor;
-        }, traceRelayRequest),
-      )
-      .handle(
-        "sshActivity",
-        Effect.fn("environment.metadata.sshActivity")(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const remoteAddress = Option.getOrUndefined(request.remoteAddress);
-          if (remoteAddress !== undefined && !isLoopbackHostname(remoteAddress)) {
-            return yield* new EnvironmentHttpForbiddenError({
-              message: "SSH activity requires a loopback peer.",
-            });
-          }
-          const activity = yield* projections
-            .getServerActivity()
-            .pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
-          return { activity, serverVersion: packageJson.version, pid: process.pid };
-        }),
-      );
+      .handle("descriptor", descriptor("descriptor"))
+      .handle("goatDescriptor", descriptor("goatDescriptor"))
+      .handle("sshActivity", sshActivity)
+      .handle("goatSshActivity", sshActivity);
   }),
 ).pipe(Layer.provide(ProjectionStore.layer));
 

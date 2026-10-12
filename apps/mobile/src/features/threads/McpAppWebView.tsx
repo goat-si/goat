@@ -38,6 +38,10 @@ import { useEnvironmentQuery } from "../../state/query";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import {
+  GOAT_MCP_APP_RECEIVE_GLOBAL,
+  LEGACY_MCP_APP_RECEIVE_GLOBAL,
+} from "@goat/contracts/legacyT3Names";
 import { MCP_APP_INLINE_MAX_HEIGHT, mcpAppInlineHeight } from "./mcpAppSizing";
 
 const ROW_BOTTOM_MARGIN = 8;
@@ -66,7 +70,7 @@ function outerDocument(src: string, allow: string, secret: string) {
 var send=function(m){window.ReactNativeWebView.postMessage(JSON.stringify({secret:secret,message:m}));};
 frame.addEventListener("load",function(){loads+=1;if(loads>1&&live){live=false;send({t3:"navigated"});}});
 window.addEventListener("message",function(e){if(live&&e.source===frame.contentWindow)send(e.data);});
-window.__t3McpAppReceive=function(m){live&&frame.contentWindow&&frame.contentWindow.postMessage(m,"*");};
+window.${LEGACY_MCP_APP_RECEIVE_GLOBAL}=window.${GOAT_MCP_APP_RECEIVE_GLOBAL}=function(m){live&&frame.contentWindow&&frame.contentWindow.postMessage(m,"*");};
 frame.src=${JSON.stringify(src).replace(/</g, "\\u003c")};})();</script></body></html>`;
 }
 
@@ -324,7 +328,7 @@ export function ThreadMcpApp(props: {
       hostVersion: Constants.expoConfig?.version ?? "0.0.0",
       post: (message) =>
         webView.current?.injectJavaScript(
-          `window.__t3McpAppReceive&&window.__t3McpAppReceive(${JSON.stringify(message)});true;`,
+          `window.${LEGACY_MCP_APP_RECEIVE_GLOBAL}&&window.${LEGACY_MCP_APP_RECEIVE_GLOBAL}(${JSON.stringify(message)});true;`,
         ),
       hostContext,
       callTool: async ({ name, arguments: args }) => {

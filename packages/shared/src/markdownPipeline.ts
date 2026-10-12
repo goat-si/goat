@@ -1,3 +1,8 @@
+import {
+  CITATION_LINK_PROTOCOLS,
+  CONTEXT_LINK_PROTOCOLS,
+  THREAD_LINK_PROTOCOLS,
+} from "@goat/contracts/legacyT3Names";
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "./path.ts";
 import type { PluggableList } from "unified";
@@ -12,7 +17,6 @@ import {
   remarkCodexDirectives,
 } from "./codexMarkdownDirectives.ts";
 import { isWindowsDrivePathHref } from "./markdownLinks.ts";
-import { THREAD_LINK_PROTOCOL } from "./threadLinks.ts";
 
 type MarkdownImageHastNode = {
   type?: string;
@@ -161,11 +165,11 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     href: [
       ...(defaultSchema.protocols?.href ?? []),
       "file",
-      "t3-citation",
-      "t3-context",
-      THREAD_LINK_PROTOCOL,
+      ...CITATION_LINK_PROTOCOLS,
+      ...CONTEXT_LINK_PROTOCOLS,
+      ...THREAD_LINK_PROTOCOLS,
     ],
-    src: [...(defaultSchema.protocols?.src ?? []), "file", "t3-context"],
+    src: [...(defaultSchema.protocols?.src ?? []), "file", ...CONTEXT_LINK_PROTOCOLS],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
 

@@ -1,3 +1,4 @@
+import { LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY } from "@goat/contracts/legacyT3Names";
 import * as NetService from "@goat/shared/Net";
 import { OtlpHeadersFromString, OtlpProtocol, type SignalExport } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
@@ -314,7 +315,10 @@ export const resolveServerConfig = (
     ).pipe(Option.filter((value) => value.trim().length > 0));
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(
-        resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
+        resolveOptionPrecedence(
+          explicitBaseDir,
+          Option.fromUndefinedOr(bootstrap?.[LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]),
+        ),
       ),
       // Same rule as deriveServerPaths: an implicit dev run reads <home>/dev.
       devUrl !== undefined && Option.isNone(explicitBaseDir) ? "dev" : "userdata",

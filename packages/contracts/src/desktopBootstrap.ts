@@ -1,15 +1,20 @@
+import {
+  LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY,
+  GOAT_DESKTOP_BOOTSTRAP_HOME_KEY,
+} from "@goat/contracts/legacyT3Names";
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-export const DesktopBackendBootstrap = Schema.Struct({
+const LegacyDesktopBackendBootstrap = Schema.Struct({
   mode: Schema.Literal("desktop"),
   noBrowser: Schema.Boolean,
   port: PortSchema,
   // Omitted when the desktop launches the backend inside WSL, since the
   // Windows-side baseDir maps to /mnt/c/... and the Linux side should use its
   // own home directory instead.
-  t3Home: Schema.optional(Schema.String),
+  [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
   // Present when the desktop rotates the renderer's bootstrap token: the
@@ -34,6 +39,23 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
+
+/** Normalize both input spellings while encoding only the legacy peer key. */
+export const DesktopBackendBootstrap = Schema.Struct({
+  ...LegacyDesktopBackendBootstrap.fields,
+  [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optionalKey(Schema.String),
+}).pipe(
+  Schema.decodeTo(Schema.toType(LegacyDesktopBackendBootstrap), {
+    decode: SchemaGetter.transform(
+      ({ [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: goatHome, ...bootstrap }) => ({
+        ...bootstrap,
+        [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]:
+          goatHome ?? bootstrap[LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY],
+      }),
+    ),
+    encode: SchemaGetter.transform((bootstrap) => bootstrap),
+  }),
+);
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;
 

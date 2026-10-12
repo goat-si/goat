@@ -43,6 +43,7 @@ import {
   parseSessionUpdateEvent,
   sessionUpdateCountsAsLoadReplayActivity,
   sessionUpdateIsReplay,
+  isSessionLoadReplayIdle,
   waitForSessionLoadReplayIdle,
   type SessionLoadGate,
   type AcpParsedSessionEvent,
@@ -2021,11 +2022,7 @@ export const make = (
       Effect.gen(function* () {
         const current = yield* getStartedState;
         const meta = sessionSetupResult._meta;
-        const syntheticReplayIdle =
-          meta !== null &&
-          typeof meta === "object" &&
-          !Array.isArray(meta) &&
-          (meta as { readonly t3SessionLoadReady?: unknown }).t3SessionLoadReady === "replay_idle";
+        const syntheticReplayIdle = isSessionLoadReplayIdle(meta);
         const extractedModelConfigId = extractModelConfigId(sessionSetupResult);
         const nextModelConfigId =
           extractedModelConfigId ?? (syntheticReplayIdle ? current.modelConfigId : undefined);

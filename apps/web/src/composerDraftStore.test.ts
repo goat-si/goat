@@ -3517,30 +3517,33 @@ describe("composerDraftStore attachment references", () => {
     expect(mergedState.draftsByThreadKey[threadKeyFor(threadId)]?.prompt).toBe(`old ${fileLink} `);
   });
 
-  it("migrates legacy image references without doubling their image marker", () => {
-    const merged = useComposerDraftStore.persist.getOptions().merge!(
-      {
-        draftsByThreadKey: {
-          [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
-            prompt: "see ![shot.png](t3-context://v1/image/img-1) after",
-            attachments: [
-              {
-                id: "img-1",
-                name: "shot.png",
-                mimeType: "image/png",
-                sizeBytes: 1,
-                dataUrl: "data:image/png;base64,YQ==",
-              },
-            ],
+  it.each(["t3", "goat"])(
+    "migrates %s image references without doubling their image marker",
+    (prefix) => {
+      const merged = useComposerDraftStore.persist.getOptions().merge!(
+        {
+          draftsByThreadKey: {
+            [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
+              prompt: `see ![shot.png](${prefix}-context://v1/image/img-1) after`,
+              attachments: [
+                {
+                  id: "img-1",
+                  name: "shot.png",
+                  mimeType: "image/png",
+                  sizeBytes: 1,
+                  dataUrl: "data:image/png;base64,YQ==",
+                },
+              ],
+            },
           },
         },
-      },
-      useComposerDraftStore.getInitialState(),
-    );
-    expect(merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.prompt).toBe(
-      "see ![shot.png](t3-context://v1/image/image_img-1) after",
-    );
-  });
+        useComposerDraftStore.getInitialState(),
+      );
+      expect(merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.prompt).toBe(
+        "see ![shot.png](t3-context://v1/image/image_img-1) after", // goat-rename: legacy
+      );
+    },
+  );
 
   it("preserves canonical references when another producer ID matches their namespace", () => {
     const prompt =

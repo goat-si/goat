@@ -1,3 +1,4 @@
+import { LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 
 import { environmentEndpointUrl } from "./endpoint.ts";
@@ -10,7 +11,7 @@ export const fetchRemoteEnvironmentDescriptor = Effect.fn(
 )(function* (input: { readonly httpBaseUrl: string; readonly timeoutMs?: number }) {
   const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "metadata");
   return yield* executeEnvironmentHttpRequest(
-    environmentEndpointUrl(input.httpBaseUrl, "/.well-known/t3/environment"),
+    environmentEndpointUrl(input.httpBaseUrl, LEGACY_ENVIRONMENT_PATH),
     input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
     client.descriptor(),
   );

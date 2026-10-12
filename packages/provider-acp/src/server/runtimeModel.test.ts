@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import {
+  isSessionLoadReplayIdle,
   decideToolCallUpdateEmission,
   applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
@@ -196,7 +197,7 @@ describe("AcpRuntimeModel", () => {
     } as EffectAcpSchema.InitializeResponse);
 
     expect(response.modes).toBeUndefined();
-    expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" });
+    expect(response._meta).toMatchObject({ t3SessionLoadReady: "replay_idle" }); // goat-rename: legacy
   });
 
   it("builds a synthetic load response with initialize mode state", () => {
@@ -1790,3 +1791,16 @@ describe("embeddedTerminalIdsFromSessionUpdate", () => {
     ).toBeUndefined();
   });
 });
+
+// goat-rename: legacy-begin
+it.each(["t3SessionLoadReady", "goatSessionLoadReady"])(
+  "recognizes replay idle metadata %s",
+  (key) => {
+    expect(isSessionLoadReplayIdle({ [key]: "replay_idle" })).toBe(true);
+    expect(isSessionLoadReplayIdle({ [key]: "loading" })).toBe(false);
+  },
+);
+it.each([null, [], "replay_idle", {}])("rejects malformed replay idle metadata %s", (meta) => {
+  expect(isSessionLoadReplayIdle(meta)).toBe(false);
+});
+// goat-rename: legacy-end

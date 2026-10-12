@@ -1,3 +1,4 @@
+import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
@@ -2099,7 +2100,10 @@ function normalizePersistedDraftsByThreadId(
     // Older drafts used producer ids (including dots and colons) directly in links.
     // Rewrite only links backed by this draft, before appending any missing references.
     const migratedPrompt = promptCandidate.replace(
-      /!?\[([^\]\r\n]*)\]\(t3-context:\/\/v1\/([a-z-]+)\/([^/()\r\n]+)\)/g,
+      new RegExp(
+        String.raw`!?\[([^\]\r\n]*)\]\((?:${CONTEXT_LINK_PROTOCOLS.join("|")}):\/\/v1\/([a-z-]+)\/([^/()\r\n]+)\)`,
+        "g",
+      ),
       (source, label: string, kind: string, id: string) => {
         const contextId = contextIds.get(`${kind}/${id}`);
         return contextId ? formatInlineContextReference({ kind, contextId, label }) : source;

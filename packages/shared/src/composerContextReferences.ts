@@ -1,4 +1,10 @@
 import {
+  LEGACY_CONTEXT_LINK_PROTOCOL,
+  CONTEXT_LINK_PROTOCOLS,
+  LEGACY_CONTEXT_ENVELOPE_TAG,
+  GOAT_CONTEXT_ENVELOPE_TAG,
+} from "@goat/contracts/legacyT3Names";
+import {
   COMPOSER_CONTEXT_LABEL_MAX_CHARS,
   type ComposerContextId,
   type ComposerContextKind,
@@ -13,13 +19,15 @@ import {
  * message's context records. Labels are display text and never identity.
  */
 
-const CONTEXT_PROTOCOL = "t3-context:";
+const CONTEXT_PROTOCOL = `${LEGACY_CONTEXT_LINK_PROTOCOL}:`;
 const COMPOSER_CONTEXT_HREF_PREFIX = `${CONTEXT_PROTOCOL}//v1/`;
+const CONTEXT_HREF_PREFIXES = CONTEXT_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
+const CONTEXT_HREF_PATTERN = `(?:${CONTEXT_LINK_PROTOCOLS.join("|")})://v1/`;
 const CONTEXT_KIND_PATTERN = /^[a-z][a-z0-9-]{0,39}$/;
 const CONTEXT_ID_PATTERN = /^[a-z0-9_-]{1,128}$/i;
 const MAX_LINK_LABEL_LENGTH = 512;
 const CONTEXT_LINK = new RegExp(
-  String.raw`(!?)\[([^\]\n]{0,${MAX_LINK_LABEL_LENGTH}})\]\((${COMPOSER_CONTEXT_HREF_PREFIX}[^\s)]{1,200})\)`,
+  String.raw`(!?)\[([^\]\n]{0,${MAX_LINK_LABEL_LENGTH}})\]\((${CONTEXT_HREF_PATTERN}[^\s)]{1,200})\)`,
   "g",
 );
 
@@ -30,8 +38,9 @@ export function formatComposerContextHref(kind: ComposerContextKind, contextId: 
 export function parseComposerContextHref(
   href: string,
 ): { kind: ComposerContextKind; contextId: ComposerContextId } | null {
-  if (!href.startsWith(COMPOSER_CONTEXT_HREF_PREFIX)) return null;
-  const rest = href.slice(COMPOSER_CONTEXT_HREF_PREFIX.length);
+  const prefix = CONTEXT_HREF_PREFIXES.find((prefix) => href.startsWith(prefix));
+  if (prefix === undefined) return null;
+  const rest = href.slice(prefix.length);
   const parts = rest.split("/");
   if (parts.length !== 2) return null;
   const [kind, contextId] = parts as [string, string];
@@ -76,7 +85,7 @@ export function collectComposerContextReferences(
   const occurrences: ComposerContextReferenceOccurrence[] = [];
   // No link can match without the protocol prefix; skip the scan entirely on
   // plain prose so long messages never pay for a regex walk per `[`.
-  if (!text.includes("](t3-context:")) return occurrences;
+  if (!CONTEXT_HREF_PREFIXES.some((prefix) => text.includes(`](${prefix}`))) return occurrences;
   for (const match of text.matchAll(CONTEXT_LINK)) {
     const parsed = parseComposerContextHref(match[3]!);
     if (!parsed) continue;
@@ -123,7 +132,7 @@ export function replaceComposerContextReferences(
 // Provider projection
 // ---------------------------------------------------------------------------
 
-const CONTEXT_ENVELOPE_TAG = "t3_context";
+const CONTEXT_ENVELOPE_TAG = LEGACY_CONTEXT_ENVELOPE_TAG;
 const CONTEXT_ENTRY_TAG = "context";
 
 function kindDisplayName(kind: ComposerContextKind): string {
@@ -150,7 +159,10 @@ export function formatComposerContextProviderMarker(
  */
 function escapeComposerContextPayloadText(text: string): string {
   return text.replace(
-    new RegExp(String.raw`<(?=/?(?:${CONTEXT_ENVELOPE_TAG}|${CONTEXT_ENTRY_TAG})\b)`, "gi"),
+    new RegExp(
+      String.raw`<(?=/?(?:${CONTEXT_ENVELOPE_TAG}|${GOAT_CONTEXT_ENVELOPE_TAG}|${CONTEXT_ENTRY_TAG})\b)`,
+      "gi",
+    ),
     "&lt;",
   );
 }

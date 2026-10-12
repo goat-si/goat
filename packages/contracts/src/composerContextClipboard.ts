@@ -1,3 +1,4 @@
+import { LEGACY_CONTEXT_CLIPBOARD_MIME } from "@goat/contracts/legacyT3Names";
 import * as Schema from "effect/Schema";
 
 import { EnvironmentId, MessageId, ThreadId } from "./baseSchemas.ts";
@@ -9,7 +10,7 @@ import { ForwardCompatibleArray } from "./baseSchemas.ts";
  * records behind the copied links plus where they came from, never bytes or URLs; the receiver
  * resolves binaries through its own environment.
  */
-export const COMPOSER_CONTEXT_CLIPBOARD_MIME = "web application/x-t3-context-fragment+json";
+export const COMPOSER_CONTEXT_CLIPBOARD_MIME = `web ${LEGACY_CONTEXT_CLIPBOARD_MIME}`;
 
 export const ComposerContextClipboardFragment = Schema.Struct({
   version: Schema.Literal(1),

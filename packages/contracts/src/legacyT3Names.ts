@@ -137,3 +137,63 @@ export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
   "t3-ember": "ember",
   "t3-iris": "iris",
 };
+
+/** Peer-visible vocabulary: readers accept both; writers retain the legacy spelling. */
+export const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
+export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";
+export const THREAD_LINK_PROTOCOLS = [
+  LEGACY_THREAD_LINK_PROTOCOL,
+  GOAT_THREAD_LINK_PROTOCOL,
+] as const;
+export const LEGACY_CONTEXT_LINK_PROTOCOL = "t3-context";
+export const GOAT_CONTEXT_LINK_PROTOCOL = "goat-context";
+export const CONTEXT_LINK_PROTOCOLS = [
+  LEGACY_CONTEXT_LINK_PROTOCOL,
+  GOAT_CONTEXT_LINK_PROTOCOL,
+] as const;
+export const LEGACY_CITATION_LINK_PROTOCOL = "t3-citation";
+export const GOAT_CITATION_LINK_PROTOCOL = "goat-citation";
+export const CITATION_LINK_PROTOCOLS = [
+  LEGACY_CITATION_LINK_PROTOCOL,
+  GOAT_CITATION_LINK_PROTOCOL,
+] as const;
+export const LEGACY_CONTEXT_ENVELOPE_TAG = "t3_context";
+export const GOAT_CONTEXT_ENVELOPE_TAG = "goat_context";
+export const LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-t3-context-fragment";
+export const GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-goat-context-fragment";
+export const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
+export const GOAT_CONTEXT_CLIPBOARD_MIME = "application/x-goat-context-fragment+json";
+export const CONTEXT_CLIPBOARD_MIMES = [
+  `web ${LEGACY_CONTEXT_CLIPBOARD_MIME}`,
+  LEGACY_CONTEXT_CLIPBOARD_MIME,
+  `web ${GOAT_CONTEXT_CLIPBOARD_MIME}`,
+  GOAT_CONTEXT_CLIPBOARD_MIME,
+] as const;
+export const LEGACY_MCP_APP_OUTPUT_KEY = "t3McpApp";
+export const GOAT_MCP_APP_OUTPUT_KEY = "goatMcpApp";
+export const LEGACY_MCP_APP_RECEIVE_GLOBAL = "__t3McpAppReceive";
+export const GOAT_MCP_APP_RECEIVE_GLOBAL = "__goatMcpAppReceive";
+export const LEGACY_SESSION_LOAD_READY_KEY = "t3SessionLoadReady";
+export const GOAT_SESSION_LOAD_READY_KEY = "goatSessionLoadReady";
+export const LEGACY_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE =
+  "urn:t3:params:oauth:token-type:environment-bootstrap";
+export const GOAT_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE =
+  "urn:goat:params:oauth:token-type:environment-bootstrap";
+export const LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY = "t3Home";
+export const GOAT_DESKTOP_BOOTSTRAP_HOME_KEY = "goatHome";
+export const LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX = "t3-desktop-bootstrap:";
+export const GOAT_DESKTOP_BOOTSTRAP_HMAC_PREFIX = "goat-desktop-bootstrap:";
+export const LEGACY_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+export const GOAT_ENVIRONMENT_PATH = "/.well-known/goat/environment";
+export const LEGACY_ACTIVITY_PATH = "/.well-known/t3/activity";
+export const GOAT_ACTIVITY_PATH = "/.well-known/goat/activity";
+export const LEGACY_ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
+export const GOAT_ORCHESTRATION_PROTOCOL_HEADER = "x-goat-orchestration-protocol";
+export const LEGACY_CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
+export const GOAT_CHECKPOINT_REFS_PREFIX = "refs/goat/checkpoints";
+export const LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
+export const GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/goat/orchestration-v2/checkpoints";
+export const LEGACY_PRE_REFRESH_REF = "refs/t3code/pre-refresh";
+export const GOAT_PRE_REFRESH_REF = "refs/goat/pre-refresh";
+export const LEGACY_REFS_ROOT = "refs/t3";
+export const GOAT_REFS_ROOT = "refs/goat";

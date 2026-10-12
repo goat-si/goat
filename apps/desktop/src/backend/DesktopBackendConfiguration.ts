@@ -1,3 +1,4 @@
+import { LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@goat/shared/serverSettings";
@@ -564,7 +565,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       mode: "desktop" as const,
       noBrowser: true,
       port: backendExposure.port,
-      t3Home: environment.baseDir,
+      [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
       desktopBootstrapSecret: input.bootstrapSecret,

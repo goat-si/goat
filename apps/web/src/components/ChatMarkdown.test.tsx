@@ -172,45 +172,47 @@ describe("ChatMarkdown bare anchor placeholders", () => {
 });
 
 describe("ChatMarkdown context references", () => {
-  it("renders text and image references through the chip renderer, with readable fallback", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    let renderer: ReactTestRenderer | undefined;
-    const text =
-      "See [Terminal output](t3-context://v1/terminal/term-1) and ![Error image](t3-context://v1/image/img-1).";
-    try {
-      await act(async () => {
-        renderer = create(
-          <ChatMarkdown
-            cwd={undefined}
-            text={text}
-            renderContextReference={({ kind, label }) => (
-              <button>
-                {kind}: {label}
-              </button>
-            )}
-          />,
-        );
-      });
-      expect(
-        renderer!.root.findAllByType("button").map((button) => button.children.join("")),
-      ).toEqual(["terminal: Terminal output", "image: Error image"]);
-      expect(renderer!.root.findAllByType("img")).toHaveLength(0);
-      expect(renderer!.root.findAllByType("a")).toHaveLength(0);
-      await act(async () => {
-        renderer!.update(<ChatMarkdown cwd={undefined} text={text} />);
-      });
-      expect(renderer!.root.findAllByType("span").map((span) => span.children.join(""))).toEqual([
-        "Terminal output",
-        "Error image",
-      ]);
-      expect(renderer!.root.findAllByType("img")).toHaveLength(0);
-    } finally {
-      await act(async () => {
-        renderer?.unmount();
-      });
-      vi.unstubAllGlobals();
-    }
-  });
+  it.each(["t3", "goat"])(
+    "renders %s text and image references through the chip renderer, with readable fallback",
+    async (prefix) => {
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      let renderer: ReactTestRenderer | undefined;
+      const text = `See [Terminal output](${prefix}-context://v1/terminal/term-1) and ![Error image](${prefix}-context://v1/image/img-1).`;
+      try {
+        await act(async () => {
+          renderer = create(
+            <ChatMarkdown
+              cwd={undefined}
+              text={text}
+              renderContextReference={({ kind, label }) => (
+                <button>
+                  {kind}: {label}
+                </button>
+              )}
+            />,
+          );
+        });
+        expect(
+          renderer!.root.findAllByType("button").map((button) => button.children.join("")),
+        ).toEqual(["terminal: Terminal output", "image: Error image"]);
+        expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+        expect(renderer!.root.findAllByType("a")).toHaveLength(0);
+        await act(async () => {
+          renderer!.update(<ChatMarkdown cwd={undefined} text={text} />);
+        });
+        expect(renderer!.root.findAllByType("span").map((span) => span.children.join(""))).toEqual([
+          "Terminal output",
+          "Error image",
+        ]);
+        expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      } finally {
+        await act(async () => {
+          renderer?.unmount();
+        });
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("reads formatted context labels through nested markup instead of the context id", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -221,7 +223,7 @@ describe("ChatMarkdown context references", () => {
         renderer = create(
           <ChatMarkdown
             cwd={undefined}
-            text="See [**Bold** `code`](t3-context://v1/terminal/term-1)."
+            text="See [**Bold** `code`](t3-context://v1/terminal/term-1)." // goat-rename: legacy
             renderContextReference={({ kind, label }) => {
               seen.push(`${kind}: ${label}`);
               return <button>{label}</button>;
@@ -1108,16 +1110,16 @@ it("opens a disclosure only when find selects a match inside it", async () => {
     expect(openStates()).toEqual(["false", "false", "false"]);
     expect(container.textContent).toContain("nothing here");
     expect(
-      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()),
+      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()), // goat-rename: legacy
     ).toEqual(["needle"]);
-    expect(highlights.get("t3-thread-find")?.size).toBe(0);
+    expect(highlights.get("t3-thread-find")?.size).toBe(0); // goat-rename: legacy
 
     await act(() => root.render(<Probe activeOccurrence={1} />));
     await frame();
     await frame();
     // Stepping to the folded match opens its two ancestors, not the unrelated one.
     expect(openStates()).toEqual(["false", "true", "true"]);
-    expect(highlights.get("t3-thread-find-active")?.size).toBe(1);
+    expect(highlights.get("t3-thread-find-active")?.size).toBe(1); // goat-rename: legacy
   } finally {
     await act(() => root.unmount());
     container.remove();
@@ -1172,7 +1174,7 @@ it("keeps Mermaid diagrams rendered until find selects a match in their source",
     // Only the diagram holding the selected match switches to source.
     expect(diagrams()).toBe(1);
     expect(
-      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()),
+      [...(highlights.get("t3-thread-find-active") ?? [])].map((range) => range.toString()), // goat-rename: legacy
     ).toEqual(["Alpha"]);
   } finally {
     await act(() => root.unmount());

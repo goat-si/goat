@@ -137,3 +137,12 @@ describe("resolveMarkdownLinkPresentation", () => {
     });
   });
 });
+
+// goat-rename: legacy-begin
+it.each(["t3-thread://v1/thread", "goat-thread://v1/thread"])(
+  "keeps in-app thread destination %s for native presses",
+  (href) => {
+    expect(resolveMarkdownLinkPresentation(href)).toEqual({ kind: "link", href });
+  },
+);
+// goat-rename: legacy-end

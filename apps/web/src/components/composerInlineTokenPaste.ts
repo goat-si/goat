@@ -1,10 +1,6 @@
 import { ComposerContextId } from "@goat/contracts";
 import type { ComposerContextClipboardFragment } from "@goat/contracts";
-import {
-  COMPOSER_CONTEXT_CLIPBOARD_MIME,
-  decodeComposerContextFragment,
-  decodeComposerContextClipboardHtml,
-} from "@goat/shared/composerContextClipboard";
+import { readComposerContextClipboardFragment } from "@goat/shared/composerContextClipboard";
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -17,9 +13,7 @@ export function readPastedComposerContext(
   const pastedText = clipboardData.getData("text/plain");
   // Only records whose links are in the pasted text get imported; a fragment may carry
   // more (it was built for a larger copy) and must not start transfers for those.
-  const decodedFragment =
-    decodeComposerContextFragment(clipboardData.getData(COMPOSER_CONTEXT_CLIPBOARD_MIME)) ??
-    decodeComposerContextClipboardHtml(clipboardData.getData("text/html"));
+  const decodedFragment = readComposerContextClipboardFragment(clipboardData);
   if (decodedFragment === null) return null;
   const pastedIds = new Set<string>(
     collectComposerContextReferences(pastedText).map((occurrence) => occurrence.contextId),
