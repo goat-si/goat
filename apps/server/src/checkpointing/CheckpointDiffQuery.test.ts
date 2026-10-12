@@ -4,7 +4,10 @@ import { CheckpointRef, CheckpointScopeId, RunId, ThreadId } from "@goat/contrac
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
+import {
+  checkpointRefCandidatesForScopeOrdinal,
+  checkpointRefForScopeOrdinal,
+} from "../orchestration-v2/CheckpointService.ts";
 import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
 import type { ProjectionCheckpointContext } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -49,6 +52,7 @@ function layerFor(input: {
   readonly projection: Effect.Effect<ProjectionCheckpointContext, OrchestratorProjectionError>;
   readonly diffCheckpoints?: CheckpointStore.CheckpointStore["Service"]["diffCheckpoints"];
   readonly authoredPaths?: ReadonlySet<string>;
+  readonly existingRefs?: (ref: string) => boolean;
 }) {
   return CheckpointDiffQuery.layer.pipe(
     Layer.provide(
@@ -59,6 +63,8 @@ function layerFor(input: {
         Layer.mock(CheckpointStore.CheckpointStore)({
           diffCheckpoints: input.diffCheckpoints ?? (() => Effect.succeed("diff")),
           listAuthoredPaths: () => Effect.succeed(input.authoredPaths ?? null),
+          hasCheckpointRef: ({ checkpointRef }) =>
+            Effect.succeed(input.existingRefs?.(checkpointRef) ?? true),
         }),
       ),
     ),
@@ -224,4 +230,26 @@ it.effect("preserves the typed missing-baseline-ref error contract", () => {
       { checkpoint: "from", turnCount: 0 },
     );
   }).pipe(Effect.provide(layer));
+});
+
+it.effect("diffs from a baseline that a later build wrote under the GOAT namespace", () => {
+  const diffCheckpoints = vi.fn((_input: CheckpointStore.DiffCheckpointsInput) =>
+    Effect.succeed("diff"),
+  );
+  return Effect.gen(function* () {
+    const [legacy, goat] = yield* checkpointRefCandidatesForScopeOrdinal({
+      scopeId: firstScopeId,
+      ordinalWithinScope: 0,
+    });
+    const layer = layerFor({
+      projection: Effect.succeed(makeProjection()),
+      diffCheckpoints,
+      existingRefs: (ref) => ref !== legacy,
+    });
+    yield* Effect.gen(function* () {
+      const query = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      yield* query.getFullThreadDiff({ threadId, toTurnCount: 2 });
+    }).pipe(Effect.provide(layer));
+    assert.equal(diffCheckpoints.mock.calls[0]?.[0].fromCheckpointRef, goat);
+  }).pipe(Effect.provide(NodeCrypto.layer));
 });

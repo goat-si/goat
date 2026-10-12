@@ -1,4 +1,7 @@
-import { LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX } from "@goat/contracts/legacyT3Names";
+import {
+  GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX,
+  LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX,
+} from "@goat/contracts/legacyT3Names";
 import {
   CheckpointId,
   CheckpointRef,
@@ -172,6 +175,20 @@ export const checkpointRefForScopeOrdinal = Effect.fn("checkpointRefForScopeOrdi
   },
 );
 
+/**
+ * Where a reconstructed checkpoint ref may live: the legacy namespace this build writes,
+ * then the GOAT namespace a later build writes (plan D17). Readers take the first that exists.
+ */
+export const checkpointRefCandidatesForScopeOrdinal = Effect.fn(
+  "checkpointRefCandidatesForScopeOrdinal",
+)(function* (input: { readonly scopeId: CheckpointScopeId; readonly ordinalWithinScope: number }) {
+  const legacy = yield* checkpointRefForScopeOrdinal(input);
+  const goat = CheckpointRef.make(
+    GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX + legacy.slice(CHECKPOINT_REFS_PREFIX.length),
+  );
+  return [legacy, goat] as const;
+});
+
 function checkpointIdForScopeOrdinal(
   idAllocator: IdAllocator.IdAllocatorV2["Service"],
   input: {
@@ -306,31 +323,34 @@ export const layer: Layer.Layer<
         withWorkspaceLock(
           input.scope.cwd,
           Effect.gen(function* () {
-            const checkpointRef = yield* checkpointRefFor({
+            const candidates = yield* checkpointRefCandidatesForScopeOrdinal({
               scopeId: input.scope.id,
               ordinalWithinScope: input.ordinalWithinScope,
-            });
+            }).pipe(Effect.provideService(Crypto.Crypto, crypto));
             const checkpointId = yield* checkpointIdForScopeOrdinal(idAllocator, {
               scopeId: input.scope.id,
               ordinalWithinScope: input.ordinalWithinScope,
             });
             const checkpointable = yield* isGitCheckpointable(input.scope.cwd);
-            const available = checkpointable
-              ? yield* checkpointStore
-                  .hasCheckpointRef({
-                    cwd: input.scope.cwd,
-                    checkpointRef,
-                  })
-                  .pipe(
-                    Effect.catch((cause) =>
-                      Effect.logWarning("orchestration V2 baseline ref lookup failed", {
-                        scopeId: input.scope.id,
-                        checkpointRef,
-                        cause: String(cause),
-                      }).pipe(Effect.as(false)),
-                    ),
-                  )
-              : false;
+            let checkpointRef = candidates[0];
+            let available = false;
+            for (const candidate of checkpointable ? candidates : []) {
+              available = yield* checkpointStore
+                .hasCheckpointRef({ cwd: input.scope.cwd, checkpointRef: candidate })
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("orchestration V2 baseline ref lookup failed", {
+                      scopeId: input.scope.id,
+                      checkpointRef: candidate,
+                      cause: String(cause),
+                    }).pipe(Effect.as(false)),
+                  ),
+                );
+              if (available) {
+                checkpointRef = candidate;
+                break;
+              }
+            }
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,

@@ -5,6 +5,8 @@ import type {
   DesktopRuntimeInfo,
 } from "@goat/contracts";
 import * as Config from "effect/Config";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A one-time synchronous check while the environment is built.
+import * as NodeFS from "node:fs";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -175,6 +177,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
     isDevelopment,
+    pathExists: NodeFS.existsSync,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;

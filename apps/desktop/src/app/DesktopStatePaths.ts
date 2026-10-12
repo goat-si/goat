@@ -1,5 +1,8 @@
 import * as Option from "effect/Option";
 
+import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
+import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
+
 export type JoinPath = (first: string, ...segments: string[]) => string;
 
 function normalizeConfiguredBaseDir(t3Home: Option.Option<string>): Option.Option<string> {
@@ -15,13 +18,19 @@ export function resolveDesktopBaseDir(input: {
   readonly joinPath: JoinPath;
   readonly t3Home: Option.Option<string>;
   readonly isDevelopment: boolean;
+  /** Lets a dev build keep a dev state left in the legacy home (see resolveGoatHome). */
+  readonly pathExists?: (path: string) => boolean;
 }): string {
-  return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () =>
-    input.isDevelopment
-      ? // The dev runner passes its home explicitly; this is a hand-launched dev build.
-        input.joinPath(input.homeDirectory, ".goat")
-      : input.joinPath(input.homeDirectory, ".goat", "desktop"),
-  );
+  return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () => {
+    if (!input.isDevelopment) return input.joinPath(input.homeDirectory, ".goat", "desktop");
+    // The dev runner passes its home explicitly; this is a hand-launched dev build.
+    const goatHome = input.joinPath(input.homeDirectory, GOAT_HOME_DIR_NAME);
+    const legacyHome = input.joinPath(input.homeDirectory, LEGACY_HOME_DIR_NAME);
+    const exists = input.pathExists ?? (() => false);
+    return !exists(input.joinPath(goatHome, "dev")) && exists(input.joinPath(legacyHome, "dev"))
+      ? legacyHome
+      : goatHome;
+  });
 }
 
 export function resolveDesktopStateDir(input: {

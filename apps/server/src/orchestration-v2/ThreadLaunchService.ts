@@ -484,7 +484,8 @@ const make = Effect.gen(function* () {
           (yield* git
             .hasCommit({
               cwd: project.workspaceRoot,
-              refName: `refs/heads/${WORKTREE_BRANCH_PREFIX}`,
+              // A plain branch named after the namespace blocks every ref inside it.
+              refName: `refs/heads/${branch.split("/")[0] ?? WORKTREE_BRANCH_PREFIX}`,
             })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))))
         ) {

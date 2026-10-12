@@ -185,15 +185,15 @@ describe("isTemporaryWorktreeBranch", () => {
     ).toBe(true);
   });
 
-  it("writes GOAT names and still recognizes short legacy names", () => {
-    expect(buildTemporaryWorktreeBranchName(() => "deadbeef")).toBe("goat/deadbeef");
-    for (const separator of ["/", "-"]) {
-      expect(
-        isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_BRANCH_PREFIX}${separator}deadbeef`),
-      ).toBe(true);
-      expect(
-        isTemporaryWorktreeBranch(`${LEGACY_WORKTREE_BRANCH_PREFIX}${separator}deadbeef-extra`),
-      ).toBe(false);
+  it("writes legacy names older servers accept, and recognizes GOAT names too", () => {
+    expect(buildTemporaryWorktreeBranchName(() => "deadbeef")).toBe(
+      `${LEGACY_WORKTREE_BRANCH_PREFIX}/deadbeef`,
+    );
+    for (const prefix of [LEGACY_WORKTREE_BRANCH_PREFIX, "goat"]) {
+      for (const separator of ["/", "-"]) {
+        expect(isTemporaryWorktreeBranch(`${prefix}${separator}deadbeef`)).toBe(true);
+        expect(isTemporaryWorktreeBranch(`${prefix}${separator}deadbeef-extra`)).toBe(false);
+      }
     }
   });
 

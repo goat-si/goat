@@ -252,7 +252,11 @@ const discoverPairTarget = Effect.fn("pair.discoverPairTarget")(function* (
       bases.push(worktreeHome);
     }
     const envHome = yield* Config.String("GOAT_HOME").pipe(Config.option);
-    bases.push(yield* resolveBaseDir(Option.getOrUndefined(envHome)));
+    // Without an explicit home, an implicit dev server and an installed one may each live
+    // in a different default home (see resolveGoatHome).
+    for (const variant of ["userdata", "dev"] as const) {
+      bases.push(yield* resolveBaseDir(Option.getOrUndefined(envHome), variant));
+    }
   }
 
   const checkedStatePaths: Array<string> = [];

@@ -117,3 +117,15 @@ Statuses assess the revised roadmap, not an implemented migration.
 | 6   | Pi and Claude MCP handoffs emitted only new names.                                                         | Both spellings emitted; Pi scrubs inherited credentials under both.                               |
 | 7   | WSL backend of an older build lost forwarded settings.                                                     | Forwarded names and `WSLENV` carry both spellings; owned names filtered under both.               |
 | 8   | CLI shims emitted only GOAT names; project-script overrides left stale legacy values.                      | Shims export both; legacy names are derived after overrides.                                      |
+
+## wp6 review — gpt-6.1-sol (task t2-wp6-review-1) — VERDICT: FAIL → folded
+
+| #   | Finding                                                                           | Fold                                                                                                     |
+| --- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1   | A hand-launched desktop dev build ignored `~/.t3/dev`.                            | `resolveDesktopBaseDir` takes `pathExists`; the desktop environment passes it.                           |
+| 2   | `goat pair` resolved one default home for both `userdata` and `dev`.              | Resolves the default per state variant.                                                                  |
+| 3   | The temp-branch collision check looked only at the `goat` namespace.              | Checks the requested branch's own namespace.                                                             |
+| 4   | Mobile clients would hand `goat/<hex>` temp branches to older servers.            | Writers keep `t3/<hex>`, `goat/` is accepted; moved to D17.                                              |
+| 5   | Reconstructed baseline checkpoint refs were read only under the legacy namespace. | `checkpointRefCandidatesForScopeOrdinal`; baseline materialization and diffs take the first that exists. |
+
+Non-blocking: D8's one-time log of the legacy-home fallback is not emitted; left out as noise.

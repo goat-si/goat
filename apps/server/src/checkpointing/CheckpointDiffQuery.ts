@@ -20,7 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { checkpointRefForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
+import { checkpointRefCandidatesForScopeOrdinal } from "../orchestration-v2/CheckpointService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import {
   CheckpointDiffResultInvalidError,
@@ -188,14 +188,27 @@ export const make = Effect.gen(function* () {
         input.fromTurnCount === 0
           ? projection.checkpointScopes.find((scope) => scope.kind === "root_run")
           : undefined;
+      const baselineRef = Effect.fn("CheckpointDiffQuery.baselineRef")(function* (
+        scope: NonNullable<typeof firstScope>,
+      ) {
+        // The baseline ref is reconstructed, not stored: take the namespace it exists in.
+        const candidates = yield* checkpointRefCandidatesForScopeOrdinal({
+          scopeId: scope.id,
+          ordinalWithinScope: 0,
+        }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+        for (const candidate of candidates) {
+          const exists = yield* checkpointStore
+            .hasCheckpointRef({ cwd: toScope.cwd, checkpointRef: candidate })
+            .pipe(Effect.orElseSucceed(() => false));
+          if (exists) return candidate;
+        }
+        return candidates[0];
+      });
       const fromCheckpointRef =
         input.fromTurnCount === 0
           ? firstScope === undefined
             ? undefined
-            : yield* checkpointRefForScopeOrdinal({
-                scopeId: firstScope.id,
-                ordinalWithinScope: 0,
-              }).pipe(Effect.provideService(Crypto.Crypto, crypto))
+            : yield* baselineRef(firstScope)
           : readyCheckpoints.find((checkpoint) => checkpoint.appRunOrdinal === input.fromTurnCount)
               ?.ref;
       if (fromCheckpointRef === undefined) {
