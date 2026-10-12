@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useContext, useEffect, useMemo } from "react";
+import { useContext, useEffect, useMemo, useRef } from "react";
 
 import {
   resolveThreadDetailRef,
@@ -9,7 +9,11 @@ import {
   useThreadVisibleTurnItems,
 } from "~/state/entities";
 
+import { threadEnvironment } from "~/state/threads";
+import { useOrchestrationCommand } from "~/state/use-orchestration-command";
+
 import { GoatBotChatView } from "./GoatBotChatView";
+import { resolveGoatBotRemoval } from "./goatBotAvailability";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -70,17 +74,28 @@ function GoatBotThreadSession({
   const confirmedHere =
     session.confirmedBot?.environmentId === environmentId &&
     session.confirmedBot.threadId === threadId;
-  const removed =
-    shell !== null
-      ? shell.archivedAt !== null || shell.deletedAt != null
-      : bootstrapped && !confirmedHere;
+  const removal = resolveGoatBotRemoval({ shell, bootstrapped, confirmedHere });
   const canOpenCurrentBot = session.confirmedBot !== null && !confirmedHere;
+  // The server starts a new bot when its thread was deleted, so ask once per deleted thread.
+  const retryAvailability = session.onRetryAvailability;
+  const replacementAskedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (removal !== "deleted" || !confirmedHere || replacementAskedFor.current === threadId) return;
+    replacementAskedFor.current = threadId;
+    retryAvailability();
+  }, [confirmedHere, removal, retryAvailability, threadId]);
+  const unarchive = useOrchestrationCommand(threadEnvironment.unarchive, { reportFailure: false });
   return (
     <GoatBotChatView
       {...session}
-      rows={removed ? NO_PENDING : session.rows}
-      removed={removed}
+      rows={removal === null ? session.rows : NO_PENDING}
+      removal={removal}
       canOpenCurrentBot={canOpenCurrentBot}
+      onUnarchive={
+        removal === "archived" && session.canOperate
+          ? () => void unarchive({ environmentId, input: { threadId } })
+          : undefined
+      }
       legacyAgentRoute={legacyAgentRoute}
     />
   );

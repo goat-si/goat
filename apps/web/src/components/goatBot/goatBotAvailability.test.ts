@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canSendToGoatBot,
   environmentSupportsChannelLedger,
+  resolveGoatBotRemoval,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
   type GoatBotEnvironmentInput,
@@ -133,5 +134,40 @@ describe("environmentSupportsChannelLedger", () => {
     expect(
       environmentSupportsChannelLedger({ repositoryIdentity: true, channelLedger: true }),
     ).toBe(true);
+  });
+});
+
+describe("resolveGoatBotRemoval", () => {
+  const live = { archivedAt: null, deletedAt: null };
+  it("keeps an archived bot as the bot and marks a deleted one for replacement", () => {
+    expect(resolveGoatBotRemoval({ shell: live, bootstrapped: true, confirmedHere: true })).toBe(
+      null,
+    );
+    expect(
+      resolveGoatBotRemoval({
+        shell: { archivedAt: "2026-10-12T00:00:00.000Z", deletedAt: null },
+        bootstrapped: true,
+        confirmedHere: true,
+      }),
+    ).toBe("archived");
+    expect(
+      resolveGoatBotRemoval({
+        shell: { archivedAt: null, deletedAt: "2026-10-12T00:00:00.000Z" },
+        bootstrapped: true,
+        confirmedHere: true,
+      }),
+    ).toBe("deleted");
+  });
+
+  it("waits for the machine's threads and the just-confirmed bot before calling it deleted", () => {
+    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: false, confirmedHere: false })).toBe(
+      null,
+    );
+    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: true, confirmedHere: true })).toBe(
+      null,
+    );
+    expect(resolveGoatBotRemoval({ shell: null, bootstrapped: true, confirmedHere: false })).toBe(
+      "deleted",
+    );
   });
 });

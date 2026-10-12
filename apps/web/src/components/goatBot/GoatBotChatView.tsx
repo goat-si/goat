@@ -11,7 +11,11 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotTimeline } from "./GoatBotTimeline";
-import { canSendToGoatBot, type GoatBotAvailability } from "./goatBotAvailability";
+import {
+  canSendToGoatBot,
+  type GoatBotAvailability,
+  type GoatBotRemoval,
+} from "./goatBotAvailability";
 import type { GoatBotRow } from "./goatBotRows";
 
 const GOAT_BOT_TITLE = "GOAT Bot";
@@ -27,7 +31,9 @@ export interface GoatBotChatViewProps {
   /** The old global agent, which keeps its coding view and history. */
   readonly legacyAgentRoute: GlobalAgentLegacyRoute | null;
   /** The bot thread was archived or deleted, here or on another device. */
-  readonly removed?: boolean | undefined;
+  readonly removal?: GoatBotRemoval | undefined;
+  /** Brings an archived bot chat back. */
+  readonly onUnarchive?: (() => void) | undefined;
   /** Only offer navigation when this connection confirmed a different bot chat. */
   readonly canOpenCurrentBot?: boolean | undefined;
 }
@@ -41,9 +47,11 @@ export function GoatBotChatView({
   onRetryInput,
   onRetryAvailability,
   legacyAgentRoute,
-  removed = false,
+  removal = null,
   canOpenCurrentBot = false,
+  onUnarchive,
 }: GoatBotChatViewProps) {
+  const removed = removal !== null;
   const ready = availability.kind === "ready" && !removed;
   const canSend = !removed && canSendToGoatBot(availability, canOperate);
   return (
@@ -54,7 +62,11 @@ export function GoatBotChatView({
           <div className="flex min-w-0 flex-col">
             <h1 className="truncate text-sm font-medium text-foreground">{GOAT_BOT_TITLE}</h1>
             <p className="truncate text-xs text-muted-foreground">
-              {removed ? "Archived or deleted" : statusLine(availability)}
+              {removal === "archived"
+                ? "Archived"
+                : removal === "deleted"
+                  ? "Deleted"
+                  : statusLine(availability)}
             </p>
           </div>
         </div>
@@ -84,8 +96,12 @@ export function GoatBotChatView({
       {rows.length > 0 ? (
         // History stays readable while the bot is unavailable; only sending stops.
         <GoatBotTimeline rows={rows} onRetry={onRetryInput} />
-      ) : removed ? (
-        <GoatBotRemovedNotice canOpenCurrentBot={canOpenCurrentBot} />
+      ) : removal !== null ? (
+        <GoatBotRemovedNotice
+          removal={removal}
+          canOpenCurrentBot={canOpenCurrentBot}
+          onUnarchive={onUnarchive}
+        />
       ) : (
         <GoatBotNotice
           availability={availability}
@@ -107,24 +123,41 @@ export function GoatBotChatView({
   );
 }
 
-function GoatBotRemovedNotice({ canOpenCurrentBot }: { canOpenCurrentBot: boolean }) {
+function GoatBotRemovedNotice({
+  removal,
+  canOpenCurrentBot,
+  onUnarchive,
+}: {
+  readonly removal: Exclude<GoatBotRemoval, null>;
+  readonly canOpenCurrentBot: boolean;
+  readonly onUnarchive: (() => void) | undefined;
+}) {
+  const description = canOpenCurrentBot
+    ? "GOAT Bot keeps going in its current chat."
+    : removal === "archived"
+      ? "Unarchive it to keep chatting with GOAT Bot here."
+      : "GOAT Bot is starting a new chat.";
   return (
     <Empty className="min-h-0 flex-1">
       <EmptyHeader className="max-w-md">
         <GoatBotAvatar size="lg" className="mx-auto mb-4" />
-        <EmptyTitle>This chat is no longer available</EmptyTitle>
-        <EmptyDescription>
-          {canOpenCurrentBot
-            ? "It was archived or deleted. GOAT Bot keeps going in its current chat."
-            : "This chat was archived or deleted."}
-        </EmptyDescription>
+        <EmptyTitle>
+          {removal === "archived" ? "This chat is archived" : "This chat was deleted"}
+        </EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
       </EmptyHeader>
-      {canOpenCurrentBot ? (
+      {canOpenCurrentBot || onUnarchive !== undefined ? (
         <EmptyContent>
           <div className="flex justify-center">
-            <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
-              Open GOAT Bot
-            </Button>
+            {canOpenCurrentBot ? (
+              <Button size="sm" variant="outline" render={<Link to={GOAT_BOT_PATH} />}>
+                Open GOAT Bot
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={onUnarchive}>
+                Unarchive
+              </Button>
+            )}
           </div>
         </EmptyContent>
       ) : null}

@@ -842,17 +842,30 @@ it("treats a rejected ingest as a final failed message with a reason and no retr
   expect(port.ingest).toHaveBeenCalledTimes(1);
 });
 
-it.each(["archived", "deleted"])(
-  "does not offer a looping link for the confirmed %s bot",
-  async (kind) => {
-    state.botArchived = kind === "archived";
-    state.botDeleted = kind === "deleted";
-    await render(false, false, true);
-    expect(container.textContent).toContain("This chat was archived or deleted");
-    expect(container.querySelector('a[href="/bot"]')).toBeNull();
-    expect(textarea().disabled).toBe(true);
-  },
-);
+it("offers to unarchive an archived bot instead of a looping link", async () => {
+  state.botArchived = true;
+  await render(false, false, true);
+  expect(container.textContent).toContain("This chat is archived");
+  expect(container.querySelector('a[href="/bot"]')).toBeNull();
+  expect(
+    Array.from(container.querySelectorAll("button")).some(
+      (button) => button.textContent === "Unarchive",
+    ),
+  ).toBe(true);
+  expect(textarea().disabled).toBe(true);
+});
+
+it("asks the server once for a replacement when the confirmed bot was deleted", async () => {
+  state.botDeleted = true;
+  await render(false, false, true);
+  // The server answers with the same deleted thread here, as an older server would.
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  await render(false, false, true);
+  expect(port.ensureBot).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("This chat was deleted");
+  expect(container.querySelector('a[href="/bot"]')).toBeNull();
+  expect(textarea().disabled).toBe(true);
+});
 
 it("offers the bot link only when the confirmed bot differs from the removed chat", async () => {
   state.botDeleted = true;
@@ -869,11 +882,11 @@ it("keeps a just-confirmed bot awaiting its shell rather than showing removed", 
   state.botMissing = true;
   await render(false, false, true);
   expect(useGlobalAgentStore.getState().botRef?.threadId).toBe("bot");
-  expect(container.textContent).not.toContain("This chat is no longer available");
+  expect(container.textContent).not.toContain("This chat was deleted");
   expect(textarea().disabled).toBe(false);
   setConnection(false);
   await render(false, false, true);
-  expect(container.textContent).toContain("This chat is no longer available");
+  expect(container.textContent).toContain("This chat was deleted");
 });
 
 it("remounts the thread permission hook when the port is installed and removed", async () => {

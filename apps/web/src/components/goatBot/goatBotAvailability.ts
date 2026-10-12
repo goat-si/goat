@@ -86,3 +86,26 @@ export function environmentSupportsChannelLedger(
 ): boolean {
   return capabilities?.channelLedger === true;
 }
+
+/** How the bot thread on screen was taken away, if it was. */
+export type GoatBotRemoval = "archived" | "deleted" | null;
+
+/**
+ * An archived bot is still the bot and comes back by unarchiving it. A deleted one is replaced by
+ * the server on the next ensure. A missing shell only counts as deleted once its machine has
+ * loaded its threads and the thread is not the bot this connection just confirmed.
+ */
+export function resolveGoatBotRemoval(input: {
+  readonly shell: {
+    readonly archivedAt: string | null;
+    readonly deletedAt?: string | null | undefined;
+  } | null;
+  readonly bootstrapped: boolean;
+  readonly confirmedHere: boolean;
+}): GoatBotRemoval {
+  if (input.shell !== null) {
+    if (input.shell.deletedAt != null) return "deleted";
+    return input.shell.archivedAt !== null ? "archived" : null;
+  }
+  return input.bootstrapped && !input.confirmedHere ? "deleted" : null;
+}
