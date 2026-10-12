@@ -88,13 +88,12 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
           'full-access', 'default', 'user', 'user', '2026-08-01', '2026-08-01', 'never', 0)`;
       yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at)
         VALUES ('session-1', 'user', '[]', 'pairing', '2026-08-01', '2027-08-01')`;
-      // A generated column. SELECT * cannot copy this table; the flag must
-      // be recomputed on the destination, not stored as a plain integer.
+      // A generated column on a row with no thread. SELECT * cannot copy this
+      // table; the flag must be recomputed, and the row must not mark a family live.
       yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
-        (provider_thread_id, thread_id, provider, status, updated_at, payload_json)
+        (provider_thread_id, provider, status, updated_at, payload_json)
         VALUES (
           'roster-active',
-          'stopped-thread',
           'codex',
           'idle',
           '2026-08-01',
