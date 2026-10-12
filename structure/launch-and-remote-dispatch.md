@@ -79,4 +79,30 @@ Delivery mode decides who wakes. Launch-watch wakes and origin reports are diffe
 A watch fires when a followed run ends. A report is the remote thread speaking back through the
 origin binding.
 
+### Relaying sends
+
+A thread launched over SSH names hosts as its origin knows them. When its `goat_thread_send`
+names a host its own machine cannot resolve, `HostThreadsMcpService` hands the send back to the
+origin instead of failing, but only when the origin declared `relaySend` in the report binding at
+launch. The coordinator declares it for `kind: "thread"` dispatches only, so delegated tasks and
+older origins, which never declare it, keep the error that names the origin and suggests
+`goat_origin_report`. Every other host tool keeps that error too. The remote caller must still be
+a live thread in default interaction mode. Migration
+`apps/server/src/persistence/Migrations/068_RemoteReportRelay.ts` stores the flag on the binding
+and the send on its report row, which travels as `RemoteReport.relay` and answers the agent with
+`delivery: "relayed"`. A retry with the same `clientRequestId` before the origin collects it
+returns the same report.
+
+The origin acts on it in `RemoteDispatchCoordinator.importBatch`, and only for a dispatch whose
+own `relay_send` column records that it offered relaying; rows from before that column refuse. It
+sends as the launcher thread: that thread must be live and in default interaction mode, and its
+runtime mode is the ceiling the target host enforces, as for the launcher's own cross-machine
+sends. The target dedupes `clientRequestId` per SSH session, and a restart replaces the session,
+so `relay_attempted` records each relay before it is sent. A relay replayed after a restart is
+reported as possibly delivered and is not sent again. A delivered send re-arms the launcher's
+watch on the target and resumes any dispatch that follows that thread. The outcome goes to the
+launcher's inbox, with remote identifiers escaped. A send that was refused or may not have
+arrived quotes the reason and the message and, under `wake`, wakes the launcher, which decides
+whether to send it itself. The relay does not change the dispatch's latest report.
+
 > Decision record: [ADR-0010](decisions/ADR-0010-remote-dispatch.md)

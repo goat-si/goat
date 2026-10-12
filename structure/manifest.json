@@ -268,6 +268,7 @@
         "apps/server/src/persistence/Migrations/064_RemoteDispatches.ts",
         "apps/server/src/persistence/Migrations/063_RemoteReports.ts",
         "apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts",
+        "apps/server/src/persistence/Migrations/068_RemoteReportRelay.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
         "packages/contracts/src/remoteReports.ts"
@@ -349,7 +350,8 @@
         "apps/server/src/persistence/Migrations/065_ChannelLedger.ts",
         "apps/server/src/persistence/Migrations/064_RemoteDispatches.ts",
         "apps/server/src/persistence/Migrations/063_RemoteReports.ts",
-        "apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts"
+        "apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts",
+        "apps/server/src/persistence/Migrations/068_RemoteReportRelay.ts"
       ]
     }
   ],

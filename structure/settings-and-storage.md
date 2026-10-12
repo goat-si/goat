@@ -60,6 +60,7 @@ path once, using a read-only snapshot. If the V2 file already exists, the V1 fil
 Orchestration v2 tables, the channel ledger (`apps/server/src/persistence/Migrations/065_ChannelLedger.ts`),
 and remote dispatch (`apps/server/src/persistence/Migrations/064_RemoteDispatches.ts`,
 `apps/server/src/persistence/Migrations/063_RemoteReports.ts`,
-`apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts`) are migrations on this database.
+`apps/server/src/persistence/Migrations/066_RemoteDispatchQuestions.ts`,
+`apps/server/src/persistence/Migrations/068_RemoteReportRelay.ts`) are migrations on this database.
 Launch watches are the exception that is not a table: they are JSON at
 `<stateDir>/thread-launch-watches.json`. See [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md).

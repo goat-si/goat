@@ -394,6 +394,11 @@ wake or prompt delivery. `goat_ssh_reports` reads the origin's bounded dispatch
 status list. Run-end notifications are controlled separately by
 `notifyOnCompletion` and the launch watch.
 
+A thread launched this way may name a host its own machine cannot reach in
+`goat_thread_send`. The origin then delivers that send as the launcher thread,
+within the launcher's modes, and the remote agent gets `delivery: "relayed"`.
+Only `goat_thread_send` relays, and only for ordinary launched threads.
+
 ### Completion webhook
 
 The launch watch's reports can also be posted to an agent outside GOAT. Turn on
