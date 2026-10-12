@@ -562,9 +562,8 @@ const make = Effect.gen(function* () {
         return { type: "question", text: REMOTE_COPY.unreachable(host) } as const;
       }
       const fallbackModel = chosen.defaultModelSelection ?? local.modelSelection;
-      // Check the model before launching: the remote's refusal would not say why. A machine
-      // that cannot list its models is left to the launch.
-      const offered = yield* callHost(
+      // Check the model before launching: the remote's refusal would not say why.
+      const capabilities = yield* callHost(
         {
           host,
           tool: "orchestrator_capabilities",
@@ -573,26 +572,35 @@ const make = Effect.gen(function* () {
           timeoutMs: READ_TIMEOUT_MS,
         },
         authorize,
-      ).pipe(Effect.flatMap(decodeOffered), Effect.option);
+      ).pipe(Effect.flatMap(decodeOffered), Effect.result);
+      // Unreachable now: ask, as when the project list cannot be read.
+      if (capabilities._tag === "Failure" && isUnreachable(capabilities.failure)) {
+        return { type: "question", text: REMOTE_COPY.unreachable(host) } as const;
+      }
+      // A machine that answers but cannot list its models (an older GOAT) cannot confirm a
+      // preference, so only the project's own model runs there and the launch decides.
+      const offered = capabilities._tag === "Success" ? capabilities.success : undefined;
       const isOffered = (model: ModelSelection) =>
-        offered._tag === "None" ||
-        offered.value.providers.some(
+        offered !== undefined &&
+        offered.providers.some(
           (provider) =>
             provider.providerInstanceId === model.instanceId &&
             provider.models.some((entry) => entry.id === model.model),
         );
       const preferred = local.preferredModelSelection;
       // A Slack connection's model is a preference, as on this machine: when that machine does
-      // not offer it, the project's model runs the work instead of a question nobody can act on.
+      // not offer it, or cannot say, the project's model runs the work instead of a question
+      // nobody can act on.
       const usePreferred = preferred !== undefined && isOffered(preferred);
       if (preferred !== undefined && !usePreferred) {
         yield* Effect.logWarning("channel default model not offered on the other machine", {
           taskId: task.taskId,
           host,
+          checked: offered !== undefined,
         });
       }
       const modelSelection = usePreferred ? preferred : fallbackModel;
-      if (!isOffered(modelSelection)) {
+      if (offered !== undefined && !isOffered(modelSelection)) {
         return {
           type: "question",
           text:

@@ -101,6 +101,14 @@ changed: the worker files `goat_origin_report` there, and
   mode is lowered to it; interaction mode and granular grants are not carried over. This is why the
   channel path does not need `goat_ssh_thread_launch`'s full-access caller: the dispatcher chooses
   the host and folder from validated lists, not an agent.
+- **Models are checked there first.** The SSH launch does not say why a remote refused, so the
+  dispatcher reads that machine's `orchestrator_capabilities` before launching. A Slack
+  connection's model is only a preference: if that machine does not offer it, or cannot list its
+  models, the remote project's model (or this machine's default) runs the work. If the model to
+  run is listed as missing, the requester is asked to pick one for the project there. If the
+  machine cannot be reached for the list, the requester is asked as for any unreachable machine.
+  A machine that answers but cannot list its models (an older GOAT) is left to the launch, which
+  fails the task if it refuses.
 - **Completion is weaker than on this machine.** The remote does not report provider background
   work or a restart continuation that has not started a run
   ([#46](https://github.com/goat-si/goat/issues/46)). A finished run settles the task only after a

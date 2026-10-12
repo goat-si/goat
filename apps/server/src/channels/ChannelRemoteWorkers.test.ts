@@ -101,6 +101,8 @@ class RemoteMachine {
   refuseSendWith: string | undefined;
   /** The models orchestrator_capabilities lists; unset, the tool is refused (an older GOAT). */
   offeredModels: ReadonlyArray<{ readonly instance: string; readonly model: string }> | undefined;
+  /** orchestrator_capabilities alone cannot be reached (the call times out). */
+  capabilitiesUnreachable = false;
   /** goat_thread_send names a run that never exists. */
   sendNamesMissingRun = false;
   /** After the answer's run, another run starts at once and asks this. */
@@ -169,7 +171,7 @@ class RemoteMachine {
     this.poke();
   }
 
-  private unreachable(message: string) {
+  unreachable(message: string) {
     return new SshRemoteDispatch.SshRemoteDispatchError({ reason: "host_unavailable", message });
   }
 
@@ -319,6 +321,7 @@ class RemoteMachine {
                 if (machine.environmentReadDown) return yield* machine.unreachable("down");
                 return { environmentId: machine.environmentId };
               case "orchestrator_capabilities":
+                if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
                 if (machine.offeredModels === undefined) break;
                 return {
                   providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
@@ -1054,6 +1057,10 @@ describe("Slack defaults for work on another machine", () => {
 
   it.effect("starts Slack work there with the connection's model, under the link's ceiling", () => {
     const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+    machine.offeredModels = [
+      { instance: "codex", model: "slack-default" },
+      { instance: "codex", model: "remote-default" },
+    ];
     return Effect.gen(function* () {
       yield* setupBot;
       yield* linkSlackUser();
@@ -1436,6 +1443,22 @@ describe("Slack defaults for work on another machine", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "runs Slack work on the project's model when that machine cannot list its models",
+    () => {
+      // An older GOAT refuses orchestrator_capabilities: the preference cannot be confirmed.
+      const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(slackInput("do@mac-studio: build it", "d6"), slackContext);
+        yield* until("running", (task) => task.status === "running");
+        assert.deepStrictEqual(machine.launches[0]!.modelSelection, remoteModel);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("ignores Slack defaults for work from the GOAT bot", () => {
     const { machine, harness } = defaultsHarness({ modelSelection: slackModel });
     return Effect.gen(function* () {
@@ -1522,4 +1545,25 @@ describe("models the other machine offers", () => {
       assert.strictEqual(machine.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "asks instead of launching unchecked when that machine's models cannot be read now",
+    () => {
+      const { machine, harness } = remoteHarness();
+      machine.offeredModels = [{ instance: "codex", model: "gpt-6.1-sol" }];
+      machine.capabilitiesUnreachable = true;
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(goatInput("do@mac-studio: flaky catalog", "mm4"), rpcContext);
+        const asked = yield* until("asked", (task) => task.status === "waiting_input");
+        assert.strictEqual(asked.openQuestions[0]?.text, REMOTE_COPY.unreachable(machine.host));
+        assert.strictEqual(machine.launches.length, 0);
+        machine.capabilitiesUnreachable = false;
+        yield* gateway.ingest(goatInput("answer: try again", "mm5"), rpcContext);
+        yield* until("running", (task) => task.status === "running");
+        assert.strictEqual(machine.launches.length, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
