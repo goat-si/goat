@@ -3300,9 +3300,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
               // The goat_host_status tool's instance, so both share last-known samples.
-              Layer.provide(
-                Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus),
-              ),
+              Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
