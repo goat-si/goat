@@ -942,24 +942,25 @@ export const layerEnvironmentToolkit = toolkitRegistration(
 
 /**
  * Host status for both the goat_host_status tool and the `server.getHostStatus`
- * WebSocket RPC. Layers memoize by reference, so the two read one instance and
- * share its last-known samples and quota refresh limit. It carries the same
- * services `layer` provides the other toolkits, so whichever side builds it
- * first builds HostThreadsMcpService the same way.
+ * WebSocket RPC. Provide it once above both, so they read one instance and
+ * share its last-known samples and quota refresh limit.
  */
+const layerLaunchWatch = LaunchWatchService.layer.pipe(Layer.provide(CompletionWebhook.layer));
+
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
-  Layer.provide(LaunchWatchService.layer),
+  Layer.provide(layerLaunchWatch),
   Layer.provide(RemoteReportService.layer),
   Layer.provide(ThreadResultService.layer),
   Layer.provide(RemoteDispatchCoordinator.layer),
 );
 
+/** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
 export const layerHostStatusToolkit = toolkitRegistration(
   HostStatusToolkit,
   HostStatusHandlers.layer,
-).pipe(Layer.provide(layerHostStatusService));
+);
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer).pipe(
   Layer.provide(HostThreadsMcpService.layer),
@@ -1033,7 +1034,7 @@ export const layer = Layer.mergeAll(
 ).pipe(
   // One launch-watch store for the launch, send and watch tools, following
   // threads with the same dispatch they use.
-  Layer.provide(LaunchWatchService.layer.pipe(Layer.provide(CompletionWebhook.layer))),
+  Layer.provide(layerLaunchWatch),
   // One report service for the launch binding and the report tools, so a
   // report wakes the origin's waiting collector.
   Layer.provide(RemoteReportService.layer),

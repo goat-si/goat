@@ -733,13 +733,7 @@ const layerMakeRoutes = Layer.mergeAll(
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer.pipe(
-      Layer.provide(
-        McpHttpServer.layerHostStatusService.pipe(
-          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-        ),
-      ),
-    ),
+    Ws.layer,
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
@@ -751,6 +745,12 @@ const layerMakeRoutes = Layer.mergeAll(
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
   ),
 ).pipe(
+  // One instance for the goat_host_status tool and the server.getHostStatus RPC.
+  Layer.provide(
+    McpHttpServer.layerHostStatusService.pipe(
+      Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+    ),
+  ),
   Layer.provide(layerSshWorkspace),
   Layer.provide(SshRemoteDispatch.layer),
   // Both transports consume the same service instance, so caches single-flight across clients
