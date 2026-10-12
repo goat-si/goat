@@ -1511,6 +1511,32 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
+  it.effect("moves a hand-edited completion webhook secret into the secret store on load", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"completionWebhook":{"enabled":true,"url":"https://agent.example/hook","secret":"hand-edited-secret"}}',
+      );
+
+      const loaded = yield* serverSettings.getSettings;
+
+      assert.equal(loaded.completionWebhook.secret, "hand-edited-secret");
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        "hand-edited-secret",
+      );
+      const stored = yield* secrets.get("completion-webhook-secret");
+      assert.equal(
+        Option.isSome(stored) ? new TextDecoder().decode(stored.value) : null,
+        "hand-edited-secret",
+      );
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
   it.effect(
     "keeps GitHub tokens per host in the secret store and tells clients only that one is set",
     () =>

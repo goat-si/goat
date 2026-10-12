@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-import { FetchHttpClient } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import { verifyWebhookSignature } from "../scheduledTasks/webhookVerification.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -53,7 +53,10 @@ interface Received {
   readonly body: string;
 }
 
-/** A webhook receiver answering each request in turn; the last answer repeats. */
+/**
+ * A webhook receiver answering each request in turn (the last answer repeats), and a
+ * count of settings reads, which is how a delivery that sent nothing shows it ran.
+ */
 const harness = (
   settings: Partial<CompletionWebhookSettings>,
   answers: ReadonlyArray<number | "network" | "hang"> = [200],
@@ -61,23 +64,46 @@ const harness = (
   Effect.gen(function* () {
     const received = yield* Queue.unbounded<Received>();
     const log: Array<Received> = [];
-    const fetch: typeof globalThis.fetch = async (input, init) => {
-      const request = new Request(input, init);
-      const entry = { url: request.url, headers: request.headers, body: await request.text() };
-      const answer = answers[Math.min(log.length, answers.length - 1)] ?? 200;
-      log.push(entry);
-      Queue.offerUnsafe(received, entry);
-      if (answer === "network") throw new Error("connection refused");
-      if (answer === "hang") return new Promise<Response>(() => {});
-      return new Response(null, { status: answer });
-    };
-    const layer = CompletionWebhook.layer.pipe(
-      Layer.provideMerge(ServerSettings.layerTest({ completionWebhook: settings })),
-      Layer.provide(
-        FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))),
-      ),
+    const reads = { count: 0 };
+    const client = HttpClient.make((request) =>
+      Effect.suspend(() => {
+        const entry = {
+          url: request.url,
+          headers: new Headers(Object.entries(request.headers)),
+          body:
+            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "",
+        };
+        const answer = answers[Math.min(log.length, answers.length - 1)] ?? 200;
+        log.push(entry);
+        Queue.offerUnsafe(received, entry);
+        if (answer === "network") {
+          return Effect.fail(
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({ request, cause: "connection refused" }),
+            }),
+          );
+        }
+        if (answer === "hang") return Effect.never;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(request, new Response(null, { status: answer })),
+        );
+      }),
     );
-    return { received, log, layer };
+    const countingSettings = Layer.effect(
+      ServerSettings.ServerSettingsService,
+      Effect.gen(function* () {
+        const base = yield* ServerSettings.ServerSettingsService;
+        return ServerSettings.ServerSettingsService.of({
+          ...base,
+          getSettings: base.getSettings.pipe(Effect.tap(() => Effect.sync(() => reads.count++))),
+        });
+      }),
+    ).pipe(Layer.provide(ServerSettings.layerTest({ completionWebhook: settings })));
+    const layer = CompletionWebhook.layer.pipe(
+      Layer.provideMerge(countingSettings),
+      Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+    );
+    return { received, log, reads, layer };
   });
 
 const withWebhook = <A, E, LE>(
@@ -98,11 +124,16 @@ const withWebhook = <A, E, LE>(
 
 /** Lets forked deliveries run up to their next sleep or pending request. */
 const settle = Effect.gen(function* () {
-  for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
-  // @effect-diagnostics-next-line globalTimers:off -- The fake fetch resolves outside the test clock.
-  yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)));
-  for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+  for (let i = 0; i < 50; i++) yield* Effect.yieldNow;
 });
+
+const verifySignature = (request: Received, secret: string) =>
+  verifyWebhookSignature({
+    signature: { header: "x-goat-signature", prefix: "sha256=", encoding: "hex" },
+    secret,
+    headers: { "x-goat-signature": request.headers.get("x-goat-signature") ?? "" },
+    body: new TextEncoder().encode(request.body),
+  });
 
 describe("completionWebhookPayload", () => {
   it("carries the run, the watch's threads and host, and leaves out absent optional fields", () => {
@@ -138,20 +169,6 @@ describe("completionWebhookPayload", () => {
   });
 });
 
-describe("completionWebhookWanted", () => {
-  it.each([
-    [{ ...enabled }, false, false],
-    [{ ...enabled }, true, true],
-    [{ ...enabled, allLaunches: true }, false, true],
-    [{ ...enabled, enabled: false, allLaunches: true }, true, false],
-    [{ ...enabled, url: "" }, true, false],
-  ] as const)("%o with notifyWebhook %s posts: %s", (settings, notifyWebhook, wanted) => {
-    expect(CompletionWebhook.completionWebhookWanted(settings, watchFor({ notifyWebhook }))).toBe(
-      wanted,
-    );
-  });
-});
-
 describe("CompletionWebhook", () => {
   it.effect("posts the payload signed with the secret, with event and delivery headers", () =>
     Effect.gen(function* () {
@@ -171,15 +188,8 @@ describe("CompletionWebhook", () => {
             launcherThreadId: launcher,
             prUrl: "https://github.com/acme/app/pull/7",
           });
-          const verify = (secret: string) =>
-            verifyWebhookSignature({
-              signature: { header: "x-goat-signature", prefix: "sha256=", encoding: "hex" },
-              secret,
-              headers: { "x-goat-signature": request.headers.get("x-goat-signature") ?? "" },
-              body: new TextEncoder().encode(request.body),
-            });
-          expect(verify("s3cret")).toBe(true);
-          expect(verify("other")).toBe(false);
+          expect(verifySignature(request, "s3cret")).toBe(true);
+          expect(verifySignature(request, "other")).toBe(false);
         }),
       );
     }),
@@ -199,7 +209,7 @@ describe("CompletionWebhook", () => {
   );
 
   it.effect.each([
-    ["the webhook is off", { ...enabled, enabled: false }, true],
+    ["the webhook is off", { ...enabled, enabled: false, allLaunches: true }, true],
     ["the launch did not opt in", enabled, false],
     ["the url is empty", { ...enabled, url: "" }, true],
     ["the url is not http(s)", { ...enabled, url: "file:///etc/passwd" }, true],
@@ -210,8 +220,11 @@ describe("CompletionWebhook", () => {
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook }), runReport());
           yield* settle;
+          yield* TestClock.adjust(60 * 60_000);
+          yield* settle;
         }),
       );
+      expect(h.reads.count).toBe(1);
       expect(h.log).toEqual([]);
     }),
   );
@@ -243,12 +256,12 @@ describe("CompletionWebhook", () => {
 
   it.effect("retries failures with the launch watch backoff until the receiver accepts", () =>
     Effect.gen(function* () {
-      const h = yield* harness(enabled, [503, "network", 429, 204]);
+      const h = yield* harness(enabled, [503, "network", 408, 429, 204]);
       yield* withWebhook(h.layer, (webhook) =>
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(h.received);
-          for (const backoff of [30_000, 60_000, 120_000]) {
+          for (const backoff of [30_000, 60_000, 120_000, 240_000]) {
             yield* settle;
             yield* TestClock.adjust(backoff - 1);
             yield* settle;
@@ -261,7 +274,7 @@ describe("CompletionWebhook", () => {
           yield* settle;
         }),
       );
-      expect(h.log).toHaveLength(4);
+      expect(h.log).toHaveLength(5);
       // Every retry is the same event under the same id and body.
       expect(new Set(h.log.map((request) => request.body)).size).toBe(1);
       expect(new Set(h.log.map((request) => request.headers.get("x-goat-delivery"))).size).toBe(1);
@@ -311,7 +324,50 @@ describe("CompletionWebhook", () => {
           yield* settle;
         }),
       );
+      yield* TestClock.adjust(60 * 60_000);
+      yield* settle;
+      expect(h.reads.count).toBe(1);
       expect(h.log).toHaveLength(1);
+    }),
+  );
+
+  it.effect("retries a request the receiver never answers once it times out", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(enabled, ["hang", 200]);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
+          yield* Queue.take(h.received);
+          yield* settle;
+          yield* TestClock.adjust(10_000 + 30_000 - 1);
+          yield* settle;
+          expect(Queue.sizeUnsafe(h.received)).toBe(0);
+          yield* TestClock.adjust(1);
+          yield* Queue.take(h.received);
+          yield* settle;
+          yield* TestClock.adjust(60 * 60_000);
+          yield* settle;
+        }),
+      );
+      expect(h.log).toHaveLength(2);
+    }),
+  );
+
+  it.effect("signs a retry with the secret current when it is sent", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(enabled, [503, 200]);
+      yield* withWebhook(h.layer, (webhook, settings) =>
+        Effect.gen(function* () {
+          yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
+          yield* Queue.take(h.received);
+          yield* settings.updateSettings({ completionWebhook: { secret: "rotated" } });
+          yield* settle;
+          yield* TestClock.adjust(30_000);
+          const retry = yield* Queue.take(h.received);
+          expect(verifySignature(retry, "rotated")).toBe(true);
+          expect(verifySignature(retry, "s3cret")).toBe(false);
+        }),
+      );
     }),
   );
 
@@ -328,6 +384,7 @@ describe("CompletionWebhook", () => {
           yield* settle;
         }),
       );
+      expect(h.reads.count).toBe(2);
       expect(h.log).toHaveLength(1);
     }),
   );

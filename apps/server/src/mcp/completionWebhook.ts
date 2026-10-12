@@ -84,14 +84,11 @@ export function completionWebhookPayload(
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 /** `sha256=<hex>` HMAC of the exact body, the scheme GOAT also accepts on inbound webhooks. */
-export function signCompletionWebhook(body: string, secret: string): string {
+function signCompletionWebhook(body: string, secret: string): string {
   return `sha256=${NodeCrypto.createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-export function completionWebhookWanted(
-  settings: CompletionWebhookSettings,
-  watch: LaunchWatch,
-): boolean {
+function completionWebhookWanted(settings: CompletionWebhookSettings, watch: LaunchWatch): boolean {
   return (
     settings.enabled && settings.url.length > 0 && (watch.notifyWebhook || settings.allLaunches)
   );
