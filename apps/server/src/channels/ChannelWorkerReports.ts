@@ -119,7 +119,16 @@ const make = Effect.gen(function* () {
         latest = reread;
       }
       if (!TERMINAL_RUN_STATUSES.has(current.status)) return latest !== stored;
-      if (latest.task.status !== "running") return latest !== stored;
+      // A worker that asked a question and stopped waits for the answer; one whose run failed or
+      // was stopped while waiting has ended the task all the same.
+      const waitingForAnswer =
+        latest.task.status === "waiting_input" && current.status === "completed";
+      if (
+        waitingForAnswer ||
+        (latest.task.status !== "running" && latest.task.status !== "waiting_input")
+      ) {
+        return latest !== stored;
+      }
 
       // A restart continuation still to come means this terminal run is not the last word.
       const continuationPending = yield* threads

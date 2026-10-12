@@ -991,6 +991,51 @@ describe("who may do what (scenario 4)", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("refuses an answer from someone unlinked after sending it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const identities = yield* ChannelIdentityService.ChannelIdentityService;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(slackInput("do: ship the fix", "unlinked-answer"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("unlinked-answer-question"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Choose",
+          question: "Staging or production?",
+        },
+        task.worker!.threadId,
+      );
+      harness.world.setStatus(task.worker!.threadId, 1, "completed");
+      yield* runtime.drain;
+      const waiting = yield* onlyTask;
+      yield* gateway.ingest(
+        {
+          ...slackInput("production", "unlinked-answer-reply"),
+          intent: "answer",
+          taskId: task.taskId,
+          questionId: waiting.openQuestions[0]!.questionId,
+        },
+        slackContext,
+      );
+      // The link goes away before reception reads the answer.
+      yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U1" });
+      yield* runtime.drain;
+      const after = yield* onlyTask;
+      assert.strictEqual(after.status, "waiting_input");
+      assert.deepStrictEqual(after.openQuestions, waiting.openQuestions);
+      assert.strictEqual(harness.world.sends.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("answers unlinked Slack users with a link notice and starts no work", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -1236,6 +1281,95 @@ describe("completion (scenario 5)", () => {
       const task = yield* onlyTask;
       return { task, threadId: task.worker!.threadId, runtime };
     });
+
+  it.effect.each(["failed", "cancelled"] as const)(
+    "ends a task waiting for an answer when its worker run %s",
+    (status) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { task, threadId, runtime } = yield* startTask();
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* reports.report(
+          {
+            taskId: task.taskId,
+            eventId: ChannelTaskEventId.make("question-before-" + status),
+            generation: task.generation,
+            status: "waiting_input",
+            summary: "Need a decision",
+            question: "Staging or production?",
+          },
+          threadId,
+        );
+        harness.world.setStatus(threadId, 1, status);
+        yield* runtime.drain;
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, status);
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+        assert.strictEqual(resultsTo(harness.slackSent, "failure").length, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("asks again instead of forwarding an answer to a worker raised above the task", () => {
+    const harness = makeHarness({ realWorkerLaunch: true });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* gateway.ingest(slackInput("do: careful work", "raised-work"), slackContext);
+      yield* runtime.drain;
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const threadId = task.worker!.threadId;
+      yield* reports.report(
+        {
+          taskId: task.taskId,
+          eventId: ChannelTaskEventId.make("raised-question"),
+          generation: task.generation,
+          status: "waiting_input",
+          summary: "Need a decision",
+          question: "Staging or production?",
+        },
+        threadId,
+      );
+      const waiting = yield* onlyTask;
+      // Someone raises the worker above the requester's auto-accept-edits ceiling.
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("raise-worker"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const runsBefore = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs.length;
+      yield* gateway.ingest(
+        {
+          ...slackInput("production", "raised-answer"),
+          intent: "answer",
+          taskId: task.taskId,
+          questionId: waiting.openQuestions[0]!.questionId,
+        },
+        slackContext,
+      );
+      yield* runtime.drain;
+      const after = yield* onlyTask;
+      assert.strictEqual(after.status, "waiting_input");
+      assert.strictEqual(after.openQuestions.length, 1);
+      assert.include(after.openQuestions[0]!.text, "full-access");
+      assert.deepStrictEqual(yield* ledger.listPendingForwards(50), []);
+      assert.strictEqual(
+        (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs.length,
+        runsBefore,
+      );
+      assert.include(
+        resultsTo(harness.slackSent, "question").at(-1)?.message.text ?? "",
+        "full-access",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect(
     "refuses a completed report from the wrong generation without recording a completion",

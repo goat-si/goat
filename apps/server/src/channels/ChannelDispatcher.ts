@@ -25,7 +25,12 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 
+import {
+  type DispatchModeRefusal,
+  DispatchModeLimit,
+} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -86,7 +91,12 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const askRequester = (stored: ChannelLedger.ChannelStoredTask, text: string, owner: string) =>
+  const askRequester = (
+    stored: ChannelLedger.ChannelStoredTask,
+    text: string,
+    owner: string,
+    options: { readonly clearPendingAnswer?: boolean } = {},
+  ) =>
     Effect.gen(function* () {
       const askedAt = DateTime.formatIso(yield* DateTime.now);
       yield* commitTransition(
@@ -105,7 +115,11 @@ const make = Effect.gen(function* () {
             },
           },
         },
-        { owner, narrate: true },
+        {
+          owner,
+          narrate: true,
+          ...(options.clearPendingAnswer ? { pendingAnswerMessageId: null } : {}),
+        },
       );
     });
 
@@ -281,6 +295,9 @@ const make = Effect.gen(function* () {
         return;
       }
       const ids = answerForwardIdsFor(event.eventId);
+      // The worker's modes may have been raised since the task started. The orchestrator re-checks
+      // them against the requester's ceiling inside the thread's command lock.
+      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
       const sent = yield* threads
         .sendToThread({
           projectId: ProjectId.make(projectId),
@@ -293,8 +310,31 @@ const make = Effect.gen(function* () {
           createdBy: "user",
           creationSource: "server",
         })
-        .pipe(Effect.result);
+        .pipe(
+          Effect.provideService(DispatchModeLimit, {
+            runtimeMode: stored.task.requester.runtimeModeCeiling,
+            interactionMode: "default",
+            refused,
+          }),
+          Effect.result,
+        );
       if (sent._tag === "Failure") {
+        const refusal = yield* Ref.get(refused);
+        if (refusal !== undefined) {
+          // Keep the answer's intent: ask again, so the requester can lower the thread or answer there.
+          yield* askRequester(
+            stored,
+            "The coding thread now runs in " +
+              refusal.runtimeMode +
+              " mode, above what this task may use, so I didn't pass on your answer (\"" +
+              event.payload.answer +
+              "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
+            owner,
+            { clearPendingAnswer: true },
+          );
+          yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          return;
+        }
         // Left pending; the next scan sends it again under the same command id.
         yield* Effect.logWarning("channel answer forward failed", {
           taskId: stored.task.taskId,
