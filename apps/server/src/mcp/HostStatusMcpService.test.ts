@@ -9,6 +9,7 @@ import {
   type ServerProvider,
   type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -240,11 +241,13 @@ it.effect("reads only this machine for a client session that may not reach hosts
     const { value, calls, connectedReads } = yield* run(
       { hosts: ["box"], hostCall: () => Effect.die("read-only session reached SSH") },
       (service) =>
-        service.readForClient({
-          environmentId: EnvironmentId.make("host-status-test"),
-          sessionId: "web-session",
-          reachHosts: false,
-        }),
+        service
+          .readForClient({
+            environmentId: EnvironmentId.make("host-status-test"),
+            sessionId: "web-session",
+            reachHosts: false,
+          })
+          .pipe(Effect.provideService(HostProcess.Platform, "win32")),
     );
     expect(connectedReads()).toBe(0);
     expect(calls).toEqual([]);
@@ -254,7 +257,7 @@ it.effect("reads only this machine for a client session that may not reach hosts
     expect(value.success.hosts[0]).toMatchObject({
       host: null,
       reachability: "ok",
-      metrics: { platform: process.platform, threads: { running: 1, waiting: 1, queued: 1 } },
+      metrics: { platform: "win32", threads: { running: 1, waiting: 1, queued: 1 } },
     });
   }),
 );
