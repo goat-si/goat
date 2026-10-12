@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   type AtomCommand,
   createEnvironmentRpcCommand,
+  isAtomCommandInterrupted,
   runAtomCommand,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
@@ -23,7 +24,11 @@ const listTaskPage = createEnvironmentRpcCommand(connectionAtomRuntime, {
 /** Settles a channel command, throwing the server's error (for example `legacy_active`). */
 async function run<W, A, E>(command: AtomCommand<W, A, E>, value: W): Promise<A> {
   const result = await runAtomCommand(appAtomRegistry, command, value, { reportFailure: false });
-  if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+  if (result._tag === "Failure") {
+    // A dropped connection interrupts the request; keep Effect internals off the screen.
+    if (isAtomCommandInterrupted(result)) throw new Error("Couldn't reach GOAT Bot.");
+    throw squashAtomCommandFailure(result);
+  }
   return result.value;
 }
 
