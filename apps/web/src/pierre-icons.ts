@@ -11,7 +11,7 @@ export interface PierreIconResolution {
   token?: string;
 }
 
-const PIERRE_ICON_SPRITE_ID = "t3code-pierre-file-icon-sprite";
+const PIERRE_ICON_SPRITE_ID = "goat-pierre-file-icon-sprite";
 
 const GOAT_FILE_ICON_SPRITE = `
 <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true">
@@ -30,7 +30,7 @@ const GOAT_FILE_ICON_SPRITE = `
     <path fill="currentColor" d="M20.374 20.375h-8.75v-8.75h8.75Zm0 9.625h-8.75v-8.75h8.75ZM30 30h-8.749v-8.75H30Zm-19.251 0H2v-8.75h8.749Z" />
   </symbol>
   <!-- Lucide Loader Circle icon, ISC license. -->
-  <symbol id="t3-tree-icon-loading" viewBox="0 0 24 24">
+  <symbol id="goat-tree-icon-loading" viewBox="0 0 24 24">
     <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M21 12a9 9 0 1 1-6.219-8.56" />
   </symbol>
   <!-- Lucide Diff icon, ISC license. -->

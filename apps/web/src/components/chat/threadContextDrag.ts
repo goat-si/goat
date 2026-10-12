@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
  * re-render the ghost.
  */
 
-export const THREAD_CONTEXT_DROP_EVENT = "t3-thread-context-drop";
+export const THREAD_CONTEXT_DROP_EVENT = "goat-thread-context-drop";
 const DROP_TARGET_ATTRIBUTE = "data-thread-context-drop";
 const DROP_OVER_ATTRIBUTE = "data-thread-context-over";
 

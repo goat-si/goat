@@ -1,7 +1,7 @@
 export const DRAFT_HERO_TRANSITION_ANIMATION_ID = "goat-draft-hero-transition";
 export const DRAFT_HERO_TRANSITION_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
-export const MOBILE_COMPOSER_VIEW_TRANSITION_NAME = "t3-mobile-composer";
-export const MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME = "t3-mobile-draft-headline";
+export const MOBILE_COMPOSER_VIEW_TRANSITION_NAME = "goat-mobile-composer";
+export const MOBILE_DRAFT_HEADLINE_VIEW_TRANSITION_NAME = "goat-mobile-draft-headline";
 const MOBILE_COMPOSER_TRANSITION_DURATION_PROPERTY = "--mobile-composer-transition-duration";
 
 type ComposerViewTransition = {

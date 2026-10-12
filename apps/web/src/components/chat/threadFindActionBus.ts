@@ -1,4 +1,4 @@
-const THREAD_FIND_OPEN_EVENT = "t3:thread-find-open";
+const THREAD_FIND_OPEN_EVENT = "goat:thread-find-open";
 
 export function requestThreadFindOpen(): void {
   window.dispatchEvent(new Event(THREAD_FIND_OPEN_EVENT));
