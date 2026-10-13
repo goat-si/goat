@@ -8,7 +8,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthStandardClientScopes } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { assert, describe, expect, it } from "@effect/vitest";
+import { afterEach, assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
@@ -42,6 +42,19 @@ const baseState = {
   origin: "http://127.0.0.1:3773",
   startedAt: "2026-06-20T00:00:00.000Z",
 } as const satisfies PersistedServerRuntimeState;
+
+const tempDirs: string[] = [];
+const makeTempDir = (prefix: string) => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), prefix));
+  tempDirs.push(directory);
+  return directory;
+};
+
+afterEach(() => {
+  for (const directory of tempDirs.splice(0)) {
+    NodeFS.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 describe("pair base URL selection", () => {
   it("pairs through the dev web origin when the server fronts a dev server", () => {
@@ -161,7 +174,7 @@ describe("goat pair", () => {
     withDescriptorServer(
       (origin, paths) =>
         Effect.gen(function* () {
-          const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-test-"));
+          const baseDir = makeTempDir("goat-pair-test-");
           const port = Number(new URL(origin).port);
           const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
           yield* persistServerRuntimeState({
@@ -223,9 +236,7 @@ describe("goat pair", () => {
   it.effect("mints a pairing grant with only the selected scopes", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "goat-pair-scopes-test-"),
-        );
+        const baseDir = makeTempDir("goat-pair-scopes-test-");
         yield* persistServerRuntimeState({
           path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
           state: yield* makePersistedServerRuntimeState({
@@ -262,7 +273,7 @@ describe("goat pair", () => {
   it.effect("pairs through the recorded dev web URL for dev servers", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-dev-test-"));
+        const baseDir = makeTempDir("goat-pair-dev-test-");
         const port = Number(new URL(origin).port);
         const statePath = NodePath.join(baseDir, "dev", "server-runtime.json");
         yield* persistServerRuntimeState({
@@ -282,7 +293,7 @@ describe("goat pair", () => {
 
   it.effect("directs to goat serve or goat connect when no server is running", () =>
     Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-none-test-"));
+      const baseDir = makeTempDir("goat-pair-none-test-");
 
       const error = yield* provideCliTestLayers(
         runCli(["pair", "--base-dir", baseDir]).pipe(Effect.flip),
@@ -300,7 +311,7 @@ describe("goat pair", () => {
   it.effect("ignores runtime state whose recorded pid is no longer alive", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-pid-test-"));
+        const baseDir = makeTempDir("goat-pair-pid-test-");
         const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
         // The origin answers (another server reused the port), but the pid
         // that wrote this state file is dead — pairing must not mint a token
@@ -329,7 +340,7 @@ describe("goat pair", () => {
 
   it.effect("ignores stale runtime state pointing at a dead server", () =>
     Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-stale-test-"));
+      const baseDir = makeTempDir("goat-pair-stale-test-");
       const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
       // A port from the dynamic range with nothing listening: the probe fails
       // fast with ECONNREFUSED and discovery moves on.
@@ -361,9 +372,7 @@ describe("auth scope options", () => {
     "issues and persists only the selected scopes for auth $group $action",
     ({ group, action }) =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(
-          NodePath.join(NodeOS.tmpdir(), "goat-cli-auth-scopes-test-"),
-        );
+        const baseDir = makeTempDir("goat-cli-auth-scopes-test-");
         const output = yield* captureStdout(
           runCli([
             "auth",

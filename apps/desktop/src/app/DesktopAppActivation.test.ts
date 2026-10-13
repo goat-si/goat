@@ -28,6 +28,18 @@ const openServers: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
   await Promise.all(openServers.splice(0).map((server) => server.close()));
+  // Closing removes the sockets; the per-user directories they sat in are this test's to remove.
+  // rmdir leaves a directory that still holds anything else.
+  const addresses = resolveDesktopAppControlAddresses({
+    stateDir: NodeOS.tmpdir(),
+    platform: HostProcess.Platform.defaultValue(),
+    tempDir: NodeOS.tmpdir(),
+    userId: HostProcess.UserId.defaultValue(),
+    joinPath: NodePath.join,
+  });
+  for (const { directory } of addresses) {
+    if (directory !== null) await NodeFSP.rmdir(directory).catch(() => undefined);
+  }
 });
 
 function makeTarget(stateDir: string, platform: NodeJS.Platform, userId: number | undefined) {

@@ -2,7 +2,6 @@ import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration uses temporary Node paths.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -137,10 +136,11 @@ it("preserves unexpected server failures without deriving the message from them"
 
 it.effect("adds, renames, and removes projects through the V2 project CLI domain", () =>
   Effect.gen(function* () {
-    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-v2-project-cli-"));
-    const workspaceRoot = NodeFS.mkdtempSync(
-      NodePath.join(NodeOS.tmpdir(), "t3-v2-project-workspace-"),
-    );
+    const fs = yield* FileSystem.FileSystem;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-v2-project-cli-" });
+    const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+      prefix: "goat-v2-project-workspace-",
+    });
 
     yield* runCli(["project", "add", workspaceRoot, "--title", "Alpha", "--base-dir", baseDir]);
     const added = (yield* readProjects(baseDir)).projects[0];

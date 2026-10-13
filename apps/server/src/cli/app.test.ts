@@ -98,6 +98,8 @@ async function startFakeDesktop(input: {
         await NodeFSP.unlink(target.address).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "ENOENT") throw error;
         });
+        // The fixture made the per-user socket directory; rmdir leaves it if anything else uses it.
+        await NodeFSP.rmdir(target.directory).catch(() => undefined);
       }
     },
   };

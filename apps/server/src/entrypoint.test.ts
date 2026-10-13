@@ -4,13 +4,23 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { isEntrypoint } from "./entrypoint.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 
-const makeTempDir = () =>
-  NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-entrypoint-test-"));
+const tempDirs: string[] = [];
+const makeTempDir = () => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-entrypoint-test-"));
+  tempDirs.push(directory);
+  return directory;
+};
+
+afterEach(() => {
+  for (const directory of tempDirs.splice(0)) {
+    NodeFS.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 describe("isEntrypoint", () => {
   it("uses the runtime answer when Node provides one", () => {

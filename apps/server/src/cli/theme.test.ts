@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as NetService from "@goat/shared/Net";
-import { assert, describe, it } from "@effect/vitest";
+import { afterEach, assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
@@ -25,7 +25,18 @@ const runCli = (args: ReadonlyArray<string>) =>
     Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
   );
 
-const makeBaseDir = () => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-theme-cli-"));
+const baseDirs: string[] = [];
+const makeBaseDir = () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-theme-cli-"));
+  baseDirs.push(baseDir);
+  return baseDir;
+};
+
+afterEach(() => {
+  for (const baseDir of baseDirs.splice(0)) {
+    NodeFS.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
 
 const settingsPathFor = (baseDir: string) => NodePath.join(baseDir, "userdata", "settings.json");
 
