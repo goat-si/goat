@@ -3322,8 +3322,8 @@ export default function ChatView(props: ChatViewProps) {
         icon: <ComposerServerUpdateIcon status="running" />,
         title: `Restarting ${versionMismatchServerLabel} for GOAT ${runtimeDrain.targetVersion}`,
         description: runtimeDrain.forced
-          ? "New messages wait until it reconnects. Work still running at the deadline resumes after the restart."
-          : "New messages wait until it reconnects. Running work finishes first; if it runs too long, the restart is called off.",
+          ? "You can send new messages once it reconnects. Work still running at the deadline resumes after the restart."
+          : "You can send new messages once it reconnects. Running work finishes first; if it runs too long, the restart is called off.",
       });
     }
     return items;
