@@ -667,6 +667,14 @@ const makeCursorIngress = Effect.fnUntraced(function* (
   const runtime = layerWithRegistry({ name }, Registry.layerFromAdapters([registeredAdapter]), {
     databaseLayer: database,
     runEffectWorker: false,
+    projects: Layer.mock(Projects.ProjectService)({
+      getById: (id) =>
+        Effect.succeedSome({
+          id,
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: { instanceId: cursorInstanceId, model: "auto" },
+        } as Project),
+    }),
     cloudSources: Layer.succeed(CloudSource.CloudTaskSourceService, {
       resolve: (input) =>
         Ref.updateAndGet(sourceReads, (count) => count + 1).pipe(
@@ -749,7 +757,7 @@ const dispatchCursorMessage = Effect.fnUntraced(function* (
 const awaitCursorRun = Effect.fnUntraced(function* (
   threadId: ThreadId,
   runId: RunId,
-  status: "running" | "completed" | "failed" | "cancelled",
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted",
 ) {
   return yield* (yield* Orchestrator.OrchestratorV2)
     .streamStoredEventsFrom({ threadId, eventType: "run.updated" })
@@ -1150,6 +1158,26 @@ it.effect(
         const saved = yield* seedCursorAccepted(threadId, 1, "submitting");
         yield* recovery.recover;
         yield* worker.drain();
+        const firstFailure = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(firstFailure.providerThreads[0]?.cloudTask?.status, "unknown");
+        assert.equal(h.getRun.mock.calls.length, 0);
+        // The default worker makes five attempts. Drive the four remaining durable deadlines,
+        // never the vendor poll clock: this prompt has no accepted remote run to observe.
+        for (const retry of [1, 2, 3, 4]) {
+          const due = Option.getOrThrow(yield* worker.nextClaimableAt);
+          const now = yield* DateTime.now;
+          yield* TestClock.adjust(
+            Math.max(0, DateTime.toEpochMillis(due) - DateTime.toEpochMillis(now)),
+          );
+          yield* worker.drain();
+          assert.equal(
+            h.getRun.mock.calls.length,
+            0,
+            `Retry ${retry} must not observe the previous prompt's run`,
+          );
+          assert.equal(h.create.mock.calls.length, 0);
+          assert.equal(h.send.mock.calls.length, 0);
+        }
         yield* awaitCursorRun(threadId, saved.run.id, "failed");
         const after = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(after.providerThreads[0]?.cloudTask?.status, "unknown");
@@ -1264,14 +1292,19 @@ it.effect.each([
         );
         yield* h.runs[ordinal - 1]!.finish(outcome);
         yield* TestClock.adjust("15 seconds");
-        const status = outcome === "cancelled" ? "cancelled" : "completed";
+        const status = outcome === "cancelled" ? "interrupted" : "completed";
         yield* awaitCursorRun(threadId, saved.run.id, status);
         yield* Fiber.join(stopping);
         yield* worker.drain();
-        assertCursorResult(
-          yield* orchestrator.getThreadProjection(threadId),
-          saved.run.id,
-          ordinal,
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(settled, saved.run.id, ordinal, status);
+        assert.equal(
+          settled.providerThreads[0]?.cloudTask?.status,
+          outcome === "cancelled" ? "cancelled" : "succeeded",
+        );
+        assert.equal(
+          settled.providerTurns.find((candidate) => candidate.runAttemptId === saved.attempt.id)
+            ?.status,
           status,
         );
         assert.equal(h.create.mock.calls.length, creates);
@@ -1361,8 +1394,17 @@ it.effect("Cursor Cloud never creates or sends when the durable submitting trans
         type: "defer_start",
         workspaceStrategy: { type: "root" },
       });
+      const prepared = yield* orchestrator.getThreadProjection(threadId);
+      const run = prepared.runs[0]!;
+      assert.equal(run.status, "preparing");
+      yield* orchestrator.dispatch({
+        type: "prepared-run.release",
+        commandId: CommandId.make("command:cursor-release-write-failure"),
+        threadId,
+        runId: run.id,
+      });
       const before = yield* orchestrator.getThreadProjection(threadId);
-      const run = before.runs[0]!;
+      assert.equal(before.runs[0]?.status, "starting");
       // Abort the real projection transaction, rather than mocking the persistence hook.
       yield* sql`
         CREATE TEMP TRIGGER reject_cursor_submitting
@@ -1374,6 +1416,7 @@ it.effect("Cursor Cloud never creates or sends when the durable submitting trans
         .start({ threadId, runId: run.id })
         .pipe(Effect.result);
       assert.equal(result._tag, "Failure");
+      assert.equal(yield* Ref.get(h.sourceReads), 1);
       assert.equal(h.create.mock.calls.length, 0);
       assert.equal(h.resume.mock.calls.length, 0);
       assert.equal(h.send.mock.calls.length, 0);
@@ -1436,8 +1479,11 @@ it.effect.each(["direct", "queued"] as const)(
         yield* h.allowResume;
         yield* Fiber.join(resuming);
         yield* Deferred.await(h.runs[1]!.streaming);
+        const followUp = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.ordinal === 2,
+        )!;
+        yield* awaitCursorTurn(threadId, followUp.activeAttemptId!);
         const second = yield* orchestrator.getThreadProjection(threadId);
-        const followUp = second.runs.find((run) => run.ordinal === 2)!;
         assert.equal(h.create.mock.calls.length, 1);
         assert.equal(h.resume.mock.calls.length, 1);
         assert.equal(h.resume.mock.calls[0]![0], cursorAgentId);
