@@ -185,10 +185,8 @@ describe("isTemporaryWorktreeBranch", () => {
     ).toBe(true);
   });
 
-  it("writes legacy names older servers accept, and recognizes GOAT names too", () => {
-    expect(buildTemporaryWorktreeBranchName(() => "deadbeef")).toBe(
-      `${LEGACY_WORKTREE_BRANCH_PREFIX}/deadbeef`,
-    );
+  it("writes GOAT names and still recognizes legacy names", () => {
+    expect(buildTemporaryWorktreeBranchName(() => "deadbeef")).toBe("goat/deadbeef");
     for (const prefix of [LEGACY_WORKTREE_BRANCH_PREFIX, "goat"]) {
       for (const separator of ["/", "-"]) {
         expect(isTemporaryWorktreeBranch(`${prefix}${separator}deadbeef`)).toBe(true);

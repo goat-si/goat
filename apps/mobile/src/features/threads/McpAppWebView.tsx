@@ -50,7 +50,7 @@ const ROW_BOTTOM_MARGIN = 8;
 // opaque-origin iframe, as web does, so the app's `window.parent` and the
 // `event.source` of host replies are a real window, which the MCP Apps SDK
 // requires. The outer page only relays: app → React Native, and host
-// replies (injected as `__t3McpAppReceive(...)`) → app.
+// replies (injected as `__goatMcpAppReceive(...)`) → app.
 //
 // Android exposes `ReactNativeWebView` to every frame, so a frame nested in
 // the app could post to React Native directly. The outer page therefore wraps
@@ -328,7 +328,7 @@ export function ThreadMcpApp(props: {
       hostVersion: Constants.expoConfig?.version ?? "0.0.0",
       post: (message) =>
         webView.current?.injectJavaScript(
-          `window.${LEGACY_MCP_APP_RECEIVE_GLOBAL}&&window.${LEGACY_MCP_APP_RECEIVE_GLOBAL}(${JSON.stringify(message)});true;`,
+          `window.${GOAT_MCP_APP_RECEIVE_GLOBAL}&&window.${GOAT_MCP_APP_RECEIVE_GLOBAL}(${JSON.stringify(message)});true;`,
         ),
       hostContext,
       callTool: async ({ name, arguments: args }) => {

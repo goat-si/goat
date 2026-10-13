@@ -1,4 +1,4 @@
-import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
+import { GOAT_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import * as Predicate from "effect/Predicate";
 
 /**
@@ -16,7 +16,7 @@ export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const MCP_APP_RESOURCE_SCHEME = "ui://";
 /** Where T3 records the app reference inside a tool item's output object. */
-export const MCP_APP_OUTPUT_KEY = LEGACY_MCP_APP_OUTPUT_KEY;
+export const MCP_APP_OUTPUT_KEY = GOAT_MCP_APP_OUTPUT_KEY;
 
 const MCP_APP_MIN_HEIGHT = 80;
 export const MCP_APP_DEFAULT_HEIGHT = 320;

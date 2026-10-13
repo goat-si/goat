@@ -188,7 +188,7 @@ describe("mcpAppFromToolItem", () => {
         resourceUri,
       },
     });
-    expect(output?.t3McpApp?.resourceUri).toBe(resourceUri);
+    expect(output?.goatMcpApp?.resourceUri).toBe(resourceUri);
   });
 
   it("keeps the compact app reference within the wire budget", async () => {
@@ -207,7 +207,7 @@ describe("mcpAppFromToolItem", () => {
       },
     });
     expect(new TextEncoder().encode(JSON.stringify(output)).byteLength).toBeLessThanOrEqual(8_192);
-    expect(output?.t3McpApp?.server).toBe("weather");
+    expect(output?.goatMcpApp?.server).toBe("weather");
   });
 });
 

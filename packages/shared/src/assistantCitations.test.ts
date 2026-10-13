@@ -52,18 +52,24 @@ function readProviderContext(expanded: string): unknown {
 }
 
 describe("assistant citation references", () => {
-  it("preserves legacy v1 link bytes without adding a comment", () => {
+  it("reads legacy v1 links and writes GOAT links without adding a comment", () => {
     expect(parseAssistantCitationHref(legacyHref)).toStrictEqual(legacyCitation);
-    expect(formatAssistantCitationHref(legacyCitation)).toBe(legacyHref);
-    expect(formatAssistantCitationHref({ ...legacyCitation, comment: undefined })).toBe(legacyHref);
-    expect(serializeAssistantCitation(legacyCitation)).toBe(`[Assistant quote](${legacyHref})`);
+    expect(formatAssistantCitationHref(legacyCitation)).toBe(
+      legacyHref.replace("t3-citation:", "goat-citation:"),
+    );
+    expect(formatAssistantCitationHref({ ...legacyCitation, comment: undefined })).toBe(
+      legacyHref.replace("t3-citation:", "goat-citation:"),
+    );
+    expect(serializeAssistantCitation(legacyCitation)).toBe(
+      `[Assistant quote](${legacyHref.replace("t3-citation:", "goat-citation:")})`,
+    );
   });
 
   it("round-trips complete quote data without a server origin", () => {
     const href = formatAssistantCitationHref(citation);
     expect(parseAssistantCitationHref(href)).toEqual(citation);
     expect(href).toMatch(
-      /^t3-citation:\/\/v1\/environment%2Fremote\/thread%3Aone\/assistant%3Fone\?/,
+      /^goat-citation:\/\/v1\/environment%2Fremote\/thread%3Aone\/assistant%3Fone\?/,
     );
     expect(href).not.toContain("localhost");
     const marker = serializeAssistantCitation(citation);
@@ -213,7 +219,9 @@ describe("assistant citation references", () => {
 
       expect(cleared).toStrictEqual(legacyCitation);
       expect(cleared).not.toHaveProperty("comment");
-      expect(formatAssistantCitationHref(cleared)).toBe(legacyHref);
+      expect(formatAssistantCitationHref(cleared)).toBe(
+        legacyHref.replace("t3-citation:", "goat-citation:"),
+      );
       expect(withAssistantCitationComment(legacyCitation, comment)).toStrictEqual(legacyCitation);
       expect(original.comment).toBe("Please change this");
     },

@@ -1,4 +1,4 @@
-import { LEGACY_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
+import { GOAT_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import {
   OrchestratorMcpCapabilitiesResult,
   OrchestrationV2StopWorkflowInput,
@@ -215,7 +215,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 const ThreadListTool = Tool.make("goat_thread_list", {
   description:
     "List GOAT threads in a project, newest first. Omit projectId for the calling thread's project, or set allProjects. Filter by durable run status, title, or settled state (settled=true lists threads the user or auto-settlement moved out of the active list), or snoozed state, and paginate with the returned cursor. A snoozed thread wakes early when it asks for something, fails, or completes. With host, lists that machine (every project there unless projectId names one of its projects). allHosts lists this environment and every SSH host it is connected to (hosts it launched or called threads on since it started), returning the newest limit threads with host on each item and unreachable hosts in unavailableHosts. To link a local thread for the user, write `[title](" +
-    LEGACY_THREAD_LINK_PROTOCOL +
+    GOAT_THREAD_LINK_PROTOCOL +
     "://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread's current title.",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
@@ -231,7 +231,7 @@ const ThreadListTool = Tool.make("goat_thread_list", {
 const ThreadReadTool = Tool.make("goat_thread_read", {
   description:
     "Read durable state and a paginated timeline from any GOAT thread in this environment. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition. Recover long item text with itemId and textOffset=nextTextOffset until nextTextOffset is null; offsets count UTF-16 code units. The thread also reports its snooze state. result is the latest run's structured result: the outcome, summary, tests, and commits its agent reported with goat_thread_report_result, plus the run status, linked pull requests, and branch GOAT already knows; check it instead of parsing chat text. To link a thread for the user, write `[title](" +
-    LEGACY_THREAD_LINK_PROTOCOL +
+    GOAT_THREAD_LINK_PROTOCOL +
     "://v1/<threadId>)` with the threadId exactly as returned, not URL-encoded; GOAT shows the thread's current title." +
     ON_ANOTHER_MACHINE,
   parameters: OrchestratorMcpThreadReadInput,

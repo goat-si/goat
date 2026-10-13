@@ -1,5 +1,5 @@
 import {
-  LEGACY_CITATION_LINK_PROTOCOL,
+  GOAT_CITATION_LINK_PROTOCOL,
   CITATION_LINK_PROTOCOLS,
 } from "@goat/contracts/legacyT3Names";
 import {
@@ -10,7 +10,7 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const CITATION_PROTOCOL = `${LEGACY_CITATION_LINK_PROTOCOL}:`;
+const CITATION_PROTOCOL = `${GOAT_CITATION_LINK_PROTOCOL}:`;
 const CITATION_HREF_PREFIX = `${CITATION_PROTOCOL}//v1/`;
 const CITATION_HREF_PREFIXES = CITATION_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 const CITATION_HREF_PATTERN = `(?:${CITATION_LINK_PROTOCOLS.join("|")})://v1/`;
@@ -18,7 +18,7 @@ const CITATION_HREF_PATTERN = `(?:${CITATION_LINK_PROTOCOLS.join("|")})://v1/`;
 const MAX_CITATION_HREF_LENGTH =
   9 * (ASSISTANT_CITATION_MAX_TEXT_LENGTH + ASSISTANT_CITATION_MAX_COMMENT_LENGTH) + 16_000;
 const CITATION_LINK = new RegExp(
-  String.raw`\[Assistant quote\]\((${CITATION_HREF_PATTERN}[^\s)]{1,${MAX_CITATION_HREF_LENGTH - CITATION_HREF_PREFIX.length}})\)`,
+  String.raw`\[Assistant quote\]\((${CITATION_HREF_PATTERN}[^\s)]{1,${MAX_CITATION_HREF_LENGTH - Math.min(...CITATION_HREF_PREFIXES.map((prefix) => prefix.length))}})\)`,
   "g",
 );
 const decodeCitation = Schema.decodeUnknownOption(AssistantCitation);

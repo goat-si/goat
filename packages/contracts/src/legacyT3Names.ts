@@ -1,5 +1,5 @@
 /**
- * T3 spellings GOAT still reads, and for older peers still writes. `scripts/goat-rename.ts`
+ * T3 spellings GOAT still reads for compatibility with existing data and older peers. `scripts/goat-rename.ts`
  * never rewrites this file, so compatibility code that imports from here survives every
  * rerun of the rename. Plan: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  *
@@ -141,7 +141,7 @@ export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
   "t3-iris": "iris",
 };
 
-/** Peer-visible vocabulary: readers accept both; writers retain the legacy spelling. */
+/** Peer-visible vocabulary: readers accept both forever; writers use the GOAT spelling. */
 export const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
 export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";
 export const THREAD_LINK_PROTOCOLS = [
