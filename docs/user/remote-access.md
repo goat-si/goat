@@ -169,6 +169,14 @@ or `shasum`, and [provider setup](./install.md#providers). GOAT keeps its
 server, launch state, and data on the host under `~/.goat`, apart from any T3
 Code install in `~/.t3`.
 
+A Windows host works when its OpenSSH server uses Git Bash as the default shell
+(the OpenSSH `DefaultShell` setting pointing at Git for Windows' `bash.exe`).
+GOAT starts its server outside your SSH session so it keeps running after you
+disconnect, which means the server gets your Windows user environment rather
+than the SSH session's: provider CLIs must be on your Windows `PATH`. After an
+app update, a Windows host moves to the new version only from a GOAT release;
+a server started from a source checkout must be stopped before reconnecting.
+
 The first launch uploads GOAT's server from this computer, so it takes longer
 than later ones. When this computer does not already have the server for your
 GOAT version, it downloads it from the public GOAT releases and checks it
