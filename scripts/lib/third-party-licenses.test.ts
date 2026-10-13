@@ -84,6 +84,35 @@ afterEach(async () => {
 });
 
 describe("third-party license generation", () => {
+  it("keeps the server-only Devin codec out of client license manifests", async () => {
+    const fixture = await createFixture();
+    const providerRoot = NodePath.join(fixture.root, "node_modules", "@goat/provider-devin-cloud");
+    await NodeFSP.mkdir(providerRoot, { recursive: true });
+    await NodeFSP.copyFile(
+      NodePath.join(REPOSITORY_ROOT, "packages/provider-devin-cloud/package.json"),
+      NodePath.join(providerRoot, "package.json"),
+    );
+    await writeJson(fixture.appManifest, {
+      name: "fixture-app",
+      dependencies: {
+        "@goat/provider-devin-cloud": "workspace:*",
+        "demo-dependency": "1.2.3",
+      },
+    });
+    await writeJson(NodePath.join(fixture.root, "node_modules/effect-acp/package.json"), {
+      name: "effect-acp",
+      private: true,
+      type: "module",
+    });
+
+    const manifest = await generateThirdPartyLicenseManifest({
+      configFile: fixture.configFile,
+      packageManifests: [{ bundle: "web", path: fixture.appManifest }],
+    });
+    expect(manifest.entries.some((entry) => entry.name === "demo-dependency")).toBe(true);
+    expect(manifest.entries.some((entry) => entry.name === "effect-acp")).toBe(false);
+  });
+
   it("generates mobile notices without scripts workspace dependency links", async () => {
     const fixture = await createFixture();
     const generatorPath = NodePath.join(fixture.root, "scripts/lib/third-party-licenses.ts");

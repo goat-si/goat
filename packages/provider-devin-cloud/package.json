@@ -24,12 +24,12 @@
     "@goat/contracts": "workspace:*",
     "@goat/provider-acp-registry": "workspace:*",
     "@goat/provider-core": "workspace:*",
-    "effect": "catalog:",
-    "effect-acp": "workspace:*"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "effect-acp": "workspace:*",
     "vite-plus": "catalog:"
   }
 }
