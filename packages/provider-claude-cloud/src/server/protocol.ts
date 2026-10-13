@@ -1,0 +1,140 @@
+// @effect-diagnostics nodeBuiltinImport:off -- PTY control sequences are decoded at the CLI boundary.
+import * as NodeUtil from "node:util";
+import * as Schema from "effect/Schema";
+
+export class ClaudeCloudError extends Schema.TaggedError<ClaudeCloudError>()("ClaudeCloudError", {
+  detail: Schema.String,
+  outcome: Schema.Literals(["rejected", "uncertain"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  override get message() {
+    return this.detail;
+  }
+}
+
+export const isClaudeCloudError = Schema.is(ClaudeCloudError);
+
+const Auth = Schema.Struct({ loggedIn: Schema.Boolean, authMethod: Schema.String });
+const Send = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), session_id: Schema.String, url: Schema.String }),
+  Schema.Struct({ ok: Schema.Literal(false), error: Schema.String }),
+]);
+export const parseAuth = Schema.decodeUnknownSync(Schema.fromJsonString(Auth));
+export const parseAuthEffect = Schema.decodeUnknownEffect(Schema.fromJsonString(Auth));
+const decodeSend = Schema.decodeUnknownSync(Schema.fromJsonString(Send));
+export const SESSION_ID = /^session_[A-Za-z0-9]+$/;
+
+export function sessionUrl(raw: string) {
+  const url = new URL(raw);
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "claude.ai" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error("Invalid Claude session URL.");
+  }
+  const id = /^\/code\/(session_[A-Za-z0-9]+)$/.exec(url.pathname)?.[1];
+  if (!id) throw new Error("Invalid Claude session URL.");
+  return { taskId: id, url: `https://claude.ai/code/${id}` };
+}
+
+export function cleanOutput(raw: string) {
+  return NodeUtil.stripVTControlCharacters(raw).replace(/\r\n?/g, "\n");
+}
+
+export function readStartReceipt(raw: string) {
+  const normalized = cleanOutput(raw);
+  // Parse only terminated lines; a chunk can split a session ID or ANSI sequence.
+  const text = normalized.slice(0, normalized.lastIndexOf("\n") + 1);
+  const titles = [...text.matchAll(/^\s*Created cloud session:\s*(.+)$/gm)];
+  const views = [...text.matchAll(/^\s*View:\s*(https:\/\/\S+)\s*$/gm)];
+  const resumes = [
+    ...text.matchAll(/^\s*Resume with:\s*claude --teleport (session_[A-Za-z0-9]+)\s*$/gm),
+  ];
+  if (!titles.length || !views.length || !resumes.length) return undefined;
+  const receipts = views.map((match) => sessionUrl(match[1]!));
+  const first = receipts[0]!;
+  if (
+    receipts.some((receipt) => receipt.taskId !== first.taskId) ||
+    resumes.some((match) => match[1] !== first.taskId)
+  ) {
+    throw new Error("Conflicting Claude cloud session identities.");
+  }
+  return { ...first, title: titles[0]![1]!.trim().slice(0, 512) };
+}
+
+export function trustRequired(raw: string) {
+  return /(?:trust this (?:folder|directory)|trust the files in this folder|workspace trust|Do you trust|Yes, I trust this folder)/i.test(
+    cleanOutput(raw),
+  );
+}
+
+export function redact(detail: string, environment: NodeJS.ProcessEnv) {
+  let text = cleanOutput(detail);
+  for (const value of Object.values(environment)) {
+    if (value && value.length >= 6) text = text.split(value).join("[redacted]");
+  }
+  text = text.replace(/https?:\/\/[^\s<>]+/g, "[link redacted]");
+  text = text.replace(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi, "[redacted]");
+  return text.slice(0, 1024).trim();
+}
+
+export function readSendReceipt(raw: string, expectedId: string, environment: NodeJS.ProcessEnv) {
+  if (!SESSION_ID.test(expectedId)) {
+    throw new ClaudeCloudError({
+      detail: "Invalid saved Claude session ID. No follow-up is safe.",
+      outcome: "uncertain",
+    });
+  }
+  const result = decodeSend(raw.trim());
+  if (!result.ok)
+    throw new ClaudeCloudError({
+      detail: redact(result.error, environment) || "Claude rejected the follow-up.",
+      outcome: "rejected",
+    });
+  const link = sessionUrl(result.url);
+  if (
+    !SESSION_ID.test(result.session_id) ||
+    result.session_id !== expectedId ||
+    link.taskId !== expectedId
+  ) {
+    throw new ClaudeCloudError({
+      detail:
+        "Claude returned a different cloud session. Delivery is uncertain; open the existing session before sending again.",
+      outcome: "uncertain",
+    });
+  }
+  return link;
+}
+
+/** Reject routing overrides without changing the selected sibling's configuration. */
+export function validateLogin(login: {
+  readonly binary: string;
+  readonly binding: string;
+  readonly environment: NodeJS.ProcessEnv;
+}) {
+  const forbidden = [
+    "CCR_FORCE_BUNDLE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+  ];
+  if (
+    !login.binary.trim() ||
+    !login.binding.trim() ||
+    forbidden.some((key) => login.environment[key]?.trim()) ||
+    Object.entries(login.environment).some(([key, value]) => key.startsWith("GIT_") && value)
+  ) {
+    throw new ClaudeCloudError({
+      outcome: "rejected",
+      detail:
+        "Claude Cloud requires the selected native Claude binary and claude.ai login without bundle, API-key, Git or third-party routing overrides.",
+    });
+  }
+}

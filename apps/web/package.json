@@ -25,6 +25,7 @@
     "@goat/client-runtime": "workspace:*",
     "@goat/contracts": "workspace:*",
     "@goat/provider-acp-registry": "workspace:*",
+    "@goat/provider-claude-cloud": "workspace:*",
     "@goat/provider-core": "workspace:*",
     "@goat/provider-cursor": "workspace:*",
     "@goat/provider-devin-cloud": "workspace:*",

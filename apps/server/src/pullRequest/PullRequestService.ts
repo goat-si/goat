@@ -208,6 +208,14 @@ type CredentialRef = PullRequestRef & { readonly [credentialNamespace]?: string 
 export class PullRequestService extends Context.Service<
   PullRequestService,
   {
+    readonly findCloudSessionPullRequest: (input: {
+      readonly projectId: ProjectId;
+      readonly repository: string;
+      readonly sessionUrl: string;
+    }) => Effect.Effect<
+      { readonly prUrl: string; readonly branch: string; readonly summary: string } | null,
+      PullRequestError
+    >;
     readonly list: (
       input: PullRequestListInput,
     ) => Effect.Effect<PullRequestListResult, PullRequestError>;
@@ -620,6 +628,14 @@ function withRateLimitBackoff(
     ...(api.withVerifiedCredential === undefined
       ? {}
       : { withVerifiedCredential: api.withVerifiedCredential }),
+    ...(api.findCloudSessionPullRequest === undefined
+      ? {}
+      : {
+          findCloudSessionPullRequest: wrap(
+            "findCloudSessionPullRequest",
+            api.findCloudSessionPullRequest,
+          ),
+        }),
     listChangeRequests: wrap("listChangeRequests", api.listChangeRequests),
     ...(api.listChangeRequestsAcross === undefined
       ? {}
@@ -3565,7 +3581,112 @@ export const make = Effect.gen(function* () {
         );
       });
 
+  const cloudResultCodec = Schema.fromJsonString(
+    Schema.NullOr(
+      Schema.Struct({ prUrl: Schema.String, branch: Schema.String, summary: Schema.String }),
+    ),
+  );
+  const findCloudSessionPullRequest: PullRequestService["Service"]["findCloudSessionPullRequest"] =
+    Effect.fn("PullRequestService.findCloudSessionPullRequest")(function* (input) {
+      const operation = "findCloudSessionPullRequest";
+      const canonical = normalizeGitRemoteUrl(input.repository);
+      if (!/^github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(canonical)) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      if (!/^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]{1,256}$/.test(input.sessionUrl)) {
+        return yield* new PullRequestOperationError({
+          operation,
+          detail: "PR observation requires a canonical Claude cloud session URL.",
+        });
+      }
+      const repository = canonical.slice("github.com/".length);
+      // Unlike linked local PRs, a cloud source must never borrow another project's checkout.
+      const { supported } = yield* listWorkspaceProjects({ projectId: input.projectId });
+      const project = supported.find(
+        (item) =>
+          item.api.kind === "github" &&
+          item.host === "github.com" &&
+          item.repository.toLowerCase() === repository.toLowerCase(),
+      );
+      if (
+        project === undefined ||
+        project.api.findCloudSessionPullRequest === undefined ||
+        project.api.withVerifiedCredential === undefined
+      ) {
+        return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
+      }
+      const read = project.api.findCloudSessionPullRequest;
+      return yield* project.api
+        .withVerifiedCredential(
+          { cwd: project.project.workspaceRoot, host: project.host },
+          (identity) =>
+            Effect.gen(function* () {
+              const bucket = Math.floor((yield* Clock.currentTimeMillis) / 60_000);
+              const key = [
+                "cloud-session-pr",
+                input.projectId,
+                project.project.workspaceRoot,
+                project.host,
+                project.repository.toLowerCase(),
+                input.sessionUrl,
+                identity.credentialFingerprint,
+                String(bucket),
+              ]
+                .map(encodeURIComponent)
+                .join(":");
+              const lookup = read({
+                cwd: project.project.workspaceRoot,
+                host: project.host,
+                repository: project.repository,
+                sessionUrl: input.sessionUrl,
+              }).pipe(Effect.mapError(toPullRequestError(operation)));
+              const encodedRead = lookup.pipe(
+                Effect.flatMap((value) =>
+                  Schema.encodeEffect(cloudResultCodec)(value).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new PullRequestOperationError({
+                          operation,
+                          detail: "Could not encode PR observation for the read cache.",
+                          cause,
+                        }),
+                    ),
+                  ),
+                ),
+              );
+              const payload = yield* readCache.get(key, encodedRead, [
+                `project:${input.projectId}`,
+              ]);
+              return yield* Schema.decodeEffect(cloudResultCodec)(payload).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new PullRequestOperationError({
+                      operation,
+                      detail: "Could not decode cached PR observation.",
+                      cause,
+                    }),
+                ),
+              );
+            }),
+        )
+        .pipe(
+          Effect.catchTags({
+            PullRequestProviderError: (cause) =>
+              Effect.fail(
+                isProviderUnusable(cause)
+                  ? toUnavailableError(cause)
+                  : new PullRequestOperationError({
+                      operation,
+                      detail: "Could not verify project source-control access for PR observation.",
+                      cause,
+                    }),
+              ),
+          }),
+        );
+    });
+
   return PullRequestService.of({
+    findCloudSessionPullRequest,
     routing,
     routingIdentity,
     withRoutingCredential,

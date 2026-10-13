@@ -1,3 +1,6 @@
+import * as CloudPty from "@goat/shared/PtyAdapter";
+import * as CloudPullRequests from "../pullRequest/PullRequestService.ts";
+import * as CloudProjection from "./ProjectionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -75,6 +78,14 @@ const layerBackgroundPolicy = BackgroundPolicy.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pipe(
+  // These local-provider fixtures never create a cloud instance.
+  Layer.provide(
+    Layer.mergeAll(
+      Layer.mock(CloudPty.PtyAdapter)({}),
+      Layer.mock(CloudPullRequests.PullRequestService)({}),
+      Layer.mock(CloudProjection.ProjectionStoreV2)({}),
+    ),
+  ),
   Layer.provide(
     Layer.mergeAll(
       layerServerConfig.pipe(Layer.provide(layerPlatformTest)),

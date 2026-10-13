@@ -23,6 +23,7 @@
 import { AcpRegistryDriver, type AcpRegistryDriverEnv } from "@goat/provider-acp-registry/server";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
+import { ClaudeCloudDriver, type ClaudeCloudDriverEnv } from "./Drivers/ClaudeCloudDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import {
   CursorDriver,
@@ -46,6 +47,7 @@ export type BuiltInDriversEnv =
   | AcpRegistryDriverEnv
   | AntigravityDriverEnv
   | ClaudeDriverEnv
+  | ClaudeCloudDriverEnv
   | CodexDriverEnv
   | CursorDriverEnv
   | CursorCloudDriverEnv
@@ -63,6 +65,7 @@ export type BuiltInDriversEnv =
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
   ClaudeDriver,
+  ClaudeCloudDriver,
   CursorDriver,
   CursorCloudDriver,
   GrokDriver,

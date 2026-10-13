@@ -53,16 +53,18 @@ import {
   fakeCloudDriver,
   fakeCloudInstanceId,
 } from "./testkit/FakeCloudAdapter.ts";
-import { canCheckpoint } from "@goat/provider-core/server/cloudTask";
+import { canCheckpoint, cloudFollowUpReason } from "@goat/provider-core/server/cloudTask";
+import { makeProviderFailure } from "@goat/provider-core/server/failure";
 
 it.effect.each([
-  { linkOnly: false, reattach: false },
-  { linkOnly: true, reattach: false },
-  { linkOnly: false, reattach: true },
-  { linkOnly: true, reattach: true },
+  { linkOnly: false, reattach: false, reportedRejection: false },
+  { linkOnly: true, reattach: false, reportedRejection: false },
+  { linkOnly: false, reattach: true, reportedRejection: false },
+  { linkOnly: true, reattach: true, reportedRejection: false },
+  { linkOnly: true, reattach: true, reportedRejection: true },
 ])(
-  "settles cloud linkOnly=$linkOnly reattach=$reattach without checkpoints",
-  ({ linkOnly, reattach }) =>
+  "settles cloud linkOnly=$linkOnly reattach=$reattach reportedRejection=$reportedRejection without checkpoints",
+  ({ linkOnly, reattach, reportedRejection }) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
       const fake = yield* makeFakeCloudAdapter();
@@ -295,21 +297,80 @@ it.effect.each([
           const followupRunId = RunId.make("run:cloud-report-followup");
           const followupAttemptId = RunAttemptId.make("attempt:cloud-report-followup");
           const failedSend = linkOnly;
-          const followupSession = failedSend
+          const followupSession = reportedRejection
             ? {
                 ...session,
-                startTurn: () =>
-                  Effect.fail(
-                    new ProviderAdapterTurnStartError({
+                startTurn: (input: Parameters<typeof session.startTurn>[0]) =>
+                  Effect.gen(function* () {
+                    const at = yield* DateTime.now;
+                    const turnId = ProviderTurnId.make(`provider-turn:rejected:${input.attemptId}`);
+                    yield* input.commitCloudTask!(
+                      {
+                        ...providerThread.cloudTask!,
+                        taskId: "remote-task-1",
+                        url: "https://example.com/tasks/1",
+                        status: "running",
+                        progress: "Follow-up rejected",
+                        summary: "Follow-up rejected; the cloud session is still available.",
+                        updatedAt: DateTime.formatIso(at),
+                      },
+                      {
+                        nativeThreadRef: {
+                          driver: fakeCloudDriver,
+                          nativeId: "native-session-1",
+                          strength: "strong",
+                        },
+                        nativeConversationHeadRef: null,
+                      },
+                    );
+                    yield* fake.publish({
+                      type: "provider_turn.updated",
                       driver: fakeCloudDriver,
                       threadId,
-                      runId: followupRunId,
+                      providerTurn: {
+                        id: turnId,
+                        providerThreadId,
+                        nodeId: input.rootNodeId,
+                        runAttemptId: input.attemptId,
+                        nativeTurnRef: null,
+                        ordinal: input.providerTurnOrdinal,
+                        status: "running",
+                        startedAt: at,
+                        completedAt: null,
+                      },
+                    });
+                    yield* fake.publish({
+                      type: "turn.terminal",
+                      driver: fakeCloudDriver,
                       providerThreadId,
-                      cause: "Send refused before remote acceptance",
-                    }),
-                  ),
+                      providerTurnId: turnId,
+                      runOrdinal: input.runOrdinal,
+                      status: "failed",
+                      failure: makeProviderFailure({
+                        class: "provider_error",
+                        message: "Follow-up rejected",
+                        retryable: false,
+                      }),
+                      failureItemOrdinal: 1,
+                      threadDisposition: "reusable",
+                    });
+                  }),
               }
-            : session;
+            : failedSend
+              ? {
+                  ...session,
+                  startTurn: () =>
+                    Effect.fail(
+                      new ProviderAdapterTurnStartError({
+                        driver: fakeCloudDriver,
+                        threadId,
+                        runId: followupRunId,
+                        providerThreadId,
+                        cause: "Send refused before remote acceptance",
+                      }),
+                    ),
+                }
+              : session;
           yield* execution.startRootRun({
             ...startInput,
             reattach: false,
@@ -337,6 +398,34 @@ it.effect.each([
             yield* fake.finish();
           }
           yield* Deferred.await(followupEnded);
+          const savedFollowup = events.findLast(
+            (event) => event.type === "provider-thread.updated",
+          );
+          assert.equal(savedFollowup?.type, "provider-thread.updated");
+          if (savedFollowup?.type === "provider-thread.updated" && failedSend) {
+            assert.equal(
+              savedFollowup.payload.cloudTask?.status,
+              reportedRejection ? "running" : "unknown",
+            );
+            const reason = cloudFollowUpReason(
+              { providerThreads: [savedFollowup.payload], runs: [] },
+              fakeCloudInstanceId,
+              fakeCloudCapabilities(),
+            );
+            if (reportedRejection) {
+              assert.isNull(reason);
+              assert.equal(savedFollowup.payload.nativeThreadRef?.nativeId, "native-session-1");
+              assert.equal(savedFollowup.payload.cloudTask?.taskId, "remote-task-1");
+              assert.equal(
+                events.filter(
+                  (event) => event.type === "message.updated" && event.runId === followupRunId,
+                ).length,
+                1,
+              );
+            } else {
+              assert.isString(reason);
+            }
+          }
         }
       }).pipe(Effect.provide(executionLayer));
       assert.equal(yield* Ref.get(captures), 0);

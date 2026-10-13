@@ -524,6 +524,360 @@ function makeService(input: {
   );
 }
 
+const cloudSessionUrl = "https://claude.ai/code/session_ABC123";
+const cloudInput = {
+  projectId: "p1" as ProjectId,
+  repository: "https://github.com/acme/web",
+  sessionUrl: cloudSessionUrl,
+};
+const cloudResult = {
+  prUrl: "https://github.com/acme/web/pull/7",
+  branch: "claude/result",
+  summary: "Changed function.",
+};
+const cloudProject = project({
+  id: "p1",
+  title: "web",
+  workspaceRoot: "/fixture/source",
+  repository: "acme/web",
+});
+const verifiedCloudCredential: NonNullable<PullRequestProviderApi["withVerifiedCredential"]> = (
+  _input,
+  use,
+) => use({ accountId: "101", viewer: "octocat", credentialFingerprint: "fixture-credential" });
+
+it.effect(
+  "observes cloud PRs only through the original project and caches the minute's result",
+  () =>
+    Effect.gen(function* () {
+      const reads: unknown[] = [];
+      const verifications: unknown[] = [];
+      const service = yield* makeService({
+        projects: [cloudProject],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            withVerifiedCredential: (input, use) => {
+              verifications.push(input);
+              return verifiedCloudCredential(input, use);
+            },
+            findCloudSessionPullRequest: (input) =>
+              Effect.sync(() => {
+                reads.push(input);
+                return cloudResult;
+              }),
+          }),
+        ],
+      });
+      const results = yield* Effect.all(
+        [
+          service.findCloudSessionPullRequest(cloudInput),
+          service.findCloudSessionPullRequest(cloudInput),
+        ],
+        { concurrency: 2 },
+      );
+      assert.deepStrictEqual(results, [cloudResult, cloudResult]);
+      assert.deepStrictEqual(reads, [
+        {
+          cwd: "/fixture/source",
+          host: "github.com",
+          repository: "acme/web",
+          sessionUrl: cloudSessionUrl,
+        },
+      ]);
+      assert.deepStrictEqual(verifications, [
+        { cwd: "/fixture/source", host: "github.com" },
+        { cwd: "/fixture/source", host: "github.com" },
+      ]);
+      yield* TestClock.adjust("1 minute");
+      yield* service.findCloudSessionPullRequest(cloudInput);
+      assert.strictEqual(reads.length, 2);
+      yield* service.refreshAfterTurn(cloudInput.projectId);
+      yield* service.findCloudSessionPullRequest(cloudInput);
+      assert.strictEqual(reads.length, 3);
+    }),
+);
+
+it.effect("expires negative cloud observations after a minute", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [cloudProject],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          withVerifiedCredential: verifiedCloudCredential,
+          findCloudSessionPullRequest: () =>
+            Effect.sync(() => (++reads === 1 ? null : cloudResult)),
+        }),
+      ],
+    });
+    assert.isNull(yield* service.findCloudSessionPullRequest(cloudInput));
+    assert.isNull(yield* service.findCloudSessionPullRequest(cloudInput));
+    assert.strictEqual(reads, 1);
+    yield* TestClock.adjust("1 minute");
+    assert.deepStrictEqual(yield* service.findCloudSessionPullRequest(cloudInput), cloudResult);
+    assert.strictEqual(reads, 2);
+  }),
+);
+
+it.effect("partitions cloud observations by credential, project, repository and session", () =>
+  Effect.gen(function* () {
+    let credential = "broad";
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [
+        cloudProject,
+        project({
+          id: "p2",
+          title: "worktree",
+          workspaceRoot: "/fixture/second",
+          repository: "acme/web",
+        }),
+        project({
+          id: "p3",
+          title: "other",
+          workspaceRoot: "/fixture/third",
+          repository: "acme/other",
+        }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          withVerifiedCredential: (_, use) =>
+            Effect.suspend(() =>
+              use({
+                accountId: "101",
+                viewer: "octocat",
+                credentialFingerprint: credential,
+              }),
+            ),
+          findCloudSessionPullRequest: () =>
+            Effect.sync(() => {
+              reads++;
+              return credential === "broad" ? cloudResult : null;
+            }),
+        }),
+      ],
+    });
+    assert.deepStrictEqual(yield* service.findCloudSessionPullRequest(cloudInput), cloudResult);
+    credential = "restricted";
+    assert.isNull(yield* service.findCloudSessionPullRequest(cloudInput));
+    assert.isNull(yield* service.findCloudSessionPullRequest(cloudInput));
+    credential = "broad";
+    yield* service.findCloudSessionPullRequest({ ...cloudInput, projectId: "p2" as ProjectId });
+    yield* service.findCloudSessionPullRequest({
+      ...cloudInput,
+      projectId: "p3" as ProjectId,
+      repository: "https://github.com/acme/other",
+    });
+    yield* service.findCloudSessionPullRequest({
+      ...cloudInput,
+      sessionUrl: "https://claude.ai/code/session_OTHER",
+    });
+    assert.strictEqual(reads, 5);
+  }),
+);
+
+it.effect("never borrows donor projects for a missing or mismatched cloud source", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        cloudProject,
+        project({
+          id: "donor",
+          title: "other",
+          workspaceRoot: "/fixture/donor",
+          repository: "acme/other",
+        }),
+        project({ id: "empty", title: "empty", workspaceRoot: "/fixture/empty" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          withVerifiedCredential: () => Effect.die("A donor must not provide credentials"),
+          findCloudSessionPullRequest: () => Effect.die("A donor must not observe the source"),
+        }),
+      ],
+    });
+    for (const source of [
+      { ...cloudInput, repository: "https://github.com/acme/other" },
+      { ...cloudInput, projectId: "missing" as ProjectId },
+      { ...cloudInput, projectId: "empty" as ProjectId },
+    ]) {
+      assert.strictEqual(
+        (yield* service.findCloudSessionPullRequest(source).pipe(Effect.flip))._tag,
+        "PullRequestUnavailableError",
+      );
+    }
+  }),
+);
+
+it.effect(
+  "rejects unsupported providers or absent cloud/credential operations before observing",
+  () =>
+    Effect.gen(function* () {
+      for (const [kind, overrides] of [
+        ["github", {}],
+        ["github", { findCloudSessionPullRequest: () => Effect.die("Missing verifier") }],
+        [
+          "gitlab",
+          {
+            withVerifiedCredential: verifiedCloudCredential,
+            findCloudSessionPullRequest: () => Effect.die("Wrong provider"),
+          },
+        ],
+      ] as const) {
+        const service = yield* makeService({
+          projects: [
+            project({
+              id: "p1",
+              title: "web",
+              workspaceRoot: "/fixture/source",
+              repository: "acme/web",
+              provider: kind,
+            }),
+          ],
+          providers: [fakeProvider(SourceControlProviderKind.make(kind), overrides)],
+        });
+        assert.strictEqual(
+          (yield* service.findCloudSessionPullRequest(cloudInput).pipe(Effect.flip))._tag,
+          "PullRequestUnavailableError",
+        );
+      }
+    }),
+);
+
+it.effect("validates canonical session URLs before credentials or cache lookup", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [cloudProject],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          withVerifiedCredential: () => Effect.die("Invalid input must not verify credentials"),
+          findCloudSessionPullRequest: () => Effect.die("Invalid input must not read"),
+        }),
+      ],
+    });
+    const error = yield* service
+      .findCloudSessionPullRequest({
+        ...cloudInput,
+        sessionUrl: `${cloudSessionUrl}?private=value`,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.notInclude(error.message, "private=value");
+  }),
+);
+
+it.effect(
+  "incomplete cloud scans are typed failures, keep their immediate cause and are not cached",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const cause = new PullRequestProviderError({
+        provider: SourceControlProviderKind.make("github"),
+        operation: "findCloudSessionPullRequest",
+        reason: "failed",
+        detail: "The bounded PR observation pass is incomplete; its cursor is retained.",
+      });
+      const service = yield* makeService({
+        projects: [cloudProject],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            withVerifiedCredential: verifiedCloudCredential,
+            findCloudSessionPullRequest: () =>
+              Effect.suspend(() => {
+                reads++;
+                return reads === 1 ? Effect.fail(cause) : Effect.succeed(cloudResult);
+              }),
+          }),
+        ],
+      });
+      const error = yield* service.findCloudSessionPullRequest(cloudInput).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "PullRequestOperationError");
+      assert.strictEqual(error.cause, cause);
+      assert.deepStrictEqual(yield* service.findCloudSessionPullRequest(cloudInput), cloudResult);
+      assert.strictEqual(reads, 2);
+    }),
+);
+
+it.effect(
+  "credential verification failures never observe or reuse previously cached cloud results",
+  () =>
+    Effect.gen(function* () {
+      let refused = false;
+      let reads = 0;
+      const cause = new PullRequestProviderError({
+        provider: SourceControlProviderKind.make("github"),
+        operation: "routeIdentity",
+        reason: "failed",
+        detail: "private-error-payload",
+      });
+      const service = yield* makeService({
+        projects: [cloudProject],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            withVerifiedCredential: (input, use) =>
+              refused ? Effect.fail(cause) : verifiedCloudCredential(input, use),
+            findCloudSessionPullRequest: () =>
+              Effect.sync(() => {
+                reads++;
+                return cloudResult;
+              }),
+          }),
+        ],
+      });
+      yield* service.findCloudSessionPullRequest(cloudInput);
+      refused = true;
+      const error = yield* service.findCloudSessionPullRequest(cloudInput).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "PullRequestOperationError");
+      assert.strictEqual(error.cause, cause);
+      assert.notInclude(error.message, "private-error-payload");
+      assert.strictEqual(reads, 1);
+    }),
+);
+
+it.effect(
+  "cloud API quota failures reuse host backoff across sessions and resume with TestClock",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const retryAt = (yield* Clock.currentTimeMillis) + 120_000;
+      const service = yield* makeService({
+        projects: [cloudProject],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            withVerifiedCredential: verifiedCloudCredential,
+            findCloudSessionPullRequest: () =>
+              Effect.suspend(() => {
+                reads++;
+                return reads === 1
+                  ? Effect.fail(
+                      new PullRequestProviderError({
+                        provider: SourceControlProviderKind.make("github"),
+                        operation: "findCloudSessionPullRequest",
+                        reason: "rate-limited",
+                        retryAt,
+                        detail: "GitHub requests are paused until quota resets.",
+                      }),
+                    )
+                  : Effect.succeed(cloudResult);
+              }),
+          }),
+        ],
+      });
+      yield* service.findCloudSessionPullRequest(cloudInput).pipe(Effect.flip);
+      const paused = yield* service
+        .findCloudSessionPullRequest({
+          ...cloudInput,
+          sessionUrl: "https://claude.ai/code/session_OTHER",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(paused._tag, "PullRequestOperationError");
+      assert.strictEqual(reads, 1);
+      yield* TestClock.setTime(retryAt);
+      assert.deepStrictEqual(yield* service.findCloudSessionPullRequest(cloudInput), cloudResult);
+      assert.strictEqual(reads, 2);
+    }),
+);
+
 it.effect("lists GitHub Enterprise PRs for a stored unknown repository after host discovery", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

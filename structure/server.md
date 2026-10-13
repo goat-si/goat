@@ -103,6 +103,7 @@ Anything missing from the list becomes an unavailable snapshot.
 | ------------- | ------------------------------------------------------- |
 | `codex`       | `apps/server/src/provider/Drivers/CodexDriver.ts`       |
 | `claudeAgent` | `apps/server/src/provider/Drivers/ClaudeDriver.ts`      |
+| `claudeCloud` | `apps/server/src/provider/Drivers/ClaudeCloudDriver.ts` |
 | `cursor`      | `packages/provider-cursor/src/server/driver.ts`         |
 | `cursorCloud` | `packages/provider-cursor/src/server/cloud/driver.ts`   |
 | `grok`        | `packages/provider-grok/src/server/driver.ts`           |

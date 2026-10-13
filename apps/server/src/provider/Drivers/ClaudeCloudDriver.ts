@@ -1,0 +1,302 @@
+import {
+  ClaudeCloudSettings,
+  ClaudeSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  TextGenerationError,
+  type ServerProvider,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import * as FileSystem from "effect/FileSystem";
+import * as DateTime from "effect/DateTime";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { ChildProcessSpawner } from "effect/process";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import type { ProviderDriver } from "@goat/provider-core/server/driver";
+import { ProviderDriverError } from "@goat/provider-core/server/errors";
+import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
+import {
+  ClaudeCloudCli,
+  ClaudeCloudError,
+  makeClaudeCloudAdapter,
+} from "@goat/provider-claude-cloud/server";
+import { makeClaudeEnvironment, resolveClaudeHomePath } from "./ClaudeHome.ts";
+import {
+  resolveClaudeSdkExecutablePath,
+  isWindowsClaudeLauncherShimPath,
+} from "./ClaudeExecutable.ts";
+import * as ProcessRunner from "../../processRunner.ts";
+import * as PullRequests from "../../pullRequest/PullRequestService.ts";
+import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
+import * as SourceCheckout from "./ClaudeCloudSourceCheckout.ts";
+
+const DRIVER = ProviderDriverKind.make("claudeCloud");
+const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
+const decodeSiblingSettings = Schema.decodeUnknownEffect(ClaudeSettings);
+const isCloudError = Schema.is(ClaudeCloudError);
+export type ClaudeCloudDriverEnv =
+  | ProviderHost.ProviderHost
+  | Path.Path
+  | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner
+  | PtyAdapter.PtyAdapter
+  | PullRequests.PullRequestService
+  | Projection.ProjectionStoreV2;
+const fail = (detail: string) => Effect.fail(new ClaudeCloudError({ detail, outcome: "rejected" }));
+
+export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudDriverEnv> = {
+  driverKind: DRIVER,
+  metadata: {
+    displayName: "Claude Cloud",
+    supportsMultipleInstances: true,
+    hasDefaultInstance: false,
+  },
+  configSchema: ClaudeCloudSettings,
+  defaultConfig: () => decodeSettings({}),
+  create: ({ instanceId, displayName, accentColor, enabled, config }) =>
+    Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const pullRequests = yield* PullRequests.PullRequestService;
+      const projection = yield* Projection.ProjectionStoreV2;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const pty = yield* PtyAdapter.PtyAdapter;
+      const operations = yield* Effect.gen(function* () {
+        return yield* ClaudeCloudCli.ClaudeCloudCli;
+      }).pipe(
+        Effect.provide(ClaudeCloudCli.layer),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(PtyAdapter.PtyAdapter, pty),
+      );
+      const resolveLogin = Effect.gen(function* () {
+        const settings = yield* host.settings.get;
+        const id = config.sourceInstanceId;
+        const entry = settings.providerInstances[id];
+        if (!entry && id !== ProviderInstanceId.make("claudeAgent"))
+          return yield* fail("The selected sibling Claude instance no longer exists.");
+        if (entry && entry.driver !== ProviderDriverKind.make("claudeAgent"))
+          return yield* fail("Claude Cloud must use a Claude sibling instance.");
+        const sibling = yield* decodeSiblingSettings(entry?.config ?? {});
+        const merged = yield* mergeProviderInstanceEnvironment(
+          entry?.environment,
+          yield* HostProcess.Environment,
+        );
+        const environment = yield* makeClaudeEnvironment(sibling, merged);
+        const forbidden = [
+          "CCR_FORCE_BUNDLE",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "CLAUDE_CODE_USE_BEDROCK",
+          "CLAUDE_CODE_USE_VERTEX",
+          "CLAUDE_CODE_USE_FOUNDRY",
+          "GIT_DIR",
+          "GIT_WORK_TREE",
+          "GIT_COMMON_DIR",
+          "GIT_OBJECT_DIRECTORY",
+          "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+          "GIT_INDEX_FILE",
+          "GIT_CONFIG_PARAMETERS",
+          "GIT_CONFIG_COUNT",
+        ];
+        if (
+          forbidden.some((key) => environment[key]?.trim()) ||
+          Object.entries(environment).some(([key, value]) => key.startsWith("GIT_") && value)
+        )
+          return yield* fail(
+            "The sibling has bundle, Git routing or third-party/API-key routing variables. Use a Claude instance configured for claude.ai cloud login.",
+          );
+        const binary = yield* resolveClaudeSdkExecutablePath(
+          expandHomePath(sibling.binaryPath, yield* HostProcess.HomeDirectory),
+          environment,
+        );
+        if (isWindowsClaudeLauncherShimPath(binary) || /\.(?:js|mjs|cjs)$/i.test(binary))
+          return yield* fail(
+            "Claude Cloud requires the native Claude executable for PTY launch. Update or select the sibling's native binary.",
+          );
+        const home = yield* resolveClaudeHomePath(sibling, environment);
+        return { binary, environment, binding: `claudeCloud:${id}:${home}:${binary}` };
+      }).pipe(
+        Effect.provideService(Path.Path, path),
+        Effect.mapError((cause) =>
+          isCloudError(cause)
+            ? cause
+            : new ClaudeCloudError({
+                detail: "Could not resolve the sibling Claude configuration.",
+                outcome: "rejected",
+                cause,
+              }),
+        ),
+      );
+      const stamp = withInstanceIdentity({
+        instanceId,
+        driverKind: DRIVER,
+        displayName,
+        accentColor,
+        continuationGroupKey: `claudeCloud:${instanceId}:${config.sourceInstanceId}`,
+      });
+      const base = (status: ServerProvider["status"], message?: string): ServerProvider =>
+        stamp({
+          executionLocation: "cloud",
+          enabled,
+          installed: false,
+          version: null,
+          status,
+          auth: { status: "unknown" },
+          checkedAt: "1970-01-01T00:00:00.000Z",
+          models: [
+            {
+              slug: "cloud-default",
+              name: "Cloud default",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+          supportedRuntimeModes: ["approval-required"],
+          supportsConversationRollback: false,
+          supportsTextGeneration: false,
+          reportsContextWindow: false,
+          showInteractionModeToggle: false,
+          setup: { canAuthenticate: false, canInstall: false },
+          ...(message ? { message } : {}),
+        });
+      // Environment-owned, empty of project source. Keep HOME/config/env from the sibling.
+      const controlCwd = path.join(
+        host.paths.providerStatusCacheDir,
+        "claude-cloud-control",
+        encodeURIComponent(instanceId),
+      );
+      const resolveControlCwd = fileSystem.makeDirectory(controlCwd, { recursive: true }).pipe(
+        Effect.as(controlCwd),
+        Effect.mapError(
+          () =>
+            new ClaudeCloudError({
+              detail:
+                "Could not prepare the environment-owned Claude control directory. No prompt was sent.",
+              outcome: "rejected",
+            }),
+        ),
+      );
+      const check = Effect.gen(function* () {
+        if (!enabled) return base("disabled");
+        const login = yield* resolveLogin;
+        const result = yield* operations.readiness(login, yield* resolveControlCwd);
+        return {
+          ...base("ready"),
+          installed: true,
+          version: result.version,
+          auth: { status: "authenticated" as const, type: "claude.ai" },
+          checkedAt: DateTime.formatIso(yield* DateTime.now),
+          message:
+            "Waits for a session-linked GitHub PR for up to two hours; PR presence does not confirm passing checks.",
+        };
+      }).pipe(Effect.catch((cause) => Effect.succeed(base("error", cause.detail))));
+      const snapshot = yield* makeManagedServerProvider({
+        resolveMaintenance: () =>
+          Effect.succeed({ provider: DRIVER, packageName: null, update: null }),
+        getSettings: host.settings.get,
+        streamSettings: host.settings.changes,
+        haveSettingsChanged: (previous, next) => !Equal.equals(previous, next),
+        initialSnapshot: () => Effect.succeed(base(enabled ? "warning" : "disabled")),
+        checkProvider: check,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER,
+              instanceId,
+              detail: "Could not build Claude Cloud readiness.",
+              cause,
+            }),
+        ),
+      );
+      const prepareStart: Parameters<typeof makeClaudeCloudAdapter>[0]["prepareStart"] = (
+        input,
+      ) => {
+        const source = input.cloudSource;
+        const projectCwd = input.runtimePolicy.cwd;
+        if (!source || !projectCwd) return fail("Claude Cloud needs a pushed project source.");
+        return SourceCheckout.prepare({ source, projectCwd }).pipe(
+          Effect.provide(ProcessRunner.layer),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+      };
+      const orchestrationAdapter = yield* makeClaudeCloudAdapter({
+        instanceId,
+        resolveLogin,
+        resolveControlCwd,
+        prepareStart,
+        observe: (input) =>
+          pullRequests.findCloudSessionPullRequest(input).pipe(
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Cannot observe GitHub PRs for this project's persisted source.",
+                  outcome: "uncertain",
+                }),
+            ),
+          ),
+        runStartedAt: (input) =>
+          projection.getThreadRecords(input.threadId, ["runs"]).pipe(
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Could not read the persisted cloud observation deadline.",
+                  outcome: "uncertain",
+                }),
+            ),
+            Effect.flatMap((records) => {
+              const run = records.runs.find((item) => item.id === input.runId);
+              return run?.startedAt
+                ? Effect.succeed(run.startedAt)
+                : Effect.fail(
+                    new ClaudeCloudError({
+                      detail:
+                        "The persisted run has no observation start time; the deadline will not be reset.",
+                      outcome: "uncertain",
+                    }),
+                  );
+            }),
+          ),
+      }).pipe(Effect.provideService(ClaudeCloudCli.ClaudeCloudCli, operations));
+      const unsupportedText = (operation: string) =>
+        Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail:
+              "Choose a local provider for text generation; Claude Cloud submits coding sessions.",
+          }),
+        );
+      return {
+        instanceId,
+        driverKind: DRIVER,
+        displayName,
+        accentColor,
+        enabled,
+        continuationIdentity: {
+          driverKind: DRIVER,
+          continuationKey: `claudeCloud:${instanceId}:${config.sourceInstanceId}`,
+        },
+        snapshot,
+        orchestrationAdapter,
+        textGeneration: {
+          generateCommitMessage: () => unsupportedText("commitMessage"),
+          generatePrContent: () => unsupportedText("prContent"),
+          generateBranchName: () => unsupportedText("branchName"),
+          generateThreadTitle: () => unsupportedText("threadTitle"),
+          generateReviewGuide: () => unsupportedText("reviewGuide"),
+        },
+      };
+    }),
+};

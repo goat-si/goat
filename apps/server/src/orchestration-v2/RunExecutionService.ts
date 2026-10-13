@@ -603,6 +603,8 @@ export const layer: Layer.Layer<
       readonly openRunOwnedSubagents?: OpenRunOwnedSubagentProjection;
       readonly terminal: ProviderTerminalEvent;
       readonly failureItemPersisted: boolean;
+      /** A reported terminal preserves the adapter's acknowledged task state. */
+      readonly providerReportedTerminal?: true;
       readonly refreshAfterTurn: Effect.Effect<void>;
       readonly writeIfRunCurrent?: {
         readonly activeAttemptId: RunAttemptId;
@@ -695,6 +697,7 @@ export const layer: Layer.Layer<
         const task = input.providerThread.cloudTask;
         const uncertainTask =
           input.terminal.status === "failed" &&
+          input.providerReportedTerminal !== true &&
           task !== undefined &&
           (task.status === "running" || task.status === "submitting")
             ? {
@@ -1095,6 +1098,7 @@ export const layer: Layer.Layer<
                     }),
                 openRunOwnedSubagents: openSubagents,
                 terminal,
+                providerReportedTerminal: true,
                 failureItemPersisted: terminal.status === "failed",
                 refreshAfterTurn,
               }).pipe(

@@ -646,7 +646,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // hydration adds their default instances to `providerInstances` on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+  Layer.provideMerge(
+    ProviderInstanceRegistryHydration.layer.pipe(
+      Layer.provide(layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService))),
+      Layer.provide(ProjectionStoreV2.layer),
+    ),
+  ),
   Layer.provideMerge(
     Layer.mergeAll(
       AntigravityInstallation.AntigravityInstallation.layer,

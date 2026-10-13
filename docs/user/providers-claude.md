@@ -4,6 +4,27 @@ GOAT uses Claude Code's login and configuration. Start with the default provider
 for one account; [provider setup](./install.md#providers) covers installation and
 shared provider settings.
 
+## Claude Cloud
+
+Add **Claude Cloud** in **Settings > Providers** and select the ID of a local Claude
+instance signed in with a claude.ai account. The cloud provider uses that instance's
+login and executable. API keys and router connections are not supported.
+
+Start from a branch already pushed to GitHub. Local changes are not included.
+GOAT prepares a clean copy of the published branch outside your project and sends
+the task to Claude Cloud. If Claude requires folder trust for that copy, launch is
+refused; GOAT does not accept trust prompts or change your trust settings.
+
+The thread keeps the session link and looks for a GitHub pull request linked to
+that session for up to two hours. **Result PR found** means a PR was located; it
+does not confirm that Claude stopped or that checks passed. If observation cannot
+confirm a result, open the session to inspect it before continuing.
+
+Follow-up messages go to the same cloud session. An accepted follow-up confirms
+message delivery, not completed work. Stop the session on Claude's website;
+Claude Cloud has no supported CLI cancellation command. Your local files and
+checkpoints are not changed by cloud work.
+
 ## Separate accounts or configurations
 
 Use a separate Claude config directory for each account. This also works for named

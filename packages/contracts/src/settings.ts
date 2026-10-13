@@ -729,6 +729,26 @@ export const ClaudeSettings = makeProviderSettingsSchema(
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
+export const ClaudeCloudSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    sourceInstanceId: ProviderInstanceId.pipe(
+      Schema.withDecodingDefault(Effect.succeed(ProviderInstanceId.make("claudeAgent"))),
+      Schema.annotateKey({
+        title: "Claude login instance",
+        description:
+          "ID of the local Claude instance whose binary and claude.ai login this cloud provider uses.",
+        providerSettingsForm: { placeholder: "claudeAgent", clearWhenEmpty: "omit" },
+      }),
+    ),
+  },
+  { order: ["sourceInstanceId"] },
+);
+export type ClaudeCloudSettings = typeof ClaudeCloudSettings.Type;
+
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
  * in the browser. The API key and Agent Platform methods take credentials from

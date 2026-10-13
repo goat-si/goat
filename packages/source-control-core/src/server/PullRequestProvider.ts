@@ -328,6 +328,13 @@ export interface ProviderRepositoryRef {
  * failing at call time.
  */
 export interface PullRequestProviderApi {
+  /** Internal artifact lookup; full commit messages never enter client activity. */
+  readonly findCloudSessionPullRequest?: (
+    input: ProviderRepositoryRef & { readonly sessionUrl: string },
+  ) => Effect.Effect<
+    { readonly prUrl: string; readonly branch: string; readonly summary: string } | null,
+    PullRequestProviderError
+  >;
   readonly withVerifiedCredential?: <A, E, R>(
     input: { readonly cwd: string; readonly host: string },
     use: (identity: {

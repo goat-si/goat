@@ -1,3 +1,6 @@
+import * as CloudPty from "@goat/shared/PtyAdapter";
+import * as CloudPullRequests from "../pullRequest/PullRequestService.ts";
+import * as CloudProjection from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -400,6 +403,13 @@ const awaitPersistedProvider = (
     Stream.runDrain,
     Effect.forkScoped,
   );
+
+// Existing registry fixtures exercise local providers; cloud services stay unused.
+const layerCloudServices = Layer.mergeAll(
+  Layer.mock(CloudPty.PtyAdapter)({}),
+  Layer.mock(CloudPullRequests.PullRequestService)({}),
+  Layer.mock(CloudProjection.ProjectionStoreV2)({}),
+);
 
 const layerTestNodeServices = Layer.mergeAll(
   NodeServices.layer,
@@ -2743,7 +2753,9 @@ it.layer(
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const layerProviderRegistry = ProviderRegistry.layer.pipe(
-          Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+          Layer.provideMerge(
+            ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(layerCloudServices)),
+          ),
           Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
           Layer.provideMerge(
             Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2848,7 +2860,9 @@ it.layer(
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const layerProviderRegistry = ProviderRegistry.layer.pipe(
-          Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+          Layer.provideMerge(
+            ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(layerCloudServices)),
+          ),
           Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
           Layer.provideMerge(
             Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2968,7 +2982,9 @@ it.layer(
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const layerProviderRegistry = ProviderRegistry.layer.pipe(
-          Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+          Layer.provideMerge(
+            ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(layerCloudServices)),
+          ),
           Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
           Layer.provideMerge(
             Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -3028,7 +3044,9 @@ it.layer(
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const layerProviderRegistry = ProviderRegistry.layer.pipe(
-            Layer.provideMerge(ProviderInstanceRegistryHydration.layer),
+            Layer.provideMerge(
+              ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(layerCloudServices)),
+            ),
             Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),

@@ -1,6 +1,7 @@
 import { SourceControlProviderKind } from "@goat/contracts";
 import { removeAgentCredits } from "@goat/source-control-core/server/mergeMessage";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type {
   PullRequestActor,
   PullRequestCapabilities,
@@ -11,6 +12,8 @@ import type {
 
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
+import * as GitHubApi from "./GitHubApi.ts";
+import * as CloudSessionPullRequest from "./cloudSessionPullRequest.ts";
 import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
@@ -190,6 +193,13 @@ const rendersEmpty = (body: string): boolean =>
 
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+  // CLI-only consumers retain their existing operations without acquiring another service.
+  const api = yield* Effect.serviceOption(GitHubApi.GitHubApi);
+  const cloudLookup = Option.isSome(api)
+    ? yield* CloudSessionPullRequest.make.pipe(
+        Effect.provideService(GitHubApi.GitHubApi, api.value),
+      )
+    : undefined;
 
   const fail = (operation: string) => (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
     new PullRequestProviderError({
@@ -254,6 +264,7 @@ export const make = Effect.gen(function* () {
   const provider: PullRequestProviderApi = {
     kind: SourceControlProviderKind.make("github"),
     capabilities: CAPABILITIES,
+    ...(cloudLookup === undefined ? {} : { findCloudSessionPullRequest: cloudLookup }),
     mergeMessageRewrite: removeAgentCredits,
     getRoutingIdentity: (input) =>
       cli.getRoutingIdentity(input).pipe(Effect.mapError(fail("routeIdentity"))),

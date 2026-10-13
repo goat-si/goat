@@ -1,3 +1,6 @@
+import * as CloudPty from "@goat/shared/PtyAdapter";
+import * as CloudPullRequests from "../pullRequest/PullRequestService.ts";
+import * as CloudProjection from "./ProjectionStore.ts";
 /**
  * Runs OpenCode 2 through the whole orchestrator with the real driver: the
  * driver probes the binary, spawns `opencode serve`, and routes to the 2.x
@@ -171,6 +174,14 @@ const layerBackgroundPolicy = BackgroundPolicy.layer.pipe(
   Layer.provide(layerServerSettings),
 );
 const layerProviderInstanceRegistry = ProviderInstanceRegistryHydration.layer.pipe(
+  // These local-provider fixtures never create a cloud instance.
+  Layer.provide(
+    Layer.mergeAll(
+      Layer.mock(CloudPty.PtyAdapter)({}),
+      Layer.mock(CloudPullRequests.PullRequestService)({}),
+      Layer.mock(CloudProjection.ProjectionStoreV2)({}),
+    ),
+  ),
   Layer.provide(
     Layer.mergeAll(
       layerServerConfig.pipe(Layer.provide(layerPlatformTest)),
