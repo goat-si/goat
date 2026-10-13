@@ -84,7 +84,7 @@ it("renders the no-drag global agent link while the sidebar is collapsed", async
   );
 });
 
-it("keeps the waiting badge in both brand width probes as the count changes", async () => {
+it("keeps the waiting badge in both width probes, with the wordmark only in the collapsed one", async () => {
   await renderBrand(false);
   await act(() =>
     root?.render(
@@ -94,7 +94,7 @@ it("keeps the waiting badge in both brand width probes as the count changes", as
       </>,
     ),
   );
-  expect(container.textContent?.trim()).toBe("GOATGOAT");
+  expect(container.textContent?.trim()).toBe("GOAT");
   await act(() => setCount(101));
   await act(() =>
     root?.render(
@@ -104,7 +104,7 @@ it("keeps the waiting badge in both brand width probes as the count changes", as
       </>,
     ),
   );
-  expect(container.textContent?.trim()).toBe("GOAT101GOAT101");
+  expect(container.textContent?.trim()).toBe("101GOAT101");
   await act(() => setCount(undefined));
   await act(() =>
     root?.render(
@@ -114,5 +114,5 @@ it("keeps the waiting badge in both brand width probes as the count changes", as
       </>,
     ),
   );
-  expect(container.textContent?.trim()).toBe("GOATGOAT");
+  expect(container.textContent?.trim()).toBe("GOAT");
 });

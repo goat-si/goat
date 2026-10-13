@@ -115,7 +115,7 @@ export function SidebarBrandWidthProbe({
       ref={observeWidth}
     >
       <div className="ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] flex px-1.5">
-        <SidebarBrandContents onBackdrop={false} />
+        <SidebarBrandContents onBackdrop={false} wordmark={false} />
       </div>
       <span className="flex items-center gap-1">
         <span className="size-8 sm:size-7" />
@@ -148,7 +148,7 @@ function SidebarBrand({
       aria-current={active ? "page" : undefined}
       data-active={active}
       className={cn(
-        // Padding holds the selected fill off the letters. The left margin keeps the letters at
+        // Padding holds the selected fill off the mark. The left margin keeps the letters at
         // the titlebar inset; the right padding stays in flow (and in the width probe above) so
         // the header's overflow clip never cuts the selected fill at the minimum sidebar width.
         "relative z-10 h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5 outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset",
@@ -161,7 +161,9 @@ function SidebarBrand({
       )}
       to={logo.to}
     >
-      <SidebarBrandContents onBackdrop={onBackdrop} />
+      {/* The sidebar header is too narrow for the wordmark beside its controls; the collapsed
+          titlebar has room for it. */}
+      <SidebarBrandContents onBackdrop={onBackdrop} wordmark={placement === "collapsed"} />
     </Link>
   );
 }
@@ -198,7 +200,7 @@ export function SidebarCollapsedBrand({
       ) : (
         // Keep the measured width without adding a focus target or a no-drag region.
         <span className="flex h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5">
-          <SidebarBrandContents onBackdrop={false} />
+          <SidebarBrandContents onBackdrop={false} wordmark />
         </span>
       )}
     </div>
@@ -206,11 +208,17 @@ export function SidebarCollapsedBrand({
 }
 
 /** The visible brand and both width probes measure the same waiting badge. */
-function SidebarBrandContents({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrandContents({
+  onBackdrop,
+  wordmark,
+}: {
+  onBackdrop: boolean;
+  wordmark: boolean;
+}) {
   const waitingCount = useGoatBotWaitingCount();
   return (
     <>
-      <SidebarBrandMark onBackdrop={onBackdrop} />
+      <SidebarBrandMark onBackdrop={onBackdrop} wordmark={wordmark} />
       {waitingCount !== undefined && waitingCount > 0 ? (
         <span className="ml-1 text-xs">{waitingCount}</span>
       ) : null}
@@ -218,7 +226,8 @@ function SidebarBrandContents({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrandMark({ onBackdrop, wordmark }: { onBackdrop: boolean; wordmark: boolean }) {
+  if (!wordmark) return <GoatWordmark aria-hidden className="size-4 shrink-0" />;
   return (
     // Center the visible capitals, without the font's ascender/descender space.
     // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
