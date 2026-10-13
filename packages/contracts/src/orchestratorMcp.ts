@@ -708,7 +708,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
   ),
   /** When anything in the thread last changed. */
   lastActivityAt: IsoDateTime,
-  /** The start of the latest visible message, untrusted text. */
+  /** The start of the latest user or assistant message of the described or latest run, untrusted text. */
   lastMessage: Schema.NullOr(
     Schema.Struct({
       role: Schema.String,
@@ -716,6 +716,7 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
       at: IsoDateTime,
     }),
   ),
+  /** The thread's last error, cut to 500 characters. */
   lastError: Schema.NullOr(Schema.String),
   /**
    * The caller's own launch watch on this thread: runs that will still be
@@ -724,7 +725,10 @@ export const OrchestratorMcpThreadStatusResult = Schema.Struct({
    */
   watch: Schema.NullOr(
     Schema.Struct({
+      /** The next run still to report, if any; at most one id. */
       pendingRunIds: Schema.Array(RunId),
+      /** How many runs are still to report. */
+      pendingRunCount: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
       lastReportedRunId: Schema.NullOr(RunId),
       webhook: Schema.Boolean,
     }),

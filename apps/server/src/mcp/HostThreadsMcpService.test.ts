@@ -20,6 +20,7 @@ import type { LaunchWatch } from "./launchWatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import { LAST_ERROR_CHARS, LAST_MESSAGE_EXCERPT_CHARS } from "./threadStatus.ts";
 
 const item = (threadId: string, updatedAt: string, host?: string): OrchestratorMcpThreadListItem =>
   ({
@@ -304,6 +305,51 @@ describe("HostThreadsMcpService", () => {
         pendingRequest: { requestId: null, kind: null },
         lastActivityAt: at,
         watch: { pendingRunIds: ["run-2"], lastReportedRunId: "run-1", webhook: true },
+      });
+    }),
+  );
+
+  it.effect("bounds a remote status and names only the next pending run", () =>
+    Effect.gen(function* () {
+      const at = "2026-10-13T01:00:00.000Z";
+      const { result } = yield* runService(
+        {
+          interactionMode: "default",
+          watch: {
+            pendingRuns: ["run-2", "run-3", "run-4"],
+            reportedRuns: [],
+            notifyWebhook: false,
+            webhookTarget: null,
+          } as unknown as LaunchWatch,
+          // A host from before the bounds returns its error whole, and no pendingRunCount.
+          hostCall: () =>
+            Effect.succeed({
+              threadId: "remote-1",
+              title: "Fix the flake",
+              phase: "failed",
+              terminal: true,
+              run: null,
+              queuedRunId: null,
+              pendingRequest: null,
+              lastActivityAt: at,
+              lastMessage: { role: "assistant", excerpt: "y".repeat(5_000), at },
+              lastError: "e".repeat(1_048_576),
+              watch: { pendingRunIds: ["a", "b"], lastReportedRunId: null, webhook: false },
+            }),
+        },
+        (service) =>
+          service.threadStatus(scope, { host: "box", threadId: ThreadId.make("remote-1") }),
+      );
+      if (result._tag !== "Success") return yield* Effect.die(result);
+      expect(result.success.lastError).toHaveLength(LAST_ERROR_CHARS);
+      expect(Array.from(result.success.lastMessage?.excerpt ?? "")).toHaveLength(
+        LAST_MESSAGE_EXCERPT_CHARS,
+      );
+      expect(result.success.watch).toEqual({
+        pendingRunIds: ["run-2"],
+        pendingRunCount: 3,
+        lastReportedRunId: null,
+        webhook: false,
       });
     }),
   );

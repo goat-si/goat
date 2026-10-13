@@ -3202,13 +3202,17 @@ const make = Effect.gen(function* () {
         const runIds = [
           ...new Set([shell.activeRunId, shell.latestRunId].filter((id) => id !== null)),
         ];
-        const runs =
+        const records =
           runIds.length === 0
-            ? []
-            : (yield* threadManagement
-                .getThreadRecords(input.threadId, ["runs"], { runIds })
-                .pipe(Effect.mapError(threadManagementFailure))).runs;
-        return statusFromShell(shell, runs);
+            ? { runs: [], turnItems: [] }
+            : yield* threadManagement
+                .getThreadRecords(input.threadId, ["runs", "turnItems"], {
+                  runIds,
+                  turnItemRunIds: runIds,
+                  turnItemTypes: ["user_message", "assistant_message"],
+                })
+                .pipe(Effect.mapError(threadManagementFailure));
+        return statusFromShell(shell, records.runs, records.turnItems);
       }),
     interruptThread: (scope, input) =>
       Effect.gen(function* () {

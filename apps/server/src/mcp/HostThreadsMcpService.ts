@@ -37,7 +37,7 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { assertLiveCaller, readCaller } from "./threadAccess.ts";
-import { statusFromRead } from "./threadStatus.ts";
+import { boundedStatus, statusFromRead } from "./threadStatus.ts";
 
 /**
  * Routes the thread tools by host. A thread id belongs to the environment that
@@ -590,17 +590,19 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
       })
       .pipe(Effect.mapError(storeFailure));
-    return {
+    return boundedStatus({
       ...status,
       watch:
         watch === null
           ? null
           : {
-              pendingRunIds: [...watch.pendingRuns],
+              // Only the next run; a thread sent to many times queues many.
+              pendingRunIds: watch.pendingRuns.slice(0, 1),
+              pendingRunCount: watch.pendingRuns.length,
               lastReportedRunId: watch.reportedRuns.at(-1) ?? null,
               webhook: watch.notifyWebhook || watch.webhookTarget !== null,
             },
-    } satisfies OrchestratorMcpThreadStatusResult;
+    }) satisfies OrchestratorMcpThreadStatusResult;
   });
 
   return HostThreadsMcpService.of({

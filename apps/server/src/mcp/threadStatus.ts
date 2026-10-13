@@ -2,6 +2,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2RunStatus,
   OrchestrationV2ThreadShell,
+  OrchestrationV2TurnItem,
   OrchestratorMcpThreadPhase,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadStatusResult,
@@ -21,6 +22,8 @@ const USER_INPUT_KINDS: ReadonlySet<string> = new Set(["user_input", "auth_refre
 const SELF_ANSWERED_KINDS: ReadonlySet<string> = new Set(["dynamic_tool_call"]);
 
 export const LAST_MESSAGE_EXCERPT_CHARS = 280;
+/** goat_thread_status is a cheap poll; a provider error can be megabytes. */
+export const LAST_ERROR_CHARS = 500;
 
 export function threadPhase(
   runStatus: OrchestrationV2RunStatus | "idle" | null,
@@ -61,11 +64,30 @@ export function isTerminalPhase(phase: OrchestratorMcpThreadPhase): boolean {
   );
 }
 
-export function excerpt(text: string): string {
-  const chars = Array.from(text.trim());
-  return chars.length <= LAST_MESSAGE_EXCERPT_CHARS
+export function excerpt(text: string, max = LAST_MESSAGE_EXCERPT_CHARS): string {
+  const trimmed = text.trim();
+  // Cut before splitting, so a huge text is not turned into an array of characters.
+  const chars = Array.from(trimmed.slice(0, max * 2));
+  return chars.length <= max && trimmed.length <= max * 2
     ? chars.join("")
-    : `${chars.slice(0, LAST_MESSAGE_EXCERPT_CHARS - 1).join("")}…`;
+    : `${chars.slice(0, max - 1).join("")}…`;
+}
+
+/**
+ * Bounds the parts of a status a thread controls, for a status from any host,
+ * including one from a GOAT that predates the bounds.
+ */
+export function boundedStatus<
+  S extends Pick<OrchestratorMcpThreadStatusResult, "lastMessage" | "lastError">,
+>(status: S): S {
+  return {
+    ...status,
+    lastMessage:
+      status.lastMessage === null
+        ? null
+        : { ...status.lastMessage, excerpt: excerpt(status.lastMessage.excerpt) },
+    lastError: status.lastError === null ? null : excerpt(status.lastError, LAST_ERROR_CHARS),
+  };
 }
 
 const iso = (value: DateTime.DateTime | null | undefined) =>
@@ -73,11 +95,13 @@ const iso = (value: DateTime.DateTime | null | undefined) =>
 
 /**
  * A local thread's status from its shell and the runs it names (the active and
- * latest run). A pending request counts only while the described run is live.
+ * latest run), with those runs' turn items for the message excerpt.
+ * A pending request counts only while the described run is live.
  */
 export function statusFromShell(
   shell: OrchestrationV2ThreadShell,
   runs: ReadonlyArray<OrchestrationV2Run>,
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
 ): Omit<OrchestratorMcpThreadStatusResult, "watch"> {
   const describedRunId = shell.activeRunId ?? shell.latestRunId;
   const run = runs.find((candidate) => candidate.id === describedRunId) ?? null;
@@ -86,8 +110,18 @@ export function statusFromShell(
   const live = runStatus === "running" || runStatus === "waiting";
   const request = live ? shell.pendingRuntimeRequest : null;
   const phase = threadPhase(runStatus, request?.kind ?? null);
-  const message = shell.latestVisibleMessage;
-  return {
+  // Shell rows carry no message bodies, so the latest message comes from the runs' items.
+  const message =
+    items
+      .flatMap((item) =>
+        (item.type === "user_message" || item.type === "assistant_message") &&
+        item.text.trim().length > 0
+          ? [item]
+          : [],
+      )
+      .toSorted((left, right) => left.ordinal - right.ordinal)
+      .at(-1) ?? null;
+  return boundedStatus({
     threadId: shell.id,
     title: shell.title,
     phase,
@@ -122,12 +156,12 @@ export function statusFromShell(
       message === null
         ? null
         : {
-            role: message.role,
+            role: message.type === "user_message" ? "user" : "assistant",
             excerpt: excerpt(message.text),
             at: DateTime.formatIso(message.updatedAt),
           },
     lastError: shell.lastError ?? null,
-  };
+  });
 }
 
 /**

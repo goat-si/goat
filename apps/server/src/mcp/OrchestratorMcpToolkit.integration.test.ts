@@ -719,7 +719,10 @@ describe("orchestrator MCP toolkit", () => {
               }),
             ),
             Layer.provide(
-              Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+              Layer.mock(LaunchWatchService.LaunchWatchService)({
+                rearm: () => Effect.void,
+                find: () => Effect.succeed(null),
+              }),
             ),
             Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
             Layer.provideMerge(McpServer.McpServer.layer),
@@ -1111,6 +1114,18 @@ describe("orchestrator MCP toolkit", () => {
               threadId: directChildThreadId,
               status: "completed",
               timedOut: false,
+            });
+            // The status poll reads its excerpt from the projection; shell rows carry no bodies.
+            const directChildStatusCall = yield* invoke("goat_thread_status", {
+              threadId: directChildThreadId,
+            });
+            expect(directChildStatusCall.structuredContent).toMatchObject({
+              phase: "completed",
+              lastMessage: {
+                role: "assistant",
+                excerpt:
+                  "Claude completed: Complete before a parent reads this child result directly.",
+              },
             });
             const pendingAfterWait = yield* orchestrator.getThreadProjection(parentThreadId);
             expect(

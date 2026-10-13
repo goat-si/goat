@@ -1,9 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { OrchestrationV2Run, OrchestrationV2ThreadShell } from "@goat/contracts";
+import type {
+  OrchestrationV2Run,
+  OrchestrationV2ThreadShell,
+  OrchestrationV2TurnItem,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import {
   excerpt,
+  LAST_ERROR_CHARS,
   LAST_MESSAGE_EXCERPT_CHARS,
   statusFromShell,
   threadPhase,
@@ -33,6 +38,14 @@ const shell = (fields: Partial<OrchestrationV2ThreadShell>) =>
     updatedAt: at("2026-10-13T01:10:00.000Z"),
     ...fields,
   }) as unknown as OrchestrationV2ThreadShell;
+
+const message = (type: OrchestrationV2TurnItem["type"], text: string, ordinal: number) =>
+  ({
+    type,
+    text,
+    ordinal,
+    updatedAt: at(`2026-10-13T01:0${ordinal}:30.000Z`),
+  }) as unknown as OrchestrationV2TurnItem;
 
 describe("threadPhase", () => {
   it.each([
@@ -66,6 +79,7 @@ describe("statusFromShell", () => {
         } as never,
       }),
       [run("run-1", "waiting"), run("run-2", "queued")],
+      [],
     );
     expect(status).toMatchObject({
       phase: "waiting_input",
@@ -87,13 +101,12 @@ describe("statusFromShell", () => {
           kind: "command",
           createdAt: at("2026-10-13T01:05:00.000Z"),
         } as never,
-        latestVisibleMessage: {
-          role: "assistant",
-          text: "x".repeat(LAST_MESSAGE_EXCERPT_CHARS + 50),
-          updatedAt: at("2026-10-13T01:09:00.000Z"),
-        } as never,
       }),
       [run("run-1", "completed")],
+      [
+        message("user_message", "Fix the flake", 1),
+        message("assistant_message", "x".repeat(LAST_MESSAGE_EXCERPT_CHARS + 50), 9),
+      ],
     );
     expect(status).toMatchObject({
       phase: "completed",
@@ -105,8 +118,36 @@ describe("statusFromShell", () => {
     expect(Array.from(status.lastMessage?.excerpt ?? "")).toHaveLength(LAST_MESSAGE_EXCERPT_CHARS);
   });
 
+  it("takes the latest user or assistant message, skipping other items and empty ones", () => {
+    const status = statusFromShell(
+      shell({ status: "running", activeRunId: "run-1" as never, latestRunId: "run-1" as never }),
+      [run("run-1", "running")],
+      [
+        message("assistant_message", "Looking at the test.", 3),
+        message("user_message", "Fix the flake", 1),
+        message("reasoning", "Thinking about the test.", 4),
+        message("assistant_message", "   ", 5),
+      ],
+    );
+    expect(status.lastMessage).toEqual({
+      role: "assistant",
+      excerpt: "Looking at the test.",
+      at: "2026-10-13T01:03:30.000Z",
+    });
+  });
+
+  it("cuts a huge last error to a bounded size", () => {
+    const status = statusFromShell(
+      shell({ status: "failed", latestRunId: "run-1" as never, lastError: "e".repeat(1_048_576) }),
+      [run("run-1", "failed")],
+      [],
+    );
+    expect(status.lastError).toHaveLength(LAST_ERROR_CHARS);
+    expect(status.lastError?.endsWith("…")).toBe(true);
+  });
+
   it("is idle before the first run", () => {
-    expect(statusFromShell(shell({}), [])).toMatchObject({ phase: "idle", run: null });
+    expect(statusFromShell(shell({}), [], [])).toMatchObject({ phase: "idle", run: null });
   });
 
   it("keeps a short message whole", () => {
