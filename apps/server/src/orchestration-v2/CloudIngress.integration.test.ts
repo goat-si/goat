@@ -42,7 +42,6 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { McpServer, McpSchema } from "effect/ai";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -78,8 +77,6 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as Registry from "./ProviderAdapterRegistry.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
-import * as Sessions from "./ProviderSessionManager.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { makeFakeCloudAdapter } from "./testkit/FakeCloudAdapter.ts";
 
@@ -824,7 +821,7 @@ const seedCursorAccepted = Effect.fnUntraced(function* (
   >["status"] = "running",
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const manager = yield* Sessions.ProviderSessionManagerV2;
+  const manager = yield* ProviderSessions.ProviderSessionManagerV2;
   const sink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const before = yield* orchestrator.getThreadProjection(threadId);
@@ -924,7 +921,7 @@ it.effect.each([false, true])(
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const manager = yield* Sessions.ProviderSessionManagerV2;
+        const manager = yield* ProviderSessions.ProviderSessionManagerV2;
         const threadId = ThreadId.make(`thread:cursor-restored-lifecycle-${shutdown}`);
         yield* createCursorThread(threadId);
         yield* dispatchCursorMessage(threadId, 1, {
@@ -1018,7 +1015,7 @@ it.effect(
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const manager = yield* Sessions.ProviderSessionManagerV2;
+        const manager = yield* ProviderSessions.ProviderSessionManagerV2;
         const threadId = ThreadId.make("thread:cursor-duplicate-terminal");
         yield* createCursorThread(threadId);
         yield* dispatchCursorMessage(threadId, 1, { type: "start_immediately" });
