@@ -165,6 +165,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_thread_read: tool(["Read", "Reading", "Read", "a GOAT thread"], "thread-read"),
   goat_thread_send: tool(["Send", "Sending", "Sent", "to a GOAT thread"], "thread-send"),
   goat_thread_wait: tool(["Wait", "Waiting", "Waited", "for a GOAT thread"], "thread-wait"),
+  goat_thread_status: tool(
+    ["Check", "Checking", "Checked", "a GOAT thread's status"],
+    "thread-read",
+  ),
   goat_thread_watch: tool(["Watch", "Watching", "Watched", "a GOAT thread"], "thread-watch"),
   goat_thread_unwatch: tool(
     ["Stop watching", "Stopping watch of", "Stopped watching", "a GOAT thread"],

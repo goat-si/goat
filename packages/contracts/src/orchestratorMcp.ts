@@ -652,6 +652,86 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
+export const OrchestratorMcpThreadStatusInput = Schema.Struct({
+  threadId: ThreadId,
+  host: Schema.optional(OrchestratorMcpHost),
+});
+export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatusInput.Type;
+
+/**
+ * Where a thread's current run is, derived from its run status and pending
+ * request: idle (no run yet), queued, starting, running, waiting on the user
+ * (waiting_input) or an approval (waiting_approval), waiting on something
+ * else, or one of the terminal run statuses.
+ */
+export const OrchestratorMcpThreadPhase = Schema.Literals([
+  "idle",
+  "queued",
+  "starting",
+  "running",
+  "waiting_input",
+  "waiting_approval",
+  "waiting",
+  "completed",
+  "failed",
+  "interrupted",
+  "cancelled",
+  "rolled_back",
+]);
+export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
+
+export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  host: OrchestratorMcpResultHost,
+  threadId: ThreadId,
+  title: Schema.String,
+  phase: OrchestratorMcpThreadPhase,
+  /** Whether the described run does no more work. */
+  terminal: Schema.Boolean,
+  /** The active run, or the latest one when none is active; null before the first run. */
+  run: Schema.NullOr(
+    Schema.Struct({
+      runId: RunId,
+      status: OrchestrationV2RunStatus,
+      requestedAt: IsoDateTime,
+      startedAt: Schema.NullOr(IsoDateTime),
+      completedAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
+  /** A newer run queued behind the active one, when there is one. */
+  queuedRunId: Schema.NullOr(RunId),
+  pendingRequest: Schema.NullOr(
+    Schema.Struct({
+      requestId: Schema.NullOr(RuntimeRequestId),
+      kind: Schema.NullOr(Schema.String),
+      since: Schema.NullOr(IsoDateTime),
+    }),
+  ),
+  /** When anything in the thread last changed. */
+  lastActivityAt: IsoDateTime,
+  /** The start of the latest visible message, untrusted text. */
+  lastMessage: Schema.NullOr(
+    Schema.Struct({
+      role: Schema.String,
+      excerpt: Schema.String,
+      at: IsoDateTime,
+    }),
+  ),
+  lastError: Schema.NullOr(Schema.String),
+  /**
+   * The caller's own launch watch on this thread: runs that will still be
+   * reported, and whether its launch asked for completion webhook reports.
+   * Null when the caller does not watch the thread.
+   */
+  watch: Schema.NullOr(
+    Schema.Struct({
+      pendingRunIds: Schema.Array(RunId),
+      lastReportedRunId: Schema.NullOr(RunId),
+      webhook: Schema.Boolean,
+    }),
+  ),
+});
+export type OrchestratorMcpThreadStatusResult = typeof OrchestratorMcpThreadStatusResult.Type;
+
 /**
  * A thread the calling thread is told about without polling: one it launched
  * (goat_thread_launch, goat_ssh_thread_launch) or asked to watch. The caller is

@@ -200,6 +200,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_thread_search",
     "goat_thread_send",
     "goat_thread_send_attachments",
+    "goat_thread_status",
     "goat_thread_transfers",
     "goat_thread_unwatch",
     "goat_thread_update",
@@ -218,7 +219,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_list",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(102);
+  expect(names.size).toBe(103);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);

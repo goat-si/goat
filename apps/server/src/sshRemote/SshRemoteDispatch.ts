@@ -108,6 +108,9 @@ export interface SshBrowseResult {
  */
 export const LAUNCH_LINEAGE_PROBE_TIMEOUT = "5 seconds";
 
+/** How a remote that predates goat_thread_status refuses it; callers fall back to goat_thread_read. */
+export const REMOTE_THREAD_STATUS_UNSUPPORTED = "does not have goat_thread_status";
+
 type SshDispatchDestination =
   | { readonly host: string; readonly target?: undefined }
   | { readonly target: DesktopSshEnvironmentTarget; readonly host?: undefined };
@@ -643,6 +646,12 @@ const make = Effect.gen(function* () {
           return failure(
             "remote_refused",
             `GOAT on ${input.target.alias} cannot prepare attachment uploads. Update it to a version with goat_attachment_prepare_upload; no thread was launched.`,
+          );
+        }
+        if (input.tool === "goat_thread_status" && error.kind === "rpc") {
+          return failure(
+            "remote_refused",
+            `GOAT on ${input.target.alias} ${REMOTE_THREAD_STATUS_UNSUPPORTED}.`,
           );
         }
         if (describe(error).includes("HTTP 401")) {

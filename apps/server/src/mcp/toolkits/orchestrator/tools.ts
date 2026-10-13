@@ -27,6 +27,8 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendInput,
   OrchestratorMcpThreadSendResult,
+  OrchestratorMcpThreadStatusInput,
+  OrchestratorMcpThreadStatusResult,
   OrchestratorMcpThreadUnwatchResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
@@ -303,8 +305,23 @@ const ThreadInterruptTool = Tool.make("goat_thread_interrupt", {
   .annotate(Tool.Title, "Interrupt a GOAT thread")
   .annotate(Tool.Destructive, true);
 
+const ThreadStatusTool = Tool.make("goat_thread_status", {
+  description:
+    "Check where a GOAT thread's current run is without waiting or reading its timeline: phase is idle (no run yet), queued, starting, running, waiting_input (a question for the user), waiting_approval, waiting, or the terminal completed, failed, interrupted, cancelled, rolled_back. run is the active run, or the latest one, with requestedAt, startedAt and completedAt; queuedRunId is a newer run waiting behind it. lastActivityAt, a short lastMessage excerpt and lastError say what it did last. watch is the caller's own launch watch on the thread: pendingRunIds will still be reported, and webhook says whether the launch asked for completion webhook reports. Call it after goat_thread_send to confirm the run started, or instead of a long goat_thread_wait; it answers immediately." +
+    ON_ANOTHER_MACHINE,
+  parameters: OrchestratorMcpThreadStatusInput,
+  success: OrchestratorMcpThreadStatusResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: hostThreadDependencies,
+})
+  .annotate(Tool.Title, "Check a GOAT thread's status")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 const WATCH_REPORTS =
-  " A watched thread wakes the calling thread with a message when a followed run ends, when the thread waits on a question, and once if its host stays unreachable; goat_thread_launch and goat_ssh_thread_launch start one automatically, and each goat_thread_send from the caller to the thread is followed the same way.";
+  " A watched thread wakes the calling thread with a message when a followed run ends, when the thread waits on a question, and once if its host stays unreachable; goat_thread_launch and goat_ssh_thread_launch start one automatically, and each goat_thread_send from the caller to the thread is followed the same way. A launch from outside any thread that chose a completion webhook is followed for later goat_thread_send calls from outside threads too.";
 
 const ThreadWatchTool = Tool.make("goat_thread_watch", {
   description:
@@ -366,6 +383,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadUpdateTool,
   ThreadSendTool,
   ThreadWaitTool,
+  ThreadStatusTool,
   ThreadInterruptTool,
   ThreadWatchTool,
   ThreadUnwatchTool,

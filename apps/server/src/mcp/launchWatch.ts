@@ -87,6 +87,8 @@ export const LaunchWatch = Schema.Struct({
   webhookTarget: Schema.NullOr(LaunchWatchWebhookTarget).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** When a run was last added; a launcherless watch's retention counts from it. */
+  armedAt: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });
@@ -164,6 +166,7 @@ export function newLaunchWatch(input: {
     deliveryAttempts: {},
     notifyWebhook: input.notifyWebhook,
     webhookTarget: input.webhookTarget ?? null,
+    armedAt: null,
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -204,7 +207,7 @@ const keepRecent = <A>(values: ReadonlyArray<A>, value: A) =>
 /** Adds a run to report; a run already pending or reported is left alone. */
 export function addPendingRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
   if (watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId)) return watch;
-  return { ...watch, pendingRuns: [...watch.pendingRuns, runId], updatedAt: now };
+  return { ...watch, pendingRuns: [...watch.pendingRuns, runId], armedAt: now, updatedAt: now };
 }
 
 /** Moves a run from pending to reported, whether or not a wake went out for it. */

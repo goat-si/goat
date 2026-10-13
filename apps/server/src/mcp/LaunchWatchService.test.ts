@@ -1699,7 +1699,7 @@ describe("LaunchWatchService launcherless watches", () => {
   );
 
   it.effect(
-    "reports an outside launch's question and run end only to the webhook, then drops it",
+    "reports an outside launch's question and run end only to the webhook, then a re-armed follow-up",
     () =>
       Effect.gen(function* () {
         const world = yield* makeWorld;
@@ -1723,6 +1723,20 @@ describe("LaunchWatchService launcherless watches", () => {
             yield* Queue.take(reported);
             // listRemote waits for the lock the report and its state change run under.
             expect(yield* service.listRemote(10)).toEqual([]);
+            // Reported, the watch stays dormant, so a follow-up send from outside re-arms it.
+            expect(
+              yield* service.find({ launcherThreadId: null, host: null, threadId: target }),
+            ).toMatchObject({ pendingRuns: [], reportedRuns: [run1] });
+            yield* service.rearm({
+              launcherThreadId: null,
+              host: null,
+              threadId: target,
+              runId: run2,
+            });
+            yield* Queue.take(world.waitStarted);
+            yield* Queue.offer(world.waits, finished(run2));
+            yield* Queue.take(reported);
+            yield* service.listRemote(10);
           }),
         );
         expect(
@@ -1745,11 +1759,14 @@ describe("LaunchWatchService launcherless watches", () => {
               excerpt: "Fixed the flake; tests pass.",
             }),
           ],
+          [null, expect.objectContaining({ event: "run.completed", runId: run2 })],
         ]);
         // No thread was woken or read as a launcher, and nothing is left to follow.
         expect(world.attempts).toEqual([]);
         expect(yield* Queue.size(world.launcherReads)).toBe(0);
-        expect(yield* storedWatches(baseDir)).toEqual([]);
+        expect(yield* storedWatches(baseDir)).toEqual([
+          expect.objectContaining({ pendingRuns: [], reportedRuns: [run1, run2] }),
+        ]);
       }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -1808,7 +1825,10 @@ describe("LaunchWatchService launcherless watches", () => {
         ),
       ).toBe(true);
       expect(world.attempts).toEqual([]);
-      expect(yield* storedWatches(baseDir)).toEqual([]);
+      // Dormant until a later outside send re-arms it.
+      expect(yield* storedWatches(baseDir)).toEqual([
+        expect.objectContaining({ pendingRuns: [], reportedRuns: [run1] }),
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

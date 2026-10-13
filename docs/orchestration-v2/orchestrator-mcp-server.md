@@ -431,9 +431,11 @@ the webhook on, a `notifyTarget` or `notifyWebhook: true` on that launch, or
 host outages are posted to the webhook only, and the launch returns
 `watching: true`. Without either, nothing changes: the launch returns
 `watching: false` and nothing is posted. The watch follows remote threads at the
-runtime mode the client was approved for and ends once its run is reported.
-It also ends without a report when the webhook stops posting it (turned off, or
-the launch's settings no longer match) or seven days after the launch.
+runtime mode the client was approved for. After its run is reported it waits:
+a later `goat_thread_send` from outside any thread re-arms it, and that run is
+reported to the webhook too. It ends without a report when the webhook stops
+posting it (turned off, or the launch's settings no longer match) or seven days
+after it was last armed.
 `goat_thread_watch`, `goat_thread_unwatch`, and `goat_thread_watch_list` still need
 a thread credential, so a client cannot list or stop these watches.
 
@@ -531,6 +533,17 @@ Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
+
+### `goat_thread_status`
+
+Answers at once where a thread's current run is, without reading the timeline or
+waiting. `phase` comes from the active run's status (else the latest run's) and
+its pending request: a user question or auth refresh is `waiting_input`, a
+provider approval is `waiting_approval`. `watch` is the caller's own launch
+watch, so a dispatcher can check that the run it just sent will be reported.
+With `host`, a host whose GOAT predates the tool is read with a one-item
+`goat_thread_read` instead, which cannot name the request kind and reports
+`waiting`.
 
 ### `goat_thread_interrupt`
 

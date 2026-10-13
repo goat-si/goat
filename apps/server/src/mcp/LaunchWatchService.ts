@@ -67,8 +67,9 @@ import {
  *
  * A launch from outside any thread may opt into a launcherless watch. It is
  * followed the same way, at the runtime mode its caller was approved for, but
- * its reports go only to the completion webhook, and it is dropped once its run
- * is reported, since no thread can send to the target or unwatch it.
+ * its reports go only to the completion webhook. Once its run is reported it
+ * stays dormant, like a launcher's watch, so a later goat_thread_send from
+ * outside any thread re-arms it and that run reaches the webhook too.
  */
 
 /** How long one local wait lasts before the follower looks for pending questions. */
@@ -84,8 +85,8 @@ const REMOTE_READ_TIMEOUT_MS = 60_000;
 const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
 /**
  * A launcherless watch has no thread that could unwatch it, so it is dropped
- * this long after it was created even while its run is still owed, for example
- * when the host never comes back or a question is never answered.
+ * this long after it was last armed even while its run is still owed, for
+ * example when the host never comes back or a question is never answered.
  */
 const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
@@ -104,6 +105,11 @@ export interface LaunchWatchTarget {
   readonly host: string | null | undefined;
   readonly threadId: ThreadId;
 }
+
+/** A watch's key; a null launcher names the launcherless watch of outside callers. */
+export type LaunchWatchKey = Omit<LaunchWatchTarget, "launcherThreadId"> & {
+  readonly launcherThreadId: ThreadId | null;
+};
 
 interface ExternalLaunchWatchInput {
   readonly host: string | null | undefined;
@@ -133,10 +139,17 @@ export interface LaunchWatchServiceShape {
       readonly webhookTarget?: LaunchWatchWebhookTarget | null;
     },
   ) => Effect.Effect<LaunchWatch, LaunchWatchStoreError>;
-  /** Adds a run to an existing watch; without a watch it does nothing. */
+  /**
+   * Adds a run to an existing watch; without a watch it does nothing. A null
+   * launcher re-arms the launcherless watch an outside caller's launch made.
+   */
   readonly rearm: (
-    input: LaunchWatchTarget & { readonly runId: RunId },
+    input: LaunchWatchKey & { readonly runId: RunId },
   ) => Effect.Effect<void, LaunchWatchStoreError>;
+  /** The watch under this key, if any. */
+  readonly find: (
+    input: LaunchWatchKey,
+  ) => Effect.Effect<LaunchWatch | null, LaunchWatchStoreError>;
   readonly unwatch: (input: LaunchWatchTarget) => Effect.Effect<boolean, LaunchWatchStoreError>;
   readonly list: (
     launcherThreadId: ThreadId,
@@ -765,7 +778,8 @@ export const make = Effect.gen(function* () {
   };
 
   const launcherlessExpired = (watch: LaunchWatch, now: number) =>
-    watch.launcherThreadId === null && now - watch.createdAt >= LAUNCHERLESS_RETENTION_MS;
+    watch.launcherThreadId === null &&
+    now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
 
   /**
    * Whether a launcherless watch can no longer report: the completion webhook,
@@ -796,13 +810,8 @@ export const make = Effect.gen(function* () {
           const watch = current(watchId, incarnation);
           if (watch === undefined || !watch.pendingRuns.includes(runId)) return 0;
           const now = yield* Clock.currentTimeMillis;
-          // A launcherless watch has nothing to wait for once its run is reported.
-          const keep = (next: LaunchWatch) =>
-            save((map) =>
-              next.launcherThreadId === null && next.pendingRuns.length === 0
-                ? map.delete(watchId)
-                : map.set(watchId, next),
-            );
+          // Kept dormant once nothing is owed, so a later send can re-arm it.
+          const keep = (next: LaunchWatch) => save((map) => map.set(watchId, next));
           if (result._tag !== "LauncherGone" && result._tag !== "CallerChanged") {
             // The launcher may have been archived while the step waited; a wake
             // queued on an archived thread would never run.
@@ -1059,7 +1068,7 @@ export const make = Effect.gen(function* () {
 
   // ── public operations ────────────────────────────────────────────────
 
-  const keyOf = (input: LaunchWatchTarget) => {
+  const keyOf = (input: LaunchWatchKey) => {
     const host = normalizeHost(input.host);
     return { host, id: launchWatchId({ ...input, host }) };
   };
@@ -1166,6 +1175,9 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const find: LaunchWatchServiceShape["find"] = (input) =>
+    locked(ensureLoaded).pipe(Effect.map(() => watches.get(keyOf(input).id) ?? null));
+
   const unwatch: LaunchWatchServiceShape["unwatch"] = (input) =>
     Effect.gen(function* () {
       const detached = yield* locked(
@@ -1262,6 +1274,7 @@ export const make = Effect.gen(function* () {
   return LaunchWatchService.of({
     register,
     rearm,
+    find,
     unwatch,
     list,
     listRemote,

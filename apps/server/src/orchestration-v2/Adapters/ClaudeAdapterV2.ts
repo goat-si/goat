@@ -1073,6 +1073,7 @@ export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__goat__list_scheduled_tasks",
   "mcp__goat__goat_thread_list",
   "mcp__goat__goat_thread_wait",
+  "mcp__goat__goat_thread_status",
   "mcp__goat__goat_thread_watch_list",
   "mcp__goat__goat_pending_request_list",
   "mcp__goat__goat_pending_request_read",

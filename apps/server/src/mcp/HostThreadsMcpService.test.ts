@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import type { LaunchWatch } from "./launchWatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -98,6 +99,8 @@ const runService = <A, E>(
     readonly originLabel?: string;
     /** That machine declared at launch that it delivers sends for this one. */
     readonly relaySend?: boolean;
+    /** The caller's launch watch that find returns. */
+    readonly watch?: LaunchWatch;
     readonly hostCall: (
       call: SshRemoteDispatch.SshHostToolCall,
     ) => Effect.Effect<unknown, SshRemoteDispatch.SshRemoteDispatchError>;
@@ -130,6 +133,7 @@ const runService = <A, E>(
     Layer.provide(
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         rearm: (input) => Effect.sync(() => void rearms.push(input)),
+        find: () => Effect.succeed(options.watch ?? null),
       }),
     ),
     Layer.provide(
@@ -180,6 +184,130 @@ const unknownHost = new SshRemoteDispatch.SshRemoteDispatchError({
 });
 
 describe("HostThreadsMcpService", () => {
+  it.effect("re-arms the launcherless watch for a send from outside any thread", () =>
+    Effect.gen(function* () {
+      const outside: McpInvocationScope = {
+        ...scope,
+        thread: undefined,
+        requestNamespace: "client",
+      };
+      const { result, rearms } = yield* runService(
+        {
+          interactionMode: "default",
+          hostCall: () =>
+            Effect.succeed({
+              threadId: "remote-1",
+              messageId: "message-1",
+              runId: "run-9",
+              status: "queued",
+              delivery: "queued",
+            }),
+        },
+        (service) =>
+          service.sendToThread(outside, {
+            host: "box",
+            threadId: ThreadId.make("remote-1"),
+            message: "one more thing",
+          }),
+      );
+      expect(result._tag).toBe("Success");
+      // The launch's webhook watch, if it chose one, follows the follow-up run too.
+      expect(rearms).toEqual([
+        { launcherThreadId: null, host: "box", threadId: "remote-1", runId: "run-9" },
+      ]);
+    }),
+  );
+
+  it.effect("reads an older host's status from one timeline item, with this caller's watch", () =>
+    Effect.gen(function* () {
+      const at = "2026-10-13T01:00:00.000Z";
+      const remoteRun = (runId: string, status: string, startedAt: string | null) => ({
+        runId,
+        ordinal: Number(runId.slice(4)),
+        status,
+        providerInstanceId: "codex",
+        model: "gpt-5",
+        requestedAt: at,
+        startedAt,
+        completedAt: null,
+      });
+      const { result, calls } = yield* runService(
+        {
+          interactionMode: "default",
+          watch: {
+            pendingRuns: ["run-2"],
+            reportedRuns: ["run-1"],
+            notifyWebhook: false,
+            webhookTarget: { type: "named", name: "bot" },
+          } as unknown as LaunchWatch,
+          hostCall: (call) =>
+            call.tool === "goat_thread_status"
+              ? Effect.fail(
+                  new SshRemoteDispatch.SshRemoteDispatchError({
+                    reason: "remote_refused",
+                    message: `GOAT on box ${SshRemoteDispatch.REMOTE_THREAD_STATUS_UNSUPPORTED}.`,
+                  }),
+                )
+              : Effect.succeed({
+                  thread: {
+                    threadId: "remote-1",
+                    projectId: "remote-project",
+                    title: "Fix the flake",
+                    createdBy: "agent",
+                    creationSource: "mcp",
+                    status: "running",
+                    latestRunId: "run-3",
+                    activeRunId: "run-2",
+                    providerInstanceId: "codex",
+                    model: "gpt-5",
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    linkedPullRequest: null,
+                    titleRegeneration: null,
+                    branch: null,
+                    worktreePath: null,
+                    parentThreadId: null,
+                    relationshipToParent: null,
+                    runCount: 3,
+                    itemCount: 4,
+                    pendingRequestCount: 1,
+                    archived: false,
+                    settled: false,
+                    settledAt: null,
+                    snoozed: false,
+                    snoozedUntil: null,
+                    createdAt: at,
+                    updatedAt: at,
+                  },
+                  recentRuns: [
+                    remoteRun("run-3", "queued", null),
+                    remoteRun("run-2", "running", at),
+                  ],
+                  items: [],
+                  nextPosition: null,
+                  hasMore: false,
+                }),
+        },
+        (service) =>
+          service.threadStatus(scope, { host: "box", threadId: ThreadId.make("remote-1") }),
+      );
+      expect(calls.map((call) => [call.tool, call.writes])).toEqual([
+        ["goat_thread_status", false],
+        ["goat_thread_read", false],
+      ]);
+      expect(result._tag === "Success" && result.success).toMatchObject({
+        host: "box",
+        phase: "waiting",
+        terminal: false,
+        run: { runId: "run-2", status: "running", startedAt: at },
+        queuedRunId: "run-3",
+        pendingRequest: { requestId: null, kind: null },
+        lastActivityAt: at,
+        watch: { pendingRunIds: ["run-2"], lastReportedRunId: "run-1", webhook: true },
+      });
+    }),
+  );
+
   it.effect("relays a send to an unreachable host through an origin that declared relaying", () =>
     Effect.gen(function* () {
       const { result, relays, rearms } = yield* runService(

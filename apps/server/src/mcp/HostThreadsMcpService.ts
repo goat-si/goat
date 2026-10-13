@@ -6,6 +6,7 @@ import {
   OrchestratorMcpThreadListResult,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
+  OrchestratorMcpThreadStatusResult,
   OrchestratorMcpThreadUnwatchResult,
   OrchestratorMcpThreadWaitResult,
   OrchestratorMcpThreadWatchListResult,
@@ -16,6 +17,7 @@ import {
   type OrchestratorMcpThreadReadInput,
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadSendRelayed,
+  type OrchestratorMcpThreadStatusInput,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWatch,
   type OrchestratorMcpThreadWatchInput,
@@ -35,6 +37,7 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { assertLiveCaller, readCaller } from "./threadAccess.ts";
+import { statusFromRead } from "./threadStatus.ts";
 
 /**
  * Routes the thread tools by host. A thread id belongs to the environment that
@@ -102,6 +105,7 @@ const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
 const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
 const decodeInterrupt = Schema.decodeUnknownEffect(OrchestratorMcpThreadInterruptResult);
+const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResult);
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
@@ -139,6 +143,14 @@ export interface HostThreadsMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
   ) => Effect.Effect<OrchestratorMcpThreadSendResult, OrchestratorMcpFailure>;
+  /**
+   * Where a thread's current run is, here or on a host, with the caller's own
+   * watch on it. Never waits on the run.
+   */
+  readonly threadStatus: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpThreadStatusInput,
+  ) => Effect.Effect<OrchestratorMcpThreadStatusResult, OrchestratorMcpFailure>;
   readonly interruptThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
@@ -232,19 +244,20 @@ const make = Effect.gen(function* () {
 
   /**
    * A send from a watching thread is followed like its launch: the run it
-   * started or joined is reported when it ends. Bookkeeping must never fail
-   * the send itself.
+   * started or joined is reported when it ends. A send from outside any thread
+   * re-arms the launcherless watch its launch made, so the completion webhook
+   * hears about follow-up runs too. Bookkeeping must never fail the send itself.
    */
   const rearmAfterSend = (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
     result: OrchestratorMcpThreadSendResult,
   ) =>
-    scope.thread === undefined || result.delivery === "relayed"
+    result.delivery === "relayed"
       ? Effect.void
       : launchWatches
           .rearm({
-            launcherThreadId: scope.thread.threadId,
+            launcherThreadId: scope.thread?.threadId ?? null,
             host: input.host,
             threadId: input.threadId,
             runId: result.runId,
@@ -542,6 +555,54 @@ const make = Effect.gen(function* () {
     return { watch: watchView(watch) } satisfies OrchestratorMcpThreadWatchResult;
   });
 
+  const threadStatus: HostThreadsMcpServiceShape["threadStatus"] = Effect.fn(
+    "HostThreadsMcpService.threadStatus",
+  )(function* (scope, input) {
+    const status =
+      input.host === undefined
+        ? yield* local.threadStatus(scope, { threadId: input.threadId })
+        : yield* onHost(
+            scope,
+            {
+              host: input.host,
+              tool: "goat_thread_status",
+              arguments: withoutHost(input),
+              writes: false,
+            },
+            decodeStatus,
+          ).pipe(
+            Effect.catchIf(
+              (error) => error.message.includes(SshRemoteDispatch.REMOTE_THREAD_STATUS_UNSUPPORTED),
+              () =>
+                readThread(scope, {
+                  threadId: input.threadId,
+                  host: input.host,
+                  limit: 1,
+                  runLimit: 2,
+                }).pipe(Effect.map(statusFromRead)),
+            ),
+          );
+    // The watch lives on this machine, whichever machine runs the thread.
+    const watch = yield* launchWatches
+      .find({
+        launcherThreadId: scope.thread?.threadId ?? null,
+        host: input.host,
+        threadId: input.threadId,
+      })
+      .pipe(Effect.mapError(storeFailure));
+    return {
+      ...status,
+      watch:
+        watch === null
+          ? null
+          : {
+              pendingRunIds: [...watch.pendingRuns],
+              lastReportedRunId: watch.reportedRuns.at(-1) ?? null,
+              webhook: watch.notifyWebhook || watch.webhookTarget !== null,
+            },
+    } satisfies OrchestratorMcpThreadStatusResult;
+  });
+
   return HostThreadsMcpService.of({
     listThreads: (scope, input) =>
       input.allHosts === true
@@ -550,6 +611,7 @@ const make = Effect.gen(function* () {
           ? local.listThreads(scope, input)
           : listOnHost(scope, input.host, input),
     readThread,
+    threadStatus,
     waitForThread: (scope, input) => {
       if (input.host === undefined) return local.waitForThread(scope, input);
       const timeoutMs = Math.min(MAX_WAIT_MS, Math.max(1, input.timeoutMs ?? DEFAULT_WAIT_MS));

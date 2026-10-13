@@ -184,6 +184,13 @@ const handlers = {
       return yield* service.interruptThread(scope, input);
     }),
   ),
+  goat_thread_status: McpToolAccess.readsOrReachesHost(reachesHost, (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* HostThreadsMcpService.HostThreadsMcpService;
+      return yield* service.threadStatus(scope, input);
+    }),
+  ),
   goat_thread_watch: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

@@ -41,10 +41,11 @@ launcherless watch only when the completion webhook takes it: the webhook is on 
 chose a target or passed `notifyWebhook: true`, or `completionWebhook.externalLaunches` is set. Otherwise it records
 nothing, as before. Such a watch has `launcherThreadId: null` and stores the client's runtime
 mode ceiling in `ceiling`, so its remote reads never go above what that client was approved for.
-Its reports go only to the webhook, with `launcherThreadId: null` in the payload. It is deleted once
-its run is reported or the thread is gone, because no thread can re-arm or unwatch it. For the same
-reason it is also dropped while its run is still owed once the webhook would no longer post its
-reports, or seven days after it was created.
+Its reports go only to the webhook, with `launcherThreadId: null` in the payload. Once its run is
+reported it stays dormant, and a `goat_thread_send` from outside any thread re-arms it, so follow-up
+runs reach the webhook too. It is deleted when the thread is gone. No thread can unwatch it, so it is
+also dropped while a run is still owed once the webhook would no longer post its reports, or seven
+days after it was last armed.
 `listRemote` leaves it out. `goat_thread_launch` skips a launch that another machine's GOAT forwarded
 (`launchedBy` or `report` set), because the dispatching machine watches that launch itself.
 `SshRemoteDispatch` also forwards `notifyOnCompletion: false` to a remote that declares it, so an

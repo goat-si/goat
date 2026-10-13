@@ -2,6 +2,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import { hostFailure } from "./hostFailure.ts";
+import { statusFromShell } from "./threadStatus.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import {
   CommandId,
@@ -50,6 +51,8 @@ import {
   type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadSendDelivered,
+  type OrchestratorMcpThreadStatusInput,
+  type OrchestratorMcpThreadStatusResult,
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
@@ -193,6 +196,11 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadWaitInput,
   ) => Effect.Effect<OrchestratorMcpThreadWaitResult, OrchestratorMcpFailure>;
+  /** Where a thread's current run is, from its shell; never waits. */
+  readonly threadStatus: (
+    scope: McpInvocationScope,
+    input: Omit<OrchestratorMcpThreadStatusInput, "host">,
+  ) => Effect.Effect<Omit<OrchestratorMcpThreadStatusResult, "watch">, OrchestratorMcpFailure>;
   readonly interruptThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
@@ -3178,6 +3186,29 @@ const make = Effect.gen(function* () {
             ? {}
             : { pendingRequestIds: result.pendingRequestIds }),
         } satisfies OrchestratorMcpThreadWaitResult;
+      }),
+    threadStatus: (scope, input) =>
+      Effect.gen(function* () {
+        yield* requireCapability(scope);
+        const shell = yield* threadManagement
+          .getThreadShell(input.threadId)
+          .pipe(Effect.mapError(threadManagementFailure));
+        if (shell === null || shell.deletedAt !== null) {
+          return yield* failure(
+            "thread_not_found",
+            `Thread ${input.threadId} is no longer available.`,
+          );
+        }
+        const runIds = [
+          ...new Set([shell.activeRunId, shell.latestRunId].filter((id) => id !== null)),
+        ];
+        const runs =
+          runIds.length === 0
+            ? []
+            : (yield* threadManagement
+                .getThreadRecords(input.threadId, ["runs"], { runIds })
+                .pipe(Effect.mapError(threadManagementFailure))).runs;
+        return statusFromShell(shell, runs);
       }),
     interruptThread: (scope, input) =>
       Effect.gen(function* () {
