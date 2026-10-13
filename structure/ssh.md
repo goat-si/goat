@@ -20,6 +20,10 @@ once it is up: `$HOME/.goat`, not the local default.
 `packages/ssh/src/command.ts` builds the `ssh` argv and runs it. `packages/ssh/src/auth.ts` is the
 password-prompt and child-environment helper. `packages/ssh/src/errors.ts` is the tagged errors
 (`SshCommandError`, `SshLaunchError`, `SshPairingError`, and the rest).
+When ssh itself cannot connect (exit 255 with a connect, resolve, or banner timeout), the
+`SshCommandError` message names the alias and the address ssh dialled. `prepareRemoteRuntime`
+passes SSH errors through unchanged, so an unreachable host never reads as a runtime archive
+problem; only an `SshLaunchError` with reason `archive-unavailable` asks for an archive.
 
 ## Remote server
 

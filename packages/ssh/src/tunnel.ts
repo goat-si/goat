@@ -2043,14 +2043,36 @@ const releasesOrderable = (left: string, right: string) => {
   return a[2] === undefined || b[2] === undefined || a[2] === b[2];
 };
 
+/**
+ * SSH failures (an unreachable host, a timeout, rejected authentication) keep their own error
+ * and message, so they never read as a missing runtime archive. Anything else is wrapped with
+ * its message attached.
+ */
 const runtimePreparationError = (cause: unknown) =>
-  cause instanceof SshLaunchError
+  cause instanceof SshLaunchError ||
+  cause instanceof SshCommandError ||
+  cause instanceof SshInvalidTargetError
     ? cause
     : new SshLaunchError({
-        message: "Failed to prepare the SSH runtime archive.",
+        message: `Failed to prepare the SSH runtime archive: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
         stdout: "",
         cause,
       });
+
+/** A failure to read or fetch the archive itself: supplying another archive is the remedy. */
+const archiveSupplyError = (cause: unknown) => {
+  const error = runtimePreparationError(cause);
+  return error instanceof SshLaunchError && error.reason === undefined
+    ? new SshLaunchError({
+        reason: "archive-unavailable",
+        message: error.message,
+        stdout: error.stdout,
+        cause: error.cause,
+      })
+    : error;
+};
 
 export const prepareRemoteRuntime = (
   target: DesktopSshEnvironmentTarget,
@@ -2183,6 +2205,7 @@ export const prepareRemoteRuntime = (
           ? `unsupported-${probe.platform}-${probe.arch}`
           : cliArchiveFileName(version, platformKey);
       return yield* new SshLaunchError({
+        reason: "archive-unavailable",
         message: `Cannot acquire the SSH runtime archive (repo=${CLI_RELEASE_REPOSITORY}, tag=v${version}, asset=${asset}, archive directory=${directory || "<not configured>"}). Configure a local archive directory and use a supported SSH platform, or an explicit release mirror.`,
         stdout: "",
       });
@@ -2191,13 +2214,13 @@ export const prepareRemoteRuntime = (
       bundleDirectory === ""
         ? null
         : yield* readLocalRuntimeArchive(bundleDirectory, version, platformKey, true).pipe(
-            Effect.mapError(runtimePreparationError),
+            Effect.mapError(archiveSupplyError),
           );
     const localArchive =
       bundledArchive !== null || directory === ""
         ? null
         : yield* readLocalRuntimeArchive(directory, version, platformKey).pipe(
-            Effect.mapError(runtimePreparationError),
+            Effect.mapError(archiveSupplyError),
           );
     if (bundledArchive === null && localArchive === null && mirror !== "") {
       yield* Effect.annotateCurrentSpan("t3.runtime.source", "download");
@@ -2210,6 +2233,7 @@ export const prepareRemoteRuntime = (
         (bundleDirectory !== "" && path.resolve(directory) === path.resolve(bundleDirectory))
       ) {
         return yield* new SshLaunchError({
+          reason: "archive-unavailable",
           message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for ${CLI_RELEASE_REPOSITORY} release v${version} or rebuild the packaged archives.`,
           stdout: "",
         });
@@ -2225,6 +2249,7 @@ export const prepareRemoteRuntime = (
               Effect.mapError(
                 (cause) =>
                   new SshLaunchError({
+                    reason: "archive-unavailable",
                     message: `Public HTTPS release is not published and local gh acquisition failed: ${cause.message}`,
                     stdout: "",
                     cause,
@@ -2236,6 +2261,7 @@ export const prepareRemoteRuntime = (
               Effect.mapError(
                 (cause) =>
                   new SshLaunchError({
+                    reason: "archive-unavailable",
                     message: `Public HTTPS release download failed and local gh acquisition failed: ${cause.message}`,
                     stdout: "",
                     cause,
@@ -2243,7 +2269,7 @@ export const prepareRemoteRuntime = (
               ),
             ),
         }),
-        Effect.mapError(runtimePreparationError),
+        Effect.mapError(archiveSupplyError),
       ));
     yield* Effect.annotateCurrentSpan(
       "t3.runtime.acquisition",
@@ -2271,7 +2297,11 @@ export const prepareRemoteRuntime = (
     Effect.mapError((error) =>
       error instanceof SshLaunchError
         ? new SshLaunchError({
-            message: `Cannot prepare GOAT ${runner?.archiveVersion?.trim() || "(node-script runner)"} on ${target.alias}: ${error.message} The existing runner and server have been left unchanged. Supply the requested runtime archive in the local SSH runtime archive directory or a release mirror, then retry.`,
+            message: `Cannot prepare GOAT ${runner?.archiveVersion?.trim() || "(node-script runner)"} on ${target.alias}: ${error.message} The existing runner and server have been left unchanged.${
+              error.reason === "archive-unavailable"
+                ? " Supply the requested runtime archive in the local SSH runtime archive directory or a release mirror, then retry."
+                : ""
+            }`,
             stdout: error.stdout,
             ...(error.reason === undefined ? {} : { reason: error.reason }),
             cause: error,

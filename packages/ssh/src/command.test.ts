@@ -20,7 +20,11 @@ import { SshCommandError } from "./errors.ts";
 
 const encoder = new TextEncoder();
 
-const makeFailedProcess = (input: { readonly stdout: string; readonly stderr?: string }) => {
+const makeFailedProcess = (input: {
+  readonly stdout: string;
+  readonly stderr?: string;
+  readonly exitCode?: number;
+}) => {
   const stdoutStream = Stream.make(encoder.encode(input.stdout));
   const stderrStream = input.stderr ? Stream.make(encoder.encode(input.stderr)) : Stream.empty;
   return ChildProcessSpawner.makeHandle({
@@ -28,7 +32,7 @@ const makeFailedProcess = (input: { readonly stdout: string; readonly stderr?: s
     stdout: stdoutStream,
     stderr: stderrStream,
     all: Stream.empty,
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(input.exitCode ?? 1)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
     stdin: Sink.drain,
@@ -208,6 +212,62 @@ describe("ssh command", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
+  it.effect.each([
+    [
+      "ssh: connect to host 100.127.141.108 port 22: Operation timed out",
+      "Cannot reach devbox over SSH (100.127.141.108:22: Operation timed out). Check the network or VPN connection to that host.",
+    ],
+    [
+      "ssh: Could not resolve hostname devbox.example.com: nodename nor servname provided, or not known",
+      "Cannot reach devbox over SSH (could not resolve devbox.example.com: nodename nor servname provided, or not known). Check the network or VPN connection to that host.",
+    ],
+  ] as const)("names the host when ssh cannot connect: %s", ([stderr, message]) => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeFailedProcess({
+          stdout: "",
+          stderr: `Warning: Permanently added 'devbox'.\n${stderr}\n`,
+          exitCode: 255,
+        }),
+      ),
+    );
+    const layerProcess = Layer.mergeAll(
+      NodeServices.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand(
+          { alias: "devbox", hostname: "devbox.example.com", username: null, port: 2222 },
+          { remoteCommandArgs: ["sh", "-s"] },
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        assert.equal(result.failure.message, message);
+        assert.include(result.failure.stderr, stderr);
+      }
+    }).pipe(Effect.provide(layerProcess));
+  });
+
+  it.effect("keeps a remote command's own exit-255 output", () => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(makeFailedProcess({ stdout: "", stderr: "runner failed\n", exitCode: 255 })),
+    );
+    const layerProcess = Layer.mergeAll(
+      NodeServices.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand({ alias: "devbox", hostname: "devbox", username: null, port: null }),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.equal(result.failure.message, "runner failed");
+    }).pipe(Effect.provide(layerProcess));
+  });
+
   it.effect("fails commands that never finish", () => {
     const spawner = ChildProcessSpawner.make(() => Effect.succeed(makeNeverFinishingProcess()));
     const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
@@ -234,7 +294,10 @@ describe("ssh command", () => {
 
       assert.isTrue(Result.isFailure(result));
       if (Result.isFailure(result)) {
-        assert.include(result.failure.message, "SSH command timed out after 1ms.");
+        assert.equal(
+          result.failure.message,
+          "SSH command to devbox (devbox.example.com:2222) timed out after 1ms.",
+        );
       }
     }).pipe(Effect.provide(layerProcess));
   });
