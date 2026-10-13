@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-09T23:31:10Z",
+  "updatedAt": "2026-10-13T22:13:55Z",
   "compatibility": [
     {
       "driver": "codex",
@@ -40,6 +40,11 @@
         { "range": ">=2026.05.09", "status": "supported" },
         { "range": "<2026.05.09", "status": "unknown" }
       ]
+    },
+    {
+      "driver": "cursorCloud",
+      "t3CodeRange": ">=0.0.46",
+      "ranges": []
     },
     {
       "driver": "grok",
