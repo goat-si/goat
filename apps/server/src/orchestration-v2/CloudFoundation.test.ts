@@ -53,7 +53,11 @@ import {
   fakeCloudDriver,
   fakeCloudInstanceId,
 } from "./testkit/FakeCloudAdapter.ts";
-import { canCheckpoint, cloudFollowUpReason } from "@goat/provider-core/server/cloudTask";
+import {
+  CLOUD_DELIVERY_REJECTED_CODE,
+  canCheckpoint,
+  cloudFollowUpReason,
+} from "@goat/provider-core/server/cloudTask";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 
 it.effect.each([
@@ -348,6 +352,7 @@ it.effect.each([
                       status: "failed",
                       failure: makeProviderFailure({
                         class: "provider_error",
+                        code: CLOUD_DELIVERY_REJECTED_CODE,
                         message: "Follow-up rejected",
                         retryable: false,
                       }),
@@ -387,10 +392,10 @@ it.effect.each([
             providerTurnOrdinal: 2,
           });
           assert.equal(yield* Ref.get(reads), 1);
-          assert.equal(yield* Ref.get(consumes), failedSend ? 0 : 1);
+          assert.equal(yield* Ref.get(consumes), failedSend && !reportedRejection ? 0 : 1);
           const retained =
             yield* sql`SELECT text FROM remote_report_inbox WHERE origin_thread_id = ${threadId}`;
-          assert.equal(retained.length, failedSend ? 1 : 0);
+          assert.equal(retained.length, failedSend && !reportedRejection ? 1 : 0);
           if (!failedSend) {
             const sent = yield* Ref.get(fake.current);
             assert.equal(sent?.providerThread.nativeThreadRef?.nativeId, "native-session-1");

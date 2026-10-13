@@ -16,6 +16,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
+import { CLOUD_DELIVERY_REJECTED_CODE } from "@goat/provider-core/server/cloudTask";
 import {
   makeProviderFailure,
   makeProviderFailureTurnItem,
@@ -294,6 +295,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
           ? makeProviderFailure({
               message: error.detail,
               class: "provider_error",
+              code: error.outcome === "rejected" ? CLOUD_DELIVERY_REJECTED_CODE : null,
               retryable: false,
             })
           : null;
@@ -681,7 +683,10 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
           Effect.catch((error) => {
             const observed = threads.get(thread.id);
             const saved =
-              thread.nativeThreadRef && !observed?.nativeThreadRef ? thread : (observed ?? thread);
+              (thread.nativeThreadRef && !observed?.nativeThreadRef) ||
+              (thread.cloudTask && !observed?.cloudTask)
+                ? thread
+                : (observed ?? thread);
             // A pre-send rejection preserves a known session; a failed acknowledgement is uncertain.
             if (error.outcome === "rejected" && saved.nativeThreadRef && saved.cloudTask)
               return Effect.gen(function* () {

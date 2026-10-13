@@ -69,6 +69,9 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const path = yield* Path.Path;
       const fileSystem = yield* FileSystem.FileSystem;
       const pty = yield* PtyAdapter.PtyAdapter;
+      const processEnvironment = yield* HostProcess.Environment;
+      const homeDirectory = yield* HostProcess.HomeDirectory;
+      const platform = yield* HostProcess.Platform;
       const operations = yield* Effect.gen(function* () {
         return yield* ClaudeCloudCli.ClaudeCloudCli;
       }).pipe(
@@ -87,7 +90,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         const sibling = yield* decodeSiblingSettings(entry?.config ?? {});
         const merged = yield* mergeProviderInstanceEnvironment(
           entry?.environment,
-          yield* HostProcess.Environment,
+          processEnvironment,
         );
         const environment = yield* makeClaudeEnvironment(sibling, merged);
         const forbidden = [
@@ -115,7 +118,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             "The sibling has bundle, Git routing or third-party/API-key routing variables. Use a Claude instance configured for claude.ai cloud login.",
           );
         const binary = yield* resolveClaudeSdkExecutablePath(
-          expandHomePath(sibling.binaryPath, yield* HostProcess.HomeDirectory),
+          expandHomePath(sibling.binaryPath, homeDirectory),
           environment,
         );
         if (isWindowsClaudeLauncherShimPath(binary) || /\.(?:js|mjs|cjs)$/i.test(binary))
@@ -126,6 +129,8 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         return { binary, environment, binding: `claudeCloud:${id}:${home}:${binary}` };
       }).pipe(
         Effect.provideService(Path.Path, path),
+        Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+        Effect.provideService(HostProcess.Platform, platform),
         Effect.mapError((cause) =>
           isCloudError(cause)
             ? cause

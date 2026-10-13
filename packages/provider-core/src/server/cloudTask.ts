@@ -6,6 +6,9 @@ import type {
   RunId,
 } from "@goat/contracts";
 
+/** A refused message delivery leaves an already accepted cloud task intact. */
+export const CLOUD_DELIVERY_REJECTED_CODE = "cloud_delivery_rejected";
+
 export function isCloudExecution(capabilities: OrchestrationV2ProviderCapabilities) {
   return capabilities.sessions.executionLocation === "cloud";
 }

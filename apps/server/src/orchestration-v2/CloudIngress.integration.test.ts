@@ -52,6 +52,7 @@ import {
 import * as TestClock from "effect/testing/TestClock";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as CommandReceipts from "./CommandReceiptStore.ts";
+import { CLOUD_DELIVERY_REJECTED_CODE } from "@goat/provider-core/server/cloudTask";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as ProviderSessions from "./ProviderSessionManager.ts";
 import * as RuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
@@ -1897,6 +1898,7 @@ it.effect.each([
   { outcome: "succeeded", resultBeforeStop: false },
   { outcome: "cancelled", resultBeforeStop: false },
   { outcome: "unknown", resultBeforeStop: false },
+  { outcome: "rejected", resultBeforeStop: false },
   { outcome: "succeeded", resultBeforeStop: true },
   { outcome: "cancelled", resultBeforeStop: true },
 ] as const)(
@@ -2146,14 +2148,15 @@ it.effect.each([
           providerThreadId: captured.providerThread.id,
           providerTurnId: ProviderTurnId.make(`provider-turn:fake-cloud:${captured.attemptId}`),
           runOrdinal: captured.runOrdinal,
-          ...(outcome === "unknown"
+          ...(outcome === "unknown" || outcome === "rejected"
             ? {
                 status: "failed" as const,
                 failureItemOrdinal: 101,
                 failure: {
-                  class: "unknown" as const,
+                  class:
+                    outcome === "rejected" ? ("provider_error" as const) : ("unknown" as const),
                   message: "Observation lost",
-                  code: null,
+                  code: outcome === "rejected" ? CLOUD_DELIVERY_REJECTED_CODE : null,
                   retryable: null,
                 },
               }
@@ -2163,7 +2166,7 @@ it.effect.each([
               }),
           threadDisposition: "reusable",
         };
-        if (outcome === "unknown") {
+        if (outcome === "unknown" || outcome === "rejected") {
           yield* captured.commitCloudTask!({ ...savedTask!, summary: "Last observed summary" });
           yield* fake.publish(terminal);
         } else if (finishing !== null) {
@@ -2177,9 +2180,16 @@ it.effect.each([
         const finished = yield* orchestrator.getThreadProjection(childId);
         assert.equal(
           finished.runs[0]?.status,
-          outcome === "unknown" ? "failed" : outcome === "cancelled" ? "cancelled" : "completed",
+          outcome === "unknown" || outcome === "rejected"
+            ? "failed"
+            : outcome === "cancelled"
+              ? "cancelled"
+              : "completed",
         );
-        assert.equal(finished.providerThreads[0]?.cloudTask?.status, outcome);
+        assert.equal(
+          finished.providerThreads[0]?.cloudTask?.status,
+          outcome === "rejected" ? "running" : outcome,
+        );
         assert.equal(
           finished.messages.filter(
             (message) => message.id === `message:cloud-result:${childRun.id}`,
@@ -2192,7 +2202,9 @@ it.effect.each([
         assert.isFalse(resultBefore.streaming);
         assert.isTrue(
           resultBefore.text.includes(
-            outcome === "unknown" ? "Last observed summary" : "Completed fake task",
+            outcome === "unknown" || outcome === "rejected"
+              ? "Last observed summary"
+              : "Completed fake task",
           ),
         );
         const resultItemBefore = assertCloudResultItem(finished, childRun.id);
@@ -2311,7 +2323,7 @@ it.effect.each([
         for (const view of [statusView, readView, taskView]) {
           assert.equal(view.cloudTask?.url, metadata.url);
           assert.equal(view.cloudTask?.progress, metadata.progress);
-          assert.equal(view.cloudTask?.status, outcome);
+          assert.equal(view.cloudTask?.status, outcome === "rejected" ? "running" : outcome);
           assert.isFalse(Object.hasOwn(view.cloudTask!, "acceptedAppRunId"));
           assert.isFalse(Object.values(view.cloudTask!).includes(undefined));
         }

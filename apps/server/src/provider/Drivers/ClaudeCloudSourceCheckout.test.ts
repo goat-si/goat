@@ -19,7 +19,7 @@ const exists = (path: string) =>
       () => false,
     ),
   );
-const harness = (head = source.sha, dirty = "") => {
+const harness = (head = source.sha, dirty = "", environment: NodeJS.ProcessEnv = {}) => {
   const calls: ProcessRunner.ProcessRunInput[] = [];
   const layer = Layer.mock(ProcessRunner.ProcessRunner)({
     run: (input) =>
@@ -43,7 +43,7 @@ const harness = (head = source.sha, dirty = "") => {
   });
   return {
     calls,
-    layer: layer.pipe(Layer.provideMerge(Layer.succeed(HostProcess.Environment, {}))),
+    layer: layer.pipe(Layer.provideMerge(Layer.succeed(HostProcess.Environment, environment))),
   };
 };
 it.effect(
@@ -120,10 +120,9 @@ it.effect.each([
 it.effect("inherited Git configuration routing is rejected before checkout creation", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const h = harness();
+      const h = harness(source.sha, "", { GIT_CONFIG_COUNT: "1" });
       const error = yield* prepare({ source, projectCwd: "/fixture/project" }).pipe(
         Effect.provide(h.layer),
-        Effect.provideService(HostProcess.Environment, { GIT_CONFIG_COUNT: "1" }),
         Effect.flip,
       );
       expect(error.outcome).toBe("rejected");
