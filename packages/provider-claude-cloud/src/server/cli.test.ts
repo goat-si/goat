@@ -31,11 +31,11 @@ it.effect(
 );
 
 it.effect.each([
-  ["Claude Code v2.1.296\n", "2.1.296"],
-  ["Claude Code nightly\n", null],
+  { output: "Claude Code v2.1.296\n", version: "2.1.296" },
+  { output: "Claude Code nightly\n", version: null },
 ] as const)(
   "normalizes readiness version %s without weakening cloud/auth checks",
-  (output, version) =>
+  ({ output, version }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* makeCliHarness((args) =>
