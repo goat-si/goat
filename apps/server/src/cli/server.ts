@@ -7,6 +7,12 @@ import { Command, GlobalFlag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
 import * as ServerConfig from "../config.ts";
+import { SERVICE_LAUNCHER_CONTEXT_ENV } from "../cloud/serviceProtocol.ts";
+import {
+  acquireServerOwnerLock,
+  launcherContextFromEnvironment,
+  serverOwnerTag,
+} from "../serverOwnerLock.ts";
 import { runServer } from "../server.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 
@@ -23,7 +29,28 @@ const runServerCommand = (
   Effect.gen(function* () {
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveServerConfig(flags, logLevel, options);
-    return yield* runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
+    const environment = yield* HostProcess.Environment;
+    const rawLauncherContext = environment[SERVICE_LAUNCHER_CONTEXT_ENV];
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Held until the server exits, before any layer opens the database.
+        yield* acquireServerOwnerLock({
+          stateDir: config.stateDir,
+          owner: serverOwnerTag({
+            launcherContext: launcherContextFromEnvironment(rawLauncherContext),
+            mode: config.mode,
+          }),
+          serverRuntimeStatePath: config.serverRuntimeStatePath,
+          waitForOwner: rawLauncherContext !== undefined,
+        });
+        return yield* runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
+      }),
+    ).pipe(
+      Effect.catchTags({
+        ServerOwnerConflictError: (error) =>
+          Effect.fail(new CliError.UserError({ cause: error.message })),
+      }),
+    );
   });
 
 /** Bare words can name existing directories, but must not create typo projects. */

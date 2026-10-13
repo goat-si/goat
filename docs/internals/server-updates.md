@@ -37,6 +37,19 @@ shared-memory file. This makes trial migrations reversible without down
 migrations. The snapshot is made once per update and survives launcher restarts;
 replacing it during a retry could capture changes from the failed trial.
 
+Another server can share the same userdata, for example a desktop app whose
+home the service also uses. Every server holds `server-owner.lock` for its
+lifetime, and each acquisition appends its owner to a generation log in that
+file. The launcher copies only while it holds the lock, so a busy lock fails the
+update with `db-owner-busy` before anything is copied, and it records the
+generation with the snapshot. Before restoring, it reads every owner since that
+generation. If any is not this update's launcher or its trial
+(`service-trial:<updateId>`), the snapshot is kept and the reason gains
+`;db-kept-for-other-server`, because restoring would erase that server's writes.
+A rollback that finds the lock busy stays pending and retries, across launcher
+restarts too. Servers older than the lock do not record themselves, so they stay
+invisible to this check.
+
 Rollback stops the trial before restoring. A durable restore marker makes an
 interrupted restore finish before either version boots. Keep the snapshot until
 commit, or until both restoration and the terminal rollback state are durable.
