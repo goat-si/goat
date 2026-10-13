@@ -425,6 +425,45 @@ export const TEXT_RULES: readonly TextRule[] = [
     find: /\bt3-xai-prompt-/g,
     replace: "goat-xai-prompt-",
   },
+  // Installed and operator-facing identities (#111, #112). Their migrations are
+  // hand code that reads the legacy spellings from legacyT3Names.ts.
+  {
+    id: "native-helper-binaries",
+    category: "identities",
+    find: /\bt3(?=-(?:resource-monitor|browser-secret)\b)/g,
+    replace: "goat",
+  },
+  {
+    id: "mobile-font-utilities",
+    category: "identities",
+    find: /(?<=\bfont-)t3(?=-[a-z])/g,
+    replace: "goat",
+    scope: (path) => path.startsWith("apps/mobile/"),
+  },
+  {
+    id: "otlp-service-identity",
+    category: "identities",
+    find: /\bt3code(?=-(?:server|desktop|web)\b)|(?<="service\.namespace": "|"stringValue":")t3code(?=")|(?<="service\.runtime": ")t3(?=-(?:server|web)")/g,
+    replace: "goat",
+    scope: (path) =>
+      /^(?:apps\/server\/src\/(?:config|persistence\/Sqlite|serverLogger\.test)|apps\/desktop\/src\/app\/DesktopObservability(?:\.test)?|apps\/web\/src\/observability\/clientTracing)\.ts$/.test(
+        path,
+      ),
+  },
+  {
+    id: "ssh-runtime-span-attributes",
+    category: "identities",
+    find: /(?<=")t3(?=\.runtime\.)/g,
+    replace: "goat",
+    scope: (path) => path.startsWith("packages/ssh/"),
+  },
+  {
+    id: "agent-scope-units",
+    category: "identities",
+    find: /(?<=app-)t3code(?=-agents\.slice)|(?<=`)t3code(?=-\$\{name\})/g,
+    replace: "goat",
+    scope: (path) => path === "apps/server/src/process/agentScope.ts",
+  },
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
@@ -757,7 +796,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "shipped-native-binaries",
-    pattern: /t3-(?:resource-monitor|browser-secret|hyprland-snap-shot|kde-snap-shot)/g,
+    pattern: /t3-(?:hyprland-snap-shot|kde-snap-shot)/g,
     reason:
       "Installed native executable names require coordinated packaging and upgrade discovery (D16).",
   },
@@ -775,8 +814,11 @@ export const KEEP_RULES: readonly KeepRule[] = [
     id: "observability-services",
     pattern:
       /t3code-(?:desktop|server|web|mobile)|t3-(?:server|web)|(?<="service.namespace": ")t3code/g,
-    reason:
-      "Operator dashboard service names remain stable; coordinate an observability follow-up.",
+    scope: (path) =>
+      /(?:relayTracing|apps\/web\/src\/lib\/runtime|apps\/mobile\/src\/features\/observability\/tracing)\./.test(
+        path,
+      ),
+    reason: "Spans sent to the T3 Connect relay keep the relay dataset's service names.",
   },
   {
     id: "legacy-profile-storage",
@@ -851,7 +893,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "mobile-native",
     pattern:
-      /font-t3-[a-z]+|t3-(?:source-text|agent-alert|agent-activity|agent-notifications|composer-editor|markdown-text|native-controls|review-diff|subscription-widget|terminal|widget-expiry)|\bT3(?:SourceText|MenuDismissTouchGate|WorkspaceNavigation|PresentationSources|ComposerEditor|KeyboardCommands|NativeControls|MarkdownText|ReviewDiff|Terminal|SelectableMarkdownText|WidgetExpiry|AgentNotifications|DeviceStream|PreviewStream|Showcase|Demo|Mark|FrostedCutout|LayoutMetrics|NativeFile|NativePresentation|NativeVideo|WorkspaceOrientation|ContextChip)\w*|react-native-screens-[\d.]+-t3\.\d+|t3_terminal\w*|t3(?:agentnotifications|composereditor|markdowntext|nativecontrols|reviewdiff|terminal|widgetexpiry)/g,
+      /t3-(?:source-text|agent-alert|agent-activity|agent-notifications|composer-editor|markdown-text|native-controls|review-diff|subscription-widget|terminal|widget-expiry)|\bT3(?:SourceText|MenuDismissTouchGate|WorkspaceNavigation|PresentationSources|ComposerEditor|KeyboardCommands|NativeControls|MarkdownText|ReviewDiff|Terminal|SelectableMarkdownText|WidgetExpiry|AgentNotifications|DeviceStream|PreviewStream|Showcase|Demo|Mark|FrostedCutout|LayoutMetrics|NativeFile|NativePresentation|NativeVideo|WorkspaceOrientation|ContextChip)\w*|react-native-screens-[\d.]+-t3\.\d+|t3_terminal\w*|t3(?:agentnotifications|composereditor|markdowntext|nativecontrols|reviewdiff|terminal|widgetexpiry)/g,
     reason:
       "Mobile native module, view and font names; renaming needs a native build host (plan D18).",
   },

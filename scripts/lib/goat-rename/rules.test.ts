@@ -198,11 +198,41 @@ describe("wp9 compatibility scopes", () => {
     ).toEqual([]);
     expect(
       findResidue(
-        "apps/desktop/a.ts",
-        't3-resource-monitor t3-browser-secret t3code-desktop "service.namespace": "t3code"',
+        "apps/server/src/cloud/relayTracing.ts",
+        't3code-server "service.namespace": "t3code"',
         KEEP_RULES,
       ),
     ).toEqual([]);
+    expect(
+      findResidue("apps/desktop/a.ts", "t3-resource-monitor t3code-desktop", KEEP_RULES),
+    ).toHaveLength(1);
+  });
+
+  it("renames installed and operator identities on an upstream sync", () => {
+    const rename = (path: string, text: string) => applyTextRules(path, text, TEXT_RULES).text;
+    expect(rename("scripts/a.ts", "t3-resource-monitor t3-browser-secret.exe")).toBe(
+      "goat-resource-monitor goat-browser-secret.exe",
+    );
+    expect(rename("apps/mobile/src/a.tsx", 'className="font-t3-bold text-sm"')).toBe(
+      'className="font-goat-bold text-sm"',
+    );
+    expect(
+      rename(
+        "apps/server/src/config.ts",
+        'serviceName: "t3code-server", "service.namespace": "t3code", "service.runtime": "t3-server"',
+      ),
+    ).toBe(
+      'serviceName: "goat-server", "service.namespace": "goat", "service.runtime": "goat-server"',
+    );
+    expect(rename("packages/ssh/src/tunnel.ts", '"t3.runtime.source"')).toBe(
+      '"goat.runtime.source"',
+    );
+    expect(
+      rename(
+        "apps/server/src/process/agentScope.ts",
+        '"app-t3code-agents.slice" `t3code-${name}-x.scope`',
+      ),
+    ).toBe('"app-goat-agents.slice" `goat-${name}-x.scope`');
   });
 });
 
