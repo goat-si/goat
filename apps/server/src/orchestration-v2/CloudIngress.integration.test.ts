@@ -75,7 +75,6 @@ import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as Registry from "./ProviderAdapterRegistry.ts";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { makeFakeCloudAdapter } from "./testkit/FakeCloudAdapter.ts";
@@ -484,6 +483,8 @@ it.effect("reattaches a fully running SQLite cloud crash snapshot once without r
       assert.equal(Option.getOrThrow(yield* outbox.get(reattach.id)).status, "succeeded");
     }).pipe(Effect.provide(recovery));
   }).pipe(Effect.scoped),
+);
+
 const cursorSource = {
   repository: "https://github.com/fixture/repo",
   branch: "published",
