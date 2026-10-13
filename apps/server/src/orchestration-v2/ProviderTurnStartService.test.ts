@@ -18,7 +18,9 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -37,6 +39,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -136,9 +139,23 @@ it("does not commit running state when inherited background routing cannot be re
   );
 
   await Effect.gen(function* () {
-    const error = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+    // A worktree removal holds the lease; the turn must not recreate the
+    // checkout until that removal is done with it.
+    const held = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const removal = yield* withWorkspaceLease(
+      "/tmp/missing-provider-turn-start-worktree",
+      Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(held);
+    const start = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
       .start({ threadId, runId })
-      .pipe(Effect.flip);
+      .pipe(Effect.flip, Effect.forkChild);
+    for (let turn = 0; turn < 50; turn++) yield* Effect.yieldNow;
+    expect(createWorktree).not.toHaveBeenCalled();
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(removal);
+    const error = yield* Fiber.join(start);
 
     expect(error._tag).toBe("ProviderTurnStartError");
     expect(projectionReadCount).toBe(2);
