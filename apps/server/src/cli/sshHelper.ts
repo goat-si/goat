@@ -31,6 +31,7 @@ import {
   RuntimeDrainResult,
 } from "@goat/contracts";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
+import * as HostProcess from "@goat/shared/HostProcess";
 import {
   encodePowerShellCommand,
   WINDOWS_DETACHED_SPAWN_POWERSHELL,
@@ -740,6 +741,8 @@ export interface SshRuntimeSupervisorInput {
    */
   readonly executable?: string | undefined;
   readonly previousExecutable?: string | undefined;
+  /** The host's platform; Windows starts replacements outside the SSH session's job. */
+  readonly platform?: NodeJS.Platform | undefined;
   readonly exitTimeoutMs: number;
   readonly readyTimeoutMs: number;
   readonly logFile: string;
@@ -835,7 +838,7 @@ export const superviseSshRuntimeReplacement = async (
     ];
     const env = { T3CODE_NO_BROWSER: "1", ...extraEnv };
     let pid: number | undefined;
-    if (process.platform === "win32") {
+    if (input.platform === "win32") {
       pid =
         executable === undefined
           ? undefined
@@ -948,25 +951,28 @@ const supervise = Command.make("supervise", {
   resultFile: Flag.String("result"),
 }).pipe(
   Command.withHandler(({ resultFile, executable, previousExecutable, ...input }) =>
-    Effect.promise(async () => {
-      let result: SshRuntimeSupervisorResult;
-      try {
-        result = await superviseSshRuntimeReplacement({
-          ...input,
-          executable: Option.getOrUndefined(executable),
-          previousExecutable: Option.getOrUndefined(previousExecutable),
-        });
-      } catch (cause) {
-        result = {
-          status: "failed",
-          reason: cause instanceof Error ? cause.message : "Replacement supervisor failed.",
-        };
-      }
-      const line = `${result.status} ${"pid" in result ? result.pid : 0} ${"version" in result ? result.version : "-"}\n`;
-      writeAtomically(resultFile, line);
-      if ("reason" in result) process.stderr.write(result.reason + "\n");
-      process.stdout.write(line);
-    }),
+    Effect.flatMap(HostProcess.Platform, (platform) =>
+      Effect.promise(async () => {
+        let result: SshRuntimeSupervisorResult;
+        try {
+          result = await superviseSshRuntimeReplacement({
+            ...input,
+            executable: Option.getOrUndefined(executable),
+            previousExecutable: Option.getOrUndefined(previousExecutable),
+            platform,
+          });
+        } catch (cause) {
+          result = {
+            status: "failed",
+            reason: cause instanceof Error ? cause.message : "Replacement supervisor failed.",
+          };
+        }
+        const line = `${result.status} ${"pid" in result ? result.pid : 0} ${"version" in result ? result.version : "-"}\n`;
+        writeAtomically(resultFile, line);
+        if ("reason" in result) process.stderr.write(result.reason + "\n");
+        process.stdout.write(line);
+      }),
+    ),
   ),
 );
 
