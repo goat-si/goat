@@ -132,7 +132,8 @@ Only the pairing and MCP-session helpers pass `keepExistingRunner`. It never ins
 or replaces a runtime.
 
 An archive upload pipes the bytes into ssh's stdin. If the remote reader exits early, only that
-upload fails, as an `SshLaunchError` carrying the remote's stderr and exit code. The patched
+upload fails, as an `SshLaunchError` carrying the remote's stderr and exit code. A lost connection
+or a timeout stays the `SshCommandError` that names the host. The patched
 `@effect/platform-node-shared` spawner keeps an `error` listener on every child stdin, so a write
 still queued when ssh exits cannot crash the process with `EPIPE`.
 

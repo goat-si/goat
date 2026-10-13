@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -85,5 +87,62 @@ describe("SSH runtime preparation errors", () => {
         assert.include(result.failure.message, ARCHIVE_ADVICE);
       }
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // The archive is found locally, then the upload command exits with `exitCode`.
+  const prepareWithFailedUpload = (exitCode: number, stderr: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const archiveDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-upload-" });
+      // Without a sidecar the file is trusted as a user-supplied local build.
+      yield* fs.writeFile(
+        `${archiveDirectory}/${cliArchiveFileName(ARCHIVE.archiveVersion, "linux-x64")}`,
+        new Uint8Array(64),
+      );
+      return yield* Effect.result(
+        prepareRemoteRuntime(uploadTarget, {}, { ...ARCHIVE, archiveDirectory }).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) =>
+              Effect.succeed(
+                command._tag === "StandardCommand" && command.args.includes("-c")
+                  ? makeExitedProcess(exitCode, stderr)
+                  : makeSuccessfulProcess('{"platform":"linux","arch":"x64","ready":false}'),
+              ),
+            ),
+          ),
+        ),
+      );
+    });
+
+  it.effect("reports an upload the remote stopped reading as a failed upload", () =>
+    Effect.gen(function* () {
+      const result = yield* prepareWithFailedUpload(
+        1,
+        "tar: write error: No space left on device\n",
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshLaunchError);
+        assert.isUndefined(result.failure.reason);
+        assert.include(result.failure.message, "Uploading the runtime archive failed (exit 1)");
+        assert.include(result.failure.message, "No space left on device");
+        assert.notInclude(result.failure.message, ARCHIVE_ADVICE);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps a connection lost during upload as an SSH connection error", () =>
+    Effect.gen(function* () {
+      const result = yield* prepareWithFailedUpload(
+        255,
+        "ssh: connect to host 100.127.141.108 port 22: Connection refused\n",
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        assert.include(result.failure.message, "Cannot reach devbox over SSH");
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
