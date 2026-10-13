@@ -32,6 +32,10 @@ import {
 } from "@goat/contracts";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import {
+  encodePowerShellCommand,
+  WINDOWS_DETACHED_SPAWN_POWERSHELL,
+} from "@goat/shared/windowsHostProcess";
+import {
   compareRuntimeProtocols,
   ownRuntimeProtocolRanges,
   SSH_RUNTIME_PROTOCOL_VERSION,
@@ -730,6 +734,12 @@ export interface SshRuntimeSupervisorInput {
   /** Launch identities recorded for the ownership checks, as the launch script writes them. */
   readonly identity: string;
   readonly previousIdentity: string;
+  /**
+   * On a Windows host, the release executables behind `runnerFile` and `previousRunnerFile`:
+   * the runners are shell scripts there, and Windows starts the executable itself.
+   */
+  readonly executable?: string | undefined;
+  readonly previousExecutable?: string | undefined;
   readonly exitTimeoutMs: number;
   readonly readyTimeoutMs: number;
   readonly logFile: string;
@@ -738,6 +748,40 @@ export interface SshRuntimeSupervisorInput {
 export type SshRuntimeSupervisorResult =
   | { readonly status: "replaced" | "rolled-back"; readonly pid: number; readonly version: string }
   | { readonly status: "old-alive" | "failed"; readonly reason: string };
+
+/**
+ * Starts a program outside the SSH session's job object, which Windows OpenSSH terminates with
+ * the session, and returns its PID. See {@link WINDOWS_DETACHED_SPAWN_POWERSHELL}.
+ */
+const spawnWindowsDetached = (
+  argv: ReadonlyArray<string>,
+  logFile: string,
+  env: Readonly<Record<string, string>>,
+) => {
+  const result = NodeChildProcess.spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL),
+    ],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GOAT_SPAWN_ARGS: argv.join("\n"),
+        GOAT_SPAWN_LOG: logFile,
+        GOAT_SPAWN_ENV: Object.entries(env)
+          .map(([name, value]) => `${name}=${value}`)
+          .join("\n"),
+      },
+    },
+  );
+  const pid = Number.parseInt(result.stdout?.trim() ?? "", 10);
+  return result.status === 0 && Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+};
 
 /**
  * Swaps the drained server for `targetVersion` on the same port. It runs detached from the SSH
@@ -775,23 +819,38 @@ export const superviseSshRuntimeReplacement = async (
 
   const start = async (
     runner: string,
+    executable: string | undefined,
     version: string,
     identity: string,
     extraEnv: Record<string, string> = {},
   ) => {
-    const log = NodeFS.openSync(input.logFile, "a");
-    const child = NodeChildProcess.spawn(
-      runner,
-      ["serve", "--host", "127.0.0.1", "--port", String(input.port), "--base-dir", input.baseDir],
-      {
+    const args = [
+      "serve",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(input.port),
+      "--base-dir",
+      input.baseDir,
+    ];
+    const env = { T3CODE_NO_BROWSER: "1", ...extraEnv };
+    let pid: number | undefined;
+    if (process.platform === "win32") {
+      pid =
+        executable === undefined
+          ? undefined
+          : spawnWindowsDetached([executable, ...args], input.logFile, env);
+    } else {
+      const log = NodeFS.openSync(input.logFile, "a");
+      const child = NodeChildProcess.spawn(runner, args, {
         detached: true,
         stdio: ["ignore", log, log],
-        env: { ...process.env, T3CODE_NO_BROWSER: "1", ...extraEnv },
-      },
-    );
-    NodeFS.closeSync(log);
-    child.unref();
-    const pid = child.pid;
+        env: { ...process.env, ...env },
+      });
+      NodeFS.closeSync(log);
+      child.unref();
+      pid = child.pid;
+    }
     if (pid === undefined) return undefined;
     const deadline = Date.now() + input.readyTimeoutMs;
     while (Date.now() < deadline && processExists(pid)) {
@@ -826,9 +885,13 @@ export const superviseSshRuntimeReplacement = async (
     return undefined;
   };
 
-  const started = await start(input.runnerFile, input.targetVersion, input.identity, {
-    [SSH_REPLACEMENT_ID_ENV]: replacementId,
-  });
+  const started = await start(
+    input.runnerFile,
+    input.executable,
+    input.targetVersion,
+    input.identity,
+    { [SSH_REPLACEMENT_ID_ENV]: replacementId },
+  );
   if (started !== undefined) {
     NodeFS.rmSync(backup, { recursive: true, force: true });
     NodeFS.rmSync(input.previousRunnerFile, { force: true });
@@ -849,7 +912,12 @@ export const superviseSshRuntimeReplacement = async (
   NodeFS.copyFileSync(input.previousRunnerFile, `${input.runnerFile}.restore`);
   NodeFS.chmodSync(`${input.runnerFile}.restore`, 0o700);
   NodeFS.renameSync(`${input.runnerFile}.restore`, input.runnerFile);
-  const restored = await start(input.runnerFile, input.previousVersion, input.previousIdentity);
+  const restored = await start(
+    input.runnerFile,
+    input.previousExecutable,
+    input.previousVersion,
+    input.previousIdentity,
+  );
   if (restored === undefined)
     return {
       status: "failed",
@@ -872,16 +940,22 @@ const supervise = Command.make("supervise", {
   previousVersion: Flag.String("previous-version"),
   identity: Flag.String("identity"),
   previousIdentity: Flag.String("previous-identity"),
+  executable: Flag.String("executable").pipe(Flag.optional),
+  previousExecutable: Flag.String("previous-executable").pipe(Flag.optional),
   exitTimeoutMs: Flag.Int("exit-timeout-ms").pipe(Flag.withDefault(60_000)),
   readyTimeoutMs: Flag.Int("ready-timeout-ms").pipe(Flag.withDefault(60_000)),
   logFile: Flag.String("log"),
   resultFile: Flag.String("result"),
 }).pipe(
-  Command.withHandler(({ resultFile, ...input }) =>
+  Command.withHandler(({ resultFile, executable, previousExecutable, ...input }) =>
     Effect.promise(async () => {
       let result: SshRuntimeSupervisorResult;
       try {
-        result = await superviseSshRuntimeReplacement(input);
+        result = await superviseSshRuntimeReplacement({
+          ...input,
+          executable: Option.getOrUndefined(executable),
+          previousExecutable: Option.getOrUndefined(previousExecutable),
+        });
       } catch (cause) {
         result = {
           status: "failed",
