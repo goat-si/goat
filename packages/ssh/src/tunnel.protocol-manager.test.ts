@@ -102,6 +102,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isFalse(events.some((event) => event.type === "stop"));
           }).pipe(Effect.provide(layer), Effect.scoped);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      // Each case runs two full ensure cycles with a drained replacement; on loaded CI runners
+      // they take about 50 s, too close to the 60 s default.
+      120_000,
     );
 
     it.live("reconciles the cached forward after pairing fails during the first ensure", () =>
