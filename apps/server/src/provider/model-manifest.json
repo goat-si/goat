@@ -33,6 +33,15 @@
       ]
     },
     {
+      "driver": "claudeCloud",
+      "t3CodeRange": ">=0.0.46",
+      "recommendedRange": ">=2.1.296",
+      "ranges": [
+        { "range": ">=2.1.296", "status": "supported" },
+        { "range": "<2.1.296", "status": "unknown" }
+      ]
+    },
+    {
       "driver": "cursor",
       "t3CodeRange": ">=0.0.42",
       "recommendedRange": ">=2026.05.09",

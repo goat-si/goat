@@ -2208,7 +2208,10 @@ it.effect.each([
           ),
         );
         const resultItemBefore = assertCloudResultItem(finished, childRun.id);
-        if (outcome !== "unknown") {
+        if (outcome === "unknown" || outcome === "rejected") {
+          assert.notInclude(resultItemBefore.text, "Pull request:");
+          assert.notInclude(resultItemBefore.text, "Branch:");
+        } else {
           assert.include(
             resultItemBefore.text,
             "Pull request: https://github.com/acme/repo/pull/1",
