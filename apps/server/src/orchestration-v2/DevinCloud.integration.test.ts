@@ -434,6 +434,15 @@ it.effect("persists real Devin relay results and late metadata through manager a
       assert.equal(result.length, 1);
       assert.include(result[0]!.text, "Verified source.");
       assert.include(result[0]!.text, "https://github.com/example/project/pull/12");
+      const resultItems = settled.turnItems.filter(
+        (item) => item.runId === run.id && item.type === "assistant_message",
+      );
+      assert.equal(resultItems.length, 1);
+      assert.equal(resultItems[0]!.id, `turn-item:cloud-result:${run.id}`);
+      assert.deepEqual(
+        resultItems.map((item) => (item.type === "assistant_message" ? item.text : null)),
+        [result[0]!.text],
+      );
       assert.equal(providerThread.nativeThreadRef?.ordinal, 1);
       assert.equal(providerThread.cloudTask?.status, "succeeded");
       assert.equal(providerThread.cloudTask?.prUrl, "https://github.com/example/project/pull/12");
@@ -464,6 +473,10 @@ it.effect("persists real Devin relay results and late metadata through manager a
       assert.deepEqual(
         refreshed.messages.filter((message) => message.id === result[0]!.id),
         result,
+      );
+      assert.deepEqual(
+        refreshed.turnItems.filter((item) => item.id === resultItems[0]!.id),
+        resultItems,
       );
       assert.equal(peer.methods.filter((method) => method === "session/new").length, 1);
       assert.equal(peer.methods.filter((method) => method === "session/prompt").length, 1);
@@ -602,6 +615,21 @@ it.effect(
           (message) => message.id === `message:cloud-result:${run.id}`,
         );
         assert.equal(result.length, 1);
+        assert.include(result[0]!.text, savedSummary);
+        const resultItems = settled.turnItems.filter(
+          (item) => item.runId === run.id && item.type === "assistant_message",
+        );
+        assert.equal(resultItems.length, 1);
+        assert.equal(resultItems[0]!.id, `turn-item:cloud-result:${run.id}`);
+        assert.deepEqual(
+          resultItems.map((item) => (item.type === "assistant_message" ? item.text : null)),
+          [result[0]!.text],
+        );
+        assert.isFalse(
+          settled.turnItems.some(
+            (item) => item.type === "assistant_message" && item.text.includes("Historical replay"),
+          ),
+        );
         const late = yield* orchestrator
           .streamStoredEventsFrom({ threadId, eventType: "provider-thread.updated" })
           .pipe(
@@ -627,6 +655,10 @@ it.effect(
         assert.deepEqual(
           refreshed.messages.filter((message) => message.id === result[0]!.id),
           result,
+        );
+        assert.deepEqual(
+          refreshed.turnItems.filter((item) => item.id === resultItems[0]!.id),
+          resultItems,
         );
         assert.equal(peer.methods.filter((method) => method === "session/load").length, 1);
         for (const method of [
