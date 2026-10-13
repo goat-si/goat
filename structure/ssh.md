@@ -45,14 +45,67 @@ Remembered launch files whose PID has exited are stale and do not block attachin
 authority either, because the launch script requires its PID file to name the live PID.
 
 Desktop and agent dispatch both leave the server running when they disconnect
-(`leaveRemoteServerRunning`). The stop script and the replacement path signal a server only after
-its `/.well-known/t3/activity` answers `idle` for that PID. `busy` or no answer leaves it
-running. A startup refresh replaces a
-compatible runtime only when it is older on the same release train: `0.1.0-dev.*` and
-`0.1.0-nightly.*` have no meaningful SemVer order, so the client attaches instead
-(`releasesOrderable` in `packages/ssh/src/tunnel.ts`).
+(`leaveRemoteServerRunning`). The explicit stop script signals a server only after its
+`/.well-known/t3/activity` answers `idle` for that PID. `busy` or no answer leaves it running.
+No client signals a server to replace it; see [Replacement](#replacement).
+
+Protocol ranges decide compatibility. The descriptor advertises `protocol: {ssh, orchestration}`
+as `{min, max}` ranges, and a client attaches when both overlap its own.
+`compareRuntimeProtocols` in `packages/shared/src/sshRuntimeProtocol.ts` is the one comparator.
+It answers `compatible`, `update-required`, `client-too-old` or `unknown`. The TypeScript
+client and the launch script both use it, the script through `__ssh-helper compat` in
+`apps/server/src/cli/sshHelper.ts`. A server that advertises only the two integers is a point
+range. Only a server with neither (`unknown`) falls back to matching the exact release.
+`serverVersion` is informational.
 
 > Decision record: [ADR-0012](decisions/ADR-0012-shared-ssh-runtime.md)
+
+### Replacement
+
+A server is replaced only through its own drain. The descriptor of a server that can drain carries
+`capabilities.drainRestart` and an `instanceId`, which is new for every start. A server without
+them is attach-only: no client replaces or signals it. If such a server is compatible, the
+client attaches. If it is incompatible, the launch fails and asks the user to stop it.
+
+The launch script holds the host replacement lock and calls `__ssh-helper drain`. That helper
+sends `POST /.well-known/goat/runtime/drain` with `expectedInstanceId` and the target version. The
+server accepts it only from loopback, with the secret from `<userdata>/runtime-control.token`
+(mode `0600`, new every start). A request that names another start gets `instance-changed`.
+
+While it drains, `RuntimeAdmission` (`apps/server/src/runtimeAdmission.ts`) makes
+`Orchestrator.dispatch` refuse new work with `ServerDrainingError`. That covers clients, MCP,
+scheduled tasks and channels alike. Continuations, steering into running work, and interrupts
+still pass.
+
+Every client that subscribed to the lifecycle stream with `runtimeDrain: true` receives
+`runtimeDrain` events. Older clients never opt in, so they never have to decode the event.
+
+`RuntimeDrain` (`apps/server/src/runtimeDrain.ts`) waits until no admitted dispatch is in flight
+and projections report `idle`, or until the grace window ends. The window is 60 s by default and
+at most 300 s. What happens next depends on the user's confirmation:
+
+- Unconfirmed, an expired window cancels the drain, and the server admits turns again. The client
+  reports a `busy` pending replacement and retries later.
+- With `confirmReplacement` (the request's `force`), the drain completes at the deadline.
+- On completion the server answers `drained` and sends itself `SIGTERM`. Normal shutdown
+  persists restart continuations, and the successor's startup recovery restores those threads.
+
+An automatic refresh of an older compatible runtime drains only a server that answered `idle`, so
+its retries never hold up new turns. An incompatible runtime, which the client cannot use at all,
+drains for the full window.
+
+After `drained`, the script runs `__ssh-helper supervise` under `nohup` so a dropped SSH
+session cannot strand the host. The supervisor:
+
+1. Waits for the old PID to exit, then backs up `statev2.sqlite`.
+2. Starts the new runner on the same port and requires a handshake: a descriptor with the target
+   version, a new `instanceId`, and compatible ranges.
+3. On failure, stops only the child it started and restores the database and the previous
+   `run-t3.sh`. Then it starts the previous version (rollback).
+
+After a rollback to a compatible version, the client attaches to it.
+
+> Decision record: [ADR-0013](decisions/ADR-0013-drain-replacement.md)
 
 The desktop app is a second caller of the same package. `apps/desktop/src/ssh/DesktopSshEnvironment.ts`
 discovers hosts and ensures an environment. The server-side caller used by agents is

@@ -89,7 +89,9 @@ Remote servers can outlive several client releases. Clients must use advertised
 capabilities and handle their absence, rather than assume their own version
 describes the server. Process replacement belongs to the launcher's
 [update protocol](./server-updates.md); the connection runtime handles the
-resulting disconnect.
+resulting disconnect. An SSH-managed server is replaced only by draining and
+stopping itself ([SSH replacement](../../structure/ssh.md#replacement)); a client
+never signals it to make way for a new version.
 
 ### Desktop without a local environment
 

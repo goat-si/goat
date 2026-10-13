@@ -250,7 +250,11 @@
         "apps/server/src/device/SshDeviceHost.ts",
         "apps/server/src/mcp/toolkits/ssh/tools.ts",
         "apps/server/src/sshRemote/remoteBrowse.ts",
-        "apps/server/src/sshRemote/SshWorkspaceSync.ts"
+        "apps/server/src/sshRemote/SshWorkspaceSync.ts",
+        "apps/server/src/cli/sshHelper.ts",
+        "apps/server/src/runtimeAdmission.ts",
+        "apps/server/src/runtimeDrain.ts",
+        "packages/shared/src/sshRuntimeProtocol.ts"
       ]
     },
     {

@@ -184,12 +184,19 @@ check with:
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
-After an app update, GOAT moves the host's server to the app's version when no
-agent work is running there. This applies to servers it launched and to servers
-left by older GOAT builds. If the old server still works with the app, GOAT
-keeps using it and replaces it once it is idle. If it does not, the connection
-waits and says the server will be replaced when its current work finishes. GOAT
-retries in the background in both cases. GOAT never replaces a server that is
+After an app update, GOAT moves the host's server to the app's version. The
+server stops taking new messages and gives running agent work up to a minute to
+finish. Every app connected to it shows that it is restarting. It then restarts
+on the new version, and any work it interrupted continues there. If work is still
+running after that minute, the server keeps going as before, the connection
+says it will be replaced when its current work finishes, and GOAT retries in the
+background. If the old server still works with the app, GOAT keeps using it and
+only starts this once it is idle. If the new version fails to start, GOAT puts
+the previous one back.
+
+A server from a GOAT release that cannot restart itself this way is never
+replaced. GOAT keeps using it if it works with the app; otherwise the error asks
+you to stop it on the host and reconnect. GOAT never replaces a server that is
 newer than the app; update the app instead. If GOAT cannot confirm that it
 launched a server, it leaves it running and the error names the process to stop
 before you reconnect. When two computers update the same host at once, the
