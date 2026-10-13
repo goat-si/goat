@@ -12,7 +12,7 @@ it.effect(
       Effect.gen(function* () {
         const h = yield* makeCliHarness();
         expect(yield* h.service.readiness(LOGIN, "/fixture/repo")).toEqual({
-          version: "2.1.296 (Claude Code)",
+          version: "2.1.296",
         });
         expect(h.starts).toEqual([]);
         expect(h.commands.map((command) => command.args)).toEqual([
@@ -26,6 +26,28 @@ it.effect(
               command.command === LOGIN.binary && command.options.env === LOGIN.environment,
           ),
         ).toBe(true);
+      }),
+    ),
+);
+
+it.effect.each([
+  ["Claude Code v2.1.296\n", "2.1.296"],
+  ["Claude Code nightly\n", null],
+] as const)(
+  "normalizes readiness version %s without weakening cloud/auth checks",
+  (output, version) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness((args) =>
+          args[0] === "--version" ? { code: 0, stdout: output } : defaultReply(args),
+        );
+        expect(yield* h.service.readiness(LOGIN, "/fixture/repo")).toEqual({ version });
+        expect(h.commands.map((command) => command.args)).toEqual([
+          ["--version"],
+          ["--help"],
+          ["auth", "status"],
+        ]);
+        expect(h.starts).toEqual([]);
       }),
     ),
 );

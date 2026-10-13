@@ -21,6 +21,8 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { ClaudeCloudDriver } from "./ClaudeCloudDriver.ts";
+import { BUNDLED_MODEL_MANIFEST } from "../ModelManifest.ts";
+import { applyProviderCompatibility } from "../providerCompatibility.ts";
 
 const INSTANCE = ProviderInstanceId.make("cloud-work");
 const SIBLING = ProviderInstanceId.make("account-work");
@@ -134,6 +136,11 @@ it.effect(
         expect(snapshot.driver).toBe("claudeCloud");
         expect(snapshot.executionLocation).toBe("cloud");
         expect(snapshot.status).toBe("ready");
+        expect(snapshot.version).toBe("2.1.296");
+        expect(
+          applyProviderCompatibility(snapshot, [], BUNDLED_MODEL_MANIFEST.compatibility)
+            .compatibilityAdvisory?.status,
+        ).toBe("supported");
         expect(snapshot.models.map((model) => model.slug)).toEqual(["cloud-default"]);
         const auth = h.commands.find((command) => command.args[0] === "auth")!;
         expect(auth.command).toBe("/fixture/claude-work");

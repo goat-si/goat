@@ -6,6 +6,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
 import {
   ClaudeCloudError,
   isClaudeCloudError,
@@ -51,7 +52,7 @@ export class ClaudeCloudCli extends Context.Service<
     readonly readiness: (
       login: ClaudeCloudLogin,
       cwd: string,
-    ) => Effect.Effect<{ version: string }, ClaudeCloudError>;
+    ) => Effect.Effect<{ version: string | null }, ClaudeCloudError>;
     readonly start: (
       login: ClaudeCloudLogin,
       cwd: string,
@@ -166,7 +167,7 @@ const make = Effect.gen(function* () {
             outcome: "rejected",
           });
         }
-        return { version: version.stdout.trim().slice(0, 128) };
+        return { version: parseGenericCliVersion(version.stdout) };
       },
       Effect.mapError((cause) =>
         cause.outcome === "rejected"
