@@ -1,5 +1,5 @@
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
-import { OrchestratorMcpFailure, RunId, ThreadId } from "@goat/contracts";
+import { OrchestratorMcpFailure, RunId, type SshLaunchWorkspace, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 
@@ -12,6 +12,20 @@ import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { SshToolkit } from "./tools.ts";
 
 const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
+
+/**
+ * The remote's local branches are usually behind origin, so a dispatched
+ * worktree starts from origin unless the caller says otherwise. The remote
+ * falls back to its local base when origin or the remote branch is missing.
+ */
+export const sshLaunchWorkspace = (
+  workspace: SshLaunchWorkspace | undefined,
+): SshLaunchWorkspace =>
+  workspace === undefined
+    ? { type: "cwd" }
+    : workspace.type === "worktree"
+      ? { ...workspace, startFromOrigin: workspace.startFromOrigin ?? true }
+      : workspace;
 
 const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
   new OrchestratorMcpFailure({
@@ -85,7 +99,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       const launch: SshRemoteDispatch.SshLaunchInput = {
         host: input.host,
         cwd: input.cwd,
-        workspace: input.workspace ?? { type: "cwd" },
+        workspace: sshLaunchWorkspace(input.workspace),
         title: input.title,
         message: input.message,
         projectTitle: input.projectTitle,

@@ -48,6 +48,7 @@ type LaunchOptions = {
   readonly clientAccess?: "full-access" | "auto" | "read-only";
   /** Whether the completion webhook takes an outside client's launch. */
   readonly webhookWatchesExternal?: boolean;
+  readonly workspace?: SshRemoteDispatch.SshLaunchInput["workspace"];
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -175,6 +176,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
           ? {}
           : { notifyOnCompletion: options.notifyOnCompletion }),
         ...(options.notifyWebhook === undefined ? {} : { notifyWebhook: options.notifyWebhook }),
+        ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     return {
@@ -208,6 +210,28 @@ it.effect("forwards the calling thread and this machine as the remote thread's l
         threadTitle: "Orchestrator",
         via: "ssh_thread_launch",
       },
+    ]);
+  }),
+);
+
+it.effect("starts a dispatched worktree from origin unless the caller opts out", () =>
+  Effect.gen(function* () {
+    const defaulted = yield* launchFromThread({
+      workspace: { type: "worktree", baseRef: "dev", branch: "feat/x" },
+    });
+    const explicit = yield* launchFromThread({
+      workspace: {
+        type: "worktree",
+        baseRef: "stack-parent",
+        branch: "feat/y",
+        startFromOrigin: false,
+      },
+    });
+    expect(
+      [...defaulted.launchInputs, ...explicit.launchInputs].map((input) => input.workspace),
+    ).toEqual([
+      { type: "worktree", baseRef: "dev", branch: "feat/x", startFromOrigin: true },
+      { type: "worktree", baseRef: "stack-parent", branch: "feat/y", startFromOrigin: false },
     ]);
   }),
 );

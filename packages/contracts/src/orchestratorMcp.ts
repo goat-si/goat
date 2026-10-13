@@ -125,7 +125,12 @@ export const SshLaunchWorkspace = Schema.Union([
     type: Schema.Literal("worktree"),
     branch: TrimmedNonEmptyString,
     baseRef: Schema.optional(TrimmedNonEmptyString),
-    startFromOrigin: Schema.optional(Schema.Boolean),
+    startFromOrigin: Schema.optional(
+      Schema.Boolean.annotate({
+        description:
+          "Default true: fetch origin and start from origin/baseRef, falling back to the local baseRef when origin lacks it. Pass false to start from the remote's local branch, for example a stack parent pushed only there.",
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("existing_worktree"),
@@ -134,7 +139,7 @@ export const SshLaunchWorkspace = Schema.Union([
   }),
 ]).annotate({
   description:
-    "cwd runs in the folder itself. worktree creates a new Git worktree of the folder's repository on the remote, on a new branch from baseRef (default: the folder's checked-out branch). existing_worktree reuses one of the worktrees goat_ssh_browse reported. Default cwd.",
+    'Prefer worktree for dispatched work: it creates a new Git worktree of the folder\'s repository on the remote, in that GOAT\'s worktrees folder, on branch from baseRef (default: the folder\'s checked-out branch), so parallel threads never share a checkout. For example {type:"worktree",baseRef:"dev",branch:"feat/x"}. cwd runs in the folder itself and shares it with anything else working there. existing_worktree reuses one of the worktrees goat_ssh_browse reported. Default cwd. Clean up finished worktrees with goat_worktree_cleanup or goat_worktree_remove, passing the same host.',
 });
 
 export type SshLaunchWorkspace = typeof SshLaunchWorkspace.Type;
