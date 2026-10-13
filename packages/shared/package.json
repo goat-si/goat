@@ -15,6 +15,10 @@
       "types": "./src/sshRuntimeProtocol.ts",
       "import": "./src/sshRuntimeProtocol.ts"
     },
+    "./windowsHostProcess": {
+      "types": "./src/windowsHostProcess.ts",
+      "import": "./src/windowsHostProcess.ts"
+    },
     "./authScopeOptions": {
       "types": "./src/authScopeOptions.ts",
       "import": "./src/authScopeOptions.ts"
