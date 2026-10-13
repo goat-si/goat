@@ -70,8 +70,9 @@ function layerSiblingKeysFor(
         if (calls !== null) yield* Ref.update(calls, (count) => count + 1);
         yield* whileDecrypting;
         const decoded = textDecoder.decode(ciphertext);
-        if (!decoded.startsWith("nightly:")) return Option.none();
-        const plaintext = decoded.slice("nightly:".length);
+        const marker = decoded.indexOf("nightly:");
+        if (marker < 0) return Option.none();
+        const plaintext = decoded.slice(marker + "nightly:".length);
         return accept(plaintext)
           ? Option.some({ plaintext, runtimeName: "GOAT Nightly" })
           : Option.none();
@@ -697,6 +698,34 @@ describe("DesktopConnectionCatalogStore", () => {
         assert.deepStrictEqual(yield* fileSystem.readFile(backupPath), raw);
       }),
     ),
+  );
+
+  it.effect(
+    "tries sibling keys when this app's key decrypts to something that is not a catalog",
+    () =>
+      withSiblingStore((siblingCalls) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const environment = yield* DesktopEnvironment.DesktopEnvironment;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+          const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+          // This app's key "decrypts" it to garbage with valid padding; the Nightly key fits.
+          yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            catalogPath,
+            `${JSON.stringify({
+              version: 1,
+              encryptedCatalog: Base64.encode(
+                textEncoder.encode(`encrypted:nightly:${VALID_CATALOG}`),
+              ),
+            })}\n`,
+          );
+
+          assert.deepStrictEqual(yield* store.get, Option.some(VALID_CATALOG));
+          assert.equal(yield* Ref.get(siblingCalls), 1);
+        }),
+      ),
   );
 
   it.effect("reports a damaged catalog, keeps it, and copies it", () =>

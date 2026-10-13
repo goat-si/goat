@@ -39,7 +39,8 @@ own safeStorage key, so a catalog one channel saved does not decrypt through ano
 `apps/desktop/src/app/DesktopSafeStorageSiblingKeys.ts`, which reads the other channels' keys from
 the same key store and decrypts with Chromium's OSCrypt scheme. macOS asks once before an app may
 read another app's key. The renderer replaces a catalog it cannot parse, so the store serves only
-plaintext that decodes as a connection catalog, whichever key opened it.
+plaintext that decodes as a connection catalog, whichever key opened it. A wrong key can decrypt to
+valid padding, so a non-catalog from this app's key also tries the sibling keys.
 
 - **Recovered.** The original file is copied to `connection-catalog.<channel>.backup.json`, then
   re-encrypted under this app's key. The other channel may be running and saving, so when the file

@@ -603,11 +603,12 @@ export const make = Effect.gen(function* () {
   const recoverCatalog = Effect.fn("desktop.connectionCatalogStore.recover")(function* (
     raw: Uint8Array,
     encryptedCatalog: Uint8Array,
-    decryptError: ElectronSafeStorage.ElectronSafeStorageDecryptError,
+    /** What to report when no sibling key yields a catalog either. */
+    noMatch: { readonly reason: CatalogFault; readonly error: GetError },
   ) {
     // No sibling key opened this same file earlier this launch; asking again would re-prompt.
     const known = yield* Ref.get(unreadableState);
-    if (Option.isSome(known) && known.value.reason === "locked") {
+    if (Option.isSome(known)) {
       const hash = yield* contentHash(raw).pipe(Effect.option);
       if (Option.contains(hash, known.value.contentHash)) {
         return yield* Effect.fail(known.value.error);
@@ -615,15 +616,7 @@ export const make = Effect.gen(function* () {
     }
     const recovered = yield* siblingKeys.decrypt(encryptedCatalog, isConnectionCatalog);
     if (Option.isNone(recovered)) {
-      return yield* markUnreadable(
-        raw,
-        "locked",
-        new DesktopConnectionCatalogStoreProtectionError({
-          operation: "decrypt-catalog",
-          catalogPath,
-          cause: decryptError,
-        }),
-      );
+      return yield* markUnreadable(raw, noMatch.reason, noMatch.error);
     }
     const { plaintext, runtimeName } = recovered.value;
     yield* Ref.set(unreadableState, Option.none());
@@ -733,11 +726,32 @@ export const make = Effect.gen(function* () {
         document.encryptedCatalog,
       ).pipe(Effect.catch((error) => markUnreadable(raw.value, "damaged", error)));
       const ownKey = yield* safeStorage.decryptString(encryptedCatalog).pipe(Effect.result);
+      // The renderer replaces a catalog it cannot parse, so only a valid one leaves this store.
+      // A wrong key can still decrypt to valid padding, so a non-catalog also tries sibling keys.
       let decrypted: string;
-      if (Result.isSuccess(ownKey)) {
+      if (Result.isSuccess(ownKey) && isConnectionCatalog(ownKey.success)) {
         decrypted = ownKey.success;
       } else {
-        const recovered = yield* recoverCatalog(raw.value, encryptedCatalog, ownKey.failure);
+        const recovered = yield* recoverCatalog(
+          raw.value,
+          encryptedCatalog,
+          Result.isSuccess(ownKey)
+            ? {
+                reason: "damaged",
+                error: new DesktopConnectionCatalogStoreDocumentDecodeError({
+                  catalogPath,
+                  cause: new Error("The decrypted connection catalog is not a valid catalog."),
+                }),
+              }
+            : {
+                reason: "locked",
+                error: new DesktopConnectionCatalogStoreProtectionError({
+                  operation: "decrypt-catalog",
+                  catalogPath,
+                  cause: ownKey.failure,
+                }),
+              },
+        );
         if (Option.isNone(recovered)) {
           if (attemptsLeft > 0) return yield* readAttempt(attemptsLeft - 1);
           return yield* new DesktopConnectionCatalogStoreProtectionError({
@@ -747,17 +761,6 @@ export const make = Effect.gen(function* () {
           });
         }
         decrypted = recovered.value;
-      }
-      // The renderer replaces a catalog it cannot parse, so only a valid one leaves this store.
-      if (!isConnectionCatalog(decrypted)) {
-        return yield* markUnreadable(
-          raw.value,
-          "damaged",
-          new DesktopConnectionCatalogStoreDocumentDecodeError({
-            catalogPath,
-            cause: new Error("The decrypted connection catalog is not a valid catalog."),
-          }),
-        );
       }
       yield* Ref.set(unreadableState, Option.none());
       return Option.some(decrypted);
