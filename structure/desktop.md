@@ -38,18 +38,21 @@ own safeStorage key, so a catalog one channel saved does not decrypt through ano
 `safeStorage`. `apps/desktop/src/app/DesktopConnectionCatalogStore.ts` then asks
 `apps/desktop/src/app/DesktopSafeStorageSiblingKeys.ts`, which reads the other channels' keys from
 the same key store and decrypts with Chromium's OSCrypt scheme. macOS asks once before an app may
-read another app's key. A result counts only when it decodes as a connection catalog, because the
-renderer replaces a catalog it cannot parse.
+read another app's key. The renderer replaces a catalog it cannot parse, so the store serves only
+plaintext that decodes as a connection catalog, whichever key opened it.
 
-- **Recovered.** The original file is copied to `connection-catalog.<channel>.backup.json` first,
-  then the catalog is re-encrypted under this app's key. If the copy fails, the file keeps the
-  sibling's encryption and is recovered again on the next read.
-- **Unreadable.** The file stays in place, and a byte-for-byte copy goes to
+- **Recovered.** The original file is copied to `connection-catalog.<channel>.backup.json`, then
+  re-encrypted under this app's key, but only if the file has not changed since it was read: the
+  other channel may be running and saving. Otherwise the file keeps the sibling's encryption.
+- **Unreadable.** A file no key opens (`locked`) or that is not a valid catalog (`damaged`)
+  stays in place, and a byte-for-byte copy goes to
   `connection-catalog.unreadable-<hash>.backup.json`, never replacing a different file. Reads
-  fail, and the same file is not retried until the app restarts, so a refused prompt does not
-  repeat. Settings → Connections and a launch toast explain where both files are
-  (`apps/web/src/components/desktop/ConnectionCatalogUnreadableNotice.tsx`). Start fresh removes
-  the catalog only once its copy exists.
+  fail. A `locked` file is not retried against sibling keys until the app restarts, so a refused
+  prompt does not repeat. Settings → Connections and a launch toast explain where both files are
+  (`apps/web/src/components/desktop/ConnectionCatalogUnreadableNotice.tsx`). Start fresh saves an
+  empty catalog, since a missing file would re-import the legacy saved environments.
+- **Writes.** `set` and `clear` read the file on disk first. One this app cannot open is copied
+  before it is replaced, and the change is refused when no copy can be made.
 
 ## Shell
 

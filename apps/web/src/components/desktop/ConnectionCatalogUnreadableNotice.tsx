@@ -1,5 +1,10 @@
+import {
+  ConnectionCatalogDocument,
+  EMPTY_CONNECTION_CATALOG_DOCUMENT,
+} from "@goat/client-runtime/platform";
 import type { DesktopConnectionCatalogUnreadable } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import * as Schema from "effect/Schema";
 import { useEffect, useState } from "react";
 
 import { requestConfirmDialog } from "../../confirmDialog";
@@ -8,6 +13,7 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
 const TITLE = "Saved environments couldn't be unlocked";
+const encodeCatalog = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument));
 
 /** The desktop's saved connection catalog when no key this app has can open it. */
 function useConnectionCatalogUnreadable() {
@@ -42,7 +48,9 @@ export function ConnectionCatalogUnreadableToast() {
       type: "error",
       title: TITLE,
       description:
-        "Another GOAT app saved them with a key this app can't read. GOAT kept the file and did not change it.",
+        unreadable.reason === "locked"
+          ? "Another GOAT app saved them with a key this app can't read. GOAT kept the file and did not change it."
+          : "The saved environments file is damaged. GOAT kept the file and did not change it.",
       timeout: 0,
       actionProps: {
         children: "Open Connections",
@@ -59,27 +67,30 @@ export function ConnectionCatalogUnreadableToast() {
 /** Explains what happened, where the copy is, and how to restore or start fresh. */
 export function ConnectionCatalogUnreadableAlert() {
   const unreadable = useConnectionCatalogUnreadable();
-  const [clearing, setClearing] = useState(false);
+  const [startingFresh, setStartingFresh] = useState(false);
   if (unreadable === null) return null;
 
   const startFresh = async () => {
-    const clear = window.desktopBridge?.clearConnectionCatalog;
-    if (clear === undefined || unreadable.backupPath === null) return;
+    const save = window.desktopBridge?.setConnectionCatalog;
+    if (save === undefined || unreadable.backupPath === null) return;
     const confirmed = await (requestConfirmDialog(
       [
         "Start with no saved environments?",
-        `GOAT removes the unreadable file and keeps its copy at ${unreadable.backupPath}.`,
+        `GOAT replaces the unreadable file with an empty list and keeps its copy at ${unreadable.backupPath}.`,
       ].join("\n"),
       { variant: "destructive" },
     ) ?? false);
     if (!confirmed) return;
-    setClearing(true);
+    setStartingFresh(true);
     try {
-      await clear();
+      // An empty catalog, not a removed file: a missing file re-imports legacy environments.
+      if (!(await save(encodeCatalog(EMPTY_CONNECTION_CATALOG_DOCUMENT)))) {
+        throw new Error("Secure storage is unavailable.");
+      }
       // The renderer's catalog cache is per page; reload to start from the empty catalog.
       window.location.reload();
     } catch (error) {
-      setClearing(false);
+      setStartingFresh(false);
       toastManager.add({
         type: "error",
         title: "Could not start fresh",
@@ -93,9 +104,10 @@ export function ConnectionCatalogUnreadableAlert() {
       <AlertTitle>{TITLE}</AlertTitle>
       <AlertDescription>
         <p>
-          Another GOAT app, such as GOAT (Nightly) or a dev build, saved them with a key this app
-          can't read. The file is unchanged at{" "}
-          <code className="break-all">{unreadable.catalogPath}</code>
+          {unreadable.reason === "locked"
+            ? "Another GOAT app, such as GOAT (Nightly) or a dev build, saved them with a key this app can't read."
+            : "The saved environments file is damaged."}{" "}
+          The file is unchanged at <code className="break-all">{unreadable.catalogPath}</code>
           {unreadable.backupPath === null ? (
             ". GOAT could not make a copy of it, so it will not replace the file."
           ) : (
@@ -104,15 +116,24 @@ export function ConnectionCatalogUnreadableAlert() {
             </>
           )}
         </p>
-        <p>
-          To get them back, quit and reopen GOAT, then choose Allow when your system asks to use the
-          other GOAT app's key. You can also open them in the GOAT app that saved them.
-        </p>
+        {unreadable.reason === "locked" ? (
+          <p>
+            To get them back, quit and reopen GOAT, then choose Allow when your system asks to use
+            the other GOAT app's key. You can also open them in the GOAT app that saved them.
+          </p>
+        ) : (
+          <p>To continue, start fresh and add your environments again.</p>
+        )}
       </AlertDescription>
       {unreadable.backupPath === null ? null : (
         <AlertAction>
-          <Button size="sm" variant="outline" disabled={clearing} onClick={() => void startFresh()}>
-            {clearing ? "Starting fresh…" : "Start fresh"}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={startingFresh}
+            onClick={() => void startFresh()}
+          >
+            {startingFresh ? "Starting fresh…" : "Start fresh"}
           </Button>
         </AlertAction>
       )}

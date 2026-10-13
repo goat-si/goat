@@ -62,23 +62,28 @@ describe("DesktopSafeStorageSiblingKeys", () => {
 
   it.effect("keeps trying after a refused key read and a key that does not fit", () =>
     Effect.gen(function* () {
-      const ciphertext = osCryptEncrypt("catalog", "dev-secret", "v10", 1003);
+      const reads: string[] = [];
+      const ciphertext = osCryptEncrypt("catalog", "legacy-nightly-secret", "v10", 1003);
       const siblingKeys = DesktopSafeStorageSiblingKeys.makeWith(
         () =>
-          storeWith({
-            "GOAT Nightly": new Error("User canceled the operation."),
-            "GOAT Alpha": "wrong-secret",
-            "GOAT Dev": "dev-secret",
-          }),
+          storeWith(
+            {
+              "GOAT Nightly": new Error("User canceled the operation."),
+              "GOAT Dev": "wrong-secret",
+              "T3 Code Nightly": "legacy-nightly-secret",
+            },
+            reads,
+          ),
         "darwin",
-        "GOAT Nightly",
+        "GOAT Alpha",
       );
 
       const result = yield* siblingKeys.decrypt(ciphertext, acceptAll);
       assert.deepStrictEqual(
         result,
-        Option.some({ plaintext: "catalog", runtimeName: "GOAT Dev" }),
+        Option.some({ plaintext: "catalog", runtimeName: "T3 Code Nightly" }),
       );
+      assert.includeMembers(reads, ["GOAT Nightly", "GOAT Dev", "T3 Code Nightly"]);
     }),
   );
 

@@ -60,11 +60,15 @@ function layerSafeStorageFor(available: boolean, failDecrypt: Ref.Ref<boolean> |
  * Stands in for another channel's key: values written as `nightly:<plaintext>` decrypt with it.
  * Counts calls, since each real attempt can show a Keychain prompt.
  */
-function layerSiblingKeysFor(calls: Ref.Ref<number> | null = null) {
+function layerSiblingKeysFor(
+  calls: Ref.Ref<number> | null = null,
+  whileDecrypting: Effect.Effect<void> = Effect.void,
+) {
   return Layer.succeed(DesktopSafeStorageSiblingKeys.DesktopSafeStorageSiblingKeys, {
     decrypt: (ciphertext, accept) =>
       Effect.gen(function* () {
         if (calls !== null) yield* Ref.update(calls, (count) => count + 1);
+        yield* whileDecrypting;
         const decoded = textDecoder.decode(ciphertext);
         if (!decoded.startsWith("nightly:")) return Option.none();
         const plaintext = decoded.slice("nightly:".length);
@@ -81,6 +85,7 @@ function layerFor(
   failDecrypt: Ref.Ref<boolean> | null = null,
   fileSystemLayer: Layer.Layer<FileSystem.FileSystem> = NodeServices.layer,
   siblingCalls: Ref.Ref<number> | null = null,
+  whileDecrypting: Effect.Effect<void> = Effect.void,
 ) {
   const layerEnvironment = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
@@ -101,7 +106,7 @@ function layerFor(
   const layerDependencies = Layer.mergeAll(
     layerEnvironment,
     layerSafeStorage,
-    layerSiblingKeysFor(siblingCalls),
+    layerSiblingKeysFor(siblingCalls, whileDecrypting),
     NodeServices.layer,
     fileSystemLayer,
   );
@@ -156,6 +161,7 @@ const withSiblingStore = <A, E, R>(
   effect: (
     siblingCalls: Ref.Ref<number>,
   ) => Effect.Effect<A, E, R | DesktopConnectionCatalogStore.DesktopConnectionCatalogStore>,
+  whileDecrypting: (baseDir: string) => Effect.Effect<void> = () => Effect.void,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -164,7 +170,9 @@ const withSiblingStore = <A, E, R>(
     });
     const siblingCalls = yield* Ref.make(0);
     return yield* effect(siblingCalls).pipe(
-      Effect.provide(layerFor(baseDir, true, null, NodeServices.layer, siblingCalls)),
+      Effect.provide(
+        layerFor(baseDir, true, null, NodeServices.layer, siblingCalls, whileDecrypting(baseDir)),
+      ),
     );
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
 
@@ -173,7 +181,7 @@ describe("DesktopConnectionCatalogStore", () => {
     withStore(
       Effect.gen(function* () {
         const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
-        const catalog = '{"schemaVersion":1,"targets":[]}';
+        const catalog = VALID_CATALOG;
 
         assert.isTrue(yield* store.set(catalog));
         assert.deepStrictEqual(yield* store.get, Option.some(catalog));
@@ -486,7 +494,7 @@ describe("DesktopConnectionCatalogStore", () => {
         Effect.provide(layer),
       );
 
-      assert.isTrue(yield* store.set('{"schemaVersion":1,"targets":[]}'));
+      assert.isTrue(yield* store.set(VALID_CATALOG));
       yield* Ref.set(failDecrypt, true);
       const error = yield* store.get.pipe(Effect.flip);
       assert.instanceOf(
@@ -505,7 +513,7 @@ describe("DesktopConnectionCatalogStore", () => {
       );
       assert.notEqual(error.message, decryptError.message);
       yield* Ref.set(failDecrypt, false);
-      assert.deepStrictEqual(yield* store.get, Option.some('{"schemaVersion":1,"targets":[]}'));
+      assert.deepStrictEqual(yield* store.get, Option.some(VALID_CATALOG));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
@@ -553,20 +561,20 @@ describe("DesktopConnectionCatalogStore", () => {
           error,
           DesktopConnectionCatalogStore.DesktopConnectionCatalogStoreProtectionError,
         );
-        assert.equal(error.operation, "decrypt-catalog");
         assert.equal(yield* fileSystem.readFileString(catalogPath), raw);
         assert.equal(yield* fileSystem.readFileString(backupPath), raw);
-        assert.deepStrictEqual(yield* store.unreadable, Option.some({ catalogPath, backupPath }));
+        assert.deepStrictEqual(
+          yield* store.unreadable,
+          Option.some({ catalogPath, backupPath, reason: "locked" as const }),
+        );
         // The same file is not retried within a launch, so a refused prompt does not repeat.
         yield* store.get.pipe(Effect.flip);
         assert.equal(yield* Ref.get(siblingCalls), 1);
 
-        // Starting fresh removes only the catalog; the copy stays.
-        yield* store.clear;
-        assert.isFalse(yield* fileSystem.exists(catalogPath));
+        // Start fresh saves an empty catalog over it; the copy stays.
+        assert.isTrue(yield* store.set(VALID_CATALOG));
         assert.equal(yield* fileSystem.readFileString(backupPath), raw);
         assert.deepStrictEqual(yield* store.unreadable, Option.none());
-        assert.isTrue(yield* store.set(VALID_CATALOG));
         assert.deepStrictEqual(yield* store.get, Option.some(VALID_CATALOG));
       }),
     ),
@@ -585,7 +593,7 @@ describe("DesktopConnectionCatalogStore", () => {
         yield* store.get.pipe(Effect.flip);
         assert.deepStrictEqual(
           yield* store.unreadable,
-          Option.some({ catalogPath, backupPath: null }),
+          Option.some({ catalogPath, backupPath: null, reason: "locked" as const }),
         );
         const setError = yield* store.set(VALID_CATALOG).pipe(Effect.flip);
         assert.instanceOf(
@@ -597,6 +605,85 @@ describe("DesktopConnectionCatalogStore", () => {
         assert.equal(clearError.operation, "back-up-catalog");
         assert.equal(yield* fileSystem.readFileString(catalogPath), raw);
         assert.equal(yield* fileSystem.readFileString(backupPath), "someone else's file");
+      }),
+    ),
+  );
+
+  it.effect("copies a catalog it cannot open before a save replaces it, without a prior read", () =>
+    withSiblingStore(() =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+        const { catalogPath, raw, stateDir } = yield* writeSiblingCatalog(VALID_CATALOG);
+
+        assert.isTrue(yield* store.set(VALID_CATALOG));
+        assert.equal(
+          yield* fileSystem.readFileString(yield* unreadableBackupPath(stateDir, raw)),
+          raw,
+        );
+        assert.notEqual(yield* fileSystem.readFileString(catalogPath), raw);
+      }),
+    ),
+  );
+
+  it.effect("does not overwrite a save another channel made during recovery", () => {
+    const otherChannelSave = '{"version":1,"encryptedCatalog":"bmV3ZXI="}\n';
+    return withSiblingStore(
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+          const { catalogPath, raw, stateDir } = yield* writeSiblingCatalog(VALID_CATALOG);
+
+          assert.deepStrictEqual(yield* store.get, Option.some(VALID_CATALOG));
+          assert.equal(yield* fileSystem.readFileString(catalogPath), otherChannelSave);
+          assert.equal(
+            yield* fileSystem.readFileString(
+              `${stateDir}/connection-catalog.goat-nightly.backup.json`,
+            ),
+            raw,
+          );
+        }),
+      // The other channel saves while this one waits on the key prompt.
+      (baseDir) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          yield* fileSystem.writeFileString(
+            `${baseDir}/userdata/connection-catalog.json`,
+            otherChannelSave,
+          );
+        }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
+    );
+  });
+
+  it.effect("reports a damaged catalog, keeps it, and copies it", () =>
+    withSiblingStore(() =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+        const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+        // This app's key opens it, but the renderer would discard what is inside.
+        assert.isTrue(yield* store.set(VALID_CATALOG));
+        const raw = `${JSON.stringify({
+          version: 1,
+          encryptedCatalog: Base64.encode(textEncoder.encode('encrypted:{"schemaVersion":1}')),
+        })}\n`;
+        yield* fileSystem.writeFileString(catalogPath, raw);
+        const backupPath = yield* unreadableBackupPath(environment.stateDir, raw);
+
+        const error = yield* store.get.pipe(Effect.flip);
+        assert.instanceOf(
+          error,
+          DesktopConnectionCatalogStore.DesktopConnectionCatalogStoreDocumentDecodeError,
+        );
+        assert.deepStrictEqual(
+          yield* store.unreadable,
+          Option.some({ catalogPath, backupPath, reason: "damaged" as const }),
+        );
+        assert.equal(yield* fileSystem.readFileString(catalogPath), raw);
+        assert.equal(yield* fileSystem.readFileString(backupPath), raw);
       }),
     ),
   );

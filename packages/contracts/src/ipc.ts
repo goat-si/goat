@@ -373,13 +373,18 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
 
 /**
- * The saved connection catalog exists but no key this app can read opens it, usually because
- * another GOAT channel encrypted it. The file stays where it is until the user starts fresh.
+ * The saved connection catalog exists but cannot be read. The file stays where it is until the
+ * user starts fresh.
  */
 export const DesktopConnectionCatalogUnreadableSchema = Schema.Struct({
   catalogPath: Schema.String,
   /** A byte-for-byte copy of the unreadable file, or null when the copy could not be written. */
   backupPath: Schema.NullOr(Schema.String),
+  /**
+   * `locked`: no key this app can read opens it, usually because another GOAT channel saved it.
+   * `damaged`: the file is not a valid catalog.
+   */
+  reason: Schema.Literals(["locked", "damaged"]),
 });
 export type DesktopConnectionCatalogUnreadable =
   typeof DesktopConnectionCatalogUnreadableSchema.Type;
@@ -1232,7 +1237,7 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   /** Null while the catalog is missing or readable. */
   getConnectionCatalogUnreadable?: () => Promise<DesktopConnectionCatalogUnreadable | null>;
-  /** Removes the saved catalog. An unreadable one is removed only once its backup copy exists. */
+  /** Removes the saved catalog. One this app cannot open is copied first, or kept. */
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   /** Resolves a suggested SSH alias before populating the connection form. */
