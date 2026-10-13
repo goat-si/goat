@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import { exitWithTestParent } from "./testParentLifetime.fixture.ts";
 import {
   remoteShell,
   ARCHIVE,
@@ -144,6 +145,7 @@ request.on("error", () => process.exit(1));
   if (args[1] === "pairing") console.log(JSON.stringify({ credential: "fixture-pairing" }));
   else console.log(JSON.stringify({ token: "fixture-session", expiresAt: null }));
 } else if (args[0] === "serve") {
+  ${exitWithTestParent('args.includes("--test-seed")')}
   const requested = args.indexOf("--port");
   const port = requested < 0 ? 0 : Number(args[requested + 1]);
   const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};

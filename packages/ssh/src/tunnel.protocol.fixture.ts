@@ -10,6 +10,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
+import { exitWithTestParent } from "./testParentLifetime.fixture.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   remoteShell,
@@ -138,6 +139,7 @@ res.resume(); res.on("end", () => process.exit(res.statusCode === 200 ? 0 : 1));
   if (args.includes("--runtime-mode-ceiling") && fs.existsSync(path.join(test, "reject-ceiling"))) process.exit(2);
   console.log(JSON.stringify(args[1] === "pairing" ? {credential: version} : {token: version, expiresAt: null}));
 } else if (args[0] === "serve") {
+  ${exitWithTestParent('args.includes("--test-seed") || process.env.T3_TEST_SEED === "1"')}
   if (fs.existsSync(path.join(test, "fail-start-" + version))) { event("failed-start"); process.exit(3); }
   const at = args.indexOf("--port"); const requested = at < 0 ? 0 : Number(args[at+1]);
   const instanceId = drainCapable ? require("node:crypto").randomUUID() : undefined;

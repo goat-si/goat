@@ -180,6 +180,13 @@ process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
 
+// Tests own this agent through its stdio. Exit when stdin ends so a test worker
+// that dies before closing its scope cannot leave the agent running under PID 1.
+process.stdin.once("end", () => {
+  logExit("stdin-end");
+  process.exit(0);
+});
+
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   if (omitModelConfigOption) {
     return [];
