@@ -239,7 +239,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("verifies, stops, publishes, then starts on a successful upgrade", () =>
+    it.live("verifies, drains, publishes, then supervises startup on a successful upgrade", () =>
       Effect.gen(function* () {
         const f = yield* fixture("none");
         const before = yield* f.snapshot;
@@ -263,13 +263,19 @@ fi
           (event) => event.type === "version" && event.version === nextVersion,
         );
         const stopped = events.findIndex(
-          (event) => event.type === "stop" && event.version === oldVersion,
+          (event) => event.type === "self-stop" && event.version === oldVersion,
         );
         const started = events.findIndex(
           (event) => event.type === "start" && event.version === nextVersion,
         );
         const published = events.findIndex((event) => event.type === "publication");
         assert.isAtLeast(verified, 0);
+        assert.isAtLeast(stopped, 0);
+        assert.isAtLeast(published, 0);
+        assert.isAtLeast(started, 0);
+        assert.isFalse(events.some((event) => event.type === "stop"));
+        assert.isTrue(events.some((event) => event.type === "drain"));
+        assert.isTrue(events.some((event) => event.type === "supervise"));
         assert.include(events[verified]!.runner!, `T3_ARCHIVE_VERSION='${oldVersion}'`);
         assert.isTrue(events[verified]!.oldAlive);
         assert.isFalse(events[published]!.oldAlive);

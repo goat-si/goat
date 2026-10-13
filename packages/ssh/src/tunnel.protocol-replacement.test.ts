@@ -12,14 +12,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
     it.live.each([false, true])(
-      "retries a failed publication after confirmed legacy termination; partial=%s",
+      "retries a failed publication after confirmed legacy drain; partial=%s",
       (partial) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
-            descriptor404: true,
+            drain: true,
+            ssh: 99,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           yield* f.fs.remove(`${f.state}/identity`);
           const before = yield* f.snapshot;
@@ -47,7 +49,7 @@ exec /bin/mv "$@"
           assert.equal(failed.oldExecutable, before.oldExecutable);
           assert.equal(failed.oldMarker, before.oldMarker);
           if (!partial) assert.equal(failed["run-t3.sh"], before["run-t3.sh"]);
-          assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+          assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"self-stop"');
           assert.isFalse(
             (yield* f.fs.readDirectory(f.state)).some(
               (name) => name.includes(".next.") || name.includes(".retained."),
@@ -60,7 +62,7 @@ exec /bin/mv "$@"
           assert.include(after.identity!, `/versions/${ARCHIVE.archiveVersion}/goat serve`);
           assert.include(after["run-t3.sh"]!, `T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
           assert.equal(
-            (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"stop"').length - 1,
+            (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"self-stop"').length - 1,
             1,
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -130,7 +132,7 @@ console.log(command);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live.each(["before publication", "before kill", "candidate validation"] as const)(
+    it.live.each(["before publication", "before drain", "candidate validation"] as const)(
       "legacy replacement refuses a race/failure %s",
       (boundary) =>
         Effect.gen(function* () {
@@ -138,11 +140,13 @@ console.log(command);
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
-            descriptor404: true,
+            drain: true,
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
           yield* f.fs.remove(`${f.state}/identity`);
           const before = yield* f.snapshot;
-          if (boundary === "before kill") {
+          if (boundary === "before drain") {
             const ps = yield* f.fs.readFileString(`${f.test}/identity-bin/ps`);
             yield* f.fs.writeFileString(
               `${f.test}/identity-bin/ps`,
@@ -175,12 +179,13 @@ console.log(command);
           }
           assert.isTrue(Result.isFailure(yield* f.run("launch")));
           yield* Effect.sync(() => process.kill(f.pid, 0));
-          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+          for (const type of ["stop", "drain", "drain-request", "self-stop", "supervise"])
+            assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), `"type":"${type}"`);
           const after = yield* f.snapshot;
           assert.equal(after.pid, before.pid);
           assert.equal(after.port, before.port);
           assert.equal(after.identity, null);
-          if (boundary === "before kill") {
+          if (boundary === "before drain") {
             assert.equal(after["run-t3.sh"], before["run-t3.sh"]);
             assert.equal(after.managed, "external\n");
           } else {

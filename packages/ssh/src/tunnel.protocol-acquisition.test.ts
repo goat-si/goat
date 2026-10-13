@@ -205,13 +205,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
     it.live(
-      "validates and publishes the requested runtime before stopping its verified owned PID",
+      "validates the requested runtime before drain and publishes it before supervised startup",
       () =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ssh: 99,
             orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
@@ -231,9 +232,16 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const validation = events.findIndex(
             (event) => event.type === "version" && event.version === ARCHIVE.archiveVersion,
           );
-          const stop = events.findIndex((event) => event.type === "stop");
+          const stop = events.findIndex((event) => event.type === "drain");
           const start = events.findLastIndex((event) => event.type === "start");
+          assert.isAtLeast(validation, 0);
+          assert.isAtLeast(stop, 0);
           assert.isBelow(validation, stop);
+          assert.isFalse(events.some((event) => event.type === "stop"));
+          assert.isTrue(events.some((event) => event.type === "self-stop"));
+          assert.isTrue(
+            events.some((event) => event.type === "supervise" && event.status === "replaced"),
+          );
           assert.isBelow(stop, start);
           assert.include(events[start].runner, `T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
           assert.equal(f.counters().uploads, 1);

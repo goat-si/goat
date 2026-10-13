@@ -96,7 +96,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         } else assert.deepEqual(after, before);
         if (linked !== undefined) assert.equal(yield* f.fs.readLink(linked), `${linked}.original`);
         const events = yield* f.fs.readFileString(`${f.test}/events`);
-        assert.notInclude(events, '"type":"stop"');
+        for (const type of ["stop", "drain", "self-stop", "supervise"])
+          assert.notInclude(events, `"type":"${type}"`);
         assert.notInclude(events, '"type":"auth"');
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -117,7 +118,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(Result.isFailure(yield* f.run("launch")));
         assert.deepEqual(yield* f.snapshot, before);
         yield* Effect.sync(() => process.kill(f.pid, 0));
-        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+        for (const type of ["stop", "drain", "self-stop", "supervise"])
+          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), `"type":"${type}"`);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
@@ -129,6 +131,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ssh: SSH_RUNTIME_PROTOCOL_VERSION,
             orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
@@ -155,7 +158,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           }
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           if (activity === "idle") {
-            assert.include(events, '"type":"stop"');
+            assert.notInclude(events, '"type":"stop"');
+            assert.include(events, '"type":"drain"');
+            assert.include(events, '"type":"self-stop"');
+            assert.include(events, '"type":"supervise"');
             assert.include(
               yield* f.fs.readFileString(`${f.state}/identity`),
               `/versions/${ARCHIVE.archiveVersion}/goat`,
@@ -164,7 +170,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           } else {
             assert.deepEqual(yield* f.snapshot, before);
             yield* Effect.sync(() => process.kill(f.pid, 0));
-            assert.notInclude(events, '"type":"stop"');
+            for (const type of ["stop", "drain", "self-stop", "supervise"])
+              assert.notInclude(events, `"type":"${type}"`);
           }
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

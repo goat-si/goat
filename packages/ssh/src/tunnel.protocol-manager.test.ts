@@ -32,6 +32,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ssh: SSH_RUNTIME_PROTOCOL_VERSION,
             orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
@@ -90,7 +91,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               .trim()
               .split("\n")
               .map((line) => JSON.parse(line));
-            assert.equal(events.filter((event) => event.type === "stop").length, 1);
+            assert.equal(events.filter((event) => event.type === "self-stop").length, 1);
+            assert.equal(events.filter((event) => event.type === "drain").length, 1);
+            assert.equal(
+              events.filter((event) => event.type === "supervise" && event.status === "replaced")
+                .length,
+              1,
+            );
+            assert.isFalse(events.some((event) => event.type === "stop"));
           }).pipe(Effect.provide(layer), Effect.scoped);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -101,6 +109,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ssh: SSH_RUNTIME_PROTOCOL_VERSION,
           orchestration: ORCHESTRATION_PROTOCOL_VERSION,
         });
@@ -146,7 +155,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true });
           assert.equal(yield* f.fs.readFileString(`${f.test}/activity-requests`), "3");
           const events = yield* f.fs.readFileString(`${f.test}/events`);
-          assert.equal(events.split('"type":"stop"').length - 1, 1);
+          assert.equal(events.split('"type":"self-stop"').length - 1, 1);
         }).pipe(Effect.provide(layer), Effect.scoped);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

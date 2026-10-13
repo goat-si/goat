@@ -46,6 +46,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               ssh: SSH_RUNTIME_PROTOCOL_VERSION,
               orchestration: ORCHESTRATION_PROTOCOL_VERSION,
               nodeReadiness: true,
+              drain: true,
             },
             f.state,
           );
@@ -119,7 +120,7 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           assert.isAtLeast(inspections.length, 2);
           assert.include(inspections[0].runner, entry);
           assert.notInclude(inspections[0].runner, nextEntry);
-          // Publication follows confirmed termination, so every old-PID inspection
+          // Publication follows the confirmed drain, so every old-PID inspection
           // must still see the old runner.
           for (const inspection of inspections) {
             assert.include(inspection.runner, entry);
@@ -142,7 +143,19 @@ process.stdout.write(cp.execFileSync('/bin/ps', args));
           );
           assert.lengthOf(
             events.filter((event) => event.type === "stop"),
-            2,
+            1,
+          );
+          assert.lengthOf(
+            events.filter((event) => event.type === "drain"),
+            1,
+          );
+          assert.lengthOf(
+            events.filter((event) => event.type === "self-stop"),
+            1,
+          );
+          assert.lengthOf(
+            events.filter((event) => event.type === "supervise" && event.status === "replaced"),
+            1,
           );
           assert.include(events.filter((event) => event.type === "start")[1].runner, nextEntry);
           for (const file of ["pid", "port", "managed", "identity"])

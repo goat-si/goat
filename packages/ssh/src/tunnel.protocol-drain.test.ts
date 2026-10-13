@@ -14,10 +14,7 @@ const compatible = {
   orchestration: ORCHESTRATION_PROTOCOL_VERSION,
 };
 
-const events = (f: {
-  fs: { readFileString: (path: string) => Effect.Effect<string, unknown> };
-  test: string;
-}) =>
+const events = (f: Pick<Effect.Success<ReturnType<typeof makeProtocolFixture>>, "fs" | "test">) =>
   f.fs.readFileString(`${f.test}/events`).pipe(
     Effect.map((text) =>
       text

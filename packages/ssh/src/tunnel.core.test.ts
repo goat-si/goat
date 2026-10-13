@@ -310,6 +310,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(launch, "ensure_remote_node_path || true");
     assert.include(devLaunch, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(devLaunch, "does not satisfy required range ");
+    // A failed cold start still cleans up the child this script launched.
     assert.include(launch, 'kill "$REMOTE_PID" 2>/dev/null || true');
     assert.include(launch, "wait_ready");
     assert.include(launch, '"$RUNNER_FILE" serve --host 127.0.0.1');
@@ -350,7 +351,9 @@ describe("ssh tunnel scripts", () => {
       'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
     );
     assert.include(launch, "check_live_protocol()");
-    assert.include(launch, 'kill "$UPGRADE_PID" 2>/dev/null || true');
+    assert.notInclude(launch, 'kill "$UPGRADE_PID"');
+    assert.include(launch, '__ssh-helper drain --port "$UPGRADE_PORT"');
+    assert.include(launch, 'nohup "$RUNNER_FILE" __ssh-helper supervise');
     assert.include(launch, 'REMOTE_PORT="$LIVE_PORT"');
     assert.include(launch, 'rm -f "$PID_FILE"');
     assert.include(launch, "printf 'external\\n' >\"$MANAGED_FILE\"");
@@ -2674,7 +2677,7 @@ cat "$HOME/.test/command"
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live.each(["stale PID", "missing identity", "identity changes before termination"] as const)(
+    it.live.each(["stale PID", "missing identity", "identity changes before drain"] as const)(
       "refuses an owned upgrade with %s despite matching protocol metadata",
       (mode) =>
         Effect.gen(function* () {
@@ -2719,6 +2722,8 @@ cat "$HOME/.test/command"
             `${runtime}/goat`,
             `#!/bin/sh
 if [ "$1" = --version ]; then printf '%s\\n' 'goat v${ARCHIVE.archiveVersion}'; exit 0; fi
+if [ "$1 $2" = '__ssh-helper compat' ]; then printf 'update-required 1 fixture-instance\\n'; exit 0; fi
+if [ "$1 $2" = '__ssh-helper drain' ]; then touch "$HOME/.test/drained"; exit 2; fi
 if [ "$1 $2" = '__ssh-helper compare-version' ]; then printf 'older\\n'; exit 0; fi
 if [ "$1 $2" = '__ssh-helper protocol' ]; then
   case " $* " in
@@ -2744,7 +2749,7 @@ if [ "$1 $2 $3 $4" != '-o command= -p ${pid}' ]; then
   exit 0
 fi
 printf 'inspected\\n' >> "$HOME/.test/inspected"
-if [ '${mode}' = 'identity changes before termination' ] && [ "$(wc -l < "$HOME/.test/inspected" | tr -d ' ')" = 1 ]; then
+if [ '${mode}' = 'identity changes before drain' ] && [ "$(wc -l < "$HOME/.test/inspected" | tr -d ' ')" = 1 ]; then
   cat "$HOME/.goat/ssh-launch/${key}/identity"
 else
   printf '%s\\n' '/bin/tail -f /unrelated/log'
@@ -2788,9 +2793,10 @@ fi
           if (mode !== "missing identity")
             assert.isAtLeast(
               (yield* fs.readFileString(`${home}/.test/inspected`)).trim().split("\n").length,
-              mode === "identity changes before termination" ? 2 : 1,
+              mode === "identity changes before drain" ? 2 : 1,
             );
           assert.isFalse(yield* fs.exists(`${home}/.test/signals`));
+          assert.isFalse(yield* fs.exists(`${home}/.test/drained`));
           assert.equal(yield* fs.readFileString(`${state}/run-t3.sh`), originalRunner);
           assert.equal(yield* fs.readFileString(record), metadata);
           assert.equal(yield* fs.readFileString(`${state}/pid`), pid + "\n");

@@ -66,6 +66,8 @@ function event(type, extra = {}) {
 }
 function runtime() { try { return JSON.parse(fs.readFileSync(runtimeFile, "utf8")); } catch { return null; } }
 const args = process.argv.slice(2);
+const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i+1]; };
+const tokenFile = path.join(home, ".goat/userdata/runtime-control.token");
 if (args[0] === "--version") {
   let runner = "";
   try { runner = fs.readFileSync(path.join(state, "run-t3.sh"), "utf8"); } catch {}
@@ -82,6 +84,27 @@ const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semv
 console.log(comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
   } else if (args[1] === "activity") {
 console.log(await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1])));
+  } else if (args[1] === "compat") {
+  try {
+    const value = await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readSshRuntimeCompatibility(Number(flag("--port")));
+    console.log(value.verdict + " " + (value.drainRestart ? 1 : 0) + " " + (value.instanceId ?? "-"));
+  } catch { console.log("unknown 0 -"); process.exitCode = 1; }
+  } else if (args[1] === "drain") {
+  const value = await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).requestSshRuntimeDrain({
+    port: Number(flag("--port")), instanceId: flag("--instance-id"), targetVersion: flag("--target-version"),
+    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file") });
+  event("drain-request", { value, force: args.includes("--force"), grace: Number(flag("--grace-seconds")) }); console.log(value);
+  } else if (args[1] === "supervise") {
+  // Supervised children prove readiness through their descriptor, not the readiness FIFO.
+  process.env.FIXTURE_SUPERVISED = "1";
+  const result = await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).superviseSshRuntimeReplacement({
+    oldPid: Number(flag("--old-pid")), oldInstanceId: flag("--old-instance-id"), port: Number(flag("--port")),
+    baseDir: flag("--base-dir"), stateDir: flag("--state-dir"), runnerFile: flag("--runner"),
+    previousRunnerFile: flag("--previous-runner"), targetVersion: flag("--target-version"),
+    previousVersion: flag("--previous-version"), identity: flag("--identity"), previousIdentity: flag("--previous-identity"),
+    exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
+  event("supervise", { status: result.status });
+  fs.writeFileSync(flag("--result"), result.status + " " + (result.pid ?? 0) + " " + (result.version ?? "-") + "\\n");
   } else if (args[1] === "runtime-port") {
 const current = runtime();
 if (!config.publishDefault || !current || !alive(current.pid)) process.exit(1);
@@ -119,23 +142,44 @@ request.on("error", () => process.exit(1));
   const requested = args.indexOf("--port");
   const port = requested < 0 ? 0 : Number(args[requested + 1]);
   const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
-  const server = http.createServer((request, response) => response.end(request.url === "/.well-known/t3/activity" ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
+  const instanceId = require("node:crypto").randomUUID();
+  const server = http.createServer((request, response) => {
+    if (request.method === "POST" && request.url === "/.well-known/goat/runtime/drain") {
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => {
+        const input = JSON.parse(body);
+        if (request.headers["x-goat-runtime-control"] !== fs.readFileSync(tokenFile, "utf8").trim()) { response.statusCode = 403; response.end("{}"); return; }
+        if (input.expectedInstanceId !== instanceId) { response.end(JSON.stringify({status:"instance-changed",instanceId,forced:false})); return; }
+        event("drain");
+        response.end(JSON.stringify({status:"drained",instanceId,forced:false}), () => {
+          event("self-stop");
+          if (runtime()?.pid === process.pid) fs.unlinkSync(runtimeFile);
+          server.close(() => process.exit(0)); server.closeAllConnections();
+        });
+      });
+      return;
+    }
+    response.end(request.url === "/.well-known/t3/activity" ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{drainRestart:true},instanceId,...fields}) : "ok");
+  });
   process.on("SIGTERM", () => {
 event("stop");
 if (runtime()?.pid === process.pid) fs.unlinkSync(runtimeFile);
 server.close(() => process.exit(0));
   });
   server.listen(port, "127.0.0.1", () => {
-const record = { version:1, startedAt:"2026-10-11T00:00:00.000Z", ...fields, pid: process.pid, port: server.address().port,
+const record = { instanceId, version:1, startedAt:"2026-10-11T00:00:00.000Z", ...fields, pid: process.pid, port: server.address().port,
   origin: "http://127.0.0.1:" + server.address().port };
 fs.mkdirSync(path.dirname(runtimeFile), { recursive: true });
 fs.writeFileSync(runtimeFile, JSON.stringify(record));
+fs.writeFileSync(tokenFile, "fixture-token-" + process.pid, {mode:0o600});
 fs.appendFileSync(path.join(fixture, "pids"), process.pid + "\\n");
 const installed = fs.existsSync(path.join(state, "run-t3.sh"))
   ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "";
 const marker = path.join(home, ".goat/runtime/goat/versions", version, ".install-complete");
 event("start", { installed, complete: fs.readFileSync(marker, "utf8").trim() });
 if (args.includes("--test-seed")) console.log(JSON.stringify(record));
+else if (process.env.FIXTURE_SUPERVISED === "1") fs.writeFileSync(path.join(fixture, "accepted-ready-" + process.pid), "ready");
 else {
   const fd = fs.openSync(path.join(fixture, "ready.fifo"), "w");
   fs.writeSync(fd, "ready\\n");

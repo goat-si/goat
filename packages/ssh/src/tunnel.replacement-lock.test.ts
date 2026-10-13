@@ -69,13 +69,14 @@ case "$3" in */${name})
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "host-wide replacement symlink mutex",
   () => {
-    it.live("legacy stop failure rolls back identity while holding the replacement lock", () =>
+    it.live("cancelled legacy drain rolls back identity while holding the replacement lock", () =>
       Effect.gen(function* () {
         const f = yield* makeProtocolFixture({
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
-          descriptor404: true,
+          drain: true,
+          ...current,
         });
         yield* f.fs.remove(`${f.state}/identity`);
         const before = yield* f.snapshot;
@@ -92,17 +93,18 @@ exec /bin/rm "$@"
         );
         yield* f.fs.chmod(`${bin}/rm`, 0o700);
         f.setRemotePath(`${bin}:${f.test}/identity-bin:${process.env.PATH ?? ""}`);
-        f.setScriptPrefix(
-          'kill() { if [ "$1" = -0 ]; then command kill "$@"; else return 1; fi; }\n',
-        );
+        yield* f.fs.writeFileString(`${f.test}/drain`, "cancelled");
         const result = yield* f.run("launch");
-        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) throw result.failure;
+        assert.equal(result.success.pending?.reason, "busy");
         assert.isNotEmpty((yield* f.fs.readFileString(`${f.test}/rollback-owner`)).trim());
         assert.deepEqual(yield* f.snapshot, before);
         assert.notInclude(
           yield* f.fs.readDirectory(`${f.home}/.goat/ssh-launch`),
           "replacement.lock",
         );
+        for (const type of ["stop", "self-stop", "supervise"])
+          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), `"type":"${type}"`);
         yield* Effect.sync(() => process.kill(f.pid, 0));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -116,6 +118,7 @@ exec /bin/rm "$@"
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
         });
         const bin = `${f.test}/locale-bin`;
@@ -162,6 +165,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...current,
           });
           const bin = `${f.test}/minimal-bin`;
@@ -195,8 +199,9 @@ exec "$HOME/.test/identity-bin/ps" "$@"
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...current,
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           const lock = `${f.home}/.goat/ssh-launch/replacement.lock`;
           const recovery = `${f.home}/.goat/ssh-launch/replacement.recovery`;
@@ -230,8 +235,9 @@ exec "$HOME/.test/identity-bin/ps" "$@"
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...current,
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           const lock = `${f.home}/.goat/ssh-launch/replacement.lock`;
           const recovery = `${f.home}/.goat/ssh-launch/replacement.recovery`;
@@ -266,8 +272,9 @@ exec "$HOME/.test/identity-bin/ps" "$@"
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         const bin = `${f.test}/lock-bin`;
         yield* f.fs.makeDirectory(bin);
@@ -301,8 +308,9 @@ case "$3" in */replacement.lock)
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
         const other = { ...uploadTarget, alias: "other-alias" };
@@ -319,13 +327,13 @@ case "$3" in */replacement.lock)
         ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport));
         assert.equal(second.pending?.reason, "contended");
         assert.equal(yield* f.fs.readLink(`${f.home}/.goat/ssh-launch/replacement.lock`), owner);
-        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"self-stop"');
         yield* f.fs.writeFileString(`${f.test}/lock-release`, "release\n");
         const result = yield* Fiber.join(first);
         if (Result.isFailure(result)) throw result.failure;
         assert.equal(result.success.refresh, "replaced");
         assert.equal(
-          (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"stop"').length - 1,
+          (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"self-stop"').length - 1,
           1,
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -337,8 +345,9 @@ case "$3" in */replacement.lock)
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         const lock = `${f.home}/.goat/ssh-launch/replacement.lock`;
         const recovery = `${f.home}/.goat/ssh-launch/replacement.recovery`;
@@ -378,8 +387,9 @@ case "$3" in */replacement.lock)
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         yield* pauseFirstLock(f, "replacement.lock");
         const launch = yield* Effect.forkChild(

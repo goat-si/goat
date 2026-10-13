@@ -12,21 +12,24 @@ const current = {
   orchestration: ORCHESTRATION_PROTOCOL_VERSION,
 };
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-  "idle-only SSH replacement",
+  "pending SSH drain replacement",
   () => {
     it.live.each(["older", "legacy", "incompatible"] as const)(
-      "%s preserves every live file while busy, then replaces once at idle",
+      "%s preserves every live file while replacement is pending, then drains once",
       (replacement) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...(replacement === "incompatible" ? { ssh: 999, orchestration: 999 } : current),
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           if (replacement === "legacy") yield* f.fs.remove(`${f.state}/identity`);
           yield* f.fs.writeFileString(`${f.test}/activity`, "busy");
+          if (replacement === "incompatible")
+            yield* f.fs.writeFileString(`${f.test}/drain`, "cancelled");
           const before = yield* f.snapshot;
           const first = yield* f.run("launch", false, {
             refreshOwnedRuntimeOnFirstConnection: true,
@@ -37,6 +40,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(first.success.status, replacement === "incompatible" ? "pending" : "ready");
           assert.deepEqual(yield* f.snapshot, before);
           yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
+          if (replacement === "incompatible")
+            yield* f.fs.writeFileString(`${f.test}/drain`, "drained");
           const second = yield* f.run("launch", false, {
             refreshOwnedRuntimeOnFirstConnection: true,
           });
@@ -44,21 +49,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(second.success.status, "ready");
           assert.equal(second.success.refresh, "replaced");
           const events = yield* f.fs.readFileString(`${f.test}/events`);
-          assert.equal(events.split('"type":"stop"').length - 1, 1);
+          assert.equal(events.split('"type":"self-stop"').length - 1, 1);
+          assert.equal(events.split('"type":"supervise"').length - 1, 1);
+          assert.notInclude(events, '"type":"stop"');
+          if (replacement === "incompatible")
+            assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
           assert.notEqual((yield* f.snapshot).pid, before.pid);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live.each(["legacy", "incompatible"] as const)(
-      "%s without a verified idle response stays pending and never commits ownership",
+      "%s with unknown activity preserves optional refresh or drains a required replacement",
       (replacement) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...(replacement === "incompatible" ? { ssh: 999, orchestration: 999 } : current),
-            candidateSignals: current,
           });
           if (replacement === "legacy") yield* f.fs.remove(`${f.state}/identity`);
           yield* f.fs.writeFileString(`${f.test}/activity`, "unknown");
@@ -67,8 +76,19 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             refreshOwnedRuntimeOnFirstConnection: true,
           });
           if (Result.isFailure(result)) throw result.failure;
-          assert.equal(result.success.pending?.reason, "unknown");
-          assert.deepEqual(yield* f.snapshot, before);
+          const events = yield* f.fs.readFileString(`${f.test}/events`);
+          assert.notInclude(events, '"type":"stop"');
+          if (replacement === "legacy") {
+            assert.equal(result.success.pending?.reason, "unknown");
+            assert.deepEqual(yield* f.snapshot, before);
+            assert.notInclude(events, '"type":"drain"');
+          } else {
+            assert.equal(result.success.refresh, "replaced");
+            assert.include(events, '"type":"drain"');
+            assert.include(events, '"type":"self-stop"');
+            assert.include(events, '"type":"supervise"');
+            assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
+          }
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
@@ -81,7 +101,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             kind: "managed",
             oldVersion: "1.2.3-preview.20260911.10",
             ...(compatible ? current : { ssh: 999, orchestration: 999 }),
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           const before = yield* f.snapshot;
           const result = yield* f.run("launch", false, {
@@ -104,8 +124,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
         yield* f.fs.writeFileString(`${f.test}/activity-pid`, String(f.pid + 1));
@@ -127,8 +148,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...current,
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           yield* f.fs.writeFileString(`${f.test}/activity`, `idle,${final}`);
           const before = yield* f.snapshot;
@@ -142,28 +164,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
 
     it.live.each(["older", "legacy", "incompatible"] as const)(
-      "%s stop failure preserves runner and rolls back prospective ownership",
+      "%s cancelled drain preserves runner and rolls back prospective ownership",
       (replacement) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
             kind: "managed",
             oldVersion: "1.2.2",
+            drain: true,
             ...(replacement === "incompatible" ? { ssh: 999, orchestration: 999 } : current),
-            candidateSignals: current,
+            candidateSignals: { ...current, drain: true },
           });
           if (replacement === "legacy") yield* f.fs.remove(`${f.state}/identity`);
           const before = yield* f.snapshot;
-          f.setScriptPrefix(`kill() {
-  if [ "$1" = '${f.pid}' ]; then return 1; fi
-  command kill "$@"
-}
-`);
+          yield* f.fs.writeFileString(`${f.test}/drain`, "cancelled");
           const result = yield* f.run("launch", false, {
             refreshOwnedRuntimeOnFirstConnection: true,
           });
-          if (Result.isSuccess(result)) throw new Error("Expected refused termination");
-          assert.include(result.failure.message, "did not stop");
+          if (Result.isFailure(result)) throw result.failure;
+          assert.equal(result.success.pending?.reason, "busy");
           assert.deepEqual(yield* f.snapshot, before);
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -175,9 +194,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           live: true,
           kind: "managed",
           oldVersion: "1.2.2",
+          drain: true,
           ...current,
           missingComparison: true,
-          candidateSignals: current,
+          candidateSignals: { ...current, drain: true },
         });
         const before = yield* f.snapshot;
         const result = yield* f.run("launch");
