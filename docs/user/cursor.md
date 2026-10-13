@@ -10,9 +10,8 @@ TypeScript package. It does not use Cursor's ACP transport for V2 execution.
   `CURSOR_API_KEY`.
 - A model accepted by the Cursor SDK. `auto` is sent to the SDK as its `default` model selection.
 
-The adapter currently uses the SDK's local-agent runtime so runs operate in the selected GOAT
-workspace. Cursor cloud agents need repository and cloud-environment configuration that GOAT does
-not expose yet.
+The Cursor provider runs in the selected GOAT workspace. Cursor Cloud is a separate provider
+that runs against the published repository in Cursor's cloud.
 
 ## Sign in
 
@@ -27,6 +26,31 @@ to use the browser flow.
 Use **Change account** or **Sign out** in the same settings section. Both stop that
 instance's running threads and keep their history. Sign-out forgets the saved credential; to revoke
 the generated key before it expires, remove it from your Cursor dashboard's API keys.
+
+## Cursor Cloud
+
+Sign in with your Cursor provider, then add Cursor Cloud in **Settings > Providers**.
+Choose the Cursor account source by its provider instance ID; the default is `cursor`.
+On mobile, manage the account under **Settings > Provider accounts**. If this environment
+has a saved Cursor SDK browser sign-in, GOAT can use it when the selected provider has
+no usable saved key. That saved sign-in may belong to a different account.
+
+Select Cursor Cloud for a repository with a pushed branch. The first message starts
+from the published revision; local edits and unpushed commits are not included.
+Cloud messages accept text only and require full access. GOAT's sandbox and approval
+overrides do not apply to Cursor's cloud. Progress, summary, and returned PR or branch
+links remain visible when connecting to the environment remotely. Cursor may create
+a draft PR; opening it does not mean its checks passed.
+
+Messages sent while a task is active wait for completion. Later messages continue
+in the same cloud agent using its original repository revision, without including
+subsequent local edits. **Stop** requests remote cancellation; GOAT marks cancellation
+only after Cursor confirms it. Closing GOAT or changing the account detaches
+observation; cloud work may continue. An unknown submission or tracking outcome
+blocks further messages until reconciled; open the saved agent link to inspect it.
+
+Manage sign-in in the selected Cursor provider's settings on the environment running
+the task. Cursor Cloud does not have a separate key entry or sign-in flow.
 
 ## V2 Capability Mapping
 
