@@ -49,7 +49,7 @@ describe("terminalContext", () => {
 
   it("formats a terminal context as a canonical reference link", () => {
     expect(formatTerminalContextReference(makeContext())).toBe(
-      "[Terminal 1 lines 12-13](t3-context://v1/terminal/terminal_context-1)",
+      "[Terminal 1 lines 12-13](goat-context://v1/terminal/terminal_context-1)",
     );
   });
 

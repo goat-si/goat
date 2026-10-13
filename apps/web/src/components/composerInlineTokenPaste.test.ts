@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import { ComposerContextId, EnvironmentId } from "@goat/contracts";
-import { CONTEXT_CLIPBOARD_MIMES } from "@goat/contracts/legacyT3Names";
+import { CONTEXT_CLIPBOARD_MIMES, GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { readPastedComposerContext, importPastedComposerText } from "./composerInlineTokenPaste";
 
 const record = {
@@ -28,7 +28,7 @@ it.each(CONTEXT_CLIPBOARD_MIMES)("imports context from clipboard MIME %s", (mime
     };
     expect(readPastedComposerContext(clipboard)).toEqual(fragment);
     expect(importPastedComposerText(clipboard, () => new Map([["ctx", "imported"]]))).toBe(
-      "[file](t3-context://v1/mention/imported)",
+      `[file](${GOAT_CONTEXT_LINK_PROTOCOL}://v1/mention/imported)`,
     );
   }
 });
