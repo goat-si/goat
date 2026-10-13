@@ -12,5 +12,10 @@ export const browserApiCorsAllowedHeaders = [
   GOAT_ORCHESTRATION_PROTOCOL_HEADER,
 ] as const;
 
-/** Origins of the Electron renderer, packaged and dev. */
-export const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"] as const;
+/** Origins of the Electron renderer, packaged and dev, current and before D13. */
+export const DESKTOP_RENDERER_ORIGINS = [
+  "goat://app",
+  "goat-dev://app",
+  "t3code://app",
+  "t3code-dev://app",
+] as const;

@@ -212,7 +212,8 @@ export function buildNewThreadLink(input: {
   return url.toString();
 }
 
-const APP_SCHEME = /^t3code(?:-[a-z]+)?:$/;
+// `goat` is registered with the OS since the desktop renderer moved to goat://app (D13).
+const APP_SCHEME = /^(?:t3code|goat)(?:-[a-z]+)?:$/;
 const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
 /**
