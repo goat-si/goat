@@ -431,9 +431,11 @@ the webhook on, a `notifyTarget` or `notifyWebhook: true` on that launch, or
 host outages are posted to the webhook only, and the launch returns
 `watching: true`. Without either, nothing changes: the launch returns
 `watching: false` and nothing is posted. The watch follows remote threads at the
-runtime mode the client was approved for. After its run is reported it waits:
-a later `goat_thread_send` from outside any thread re-arms it, and that run is
-reported to the webhook too. It ends without a report when the webhook stops
+runtime mode the client was approved for. The watch belongs to the client
+session that launched: only that session sees it in `goat_thread_status`.
+After its run is reported it waits: a later `goat_thread_send` from the same
+session re-arms it, and that run is reported to the webhook too. Another client
+sending to the thread does not. It ends without a report when the webhook stops
 posting it (turned off, or the launch's settings no longer match) or seven days
 after it was last armed.
 `goat_thread_watch`, `goat_thread_unwatch`, and `goat_thread_watch_list` still need

@@ -372,6 +372,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                     : // An outside client's launch is watched only for the completion webhook.
                       launchWatches
                         .watchExternal({
+                          owner: context.scope.requestNamespace,
                           host: null,
                           threadId: thread.id,
                           projectId: thread.projectId,

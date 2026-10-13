@@ -184,12 +184,12 @@ const unknownHost = new SshRemoteDispatch.SshRemoteDispatchError({
 });
 
 describe("HostThreadsMcpService", () => {
-  it.effect("re-arms the launcherless watch for a send from outside any thread", () =>
+  it.effect("re-arms only the outside caller's own launcherless watch after its send", () =>
     Effect.gen(function* () {
       const outside: McpInvocationScope = {
         ...scope,
         thread: undefined,
-        requestNamespace: "client",
+        requestNamespace: "client:bot-a",
       };
       const { result, rearms } = yield* runService(
         {
@@ -213,7 +213,13 @@ describe("HostThreadsMcpService", () => {
       expect(result._tag).toBe("Success");
       // The launch's webhook watch, if it chose one, follows the follow-up run too.
       expect(rearms).toEqual([
-        { launcherThreadId: null, host: "box", threadId: "remote-1", runId: "run-9" },
+        {
+          launcherThreadId: null,
+          owner: "client:bot-a",
+          host: "box",
+          threadId: "remote-1",
+          runId: "run-9",
+        },
       ]);
     }),
   );

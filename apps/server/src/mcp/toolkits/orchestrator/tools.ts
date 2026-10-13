@@ -321,7 +321,7 @@ const ThreadStatusTool = Tool.make("goat_thread_status", {
   .annotate(Tool.Idempotent, true);
 
 const WATCH_REPORTS =
-  " A watched thread wakes the calling thread with a message when a followed run ends, when the thread waits on a question, and once if its host stays unreachable; goat_thread_launch and goat_ssh_thread_launch start one automatically, and each goat_thread_send from the caller to the thread is followed the same way. A launch from outside any thread that chose a completion webhook is followed for later goat_thread_send calls from outside threads too.";
+  " A watched thread wakes the calling thread with a message when a followed run ends, when the thread waits on a question, and once if its host stays unreachable; goat_thread_launch and goat_ssh_thread_launch start one automatically, and each goat_thread_send from the caller to the thread is followed the same way. A launch from outside any thread that chose a completion webhook is followed for later goat_thread_send calls from the same outside client too.";
 
 const ThreadWatchTool = Tool.make("goat_thread_watch", {
   description:

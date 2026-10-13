@@ -67,9 +67,15 @@ import {
  *
  * A launch from outside any thread may opt into a launcherless watch. It is
  * followed the same way, at the runtime mode its caller was approved for, but
- * its reports go only to the completion webhook. Once its run is reported it
- * stays dormant, like a launcher's watch, so a later goat_thread_send from
- * outside any thread re-arms it and that run reaches the webhook too.
+ * its reports go only to the completion webhook. It belongs to the outside
+ * caller that launched (its MCP request namespace), and only that caller sees
+ * it in goat_thread_status. Once its run is reported it stays dormant, like a
+ * launcher's watch, so a later goat_thread_send from the same caller re-arms
+ * it and that run reaches the webhook too.
+ *
+ * Dormant watches expire: a launcher's after a week without changes, a
+ * launcherless one a week after it was last armed. An expired watch is treated
+ * as gone, and a periodic sweep drops it and releases any inline secret.
  */
 
 /** How long one local wait lasts before the follower looks for pending questions. */
@@ -89,6 +95,8 @@ const DORMANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
  * example when the host never comes back or a question is never answered.
  */
 const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
+/** How often dormant watches past their retention are dropped while the server runs. */
+const SWEEP_MS = 60 * 60_000;
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
 const RETRY_MS = 30_000;
 const TAIL_WINDOW = 40;
@@ -106,12 +114,19 @@ export interface LaunchWatchTarget {
   readonly threadId: ThreadId;
 }
 
-/** A watch's key; a null launcher names the launcherless watch of outside callers. */
-export type LaunchWatchKey = Omit<LaunchWatchTarget, "launcherThreadId"> & {
-  readonly launcherThreadId: ThreadId | null;
-};
+/**
+ * A watch's key. A null launcher names the launcherless watch of one outside
+ * caller, identified by its MCP request namespace.
+ */
+export type LaunchWatchKey = Omit<LaunchWatchTarget, "launcherThreadId"> &
+  (
+    | { readonly launcherThreadId: ThreadId }
+    | { readonly launcherThreadId: null; readonly owner: string }
+  );
 
 interface ExternalLaunchWatchInput {
+  /** The outside caller's MCP request namespace; only it can see and re-arm the watch. */
+  readonly owner: string;
   readonly host: string | null | undefined;
   readonly threadId: ThreadId;
   readonly projectId: ProjectId | null;
@@ -357,12 +372,20 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  /** Applies one change to the map and saves it; memory moves only after the write lands. */
-  const save = (change: (current: Map<string, LaunchWatch>) => void) => {
-    const next = new Map(watches);
-    change(next);
-    return persist(next);
-  };
+  /**
+   * Applies one change to the map and saves it; memory moves only after the
+   * write lands. Dormant watches past their retention are dropped on the way.
+   */
+  const save = (change: (current: Map<string, LaunchWatch>) => void) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const next = new Map(watches);
+      change(next);
+      for (const [watchId, watch] of next) {
+        if (dormantExpired(watch, now)) next.delete(watchId);
+      }
+      return yield* persist(next);
+    });
 
   const loadFile = (filePath: string) =>
     Effect.gen(function* () {
@@ -781,6 +804,17 @@ export const make = Effect.gen(function* () {
     watch.launcherThreadId === null &&
     now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
 
+  /** A watch past its retention, which every operation treats as gone. */
+  const expired = (watch: LaunchWatch, now: number) =>
+    launcherlessExpired(watch, now) ||
+    (watch.pendingRuns.length === 0 &&
+      watch.outage === null &&
+      now - watch.updatedAt >= DORMANT_RETENTION_MS);
+
+  /** An expired watch with nothing owed. One still owed is left to its follower to drop. */
+  const dormantExpired = (watch: LaunchWatch, now: number) =>
+    watch.pendingRuns.length === 0 && watch.outage === null && expired(watch, now);
+
   /**
    * Whether a launcherless watch can no longer report: the completion webhook,
    * its only destination, stopped taking it, or it outlived its retention.
@@ -1070,7 +1104,37 @@ export const make = Effect.gen(function* () {
 
   const keyOf = (input: LaunchWatchKey) => {
     const host = normalizeHost(input.host);
-    return { host, id: launchWatchId({ ...input, host }) };
+    const owner = input.launcherThreadId === null ? input.owner : null;
+    return {
+      host,
+      id: launchWatchId({
+        launcherThreadId: input.launcherThreadId,
+        owner,
+        host,
+        threadId: input.threadId,
+      }),
+    };
+  };
+
+  /** The watch under an id unless it outlived its retention. Call with the lock held. */
+  const live = (id: string, now: number) => {
+    const watch = watches.get(id);
+    return watch === undefined || expired(watch, now) ? undefined : watch;
+  };
+
+  /**
+   * A new watch's incarnation. One replacing an expired watch keeps its
+   * incarnation, so a follower still winding down follows the replacement.
+   */
+  const incarnationFor = (id: string) => {
+    const previous = watches.get(id)?.incarnation;
+    return previous === undefined
+      ? crypto.randomUUIDv4.pipe(
+          Effect.mapError(
+            (cause) => new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
+          ),
+        )
+      : Effect.succeed(previous);
   };
 
   let loaded = false;
@@ -1094,15 +1158,7 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     // Keep only watches that still owe a report or changed recently.
     watches = new Map(
-      stored.watches
-        .filter(
-          (watch) =>
-            !launcherlessExpired(watch, now) &&
-            (watch.pendingRuns.length > 0 ||
-              watch.outage !== null ||
-              now - watch.updatedAt < DORMANT_RETENTION_MS),
-        )
-        .map((watch) => [watch.id, watch]),
+      stored.watches.filter((watch) => !expired(watch, now)).map((watch) => [watch.id, watch]),
     );
     loaded = true;
     yield* releaseDroppedTargets(
@@ -1127,7 +1183,7 @@ export const make = Effect.gen(function* () {
         yield* ensureLoaded;
         const { host, id } = keyOf(input);
         const now = yield* Clock.currentTimeMillis;
-        const existing = watches.get(id);
+        const existing = live(id, now);
         const base =
           existing ??
           newLaunchWatch({
@@ -1136,12 +1192,7 @@ export const make = Effect.gen(function* () {
             threadId: input.threadId,
             projectId: input.projectId,
             title: input.title,
-            incarnation: yield* crypto.randomUUIDv4.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
-              ),
-            ),
+            incarnation: yield* incarnationFor(id),
             notifyWebhook: input.notifyWebhook ?? false,
             webhookTarget: input.webhookTarget ?? null,
             now,
@@ -1168,7 +1219,13 @@ export const make = Effect.gen(function* () {
         const { id } = keyOf(input);
         const existing = watches.get(id);
         if (existing === undefined) return;
-        const watch = addPendingRun(existing, input.runId, yield* Clock.currentTimeMillis);
+        const now = yield* Clock.currentTimeMillis;
+        if (expired(existing, now)) {
+          // Past its retention it is gone; re-arming must not revive its webhook.
+          yield* save((map) => map.delete(id));
+          return;
+        }
+        const watch = addPendingRun(existing, input.runId, now);
         if (watch === existing) return;
         yield* save((map) => map.set(id, watch));
         yield* ensureFollower(watch);
@@ -1176,7 +1233,12 @@ export const make = Effect.gen(function* () {
     );
 
   const find: LaunchWatchServiceShape["find"] = (input) =>
-    locked(ensureLoaded).pipe(Effect.map(() => watches.get(keyOf(input).id) ?? null));
+    locked(
+      Effect.gen(function* () {
+        yield* ensureLoaded;
+        return live(keyOf(input).id, yield* Clock.currentTimeMillis) ?? null;
+      }),
+    );
 
   const unwatch: LaunchWatchServiceShape["unwatch"] = (input) =>
     Effect.gen(function* () {
@@ -1222,24 +1284,25 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* ensureLoaded;
           const host = normalizeHost(input.host);
-          const id = launchWatchId({ launcherThreadId: null, host, threadId: input.threadId });
+          const id = launchWatchId({
+            launcherThreadId: null,
+            owner: input.owner,
+            host,
+            threadId: input.threadId,
+          });
           const now = yield* Clock.currentTimeMillis;
-          const existing = watches.get(id);
+          const existing = live(id, now);
           const base =
             existing === undefined
               ? newLaunchWatch({
                   launcherThreadId: null,
+                  owner: input.owner,
                   ceiling: input.ceiling,
                   host,
                   threadId: input.threadId,
                   projectId: input.projectId,
                   title: input.title,
-                  incarnation: yield* crypto.randomUUIDv4.pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
-                    ),
-                  ),
+                  incarnation: yield* incarnationFor(id),
                   notifyWebhook: input.route.notifyWebhook,
                   webhookTarget: input.route.webhookTarget,
                   now,
@@ -1270,6 +1333,21 @@ export const make = Effect.gen(function* () {
       ),
     ),
   );
+
+  // A dormant watch has no follower to notice that it expired, so sweep them.
+  const sweep = locked(
+    Effect.gen(function* () {
+      if (!loaded) return;
+      const now = yield* Clock.currentTimeMillis;
+      if (![...watches.values()].some((watch) => dormantExpired(watch, now))) return;
+      yield* save(() => {});
+    }),
+  ).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("launch watches: expired watches not dropped", { cause: error }),
+    ),
+  );
+  yield* forkParked(Effect.forever(Effect.sleep(SWEEP_MS).pipe(Effect.andThen(sweep))));
 
   return LaunchWatchService.of({
     register,

@@ -21,6 +21,7 @@ import {
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWatch,
   type OrchestratorMcpThreadWatchInput,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -243,6 +244,18 @@ const make = Effect.gen(function* () {
       : Effect.succeed(scope.thread.threadId);
 
   /**
+   * The caller's own watch of a thread: its thread's, or for an outside caller
+   * the launcherless watch its own launch made, never another caller's.
+   */
+  const watchKeyOf = (
+    scope: McpInvocationScope,
+    target: { readonly host: string | undefined; readonly threadId: ThreadId },
+  ): LaunchWatchService.LaunchWatchKey =>
+    scope.thread === undefined
+      ? { launcherThreadId: null, owner: scope.requestNamespace, ...target }
+      : { launcherThreadId: scope.thread.threadId, ...target };
+
+  /**
    * A send from a watching thread is followed like its launch: the run it
    * started or joined is reported when it ends. A send from outside any thread
    * re-arms the launcherless watch its launch made, so the completion webhook
@@ -257,9 +270,7 @@ const make = Effect.gen(function* () {
       ? Effect.void
       : launchWatches
           .rearm({
-            launcherThreadId: scope.thread?.threadId ?? null,
-            host: input.host,
-            threadId: input.threadId,
+            ...watchKeyOf(scope, { host: input.host, threadId: input.threadId }),
             runId: result.runId,
           })
           .pipe(
@@ -584,11 +595,7 @@ const make = Effect.gen(function* () {
           );
     // The watch lives on this machine, whichever machine runs the thread.
     const watch = yield* launchWatches
-      .find({
-        launcherThreadId: scope.thread?.threadId ?? null,
-        host: input.host,
-        threadId: input.threadId,
-      })
+      .find(watchKeyOf(scope, { host: input.host, threadId: input.threadId }))
       .pipe(Effect.mapError(storeFailure));
     return {
       ...status,

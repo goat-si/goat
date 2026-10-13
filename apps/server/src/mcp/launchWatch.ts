@@ -54,6 +54,12 @@ export const LaunchWatch = Schema.Struct({
   /** Null for a launch from outside any thread, whose reports go only to the completion webhook. */
   launcherThreadId: Schema.NullOr(ThreadId),
   /**
+   * The outside caller a launcherless watch belongs to (its MCP request namespace),
+   * so another outside caller cannot see or re-arm it. Null for a thread launcher's
+   * watch, and for launcherless watches from before owners were recorded.
+   */
+  owner: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /**
    * The runtime mode a launcherless watch's remote reads run at: what its outside
    * caller was approved for at launch. A thread launcher's current mode is used instead.
    */
@@ -129,16 +135,24 @@ export function normalizeHost(host: string | null | undefined): string | null {
 
 export function launchWatchId(input: {
   readonly launcherThreadId: string | null;
+  readonly owner?: string | null;
   readonly host: string | null;
   readonly threadId: string;
 }): string {
-  return [input.launcherThreadId ?? "", input.host ?? "", input.threadId]
+  const owner = input.launcherThreadId === null ? (input.owner ?? null) : null;
+  return [
+    input.launcherThreadId ?? "",
+    input.host ?? "",
+    input.threadId,
+    ...(owner === null ? [] : [owner]),
+  ]
     .map(encodeURIComponent)
     .join(":");
 }
 
 export function newLaunchWatch(input: {
   readonly launcherThreadId: ThreadId | null;
+  readonly owner?: string | null;
   readonly ceiling?: RuntimeMode | null;
   readonly host: string | null;
   readonly threadId: ThreadId;
@@ -153,6 +167,7 @@ export function newLaunchWatch(input: {
     id: launchWatchId(input),
     incarnation: input.incarnation,
     launcherThreadId: input.launcherThreadId,
+    owner: input.launcherThreadId === null ? (input.owner ?? null) : null,
     ceiling: input.ceiling ?? null,
     host: input.host,
     threadId: input.threadId,
