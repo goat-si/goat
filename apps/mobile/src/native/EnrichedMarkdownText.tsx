@@ -1,3 +1,7 @@
+import {
+  GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE,
+  GOAT_CONTEXT_CLIPBOARD_UTI,
+} from "@goat/contracts/legacyT3Names";
 import { decodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import {
   collectComposerContextReferences,
@@ -234,9 +238,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     return {
       linkTextByUrl,
       htmlAttributes: {
-        "data-t3-context-fragment": encodeURIComponent(props.contextClipboardFragment!),
+        [GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE]: encodeURIComponent(props.contextClipboardFragment!),
       },
-      mimeTypes: { "app.t3.context-fragment": props.contextClipboardFragment! },
+      mimeTypes: { [GOAT_CONTEXT_CLIPBOARD_UTI]: props.contextClipboardFragment! },
     };
   }, [props.contextClipboardFragment, props.markdown]);
   const markdownStyle = useMemo(

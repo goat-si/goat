@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 import { Socket } from "effect/socket";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import {
+  AuthEnvironmentBootstrapTokenType,
   ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_PROTOCOL_HEADER,
   CommandId,
@@ -261,7 +262,7 @@ try {
     body: new URLSearchParams({
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: bootstrap,
-      subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
+      subject_token_type: AuthEnvironmentBootstrapTokenType,
       requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
     }),
   });

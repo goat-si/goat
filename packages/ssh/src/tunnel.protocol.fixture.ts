@@ -152,10 +152,10 @@ if (req.method === "POST" && req.url === "/.well-known/goat/runtime/drain" && dr
   });
   return;
 }
-if (req.url === "/.well-known/t3/environment" && (${JSON.stringify(signals.descriptor404 ?? false)} || fs.existsSync(path.join(test, "descriptor404")))) {
+if (["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(req.url) && (${JSON.stringify(signals.descriptor404 ?? false)} || fs.existsSync(path.join(test, "descriptor404")))) {
   res.statusCode = 404; res.end("{}"); return;
 }
-if (req.url === "/.well-known/t3/activity") {
+if (["/.well-known/goat/activity", "/.well-known/t3/activity"].includes(req.url)) {
   const file = path.join(test, "activity");
   const values = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split(",") : ["unknown"];
   const countFile = path.join(test, "activity-requests");
@@ -167,7 +167,7 @@ if (req.url === "/.well-known/t3/activity") {
   const activityPid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : process.pid;
   res.end(JSON.stringify({activity, serverVersion: version, pid: activityPid})); return;
 }
-res.end(req.url === "/.well-known/t3/environment" ? JSON.stringify(descriptor) : "ok");
+res.end(["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(req.url) ? JSON.stringify(descriptor) : "ok");
   });
   process.on("SIGTERM", () => {
 event("stop");

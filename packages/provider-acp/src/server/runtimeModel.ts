@@ -1359,7 +1359,7 @@ export function syntheticLoadSessionResponseFromInitialize(
   return {
     ...(modes ? { modes } : {}),
     _meta: {
-      [LEGACY_SESSION_LOAD_READY_KEY]: "replay_idle",
+      [GOAT_SESSION_LOAD_READY_KEY]: "replay_idle",
     },
   };
 }

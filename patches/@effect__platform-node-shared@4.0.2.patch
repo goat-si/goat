@@ -1,7 +1,8 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+index b3e4deaa75124184262437280a97bad2b9e07c9d..7af6726b66a2806178b0cf6909f0801fe1363426 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -44,9 +44,17 @@
+@@ -44,9 +44,18 @@ const isProcessAlive = (childProcess, exitSignal) => {
      return false;
    }
  };
@@ -19,10 +20,33 @@ diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
 +    windowsHide: true
 +  }, onExit);
 +};
++const ignoreLateWriteError = () => {};
  const make = /*#__PURE__*/Effect.gen(function* () {
    const fs = yield* FileSystem.FileSystem;
    const path = yield* Path.Path;
+@@ -170,6 +179,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+             // Create a sink to write to for input file descriptors
+             let sink = Sink.drain;
+             if (nodeStream && "write" in nodeStream) {
++              nodeStream.on("error", ignoreLateWriteError);
+               sink = NodeSink.fromWritable({
+                 evaluate: () => nodeStream,
+                 onError: error => toPlatformError(`fromWritable(fd${fd})`, toError(error), command)
+@@ -214,6 +224,12 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     // sink that will attached to the process handle
+     let sink = Sink.drain;
+     if (Predicate.isNotNull(childProcess.stdin)) {
++      // The sink listens for errors only while it writes. Once the writer is
++      // interrupted (timeout, cancellation), a write still queued in libuv can
++      // fail with EPIPE after the child exits; without a listener that error
++      // crashes the process. The write's failure is already reported, if at
++      // all, through the sink or the exit code.
++      childProcess.stdin.on("error", ignoreLateWriteError);
+       sink = NodeSink.fromWritable({
+         evaluate: () => childProcess.stdin,
+         onError: error => toPlatformError("fromWritable(stdin)", toError(error), command),
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
+index f15aa85d65f52c3f79e7a78403897c9c32eaa521..aecc199cc13c6858cbac1247d7646a4b55232252 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
 @@ -19,7 +19,9 @@
@@ -36,7 +60,7 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
   *
   * POSIX cleanup targets a numeric process-group ID. If the group disappears
   * and its ID is reused before cleanup, an unrelated group may be signalled.
-@@ -99,13 +101,20 @@
+@@ -99,13 +101,22 @@ const isProcessAlive = (childProcess: NodeChildProcess.ChildProcess, exitSignal:
  const taskkill = (
    childProcess: NodeChildProcess.ChildProcess,
    onExit: (error: NodeChildProcess.ExecException | null) => void = () => {}
@@ -55,6 +79,29 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
      onExit
    )
 +}
-
++
++const ignoreLateWriteError = () => {}
+ 
  const make = Effect.gen(function*() {
    const fs = yield* FileSystem.FileSystem
+@@ -244,6 +255,7 @@ const make = Effect.gen(function*() {
+           // Create a sink to write to for input file descriptors
+           let sink: Sink.Sink<void, Uint8Array, never, PlatformError.PlatformError> = Sink.drain
+           if (nodeStream && "write" in nodeStream) {
++            nodeStream.on("error", ignoreLateWriteError)
+             sink = NodeSink.fromWritable({
+               evaluate: () => nodeStream,
+               onError: (error) => toPlatformError(`fromWritable(fd${fd})`, toError(error), command)
+@@ -300,6 +312,12 @@ const make = Effect.gen(function*() {
+       // sink that will attached to the process handle
+       let sink: Sink.Sink<void, unknown, never, PlatformError.PlatformError> = Sink.drain
+       if (Predicate.isNotNull(childProcess.stdin)) {
++        // The sink listens for errors only while it writes. Once the writer is
++        // interrupted (timeout, cancellation), a write still queued in libuv can
++        // fail with EPIPE after the child exits; without a listener that error
++        // crashes the process. The write's failure is already reported, if at
++        // all, through the sink or the exit code.
++        childProcess.stdin.on("error", ignoreLateWriteError)
+         sink = NodeSink.fromWritable({
+           evaluate: () => childProcess.stdin!,
+           onError: (error) => toPlatformError("fromWritable(stdin)", toError(error), command),

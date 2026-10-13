@@ -3,7 +3,7 @@ import {
   GOAT_ENVIRONMENT_PATH,
   LEGACY_ACTIVITY_PATH,
   GOAT_ACTIVITY_PATH,
-  GOAT_ORCHESTRATION_PROTOCOL_HEADER,
+  LEGACY_ORCHESTRATION_PROTOCOL_HEADER,
 } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import type * as DateTime from "effect/DateTime";
@@ -85,7 +85,7 @@ const OptionalBearerHeaders = Schema.Struct({
   dpop: Schema.optionalKey(Schema.String),
 });
 
-const LegacyOrchestrationProtocolHeaders = Schema.Struct({
+const GoatOrchestrationProtocolHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
   dpop: Schema.optionalKey(Schema.String),
   [ORCHESTRATION_PROTOCOL_HEADER]: Schema.Literal(ORCHESTRATION_PROTOCOL_VERSION_TEXT),
@@ -94,22 +94,22 @@ const LegacyOrchestrationProtocolHeaders = Schema.Struct({
 const OrchestrationProtocolHeaders = Schema.Struct({
   ...OptionalBearerHeaders.fields,
   [ORCHESTRATION_PROTOCOL_HEADER]: Schema.optionalKey(Schema.String),
-  [GOAT_ORCHESTRATION_PROTOCOL_HEADER]: Schema.optionalKey(Schema.String),
+  [LEGACY_ORCHESTRATION_PROTOCOL_HEADER]: Schema.optionalKey(Schema.String),
 })
   .check(
     Schema.makeFilter(
       (headers) =>
-        (headers[GOAT_ORCHESTRATION_PROTOCOL_HEADER] ?? headers[ORCHESTRATION_PROTOCOL_HEADER]) ===
-        ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+        (headers[ORCHESTRATION_PROTOCOL_HEADER] ??
+          headers[LEGACY_ORCHESTRATION_PROTOCOL_HEADER]) === ORCHESTRATION_PROTOCOL_VERSION_TEXT,
     ),
   )
   .pipe(
-    Schema.decodeTo(LegacyOrchestrationProtocolHeaders, {
+    Schema.decodeTo(GoatOrchestrationProtocolHeaders, {
       decode: SchemaGetter.transform(
-        ({ [GOAT_ORCHESTRATION_PROTOCOL_HEADER]: goatProtocol, ...headers }) => ({
+        ({ [LEGACY_ORCHESTRATION_PROTOCOL_HEADER]: legacyProtocol, ...headers }) => ({
           ...headers,
-          [ORCHESTRATION_PROTOCOL_HEADER]: (goatProtocol ??
-            headers[ORCHESTRATION_PROTOCOL_HEADER]) as typeof ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+          [ORCHESTRATION_PROTOCOL_HEADER]: (headers[ORCHESTRATION_PROTOCOL_HEADER] ??
+            legacyProtocol) as typeof ORCHESTRATION_PROTOCOL_VERSION_TEXT,
         }),
       ),
       encode: SchemaGetter.transform((headers) => headers),
@@ -522,23 +522,23 @@ export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
 
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
   .add(
-    HttpApiEndpoint.get("descriptor", LEGACY_ENVIRONMENT_PATH, {
+    HttpApiEndpoint.get("descriptor", GOAT_ENVIRONMENT_PATH, {
       success: ExecutionEnvironmentDescriptor,
     }),
   )
   .add(
-    HttpApiEndpoint.get("sshActivity", LEGACY_ACTIVITY_PATH, {
+    HttpApiEndpoint.get("sshActivity", GOAT_ACTIVITY_PATH, {
       success: SshServerActivity,
       error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
     }),
   )
   .add(
-    HttpApiEndpoint.get("goatDescriptor", GOAT_ENVIRONMENT_PATH, {
+    HttpApiEndpoint.get("legacyDescriptor", LEGACY_ENVIRONMENT_PATH, {
       success: ExecutionEnvironmentDescriptor,
     }),
   )
   .add(
-    HttpApiEndpoint.get("goatSshActivity", GOAT_ACTIVITY_PATH, {
+    HttpApiEndpoint.get("legacySshActivity", LEGACY_ACTIVITY_PATH, {
       success: SshServerActivity,
       error: [EnvironmentInternalError, EnvironmentHttpForbiddenError],
     }),

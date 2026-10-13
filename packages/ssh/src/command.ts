@@ -155,6 +155,50 @@ function normalizeSshErrorMessage(input: {
   return cleanedStdout.length > 0 ? cleanedStdout : input.fallbackMessage;
 }
 
+/** Names a target the way a user configured it, with the address ssh dials when that differs. */
+function describeSshTarget(target: DesktopSshEnvironmentTarget): string {
+  const alias = target.alias.trim() || target.hostname.trim();
+  const hostname = target.hostname.trim();
+  const address = target.port === null ? hostname : `${hostname}:${target.port}`;
+  return address === "" || address === alias ? alias : `${alias} (${address})`;
+}
+
+const UNREACHABLE_HINT = "Check the network or VPN connection to that host.";
+
+/**
+ * ssh exits 255 for its own failures. When the connection itself failed, the message leads
+ * with the host and the address ssh dialed, so it reads as a network problem instead of a
+ * failure of whatever the remote command was meant to do.
+ */
+function describeSshConnectionFailure(
+  target: DesktopSshEnvironmentTarget,
+  stderr: string,
+): string | undefined {
+  const alias = target.alias.trim() || target.hostname.trim();
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .toReversed();
+  for (const line of lines) {
+    const connect = /^ssh: connect to host (\S+) port (\d+): (.+)$/.exec(line);
+    if (connect !== null) {
+      return `Cannot reach ${alias} over SSH (${connect[1]}:${connect[2]}: ${connect[3]}). ${UNREACHABLE_HINT}`;
+    }
+    const resolve = /^ssh: Could not resolve hostname (\S+): (.+)$/.exec(line);
+    if (resolve !== null) {
+      return `Cannot reach ${alias} over SSH (could not resolve ${resolve[1]}: ${resolve[2]}). ${UNREACHABLE_HINT}`;
+    }
+    if (
+      line.startsWith("Connection timed out during banner exchange") ||
+      /^Connection to \S+ port \d+ timed out/.test(line)
+    ) {
+      return `Cannot reach ${alias} over SSH (${line}). ${UNREACHABLE_HINT}`;
+    }
+  }
+  return undefined;
+}
+
 function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   return {
     alias: target.alias,
@@ -274,11 +318,13 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       exitCode,
       stdout: diagnosticStdout,
       stderr,
-      message: normalizeSshErrorMessage({
-        stdout: diagnosticStdout,
-        stderr,
-        fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
-      }),
+      message:
+        (exitCode === 255 ? describeSshConnectionFailure(target, stderr) : undefined) ??
+        normalizeSshErrorMessage({
+          stdout: diagnosticStdout,
+          stderr,
+          fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
+        }),
     });
   }
 
@@ -317,7 +363,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               command: ["ssh"],
               exitCode: null,
               stderr: "",
-              message: `SSH command timed out after ${input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS}ms.`,
+              message: `SSH command to ${describeSshTarget(target)} timed out after ${input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS}ms.`,
             });
           }),
       }),

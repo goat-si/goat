@@ -10,11 +10,19 @@ import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import packageJson from "../../package.json" with { type: "json" };
 import { readLiveSshRuntimeProtocol, readSshServerActivity } from "./sshHelper.ts";
 
-const startDescriptor = async (value: unknown) => {
+const startDescriptor = async (value: unknown, legacyOnly = false) => {
+  const paths: string[] = [];
   const server = NodeHttp.createServer((request, response) => {
+    paths.push(request.url ?? "");
     response.setHeader("content-type", "application/json");
-    if (request.url === "/.well-known/t3/environment") response.end(JSON.stringify(value));
-    else response.end("ok");
+    if (
+      request.url === (legacyOnly ? "/.well-known/t3/environment" : "/.well-known/goat/environment")
+    )
+      response.end(JSON.stringify(value));
+    else {
+      response.writeHead(404);
+      response.end();
+    }
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -24,6 +32,7 @@ const startDescriptor = async (value: unknown) => {
   if (address === null || typeof address === "string") throw new Error("No loopback port");
   return {
     port: address.port,
+    paths,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -76,9 +85,13 @@ await Effect.runPromise(Command.runWith(sshHelperCommand,{version:'test'})(['pro
     });
   });
 
-  it.each((["matching", "legacy", "disagreeing", "malformed"] as const).map((mode) => ({ mode })))(
-    "checks a live loopback descriptor: $mode",
-    async ({ mode }) => {
+  it.each(
+    (["matching", "legacy", "disagreeing", "malformed"] as const).flatMap((mode) =>
+      [false, true].map((legacyOnly) => ({ mode, legacyOnly })),
+    ),
+  )(
+    "checks a live loopback descriptor: $mode, legacy path=$legacyOnly",
+    async ({ mode, legacyOnly }) => {
       const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-helper-"));
       const liveDescriptor =
         mode === "legacy"
@@ -90,7 +103,7 @@ await Effect.runPromise(Command.runWith(sshHelperCommand,{version:'test'})(['pro
           : mode === "malformed"
             ? { ...descriptor, sshRuntimeProtocolVersion: "1" }
             : descriptor;
-      const server = await startDescriptor(liveDescriptor);
+      const server = await startDescriptor(liveDescriptor, legacyOnly);
       try {
         const file = NodePath.join(home, "server-runtime.json");
         NodeFS.writeFileSync(
@@ -112,6 +125,11 @@ await Effect.runPromise(Command.runWith(sshHelperCommand,{version:'test'})(['pro
           }),
         );
         const result = await readLiveSshRuntimeProtocol(file);
+        expect(server.paths).toEqual(
+          legacyOnly
+            ? ["/.well-known/goat/environment", "/.well-known/t3/environment"]
+            : ["/.well-known/goat/environment"],
+        );
         expect(result.status).toBe(mode === "matching" || mode === "legacy" ? "live" : "unknown");
         if (result.status === "live") {
           expect(result.serverVersion).toBe(packageJson.version);
@@ -312,7 +330,7 @@ describe("SSH server activity", () => {
     { activity: "idle", expected: "unknown", status: 404 },
   ])("handles $activity with HTTP $status", async ({ activity, expected, status }) => {
     const server = NodeHttp.createServer((request, response) => {
-      expect(request.url).toBe("/.well-known/t3/activity");
+      expect(["/.well-known/goat/activity", "/.well-known/t3/activity"]).toContain(request.url);
       response.writeHead(status);
       response.end(
         JSON.stringify({ activity, serverVersion: packageJson.version, pid: process.pid }),
@@ -377,6 +395,32 @@ it("returns unknown when an activity response exceeds the deadline", async () =>
   } finally {
     vi.useRealTimers();
     server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+it.each([404, 403, 500])("activity falls back only on HTTP %s", async (status) => {
+  const paths: string[] = [];
+  const server = NodeHttp.createServer((request, response) => {
+    paths.push(request.url ?? "");
+    response.writeHead(request.url === "/.well-known/goat/activity" ? status : 200);
+    response.end(
+      JSON.stringify({ activity: "idle", serverVersion: packageJson.version, pid: process.pid }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing port");
+  try {
+    expect(await readSshServerActivity(address.port, process.pid)).toBe(
+      status === 404 ? "idle" : "unknown",
+    );
+    expect(paths).toEqual(
+      status === 404
+        ? ["/.well-known/goat/activity", "/.well-known/t3/activity"]
+        : ["/.well-known/goat/activity"],
+    );
+  } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

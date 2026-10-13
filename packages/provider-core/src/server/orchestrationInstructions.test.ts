@@ -8,6 +8,11 @@ import {
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
+  it("instructs every provider to write GOAT thread links", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "[title](goat-thread://v1/<threadId>)");
+    assert.notInclude(GOAT_ORCHESTRATION_INSTRUCTIONS, "t3-thread://");
+  });
+
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
     assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level GOAT conversations");

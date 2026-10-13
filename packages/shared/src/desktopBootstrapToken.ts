@@ -23,12 +23,11 @@ function windowIndex(nowMs: number): number {
   return Math.floor(nowMs / DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS);
 }
 
-// Tokens are issued with the legacy prefix so older backends accept them; a later build that
-// issues GOAT-prefixed tokens is accepted here already.
+// New tokens use the GOAT prefix; validation also accepts tokens from older desktops.
 function deriveToken(
   secret: string,
   window: number,
-  prefix: string = LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX,
+  prefix: string = GOAT_DESKTOP_BOOTSTRAP_HMAC_PREFIX,
 ): string {
   return NodeCrypto.createHmac("sha256", secret).update(`${prefix}${window}`).digest("hex");
 }

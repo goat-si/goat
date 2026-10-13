@@ -90,8 +90,8 @@ describe("DesktopBackendActivity", () => {
       const probe = yield* activity.probe;
       assert.equal(probe.activity, "idle");
       assert.deepEqual(urls, [
-        "http://127.0.0.1:4444/.well-known/t3/activity",
-        "http://127.0.0.1:4444/.well-known/t3/activity",
+        "http://127.0.0.1:4444/.well-known/goat/activity",
+        "http://127.0.0.1:4444/.well-known/goat/activity",
       ]);
       assert.isTrue(yield* probe.unchanged);
       a.changePid();

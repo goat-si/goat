@@ -7,14 +7,14 @@ import * as SchemaGetter from "effect/SchemaGetter";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-const LegacyDesktopBackendBootstrap = Schema.Struct({
+const GoatDesktopBackendBootstrap = Schema.Struct({
   mode: Schema.Literal("desktop"),
   noBrowser: Schema.Boolean,
   port: PortSchema,
   // Omitted when the desktop launches the backend inside WSL, since the
   // Windows-side baseDir maps to /mnt/c/... and the Linux side should use its
   // own home directory instead.
-  [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optional(Schema.String),
+  [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
   // Present when the desktop rotates the renderer's bootstrap token: the
@@ -40,17 +40,16 @@ const LegacyDesktopBackendBootstrap = Schema.Struct({
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
-/** Normalize both input spellings while encoding only the legacy peer key. */
+/** Normalize both input spellings while encoding only the GOAT peer key. */
 export const DesktopBackendBootstrap = Schema.Struct({
-  ...LegacyDesktopBackendBootstrap.fields,
-  [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optionalKey(Schema.String),
+  ...GoatDesktopBackendBootstrap.fields,
+  [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: Schema.optionalKey(Schema.String),
 }).pipe(
-  Schema.decodeTo(Schema.toType(LegacyDesktopBackendBootstrap), {
+  Schema.decodeTo(Schema.toType(GoatDesktopBackendBootstrap), {
     decode: SchemaGetter.transform(
-      ({ [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: goatHome, ...bootstrap }) => ({
+      ({ [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: legacyHome, ...bootstrap }) => ({
         ...bootstrap,
-        [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]:
-          goatHome ?? bootstrap[LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY],
+        [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: bootstrap[GOAT_DESKTOP_BOOTSTRAP_HOME_KEY] ?? legacyHome,
       }),
     ),
     encode: SchemaGetter.transform((bootstrap) => bootstrap),
@@ -59,7 +58,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;
 
-/** Written to `<t3Home>/runtime` just before the desktop app stops its
+/** Written to `<goatHome>/runtime` just before the desktop app stops its
     backend to install an update. The updated app starts a new backend right
     away, so a backend that sees a fresh marker at shutdown keeps its managed
     tunnel. */

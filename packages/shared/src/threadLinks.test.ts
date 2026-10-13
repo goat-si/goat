@@ -27,7 +27,7 @@ describe("thread links", () => {
         (threadId) => titles.get(threadId),
       ),
     ).toBe(
-      "[Decoded](t3-thread://v1/thread:project:1) [Literal escape](t3-thread://v1/provider%3A1)",
+      "[Decoded](goat-thread://v1/thread:project:1) [Literal escape](goat-thread://v1/provider%3A1)",
     );
     // A thread with an empty title still exists, so its link is not redirected.
     const untitled = new Map([
@@ -49,18 +49,18 @@ describe("thread links", () => {
     ].join("\n");
     expect(relabelThreadLinks(markdown, () => "New")).toBe(
       [
-        "Live [New](t3-thread://v1/t1), literal `[old](t3-thread://v1/t1)`.",
+        "Live [New](goat-thread://v1/t1), literal `[old](t3-thread://v1/t1)`.",
         "```md",
         "[old](t3-thread://v1/t1)",
         "```",
-        "After [New](t3-thread://v1/t1)",
+        "After [New](goat-thread://v1/t1)",
       ].join("\n"),
     );
   });
 
   it("formats a label that would otherwise break the Markdown link", () => {
-    expect(formatThreadLink("t1", "Fix [ci] \\ build")).toBe("[Fix ci build](t3-thread://v1/t1)");
-    expect(formatThreadLink("t1", " ] ")).toBe("[t1](t3-thread://v1/t1)");
+    expect(formatThreadLink("t1", "Fix [ci] \\ build")).toBe("[Fix ci build](goat-thread://v1/t1)");
+    expect(formatThreadLink("t1", " ] ")).toBe("[t1](goat-thread://v1/t1)");
   });
 
   it("relabels links with the current title and leaves unknown threads alone", () => {
@@ -70,6 +70,6 @@ describe("thread links", () => {
         "See [Old name](t3-thread://v1/renamed) and [Gone](t3-thread://v1/deleted).",
         (threadId) => titles.get(threadId),
       ),
-    ).toBe("See [Fix the build now](t3-thread://v1/renamed) and [Gone](t3-thread://v1/deleted).");
+    ).toBe("See [Fix the build now](goat-thread://v1/renamed) and [Gone](t3-thread://v1/deleted).");
   });
 });

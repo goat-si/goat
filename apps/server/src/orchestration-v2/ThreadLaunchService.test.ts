@@ -1157,7 +1157,7 @@ it.effect("names the worktree itself when the client provides no branch", () =>
       yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 1));
       assert.match(
         harness.createWorktree.mock.calls[0]?.[0]?.newRefName ?? "",
-        /^t3\/[0-9a-f]{8}$/u,
+        /^goat\/[0-9a-f]{8}$/u,
       );
       yield* waitUntil(() =>
         threads
@@ -1220,35 +1220,37 @@ it.effect("renames a temporary t3/<hash> branch off the provisioning critical pa
   }),
 );
 
-it.effect("provisions under t3-<hash> when a plain t3 branch blocks t3/*", () =>
-  Effect.gen(function* () {
-    const harness = makeHarness({
-      hasCommit: (input) => Effect.succeed(input.refName === "refs/heads/t3"),
-      createWorktree: (input) =>
-        Effect.succeed({
-          worktree: { path: "/repo-worktrees/temp", refName: input.newRefName, headSha: "abc" },
-        } as never),
-    });
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const threads = yield* ThreadManagement.ThreadManagementService;
-      const launched = yield* launches.launch(
-        launchInput({
-          command: "command:launch:blocked-namespace",
-          thread: "thread:launch:blocked-namespace",
-          message: "Build the feature",
-          workspace: { type: "worktree", baseRef: "main", branch: "t3/abcd1234" },
-        }),
-      );
-      yield* waitUntil(() =>
-        threads
-          .getThreadProjection(launched.threadId)
-          .pipe(Effect.map((projection) => projection.thread.branch === "generated-branch")),
-      );
-      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.newRefName, "t3-abcd1234");
-      assert.equal(harness.renameBranch.mock.calls[0]?.[0]?.oldBranch, "t3-abcd1234");
-    }).pipe(Effect.provide(harness.layer));
-  }),
+it.effect(
+  "provisions under goat-<hash> when a plain t3 branch blocks the legacy t3/* request",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        hasCommit: (input) => Effect.succeed(input.refName === "refs/heads/t3"),
+        createWorktree: (input) =>
+          Effect.succeed({
+            worktree: { path: "/repo-worktrees/temp", refName: input.newRefName, headSha: "abc" },
+          } as never),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const launched = yield* launches.launch(
+          launchInput({
+            command: "command:launch:blocked-namespace",
+            thread: "thread:launch:blocked-namespace",
+            message: "Build the feature",
+            workspace: { type: "worktree", baseRef: "main", branch: "t3/abcd1234" },
+          }),
+        );
+        yield* waitUntil(() =>
+          threads
+            .getThreadProjection(launched.threadId)
+            .pipe(Effect.map((projection) => projection.thread.branch === "generated-branch")),
+        );
+        assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.newRefName, "goat-abcd1234");
+        assert.equal(harness.renameBranch.mock.calls[0]?.[0]?.oldBranch, "goat-abcd1234");
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );
 
 it.effect("keeps an explicit branch name instead of generating one", () =>

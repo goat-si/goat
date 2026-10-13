@@ -1,3 +1,4 @@
+import { GOAT_REFS_ROOT } from "@goat/contracts/legacyT3Names";
 /**
  * Guided reviews: a maintainer-facing brief on a pull request, written by the environment's
  * source-control writer model. See `PullRequestReviewGuide` in contracts for what a guide is for.
@@ -215,7 +216,7 @@ const make = Effect.gen(function* () {
       );
     // Fetched into a ref of this run's own: FETCH_HEAD is shared by every fetch in the
     // workspace, so a concurrent run could otherwise measure this change from its base.
-    const baseRef = `refs/t3/review-guide/${runId}/base`;
+    const baseRef = `${GOAT_REFS_ROOT}/review-guide/${runId}/base`;
     yield* fetch([`+refs/heads/${detail.baseBranch}:${baseRef}`]);
     yield* Effect.addFinalizer(() =>
       git

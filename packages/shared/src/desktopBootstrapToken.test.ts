@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- the test derives a token the way a later build would.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the test checks the independently specified wire prefix.
 import * as NodeCrypto from "node:crypto";
 
 import {
@@ -53,14 +53,15 @@ describe("desktop bootstrap token", () => {
 
 it("keeps accepting the token bytes issued before the rename", () => {
   const legacyToken = "5d78c2ca298011b8e4d1864d152fadd3bc83a0d5432d55cc7e97767a14fa6b02";
-  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).toBe(legacyToken);
+  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).not.toBe(legacyToken);
   expect(isValidDesktopBootstrapToken(SECRET, legacyToken, 10 * WINDOW)).toBe(true);
 });
 
-it("accepts tokens a later build derives with the GOAT prefix", () => {
+it("issues tokens with the GOAT prefix", () => {
   const goatToken = NodeCrypto.createHmac("sha256", SECRET)
     .update(`goat-desktop-bootstrap:${10}`)
     .digest("hex");
+  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).toBe(goatToken);
   expect(isValidDesktopBootstrapToken(SECRET, goatToken, 10 * WINDOW)).toBe(true);
   expect(isValidDesktopBootstrapToken(SECRET, goatToken, 12 * WINDOW)).toBe(false);
 });

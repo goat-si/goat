@@ -201,7 +201,7 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["T3 Code Alpha"]);
+        assert.deepEqual(calls.setName, ["GOAT Alpha"]);
         assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "GOAT");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
@@ -245,7 +245,7 @@ describe("DesktopAppIdentity", () => {
 
         const runtimeName = calls.setName[0];
         assert.isDefined(runtimeName);
-        assert.equal(runtimeName, `T3 Code ${stage}`);
+        assert.equal(runtimeName, `GOAT ${stage}`);
         // RFC 9110's token grammar, after Electron removes ASCII spaces.
         assert.match(runtimeName.replaceAll(" ", ""), /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/);
         assert.equal(

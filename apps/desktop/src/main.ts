@@ -67,6 +67,8 @@ import { resolveDesktopSshCliRunner } from "./ssh/desktopSshCliRunner.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
+import * as DesktopRendererOriginMigration from "./app/DesktopRendererOriginMigration.ts";
+import * as DesktopSafeStorageKeyMigration from "./app/DesktopSafeStorageKeyMigration.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
@@ -93,6 +95,19 @@ if (process.argv.includes("--version")) {
   }
   Electron.app.exit(0);
 }
+
+// Electron reads app.name once, before the event loop starts, to name the safeStorage key (macOS
+// Keychain item, Linux keyring entry). Set the runtime name here, synchronously. Builds that set
+// it later left their key under the initial package name, which the key migration copies from.
+const initialRuntimeName = Electron.app.name;
+Electron.app.setName(
+  DesktopEnvironment.desktopRuntimeAppName(
+    DesktopEnvironment.resolveDesktopAppBranding({
+      isDevelopment: (process.env.VITE_DEV_SERVER_URL ?? "").trim() !== "",
+      appVersion: Electron.app.getVersion(),
+    }).stageLabel,
+  ),
+);
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
@@ -161,6 +176,8 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopState.layer,
   DesktopShutdown.layer,
   DesktopLegacyLocalStorage.layer,
+  DesktopSafeStorageKeyMigration.layer({ initialRuntimeName }),
+  DesktopRendererOriginMigration.layer,
   DesktopAppSettings.layer,
   DesktopClientSettings.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),

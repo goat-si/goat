@@ -4274,3 +4274,24 @@ it.effect("SSH workspace push propagates key-auth refusal", () =>
     assert.deepInclude(error, { _tag: "GitCommandError", reason: "authentication_failed" });
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const previous = yield* git(cwd, ["rev-parse", "HEAD"]);
+    yield* writeTextFile(cwd, "README.md", "# rewritten\n");
+    yield* git(cwd, ["commit", "-am", "rewritten", "--amend"]);
+    const target = yield* git(cwd, ["rev-parse", "HEAD"]);
+    yield* git(cwd, ["reset", "--hard", previous]);
+    const result = yield* driver.refreshCheckedOutBranch({
+      cwd,
+      targetCommit: target,
+      resetWhenHeadCommit: previous,
+    });
+    assert.isTrue(result.moved);
+    assert.equal(yield* git(cwd, ["rev-parse", "refs/goat/pre-refresh"]), previous);
+    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), target);
+  }).pipe(Effect.provide(layerTest)),
+);

@@ -1,5 +1,5 @@
 import {
-  LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY,
+  GOAT_DESKTOP_BOOTSTRAP_HOME_KEY,
   LEGACY_RESOURCE_MONITOR_BINARY_NAME,
 } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
@@ -573,7 +573,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       mode: "desktop" as const,
       noBrowser: true,
       port: backendExposure.port,
-      [LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY]: environment.baseDir,
+      [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
       desktopBootstrapSecret: input.bootstrapSecret,
@@ -662,7 +662,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     mode: "desktop" as const,
     noBrowser: true,
     port: input.port,
-    // Omit t3Home so the Linux backend uses its own home dir instead of
+    // Omit goatHome so the Linux backend uses its own home dir instead of
     // the Windows-side baseDir (which would be a /mnt/c path and share
     // the SQLite file with the primary).
     host: wslBindHost,

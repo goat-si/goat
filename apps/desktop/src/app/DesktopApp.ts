@@ -25,6 +25,8 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
+import * as DesktopRendererOriginMigration from "./DesktopRendererOriginMigration.ts";
+import * as DesktopSafeStorageKeyMigration from "./DesktopSafeStorageKeyMigration.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -183,10 +185,11 @@ const bootstrap = Effect.gen(function* () {
   });
   yield* installDesktopIpcHandlers();
   yield* logBootstrapInfo("bootstrap ipc handlers registered");
+  const userDataPath = yield* (yield* DesktopAppIdentity.DesktopAppIdentity).resolveUserDataPath;
+  // Before any window: the renderer must find its storage on the new origin.
+  yield* (yield* DesktopRendererOriginMigration.DesktopRendererOriginMigration).run(userDataPath);
   // Before any window: the preload merges these items before the app reads storage.
-  yield* (yield* DesktopLegacyLocalStorage.DesktopLegacyLocalStorage).load(
-    yield* (yield* DesktopAppIdentity.DesktopAppIdentity).resolveUserDataPath,
-  );
+  yield* (yield* DesktopLegacyLocalStorage.DesktopLegacyLocalStorage).load(userDataPath);
 
   yield* snapShot.initialize;
 
@@ -305,6 +308,14 @@ const startup = Effect.gen(function* () {
   }
   const userDataPath = yield* appIdentity.resolveUserDataPath;
   yield* electronApp.setPath("userData", userDataPath);
+  // Before the runtime name is set and before anything reads safeStorage.
+  yield* (yield* DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration).run({
+    userDataPath,
+    legacyRuntimeName: DesktopEnvironment.legacyDesktopRuntimeAppName(
+      environment.branding.stageLabel,
+    ),
+    runtimeName: DesktopEnvironment.desktopRuntimeAppName(environment.branding.stageLabel),
+  });
   yield* logStartupInfo("runtime logging configured", { logDir: environment.logDir });
   yield* desktopSettings.load;
 

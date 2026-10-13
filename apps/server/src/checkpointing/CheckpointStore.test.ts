@@ -567,3 +567,21 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
     );
   });
 });
+
+it.effect("writes GOAT checkpoint refs and restores an existing legacy ref", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const store = yield* CheckpointStore.CheckpointStore;
+    const ref = checkpointRefForThreadTurn(ThreadId.make("rename"), 1);
+    expect(ref).toMatch(/^refs\/goat\/checkpoints\//);
+    yield* store.captureCheckpoint({ cwd, checkpointRef: ref });
+    const legacy = ref.replace("refs/goat/", "refs/t3/") as typeof ref;
+    yield* git(cwd, ["update-ref", legacy, ref]);
+    yield* writeTextFile(NodePath.join(cwd, "README.md"), "changed\n");
+    expect(yield* store.hasCheckpointRef({ cwd, checkpointRef: legacy })).toBe(true);
+    yield* store.restoreCheckpoint({ cwd, checkpointRef: legacy });
+    const fs = yield* FileSystem.FileSystem;
+    expect(yield* fs.readFileString(NodePath.join(cwd, "README.md"))).toBe("# test\n");
+  }).pipe(Effect.provide(layerTest)),
+);

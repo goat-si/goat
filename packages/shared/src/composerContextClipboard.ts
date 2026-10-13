@@ -29,9 +29,9 @@ export function encodeComposerContextClipboardHtml(
   html?: string,
 ): string {
   if (html !== undefined)
-    return `<div ${LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE}="${encodeURIComponent(fragment)}">${html}</div>`;
+    return `<div ${GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE}="${encodeURIComponent(fragment)}">${html}</div>`;
   const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<pre ${LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE}="${encodeURIComponent(fragment)}">${escaped}</pre>`;
+  return `<pre ${GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE}="${encodeURIComponent(fragment)}">${escaped}</pre>`;
 }
 
 export function decodeComposerContextClipboardHtml(

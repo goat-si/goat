@@ -9,7 +9,10 @@ contract picks the directory this process uses.
 `apps/server/src/bin.ts` is the executable entry. When it is the process entrypoint it either
 serves the ACP MCP stdio bridge or calls `runCli` in `apps/server/src/binCli.ts`. The CLI root is
 `Command.make("goat")`. A bare `goat` runs `runDefaultServerCommand` from `apps/server/src/cli/server.ts`,
-which resolves config and calls `runServer` in `apps/server/src/server.ts`.
+which resolves config, takes the state directory's `server-owner.lock`
+([state roots](settings-and-storage.md#state-roots)), and calls `runServer` in
+`apps/server/src/server.ts`. A server under the service launcher waits while another server owns
+the directory; any other server fails after a short grace for an owner that is exiting.
 
 `runServer` launches the HTTP layer. `layerHttpServer` binds `NodeHttp.createServer` with the
 configured host, port, and websocket options. WebSocket RPC is `GET /ws` in `apps/server/src/ws.ts`.

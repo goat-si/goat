@@ -14,12 +14,14 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
@@ -1166,6 +1168,51 @@ describe("EnvironmentRegistry", () => {
         yield* Deferred.succeed(releaseDisconnect, undefined);
       }).pipe(Effect.provide(harness.layer));
     }),
+  );
+
+  it.effect.each([
+    { finalEnabled: false, requests: 2 },
+    { finalEnabled: true, requests: 1 },
+  ])(
+    "a stalled SSH teardown holds one request while the switch flips; ends enabled=$finalEnabled",
+    ({ finalEnabled, requests }) =>
+      Effect.gen(function* () {
+        // Each desktop disconnect reports itself and waits for its own release.
+        const calls = yield* Queue.unbounded<Deferred.Deferred<void>>();
+        const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+          holdSshDisconnect: () =>
+            Effect.gen(function* () {
+              const release = yield* Deferred.make<void>();
+              yield* Queue.offer(calls, release);
+              yield* Deferred.await(release);
+            }),
+        });
+
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          const environmentId = SSH_CONNECTION.environmentId;
+          yield* registry.start;
+
+          yield* registry.setEnabled(environmentId, false);
+          const stalled = yield* Queue.take(calls);
+          for (let flip = 0; flip < 3; flip++) {
+            yield* registry.setEnabled(environmentId, true);
+            yield* registry.setEnabled(environmentId, false);
+          }
+          if (finalEnabled) yield* registry.setEnabled(environmentId, true);
+          // Four offs while the host is stuck reach the desktop once.
+          expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([SSH_TARGET]);
+
+          yield* Deferred.succeed(stalled, undefined);
+          if (requests === 2) {
+            // Still off when the stalled request returns: one rerun.
+            yield* Deferred.succeed(yield* Queue.take(calls), undefined);
+          } else {
+            yield* TestClock.adjust(0);
+          }
+          expect(yield* Ref.get(harness.disconnectedSshTargets)).toHaveLength(requests);
+        }).pipe(Effect.provide(harness.layer));
+      }),
   );
 
   it.effect("does not connect a persisted environment that was switched off", () =>

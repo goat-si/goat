@@ -56,6 +56,31 @@ beforeEach(() => vi.stubGlobal("fetch", async () => new Response(null, { status:
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ssh tunnel scripts", () => {
+  it.live("generates valid shell syntax with GOAT runtime variables and legacy peer metadata", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const generated = yield* nativeScriptsBatch([{ input: ARCHIVE }, { input: NODE_SCRIPT }]);
+      for (const scripts of generated) {
+        assert.include(scripts.runner, "GOAT_NODE_SCRIPT_PATH=");
+        assert.include(scripts.runner, "T3_NODE_SCRIPT_PATH=");
+        assert.notMatch(scripts.runner, /\$[\{]?T3_/);
+        for (const script of Object.values(scripts)) {
+          if (script === null) continue;
+          const child = yield* spawner.spawn(
+            ChildProcess.make(remoteShell, ["-n"], {
+              stdin: { stream: Stream.make(encoder.encode(script)), endOnDone: true },
+            }),
+          );
+          const result = yield* Effect.all({
+            code: child.exitCode,
+            stderr: child.stderr.pipe(Stream.decodeText(), Stream.mkString),
+          });
+          assert.equal(result.code, 0, result.stderr);
+        }
+      }
+      assert.include(generated[0]!.runner, `T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.effect(
     "preserves runner bytes and keeps cache directories out of launch and pairing scripts",
     () =>
@@ -93,7 +118,7 @@ describe("ssh tunnel scripts", () => {
           if (key === "node") continue;
           const ordinary = baseline[key].runner;
           const start = ordinary.indexOf(
-            '  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS"',
+            '  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS"',
           );
           const end = ordinary.indexOf("  if command -v sha256sum >/dev/null 2>&1; then");
           const upload = first.upload!;
@@ -102,7 +127,7 @@ describe("ssh tunnel scripts", () => {
             upload.slice(upload.indexOf("  if command -v sha256sum >/dev/null 2>&1; then")),
             ordinary.slice(end),
           );
-          assert.include(upload, `T3_EXPECTED='${"a".repeat(64)}'`);
+          assert.include(upload, `GOAT_EXPECTED='${"a".repeat(64)}'`);
           assert.equal(first.runner, ordinary);
         }
         assert.throws(
@@ -121,7 +146,7 @@ describe("ssh tunnel scripts", () => {
   );
   it.effect("preserves literal shell PIDs through every nested script builder", () =>
     Effect.gen(function* () {
-      const lockOwner = `printf '%s\\n' "$$" > "$T3_LOCK_CANDIDATE/pid"`;
+      const lockOwner = `printf '%s\\n' "$$" > "$GOAT_LOCK_CANDIDATE/pid"`;
       for (const input of [
         ARCHIVE,
         { ...ARCHIVE, releaseBaseUrl: "https://example.invalid/mirror/" },
@@ -132,7 +157,7 @@ describe("ssh tunnel scripts", () => {
           assert.include(generated[field], lockOwner, field);
           assert.notInclude(
             generated[field],
-            `printf '%s\\n' "$" > "$T3_LOCK_CANDIDATE/pid"`,
+            `printf '%s\\n' "$" > "$GOAT_LOCK_CANDIDATE/pid"`,
             field,
           );
         }
@@ -150,33 +175,36 @@ describe("ssh tunnel scripts", () => {
     Effect.gen(function* () {
       const generated = yield* nativeScripts({ nodeScriptPath: "/fixture/dollar $$ $& entry.mjs" });
       for (const field of ["runner", "launch", "pairing", "mcp"] as const) {
-        assert.include(generated[field], "T3_NODE_SCRIPT_PATH='/fixture/dollar $$ $& entry.mjs'");
+        assert.include(generated[field], "GOAT_NODE_SCRIPT_PATH='/fixture/dollar $$ $& entry.mjs'");
       }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it("embeds the runner in the launch script byte for byte", () => {
     const runner = SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE);
-    assert.include(runner, 'printf \'%s\\n\' "$$" > "$T3_LOCK_CANDIDATE/pid"');
+    assert.include(runner, 'printf \'%s\\n\' "$$" > "$GOAT_LOCK_CANDIDATE/pid"');
     assert.include(SshTunnel.buildRemoteLaunchScript(ARCHIVE), runner);
   });
 
   it("installs and runs the release archive without Node, npm, or npx", () => {
     const script = SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE);
 
-    assert.include(script, "T3_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
-    assert.include(script, "T3_NODE_SCRIPT_PATH=''");
+    assert.include(script, "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
+    assert.include(script, "GOAT_NODE_SCRIPT_PATH=''");
     assert.include(
       script,
-      "T3_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
+      "GOAT_RELEASE_BASE_URL='https://github.com/goat-si/goat-releases/releases/download'",
     );
     assert.include(
       script,
-      'T3_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$T3_ARCHIVE_VERSION"',
+      'GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"',
     );
-    assert.include(script, 'T3_ARCHIVE="goat-$T3_ARCHIVE_VERSION-$T3_PLATFORM-$T3_ARCH.tar.gz"');
+    assert.include(
+      script,
+      'GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"',
+    );
     assert.include(script, "SHA256SUMS");
-    assert.include(script, 'exec "$T3_RUNTIME_DIR/goat" "$@"');
+    assert.include(script, 'exec "$GOAT_RUNTIME_DIR/goat" "$@"');
     assert.notInclude(script, "npx");
     assert.notInclude(script, "npm exec");
     assert.notInclude(script, "t3@latest");
@@ -185,44 +213,44 @@ describe("ssh tunnel scripts", () => {
     // the completion marker after acquiring it.
     assert.include(
       script,
-      'T3_LOCK="$HOME/.goat/runtime/goat/versions/.$T3_ARCHIVE_VERSION.install.lock"',
+      'GOAT_LOCK="$HOME/.goat/runtime/goat/versions/.$GOAT_ARCHIVE_VERSION.install.lock"',
     );
     // Publish the pid before the atomic move, and pin stale cleanup to a cwd.
-    assert.include(script, 'mv "$T3_LOCK_CANDIDATE" "$T3_LOCK"');
-    assert.include(script, 'cd "$T3_LOCK" 2>/dev/null || exit 0');
-    assert.include(script, 'if kill -0 "$T3_LOCK_OWNER" 2>/dev/null; then exit 2; fi');
-    assert.include(script, 'elif [ "$T3_LOCK_UNOWNED" -lt 4 ]; then');
-    assert.include(script, 'if [ "$T3_LOCK_WAITED" -ge 360 ]; then');
-    assert.include(script, '"$T3_STAGING/SHA256SUMS" 30');
-    assert.include(script, '"$T3_STAGING/$T3_ARCHIVE" 240');
+    assert.include(script, 'mv "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK"');
+    assert.include(script, 'cd "$GOAT_LOCK" 2>/dev/null || exit 0');
+    assert.include(script, 'if kill -0 "$GOAT_LOCK_OWNER" 2>/dev/null; then exit 2; fi');
+    assert.include(script, 'elif [ "$GOAT_LOCK_UNOWNED" -lt 4 ]; then');
+    assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
+    assert.include(script, '"$GOAT_STAGING/SHA256SUMS" 30');
+    assert.include(script, '"$GOAT_STAGING/$GOAT_ARCHIVE" 240');
     assert.notInclude(script, "-mmin");
-    assert.equal(script.split("if ! t3_runtime_ready; then").length - 1, 2);
+    assert.equal(script.split("if ! goat_runtime_ready; then").length - 1, 2);
     assert.isBelow(
-      script.indexOf('"$T3_STAGING/goat" --version'),
-      script.indexOf('> "$T3_STAGING/.install-complete"'),
+      script.indexOf('"$GOAT_STAGING/goat" --version'),
+      script.indexOf('> "$GOAT_STAGING/.install-complete"'),
     );
     // Node discovery is defined for the dev path but only ever invoked inside
     // the node-script branch, which the archive path skips entirely.
     assert.equal(script.split("ensure_remote_node_path || true").length - 1, 1);
     assert.isBelow(
       script.indexOf("ensure_remote_node_path || true"),
-      script.indexOf('exec node "$T3_NODE_SCRIPT_PATH" "$@"'),
+      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
     );
     assert.isBelow(
-      script.indexOf('exec node "$T3_NODE_SCRIPT_PATH" "$@"'),
-      script.indexOf("T3_ARCHIVE_VERSION="),
+      script.indexOf('exec node "$GOAT_NODE_SCRIPT_PATH" "$@"'),
+      script.indexOf("GOAT_ARCHIVE_VERSION="),
     );
 
     const launch = SshTunnel.buildRemoteLaunchScript({
       ...ARCHIVE,
       releaseBaseUrl: "https://mirror.example/goat/",
     });
-    assert.include(launch, "T3_ARCHIVE_MODE=1");
-    assert.include(launch, "T3_RELEASE_BASE_URL='https://mirror.example/goat'");
+    assert.include(launch, "GOAT_ARCHIVE_MODE=1");
+    assert.include(launch, "GOAT_RELEASE_BASE_URL='https://mirror.example/goat'");
     assert.include(launch, '"$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE"');
     assert.include(launch, '"$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT"');
     assert.include(launch, "__ssh-helper protocol --runtime-file");
-    assert.include(SshTunnel.buildRemoteLaunchScript(NODE_SCRIPT), "T3_ARCHIVE_MODE=0");
+    assert.include(SshTunnel.buildRemoteLaunchScript(NODE_SCRIPT), "GOAT_ARCHIVE_MODE=0");
   });
 
   it("rejects archive versions that are not a single exact version segment", () => {
@@ -243,7 +271,7 @@ describe("ssh tunnel scripts", () => {
     }
     assert.include(
       SshTunnel.buildRemoteGoatRunnerScript(ARCHIVE),
-      "T3_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
+      "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
     );
   });
 
@@ -260,7 +288,7 @@ describe("ssh tunnel scripts", () => {
   it("does not hard-code a remote node engine range", () => {
     const script = SshTunnel.buildRemoteGoatRunnerScript(NODE_SCRIPT);
 
-    assert.include(script, "T3_NODE_ENGINE_RANGE=''");
+    assert.include(script, "GOAT_NODE_ENGINE_RANGE=''");
     assert.notInclude(script, TEST_NODE_ENGINE_RANGE);
   });
 
@@ -272,12 +300,12 @@ describe("ssh tunnel scripts", () => {
 
     assert.include(
       script,
-      "T3_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
+      "GOAT_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
     );
-    assert.include(script, 'exec node "$T3_NODE_SCRIPT_PATH" "$@"');
-    assert.include(script, "T3_ARCHIVE_VERSION=''");
+    assert.include(script, 'exec node "$GOAT_NODE_SCRIPT_PATH" "$@"');
+    assert.include(script, "GOAT_ARCHIVE_VERSION=''");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
-    assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
+    assert.include(script, `GOAT_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
     assert.include(script, "function satisfiesSemverRange");
     assert.include(script, "satisfiesSemverRange(rawVersion, range)");
@@ -291,7 +319,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(script, 'prepend_path_if_dir "$HOME/.nodenv/shims"');
     assert.include(script, 'NVM_DIR="$HOME/.nvm"');
     assert.include(script, "nvm use --silent default");
-    assert.include(script, 'for T3_NODE_BIN in "$NVM_DIR"/versions/node/*/bin');
+    assert.include(script, 'for GOAT_NODE_BIN in "$NVM_DIR"/versions/node/*/bin');
     assert.notInclude(script, "ensure $NVM_DIR/nvm.sh is available");
     assert.notInclude(script, "npx");
   });
@@ -308,7 +336,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(launch, "RUNNER_CHANGED=1");
     assert.include(launch, "ensure_remote_node_path()");
     assert.include(launch, "ensure_remote_node_path || true");
-    assert.include(devLaunch, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
+    assert.include(devLaunch, `GOAT_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(devLaunch, "does not satisfy required range ");
     // A failed cold start still cleans up the child this script launched.
     assert.include(launch, 'kill "$REMOTE_PID" 2>/dev/null || true');
@@ -320,7 +348,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(launch, 'wait_ready "60000"');
     assert.include(launch, 'if [ -s "$LOG_FILE" ]; then');
     assert.include(launch, "It wrote nothing to %s");
-    assert.include(launch, "T3_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
+    assert.include(launch, "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'");
     assert.include(
       SshTunnel.buildRemotePairingScript(stateKey, ARCHIVE),
       '"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json',
@@ -332,7 +360,7 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(SshTunnel.buildRemotePairingScript(stateKey, ARCHIVE), "server-home");
     assert.include(
       SshTunnel.buildRemotePairingScript(stateKey, ARCHIVE),
-      "T3_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
+      "GOAT_ARCHIVE_VERSION='1.2.3-preview.20260911.4'",
     );
     assert.include(
       SshTunnel.buildRemoteStopScript(stateKey),
@@ -1179,7 +1207,7 @@ else if (args[0] === "__ssh-helper") {
 else {
   fs.appendFileSync("${root}/starts", "start\\n");
   const fields = {serverVersion:"${ARCHIVE.archiveVersion}",sshRuntimeProtocolVersion:${SSH_RUNTIME_PROTOCOL_VERSION},orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
-  const server = http.createServer((request,response) => response.end(request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
+  const server = http.createServer((request,response) => response.end(["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(request.url) ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{},...fields}) : "ok"));
   process.on("SIGTERM", () => { fs.appendFileSync("${root}/stops", "stop\\n"); server.close(); });
   server.listen(0, "127.0.0.1", () => {
     const record = {version:1,startedAt:"2026-10-11T00:00:00.000Z",...fields,pid:process.pid,port:server.address().port,origin:"http://127.0.0.1:"+server.address().port};
@@ -1829,7 +1857,7 @@ describe("archive runner script", () => {
             { mode: 0o700 },
           );
           const script = SshTunnel.buildRemoteGoatRunnerScript({ archiveVersion, releaseBaseUrl });
-          assert.include(script, 'if [ "$T3_LOCK_WAITED" -ge 360 ]; then');
+          assert.include(script, 'if [ "$GOAT_LOCK_WAITED" -ge 360 ]; then');
           yield* fs.writeFileString(runner, script.replace("-ge 360 ]", "-ge 3 ]"));
           const result = yield* runRunner(home, runner, bin);
           assert.equal(result.exitCode, 1);
@@ -2081,7 +2109,7 @@ console.log("goat v" + (count === 0 ? version : "9.9.9"));`,
             }
             if (
               mode === "upload-failure" &&
-              command.args.some((arg) => arg.includes("T3_SSH_UPLOADED_ARCHIVE"))
+              command.args.some((arg) => arg.includes("GOAT_SSH_UPLOADED_ARCHIVE"))
             )
               return {
                 ...makeSuccessfulProcess(""),

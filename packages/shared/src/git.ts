@@ -16,13 +16,8 @@ import {
   LEGACY_WORKTREE_LONG_BRANCH_PREFIX,
 } from "@goat/contracts/legacyT3Names";
 
-/**
- * Temporary branch names cross independently versioned peers (a mobile client names the
- * branch an older server provisions), so they keep the legacy prefix until a later build
- * flips it (plan D17). `goat/` names are already accepted.
- */
-export const WORKTREE_BRANCH_PREFIX = LEGACY_WORKTREE_BRANCH_PREFIX;
-const GOAT_WORKTREE_BRANCH_PREFIX = "goat";
+/** New temporary branches use GOAT names; readers also recognize older clients' prefixes. */
+export const WORKTREE_BRANCH_PREFIX = "goat";
 // Canonical form is `goat/<8 hex>`, or `goat-<8 hex>` when a plain `goat`
 // branch blocks the namespace. Legacy prefixes remain eligible for regeneration,
 // including UUID v4 names produced by older mobile builds.
@@ -30,7 +25,7 @@ const TEMP_WORKTREE_HEX_TOKEN = "[0-9a-f]{8}";
 const TEMP_WORKTREE_UUID_V4_TOKEN =
   "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
-  `^(?:(?:${GOAT_WORKTREE_BRANCH_PREFIX}|${LEGACY_WORKTREE_BRANCH_PREFIX})[-/]${TEMP_WORKTREE_HEX_TOKEN}|${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}(?:[-/]${TEMP_WORKTREE_HEX_TOKEN}|\\/${TEMP_WORKTREE_UUID_V4_TOKEN}))$`,
+  `^(?:(?:${WORKTREE_BRANCH_PREFIX}|${LEGACY_WORKTREE_BRANCH_PREFIX})[-/]${TEMP_WORKTREE_HEX_TOKEN}|${LEGACY_WORKTREE_LONG_BRANCH_PREFIX}(?:[-/]${TEMP_WORKTREE_HEX_TOKEN}|\\/${TEMP_WORKTREE_UUID_V4_TOKEN}))$`,
 );
 
 /**

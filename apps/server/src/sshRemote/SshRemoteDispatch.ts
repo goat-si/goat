@@ -1351,7 +1351,13 @@ const make = Effect.gen(function* () {
   });
 });
 
-/** Resolve local archive/mirror configuration before building the remote runner. */
+/**
+ * Resolve local archive/mirror configuration before building the remote runner.
+ * The server owns the host's runtime like the desktop does: it installs its own
+ * release on a stopped host and refreshes an older compatible server once it
+ * answers idle. Replacement only happens through the server's own drain, so
+ * another client attached to it is never cut off mid-turn.
+ */
 export const resolveSshCliRunner = (baseDir: string) =>
   Effect.gen(function* () {
     const archiveDirectory = yield* Config.String("GOAT_SSH_RUNTIME_ARCHIVE_DIR").pipe(
@@ -1372,7 +1378,7 @@ export const resolveSshCliRunner = (baseDir: string) =>
       archiveDirectory,
       ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
       ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
-      keepExistingRunner: true,
+      refreshOwnedRuntimeOnFirstConnection: true,
     } satisfies SshTunnel.RemoteGoatRunnerOptions;
   });
 
@@ -1381,10 +1387,9 @@ const layerManager = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     const runner = yield* resolveSshCliRunner(config.baseDir);
     return SshTunnel.SshEnvironmentManager.layer({
-      // Share only the GOAT runner under the tunnel's ~/.goat/ssh-launch.
-      // Keep run-t3.sh there so a second GOAT client cannot restart a managed
-      // server. Do not import/reuse an upstream ~/.t3 runner or server home.
-      // Local archiveDirectory still belongs to this local config.baseDir.
+      // Share only the GOAT runner under the tunnel's ~/.goat/ssh-launch. Do not
+      // import/reuse an upstream ~/.t3 runner or server home. Local
+      // archiveDirectory still belongs to this local config.baseDir.
       resolveCliRunner: Effect.succeed(runner),
       leaveRemoteServerRunning: true,
     });

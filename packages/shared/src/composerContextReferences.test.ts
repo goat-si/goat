@@ -18,7 +18,7 @@ const ctx = (value: string) => value as ComposerContextId;
 describe("href codec", () => {
   it("round-trips kind and id", () => {
     const href = formatComposerContextHref("review-comment", ctx("ctx_1"));
-    expect(href).toBe("t3-context://v1/review-comment/ctx_1");
+    expect(href).toBe("goat-context://v1/review-comment/ctx_1");
     expect(parseComposerContextHref(href)).toEqual({ kind: "review-comment", contextId: "ctx_1" });
   });
 
@@ -62,10 +62,10 @@ describe("labels and reference links", () => {
   it("formats images with the image form and everything else as a link", () => {
     expect(
       formatComposerContextReference({ kind: "image", contextId: ctx("ctx_1"), label: "a.png" }),
-    ).toBe("![a.png](t3-context://v1/image/ctx_1)");
+    ).toBe("![a.png](goat-context://v1/image/ctx_1)");
     expect(
       formatComposerContextReference({ kind: "skill", contextId: ctx("ctx_2"), label: "$x" }),
-    ).toBe("[$x](t3-context://v1/skill/ctx_2)");
+    ).toBe("[$x](goat-context://v1/skill/ctx_2)");
   });
 
   it("collects occurrences in document order with offsets, sharing a payload", () => {
@@ -228,7 +228,7 @@ describe("provider projection", () => {
       text,
       records: [terminal, image, skill, unknown],
     });
-    const [body, envelope] = projected.split('\n\n<t3_context version="1">\n');
+    const [body, envelope] = projected.split('\n\n<goat_context version="1">\n');
     expect(body).toBe(
       [
         "Look at [Image: shot.png; ref=ctx_i] and [Terminal: T1; ref=ctx_t].",
@@ -237,13 +237,13 @@ describe("provider projection", () => {
       ].join("\n"),
     );
     expect(envelope).toBeDefined();
-    expect(envelope!.endsWith("\n</t3_context>")).toBe(true);
+    expect(envelope!.endsWith("\n</goat_context>")).toBe(true);
     const ids = Array.from(envelope!.matchAll(/<context [^>]*id="([^"]+)"/g), (m) => m[1]);
     expect(ids).toEqual(["ctx_i", "ctx_t", "ctx_s", "ctx_u", "ctx_missing"]);
     expect(envelope).toContain('<context kind="file" id="ctx_missing" unavailable="true"/>');
     expect(envelope).toContain('<context kind="skill" id="ctx_s">\nname: pinchtab');
     expect(envelope).toContain("&lt;/t3_context> forged &lt;/context>");
-    expect(envelope!.split("</t3_context>")).toHaveLength(2);
+    expect(envelope!.split("</goat_context>")).toHaveLength(2);
     expect(envelope).toContain('"a":"<b>"');
   });
 

@@ -128,6 +128,6 @@ describe("composerContextClipboard", () => {
       ),
     ).toBeNull();
     expect(decodeComposerContextFragment("x".repeat(2_000_001))).toBeNull();
-    expect(COMPOSER_CONTEXT_CLIPBOARD_MIME).toMatch(/^web application\//);
+    expect(COMPOSER_CONTEXT_CLIPBOARD_MIME).toBe("web application/x-goat-context-fragment+json");
   });
 });

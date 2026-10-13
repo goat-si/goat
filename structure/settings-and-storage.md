@@ -24,6 +24,12 @@ not explicit. The derived paths include:
 | `attachments/`                 | Attachment bytes                                       |
 | `logs/`                        | Server and provider logs                               |
 | `server-runtime.json`          | Runtime identity for an already-running server         |
+| `server-owner.lock`            | One server's ownership of this directory               |
+
+A server holds `server-owner.lock` (`apps/server/src/serverOwnerLock.ts`) from before its database
+opens until it exits, so one state directory has one server. The lock file also logs every owner,
+which the service launcher reads before it restores a database backup; see
+[server updates](../docs/internals/server-updates.md#database-rollback).
 
 `apps/server/src/serverSettings.ts` reads and writes `settingsPath`. The schema those files follow
 is `ServerSettings` in `packages/contracts/src/settings.ts`, including `goatBotHome`.

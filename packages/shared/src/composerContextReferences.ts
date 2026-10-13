@@ -1,5 +1,5 @@
 import {
-  LEGACY_CONTEXT_LINK_PROTOCOL,
+  GOAT_CONTEXT_LINK_PROTOCOL,
   CONTEXT_LINK_PROTOCOLS,
   LEGACY_CONTEXT_ENVELOPE_TAG,
   GOAT_CONTEXT_ENVELOPE_TAG,
@@ -14,12 +14,12 @@ import {
 } from "@goat/contracts";
 
 /**
- * Canonical inline reference: `[label](t3-context://v1/<kind>/<contextId>)`, or the image
+ * Canonical inline reference: `[label](goat-context://v1/<kind>/<contextId>)`, or the image
  * form `![label](...)`. The link carries position and identity only; the payload lives in the
  * message's context records. Labels are display text and never identity.
  */
 
-const CONTEXT_PROTOCOL = `${LEGACY_CONTEXT_LINK_PROTOCOL}:`;
+const CONTEXT_PROTOCOL = `${GOAT_CONTEXT_LINK_PROTOCOL}:`;
 const COMPOSER_CONTEXT_HREF_PREFIX = `${CONTEXT_PROTOCOL}//v1/`;
 const CONTEXT_HREF_PREFIXES = CONTEXT_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 const CONTEXT_HREF_PATTERN = `(?:${CONTEXT_LINK_PROTOCOLS.join("|")})://v1/`;
@@ -132,7 +132,7 @@ export function replaceComposerContextReferences(
 // Provider projection
 // ---------------------------------------------------------------------------
 
-const CONTEXT_ENVELOPE_TAG = LEGACY_CONTEXT_ENVELOPE_TAG;
+const CONTEXT_ENVELOPE_TAG = GOAT_CONTEXT_ENVELOPE_TAG;
 const CONTEXT_ENTRY_TAG = "context";
 
 function kindDisplayName(kind: ComposerContextKind): string {
@@ -160,7 +160,7 @@ export function formatComposerContextProviderMarker(
 function escapeComposerContextPayloadText(text: string): string {
   return text.replace(
     new RegExp(
-      String.raw`<(?=/?(?:${CONTEXT_ENVELOPE_TAG}|${GOAT_CONTEXT_ENVELOPE_TAG}|${CONTEXT_ENTRY_TAG})\b)`,
+      String.raw`<(?=/?(?:${LEGACY_CONTEXT_ENVELOPE_TAG}|${GOAT_CONTEXT_ENVELOPE_TAG}|${CONTEXT_ENTRY_TAG})\b)`,
       "gi",
     ),
     "&lt;",

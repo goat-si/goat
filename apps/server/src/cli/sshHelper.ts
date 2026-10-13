@@ -1,10 +1,16 @@
-import { LEGACY_ENVIRONMENT_PATH, LEGACY_ACTIVITY_PATH } from "@goat/contracts/legacyT3Names";
+import {
+  GOAT_ENVIRONMENT_PATH,
+  LEGACY_ENVIRONMENT_PATH,
+  GOAT_ACTIVITY_PATH,
+  LEGACY_ACTIVITY_PATH,
+} from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics globalDateInEffect:off
 // @effect-diagnostics globalDate:off
 // The helpers mirror the inline Node snippets the SSH launch script used to
 // run, byte for byte in behaviour, so they stay on plain Node APIs.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
@@ -31,6 +37,12 @@ import {
   SSH_RUNTIME_PROTOCOL_VERSION,
 } from "@goat/shared/sshRuntimeProtocol";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import {
+  SSH_REPLACEMENT_ID_ENV,
+  sshReplacementOwner,
+  sshSupervisorOwner,
+} from "../serverOwnerLock.ts";
+import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
 import packageJson from "../../package.json" with { type: "json" };
 
 /**
@@ -162,9 +174,14 @@ const readProtocolDescriptor = (port: number) =>
       if (cause !== undefined) reject(cause);
       else resolve(value);
     };
-    const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: LEGACY_ENVIRONMENT_PATH, timeout: 1000 },
-      (response) => {
+    let request: NodeHttp.ClientRequest;
+    const send = (path: string) => {
+      request = NodeHttp.get({ hostname: "127.0.0.1", port, path, timeout: 1000 }, (response) => {
+        if (response.statusCode === 404 && path === GOAT_ENVIRONMENT_PATH) {
+          response.resume();
+          send(LEGACY_ENVIRONMENT_PATH);
+          return;
+        }
         const chunks: Buffer[] = [];
         let bytes = 0;
         response.on("data", (chunk: Buffer) => {
@@ -188,19 +205,20 @@ const readProtocolDescriptor = (port: number) =>
             finish(cause);
           }
         });
-      },
-    );
+      });
+      request.once("timeout", () => {
+        const cause = new Error("SSH descriptor timed out");
+        request.destroy(cause);
+        finish(cause);
+      });
+      request.once("error", finish);
+    };
     const deadline = setTimeout(() => {
       const cause = new Error("SSH descriptor deadline exceeded");
       request.destroy(cause);
       finish(cause);
     }, 1500);
-    request.once("timeout", () => {
-      const cause = new Error("SSH descriptor timed out");
-      request.destroy(cause);
-      finish(cause);
-    });
-    request.once("error", finish);
+    send(GOAT_ENVIRONMENT_PATH);
   });
 
 const protocolVersion = (value: unknown): value is string =>
@@ -419,12 +437,17 @@ export const readSshServerActivity = async (
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      request.destroy();
+      request?.destroy();
       resolve(value);
     };
-    const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: LEGACY_ACTIVITY_PATH },
-      (response) => {
+    let request: NodeHttp.ClientRequest | undefined;
+    const send = (path: string) => {
+      request = NodeHttp.get({ hostname: "127.0.0.1", port, path }, (response) => {
+        if (response.statusCode === 404 && path === GOAT_ACTIVITY_PATH) {
+          response.resume();
+          send(LEGACY_ACTIVITY_PATH);
+          return;
+        }
         const chunks: Buffer[] = [];
         let bytes = 0;
         response.on("data", (chunk: Buffer) => {
@@ -453,10 +476,11 @@ export const readSshServerActivity = async (
             finish("unknown");
           }
         });
-      },
-    );
+      });
+      request.once("error", () => finish("unknown"));
+    };
     const deadline = setTimeout(() => finish("unknown"), 1500);
-    request.once("error", () => finish("unknown"));
+    send(GOAT_ACTIVITY_PATH);
   });
 };
 
@@ -693,6 +717,10 @@ export type SshRuntimeSupervisorResult =
  * the handshake: its descriptor names `targetVersion`, a new instance, and protocol ranges this
  * build attaches to. Otherwise the supervisor stops only the child it started, restores the
  * database and runner it backed up, and starts the previous version again.
+ *
+ * The backup and the restore both run under server-owner.lock. The restore is skipped when any
+ * server other than this supervisor and the replacement it started owned the data since the
+ * backup, so another server's writes are never overwritten by the snapshot.
  */
 export const superviseSshRuntimeReplacement = async (
   input: SshRuntimeSupervisorInput,
@@ -701,9 +729,28 @@ export const superviseSshRuntimeReplacement = async (
     return { status: "old-alive", reason: "The drained server did not exit; it was left running." };
   const userdata = NodePath.join(input.baseDir, "userdata");
   const backup = NodePath.join(input.stateDir, "replacement-backup");
-  copyDatabase(userdata, backup);
+  const replacementId = NodeCrypto.randomUUID();
+  const ours = new Set([sshSupervisorOwner(replacementId), sshReplacementOwner(replacementId)]);
+  NodeFS.mkdirSync(userdata, { recursive: true, mode: 0o700 });
+  const backupLock = tryAcquireServerOwnerLock(userdata, sshSupervisorOwner(replacementId));
+  if (backupLock === undefined)
+    return {
+      status: "failed",
+      reason: `Another GOAT server is using ${userdata}; GOAT ${input.targetVersion} was not started.`,
+    };
+  const backupGeneration = backupLock.generation;
+  try {
+    copyDatabase(userdata, backup);
+  } finally {
+    backupLock.release();
+  }
 
-  const start = async (runner: string, version: string, identity: string) => {
+  const start = async (
+    runner: string,
+    version: string,
+    identity: string,
+    extraEnv: Record<string, string> = {},
+  ) => {
     const log = NodeFS.openSync(input.logFile, "a");
     const child = NodeChildProcess.spawn(
       runner,
@@ -711,7 +758,7 @@ export const superviseSshRuntimeReplacement = async (
       {
         detached: true,
         stdio: ["ignore", log, log],
-        env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+        env: { ...process.env, T3CODE_NO_BROWSER: "1", ...extraEnv },
       },
     );
     NodeFS.closeSync(log);
@@ -751,13 +798,26 @@ export const superviseSshRuntimeReplacement = async (
     return undefined;
   };
 
-  const started = await start(input.runnerFile, input.targetVersion, input.identity);
+  const started = await start(input.runnerFile, input.targetVersion, input.identity, {
+    [SSH_REPLACEMENT_ID_ENV]: replacementId,
+  });
   if (started !== undefined) {
     NodeFS.rmSync(backup, { recursive: true, force: true });
     NodeFS.rmSync(input.previousRunnerFile, { force: true });
     return { status: "replaced", pid: started, version: input.targetVersion };
   }
-  copyDatabase(backup, userdata);
+  const restoreLock = tryAcquireServerOwnerLock(userdata, sshSupervisorOwner(replacementId));
+  if (restoreLock === undefined)
+    return {
+      status: "failed",
+      reason: `GOAT ${input.targetVersion} did not start and another GOAT server is now using ${userdata}; its database was left as is.`,
+    };
+  try {
+    if (restoreLock.ownersSince(backupGeneration).every((owner) => ours.has(owner)))
+      copyDatabase(backup, userdata);
+  } finally {
+    restoreLock.release();
+  }
   NodeFS.copyFileSync(input.previousRunnerFile, `${input.runnerFile}.restore`);
   NodeFS.chmodSync(`${input.runnerFile}.restore`, 0o700);
   NodeFS.renameSync(`${input.runnerFile}.restore`, input.runnerFile);

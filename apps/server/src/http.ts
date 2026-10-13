@@ -360,9 +360,9 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
     });
     return handlers
       .handle("descriptor", descriptor("descriptor"))
-      .handle("goatDescriptor", descriptor("goatDescriptor"))
+      .handle("legacyDescriptor", descriptor("legacyDescriptor"))
       .handle("sshActivity", sshActivity)
-      .handle("goatSshActivity", sshActivity);
+      .handle("legacySshActivity", sshActivity);
   }),
 ).pipe(Layer.provide(ProjectionStore.layer));
 

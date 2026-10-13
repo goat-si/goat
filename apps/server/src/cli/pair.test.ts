@@ -120,11 +120,19 @@ const testDescriptor = {
   capabilities: { repositoryIdentity: true },
 };
 
-const withDescriptorServer = <A, E, R>(run: (origin: string) => Effect.Effect<A, E, R>) =>
+const withDescriptorServer = <A, E, R>(
+  run: (origin: string, paths: string[]) => Effect.Effect<A, E, R>,
+  legacyOnly = false,
+) =>
   Effect.acquireUseRelease(
     Effect.callback<NodeHttp.Server>((resume) => {
+      const paths: string[] = [];
       const server = NodeHttp.createServer((request, response) => {
-        if (request.url === "/.well-known/t3/environment") {
+        paths.push(request.url ?? "");
+        if (
+          request.url ===
+          (legacyOnly ? "/.well-known/t3/environment" : "/.well-known/goat/environment")
+        ) {
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(testDescriptor));
           return;
@@ -132,6 +140,7 @@ const withDescriptorServer = <A, E, R>(run: (origin: string) => Effect.Effect<A,
         response.writeHead(404);
         response.end();
       });
+      Object.assign(server, { paths });
       server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
     }),
     (server) => {
@@ -139,49 +148,60 @@ const withDescriptorServer = <A, E, R>(run: (origin: string) => Effect.Effect<A,
       if (address === null || typeof address === "string") {
         return Effect.die(new Error("Expected a TCP address"));
       }
-      return run(`http://127.0.0.1:${String(address.port)}`);
+      return run(
+        `http://127.0.0.1:${String(address.port)}`,
+        (server as NodeHttp.Server & { paths: string[] }).paths,
+      );
     },
     (server) => Effect.sync(() => server.close()),
   );
 
 describe("goat pair", () => {
-  it.effect("mints a token and prints a QR pairing URL for a live server", () =>
-    withDescriptorServer((origin) =>
-      Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-test-"));
-        const port = Number(new URL(origin).port);
-        const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
-        yield* persistServerRuntimeState({
-          path: statePath,
-          state: yield* makePersistedServerRuntimeState({
-            config: { host: "127.0.0.1", devUrl: undefined },
-            port,
-          }),
-        });
+  it.effect.each([false, true])("mints a token with legacy path fallback=%s", (legacyOnly) =>
+    withDescriptorServer(
+      (origin, paths) =>
+        Effect.gen(function* () {
+          const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pair-test-"));
+          const port = Number(new URL(origin).port);
+          const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
+          yield* persistServerRuntimeState({
+            path: statePath,
+            state: yield* makePersistedServerRuntimeState({
+              config: { host: "127.0.0.1", devUrl: undefined },
+              port,
+            }),
+          });
 
-        const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir]));
+          const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir]));
 
-        assert.include(output, `Pairing with pair-test (${origin})`);
-        assert.include(output, `Pairing URL: ${origin}/pair#token=`);
-        assert.isTrue(output.includes("█") || output.includes("▀") || output.includes("▄"));
-        // Loopback origins are not reachable from a phone; the output must say so.
-        assert.include(output, "only reachable from this machine");
+          assert.deepEqual(
+            paths,
+            legacyOnly
+              ? ["/.well-known/goat/environment", "/.well-known/t3/environment"]
+              : ["/.well-known/goat/environment"],
+          );
+          assert.include(output, `Pairing with pair-test (${origin})`);
+          assert.include(output, `Pairing URL: ${origin}/pair#token=`);
+          assert.isTrue(output.includes("█") || output.includes("▀") || output.includes("▄"));
+          // Loopback origins are not reachable from a phone; the output must say so.
+          assert.include(output, "only reachable from this machine");
 
-        const token = /#token=([A-Z2-9]+)/.exec(output)?.[1];
-        assert.isString(token);
+          const token = /#token=([A-Z2-9]+)/.exec(output)?.[1];
+          assert.isString(token);
 
-        // The token must be in the same store the running server reads.
-        const listed = yield* captureStdout(
-          runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
-        );
-        const credentials = JSON.parse(listed) as ReadonlyArray<{
-          readonly label?: string;
-          readonly scopes: ReadonlyArray<string>;
-        }>;
-        assert.equal(credentials.length, 1);
-        assert.equal(credentials[0]?.label, "goat pair");
-        assert.deepEqual(credentials[0]?.scopes, AuthStandardClientScopes);
-      }),
+          // The token must be in the same store the running server reads.
+          const listed = yield* captureStdout(
+            runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
+          );
+          const credentials = JSON.parse(listed) as ReadonlyArray<{
+            readonly label?: string;
+            readonly scopes: ReadonlyArray<string>;
+          }>;
+          assert.equal(credentials.length, 1);
+          assert.equal(credentials[0]?.label, "goat pair");
+          assert.deepEqual(credentials[0]?.scopes, AuthStandardClientScopes);
+        }),
+      legacyOnly,
     ).pipe(
       Effect.provide(NodeServices.layer),
       Effect.provideService(HostProcess.Environment, {

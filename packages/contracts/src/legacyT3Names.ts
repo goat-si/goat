@@ -1,5 +1,5 @@
 /**
- * T3 spellings GOAT still reads, and for older peers still writes. `scripts/goat-rename.ts`
+ * T3 spellings GOAT still reads for compatibility with existing data and older peers. `scripts/goat-rename.ts`
  * never rewrites this file, so compatibility code that imports from here survives every
  * rerun of the rename. Plan: devlog/_plan/261013_remove-t3-internals/000_plan.md.
  *
@@ -141,7 +141,11 @@ export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
   "t3-iris": "iris",
 };
 
-/** Peer-visible vocabulary: readers accept both; writers retain the legacy spelling. */
+/** Literal SSH runner metadata older clients inspect without sourcing the script. */
+export const LEGACY_SSH_ARCHIVE_VERSION_KEY = "T3_ARCHIVE_VERSION";
+export const LEGACY_SSH_NODE_SCRIPT_PATH_KEY = "T3_NODE_SCRIPT_PATH";
+
+/** Peer-visible vocabulary: readers accept both forever; writers use the GOAT spelling. */
 export const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
 export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";
 export const THREAD_LINK_PROTOCOLS = [
@@ -166,6 +170,9 @@ export const LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-t3-context-fragment";
 export const GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-goat-context-fragment";
 export const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
 export const GOAT_CONTEXT_CLIPBOARD_MIME = "application/x-goat-context-fragment+json";
+/** Native iOS clipboard type; HTML remains the portable flavor. */
+export const LEGACY_CONTEXT_CLIPBOARD_UTI = "app.t3.context-fragment";
+export const GOAT_CONTEXT_CLIPBOARD_UTI = "app.goat.context-fragment";
 export const CONTEXT_CLIPBOARD_MIMES = [
   `web ${LEGACY_CONTEXT_CLIPBOARD_MIME}`,
   LEGACY_CONTEXT_CLIPBOARD_MIME,
@@ -260,3 +267,13 @@ export const LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY = "t3code:snap-shot-setup
 /** Native helper names retained for older resource directories and development builds. */
 export const LEGACY_RESOURCE_MONITOR_BINARY_NAME = "t3-resource-monitor";
 export const LEGACY_BROWSER_SECRET_BINARY_NAME = "t3-browser-secret";
+
+/**
+ * Electron runtime identity before D13. The runtime name keys the safeStorage key (macOS Keychain
+ * item and Linux keyring entry `<name> <stage> Safe Storage`); the renderer scheme keys every
+ * origin-scoped store. The desktop copies both forward on first launch and leaves the originals
+ * for rollback. The schemes stay registered as OS link handlers for existing links.
+ */
+export const LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
+export const LEGACY_DESKTOP_RENDERER_SCHEME = "t3code";
+export const LEGACY_DESKTOP_DEV_RENDERER_SCHEME = "t3code-dev";

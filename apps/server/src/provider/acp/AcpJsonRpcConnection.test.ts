@@ -1637,7 +1637,7 @@ describe("AcpSessionRuntime", () => {
 
       expect(started.sessionId).toBe("mock-session-1");
       expect(started.sessionSetupResult._meta).toMatchObject({
-        t3SessionLoadReady: "replay_idle",
+        goatSessionLoadReady: "replay_idle",
       });
 
       const unexpectedReplayEvent = yield* Stream.runHead(runtime.getEvents()).pipe(
@@ -1677,7 +1677,7 @@ describe("AcpSessionRuntime", () => {
 
       expect(loaded.sessionId).toBe("mock-session-1");
       expect(loaded.sessionSetupResult._meta).toMatchObject({
-        t3SessionLoadReady: "replay_idle",
+        goatSessionLoadReady: "replay_idle",
       });
     }).pipe(
       Effect.provide(

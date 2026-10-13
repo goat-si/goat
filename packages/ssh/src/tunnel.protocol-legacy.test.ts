@@ -51,7 +51,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const source = yield* f.fs.readFileString(`${f.state}/run-t3.sh`);
           yield* f.fs.writeFileString(
             `${f.state}/run-t3.sh`,
-            source.replace("T3_ARCHIVE_VERSION='1.2.2'", "T3_ARCHIVE_VERSION='1.2.2\t'"),
+            source.replace("GOAT_ARCHIVE_VERSION='1.2.2'", "GOAT_ARCHIVE_VERSION='1.2.2\t'"),
           );
         }
         const psPath = `${f.test}/identity-bin/ps`;

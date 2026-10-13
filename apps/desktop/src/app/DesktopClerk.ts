@@ -126,6 +126,13 @@ export const make = Effect.gen(function* () {
           }),
       }).pipe(Effect.orDie),
   );
+  // The bridge registers the renderer scheme. Windows has no installer-level registration, so the
+  // legacy scheme that existing links and the Codex sign-in handoff use is registered here too.
+  if (environment.platform === "win32") {
+    yield* electronApp.setAsDefaultProtocolClient(
+      ElectronProtocol.getLegacyDesktopScheme(environment.isDevelopment),
+    );
+  }
 
   return DesktopClerk.of({
     configure: Effect.gen(function* () {
@@ -173,13 +180,18 @@ export const make = Effect.gen(function* () {
       };
       const resumeProviderAuth = (value: string | undefined) => {
         const destination = providerAuthReturnUrl(value);
-        const expectedOrigin = `${ElectronProtocol.getDesktopScheme(environment.isDevelopment)}://app`;
-        if (!destination?.startsWith(`${expectedOrigin}/`)) return false;
+        const origin = ElectronProtocol.getDesktopOrigin(environment.isDevelopment);
+        const legacyOrigin = ElectronProtocol.getLegacyDesktopOrigin(environment.isDevelopment);
+        // A sign-in an older build started returns to the legacy origin; open it on this one.
+        const target = destination?.startsWith(`${legacyOrigin}/`)
+          ? origin + destination.slice(legacyOrigin.length)
+          : destination;
+        if (!target?.startsWith(`${origin}/`)) return false;
         void runPromise(
           Effect.gen(function* () {
             const mainWindow = yield* electronWindow.currentMainOrFirst;
             if (Option.isNone(mainWindow)) return;
-            yield* Effect.promise(() => mainWindow.value.loadURL(destination));
+            yield* Effect.promise(() => mainWindow.value.loadURL(target));
             yield* electronWindow.reveal(mainWindow.value);
           }).pipe(
             Effect.catchCause((cause) =>

@@ -79,13 +79,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               );
             }
             const count = yield* f.fs.readFileString(`${f.test}/activity-requests`);
-            assert.equal(count, mode === "busy" || mode === "unknown" ? "1" : "2");
+            // Unknown activity returns 404, so each probe also tries the legacy endpoint.
+            assert.equal(count, mode === "busy" ? "1" : "2");
             yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
             yield* manager.disconnectEnvironment(uploadTarget);
             yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true });
             assert.equal(
               yield* f.fs.readFileString(`${f.test}/activity-requests`),
-              mode === "busy" || mode === "unknown" ? "3" : count,
+              mode === "unknown" ? "4" : mode === "busy" ? "3" : count,
             );
             const events = (yield* f.fs.readFileString(`${f.test}/events`))
               .trim()

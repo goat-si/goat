@@ -65,12 +65,15 @@ URL selects the deployment.
 Enable Clerk's Native API and add the desktop redirects to its SSO redirect allowlist:
 
 ```text
+goat-dev://app/
+goat://app/
 t3code-dev://app/
 t3code://app/
 ```
 
-Add the corresponding origin to the Clerk instance's Backend API `allowed_origins` array.
-Development uses `t3code-dev://app`; production uses `t3code://app`. Update the array with
+Add the corresponding origins to the Clerk instance's Backend API `allowed_origins` array.
+Development uses `goat-dev://app`; production uses `goat://app`. Keep the `t3code` entries for
+desktop builds from before the renderer moved to `goat://app`. Update the array with
 `PATCH https://api.clerk.com/v1/instance` using the Clerk secret key, preserving existing entries.
 The Clerk Electron integration handles token
 persistence and system-browser callback delivery.

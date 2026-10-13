@@ -27,7 +27,7 @@ import { isGitImport, parseTurnDiffFilesFromNumstat } from "../checkpointing/Dif
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
-const CHECKPOINT_REFS_PREFIX = LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX;
+const CHECKPOINT_REFS_PREFIX = GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX;
 const ROOT_CHECKPOINT_SCOPE_NAME = "root";
 
 export class CheckpointRootScopePrepareError extends Schema.TaggedError<CheckpointRootScopePrepareError>()(
@@ -176,17 +176,16 @@ export const checkpointRefForScopeOrdinal = Effect.fn("checkpointRefForScopeOrdi
 );
 
 /**
- * Where a reconstructed checkpoint ref may live: the legacy namespace this build writes,
- * then the GOAT namespace a later build writes (plan D17). Readers take the first that exists.
+ * Reconstructed refs prefer the GOAT namespace and fall back to checkpoints from older builds.
  */
 export const checkpointRefCandidatesForScopeOrdinal = Effect.fn(
   "checkpointRefCandidatesForScopeOrdinal",
 )(function* (input: { readonly scopeId: CheckpointScopeId; readonly ordinalWithinScope: number }) {
-  const legacy = yield* checkpointRefForScopeOrdinal(input);
-  const goat = CheckpointRef.make(
-    GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX + legacy.slice(CHECKPOINT_REFS_PREFIX.length),
+  const goat = yield* checkpointRefForScopeOrdinal(input);
+  const legacy = CheckpointRef.make(
+    LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX + goat.slice(CHECKPOINT_REFS_PREFIX.length),
   );
-  return [legacy, goat] as const;
+  return [goat, legacy] as const;
 });
 
 function checkpointIdForScopeOrdinal(
@@ -272,7 +271,7 @@ export const layer: Layer.Layer<
     const crypto = yield* Crypto.Crypto;
     const checkpointRefFor = (input: Parameters<typeof checkpointRefForScopeOrdinal>[0]) =>
       checkpointRefForScopeOrdinal(input).pipe(Effect.provideService(Crypto.Crypto, crypto));
-    /** The stored ref for a scope ordinal under either namespace, legacy first. */
+    /** The stored ref for a scope ordinal under either namespace, GOAT first. */
     const findCheckpointRef = (
       cwd: string,
       input: Parameters<typeof checkpointRefForScopeOrdinal>[0],
@@ -459,7 +458,7 @@ export const layer: Layer.Layer<
             });
           }
 
-          // A later build may have written the previous checkpoint under the GOAT namespace.
+          // The previous checkpoint may have been written under the legacy namespace.
           const existingPreviousRef = yield* findCheckpointRef(
             input.scope.cwd,
             previousScopeOrdinal,

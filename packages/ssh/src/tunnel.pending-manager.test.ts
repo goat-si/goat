@@ -46,10 +46,21 @@ const fixture = Effect.gen(function* () {
   let pairingFails = false;
   let forwardFails = false;
   let versionNewer = false;
+  // One-shot: the next alias resolution waits until the test releases it.
+  let resolutionGate: {
+    entered: Deferred.Deferred<void>;
+    release: Deferred.Deferred<void>;
+  } | null = null;
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       if (command.args.includes("-G")) {
+        const gate = resolutionGate;
+        resolutionGate = null;
+        if (gate !== null) {
+          yield* Deferred.succeed(gate.entered, undefined);
+          yield* Deferred.await(gate.release);
+        }
         if (resolutionFails)
           return {
             ...makeSuccessfulProcess(""),
@@ -174,10 +185,60 @@ const fixture = Effect.gen(function* () {
     failPairing: (value: boolean) => {
       pairingFails = value;
     },
+    holdNextResolution: Effect.gen(function* () {
+      const gate = { entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+      resolutionGate = gate;
+      return gate;
+    }),
   };
 });
 
 describe("SSH pending replacement reconciliation", () => {
+  it.effect("a disconnect overtaken by a newer reconnect leaves the host connected", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      f.setMode("ready");
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget);
+        // A completed off clears the cached resolution, so the next off resolves again.
+        yield* manager.disconnectEnvironment(uploadTarget);
+        // Off again: this disconnect stalls resolving the alias, before the target lock.
+        const gate = yield* f.holdNextResolution;
+        const disconnect = yield* Effect.forkChild(manager.disconnectEnvironment(uploadTarget));
+        yield* Deferred.await(gate.entered);
+        // Switch back on: the newer ensure reaches the lock first.
+        yield* manager.ensureEnvironment(uploadTarget);
+        yield* Deferred.succeed(gate.release, undefined);
+        yield* Fiber.join(disconnect);
+        // Only the first, completed off closed a forward and stopped the server.
+        assert.equal(f.count.kills, 1);
+        assert.equal(f.count.stops, 1);
+        assert.equal(f.count.forwards, 2);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
+  );
+
+  it.effect("an older reconnect cannot relaunch a host after a newer disconnect", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      f.setMode("ready");
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const gate = yield* f.holdNextResolution;
+        const ensure = yield* Effect.forkChild(
+          Effect.result(manager.ensureEnvironment(uploadTarget)),
+        );
+        yield* Deferred.await(gate.entered);
+        yield* manager.disconnectEnvironment(uploadTarget);
+        yield* Deferred.succeed(gate.release, undefined);
+        assert.isTrue(Result.isFailure(yield* Fiber.join(ensure)));
+        assert.equal(f.count.launches, 0);
+        assert.equal(f.count.forwards, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
+  );
+
   it.effect.each(["replacement", "stale", "disconnect"] as const)(
     "interrupted %s close cannot leak a removed forward",
     (action) =>

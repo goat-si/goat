@@ -1,14 +1,14 @@
-import { LEGACY_THREAD_LINK_PROTOCOL, THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
+import { GOAT_THREAD_LINK_PROTOCOL, THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { ThreadId } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 /**
- * Agents mention another thread in Markdown as `[title](t3-thread://v1/<threadId>)`. The id is
+ * Agents mention another thread in Markdown as `[title](goat-thread://v1/<threadId>)`. The id is
  * the reference and resolves in the environment of the message that holds it. Titles change, so
  * clients show the thread's current title; the label only stands in for a thread they cannot see.
  */
-export const THREAD_LINK_PROTOCOL = LEGACY_THREAD_LINK_PROTOCOL;
+export const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
 const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.

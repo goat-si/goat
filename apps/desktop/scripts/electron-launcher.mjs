@@ -21,8 +21,9 @@ const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
 const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 19;
+// The renderer scheme, plus the pre-D13 one that existing links use.
+const APP_PROTOCOL_SCHEMES = isDevelopment ? ["goat-dev", "t3code-dev"] : ["goat", "t3code"];
+const LAUNCHER_VERSION = 20;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",

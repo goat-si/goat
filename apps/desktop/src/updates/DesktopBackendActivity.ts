@@ -1,4 +1,4 @@
-import { LEGACY_ACTIVITY_PATH } from "@goat/contracts/legacyT3Names";
+import { GOAT_ACTIVITY_PATH } from "@goat/contracts/legacyT3Names";
 import { SshServerActivity } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -87,7 +87,7 @@ const make = Effect.gen(function* () {
             if (!snapshot.ready || Option.isNone(snapshot.activePid) || Option.isNone(config))
               return { activity: "unknown" as const, reason: null };
             const pid = snapshot.activePid.value;
-            const url = new URL(LEGACY_ACTIVITY_PATH, config.value.httpBaseUrl);
+            const url = new URL(GOAT_ACTIVITY_PATH, config.value.httpBaseUrl);
             url.hostname = "127.0.0.1";
             const activity = yield* http.get(url.href).pipe(
               Effect.flatMap((response) =>
