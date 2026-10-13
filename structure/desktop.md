@@ -4,10 +4,28 @@
 at `dist-electron/boot.cjs`. The main process source is `apps/desktop/src/main.ts`, which composes
 the desktop layers and runs `DesktopApp.program`.
 
-The packaged renderer is the built web app. `apps/desktop/src/app/DesktopEnvironment.ts` serves it
-on the `t3code://app` scheme (`apps/desktop/src/electron/ElectronProtocol.ts` also registers
-`t3code-dev`). `APP_BASE_NAME` in that file is `"GOAT"`. `DESKTOP_RUNTIME_APP_BASE_NAME` stays
-`"T3 Code"` so saved SSH credentials that key off the Electron runtime name remain readable.
+The packaged renderer is the built web app, served on `goat://app` (`goat-dev://app` in
+development) by `apps/desktop/src/electron/ElectronProtocol.ts`.
+
+## Runtime identity
+
+The Electron runtime name is `GOAT <stage>` (`DESKTOP_RUNTIME_APP_BASE_NAME` in
+`apps/desktop/src/app/DesktopEnvironment.ts`). It keys the safeStorage key that encrypts saved
+connections and Clerk tokens. The renderer origin keys localStorage and IndexedDB. Builds before
+#110 used `T3 Code <stage>` and `t3code://app`; both migrate forward once per profile and leave the
+originals for a rolled-back build:
+
+- `apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts` copies the old name's key to the new name
+  before anything reads safeStorage (macOS Keychain, Linux Secret Service; Windows keeps its key in
+  the profile). Marker: `safe-storage-key-migrated` in the profile.
+- `apps/desktop/src/app/DesktopRendererOriginMigration.ts` copies localStorage and every IndexedDB
+  database from the legacy origin before the first window, never replacing existing data. Marker:
+  `renderer-origin-migrated`.
+
+The OS hands both `goat` and `t3code` links to the app (`getDesktopLinkSchemes`), and the server
+accepts both renderer origins (`DESKTOP_RENDERER_ORIGINS` in `apps/server/src/httpCors.ts`).
+
+> Decision record: [ADR-0014](decisions/ADR-0014-desktop-runtime-identity.md)
 
 ## Shell
 

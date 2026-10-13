@@ -908,13 +908,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // A Linux AppImage build also emits the .deb from the same run.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).target, ["AppImage", "deb"]);
       // Linux must register the renderer schemes so the generated .desktop
-      // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
+      // entry advertises MimeType=x-scheme-handler/goat;... for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "GOAT", schemes: ["t3code", "t3code-dev"] },
+        { name: "GOAT", schemes: ["goat", "goat-dev", "t3code", "t3code-dev"] },
       ]);
       // macOS also offers itself as a web browser, so it can be chosen as the default.
       assert.deepStrictEqual((mac.mac as Record<string, unknown>).protocols, [
-        { name: "GOAT", schemes: ["t3code", "t3code-dev"] },
+        { name: "GOAT", schemes: ["goat", "goat-dev", "t3code", "t3code-dev"] },
         { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
       ]);
       // macOS lists a default browser only when it also opens web pages as documents.
@@ -2405,7 +2405,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
       assert.deepStrictEqual(mac.protocols, [
-        { name: "GOAT", schemes: ["t3code", "t3code-dev"] },
+        { name: "GOAT", schemes: ["goat", "goat-dev", "t3code", "t3code-dev"] },
         { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
       ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),

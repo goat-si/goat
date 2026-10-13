@@ -110,7 +110,7 @@ describe("DesktopClerk", () => {
           {
             storage: storageAdapter,
             passkeys: true,
-            renderer: { scheme: "t3code-dev", host: "app" },
+            renderer: { scheme: "goat-dev", host: "app" },
           },
         ],
       ]);
@@ -319,10 +319,9 @@ it.effect(
         "t3code-dev://app/settings/providers?instanceId=work&code=never-forward",
       ]);
       yield* Effect.promise(() => revealed.promise);
-      assert.deepEqual(loadURL.mock.calls, [
-        ["t3code-dev://app/settings/providers?instanceId=work"],
-      ]);
-      listeners.get("open-url")!(event, "t3code-dev://app/welcome#agents:machine-id");
+      // A sign-in an older build started returns to the legacy origin and opens on the new one.
+      assert.deepEqual(loadURL.mock.calls, [["goat-dev://app/settings/providers?instanceId=work"]]);
+      listeners.get("open-url")!(event, "goat-dev://app/welcome#agents:machine-id");
       assert.equal(event.preventDefault.mock.calls.length, 1);
     }).pipe(
       Effect.scoped,

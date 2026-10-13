@@ -67,6 +67,8 @@ import { resolveDesktopSshCliRunner } from "./ssh/desktopSshCliRunner.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopLegacyLocalStorage from "./app/DesktopLegacyLocalStorage.ts";
+import * as DesktopRendererOriginMigration from "./app/DesktopRendererOriginMigration.ts";
+import * as DesktopSafeStorageKeyMigration from "./app/DesktopSafeStorageKeyMigration.ts";
 import * as DesktopTelemetryPublisher from "./telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
@@ -161,6 +163,8 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopState.layer,
   DesktopShutdown.layer,
   DesktopLegacyLocalStorage.layer,
+  DesktopSafeStorageKeyMigration.layer,
+  DesktopRendererOriginMigration.layer,
   DesktopAppSettings.layer,
   DesktopClientSettings.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),

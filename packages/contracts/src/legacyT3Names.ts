@@ -243,3 +243,13 @@ export const LEGACY_DESKTOP_PROMPT_STASH_KEY = "t3code:prompt-stash:v2";
 export const LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY = "t3code:composer-drafts:v1";
 export const LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY = "t3.backgroundActivity.clientId";
 export const LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY = "t3code:snap-shot-setup-resume:v1";
+
+/**
+ * Electron runtime identity before D13. The runtime name keys the safeStorage key (macOS Keychain
+ * item and Linux keyring entry `<name> <stage> Safe Storage`); the renderer scheme keys every
+ * origin-scoped store. The desktop copies both forward on first launch and leaves the originals
+ * for rollback. The schemes stay registered as OS link handlers for existing links.
+ */
+export const LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
+export const LEGACY_DESKTOP_RENDERER_SCHEME = "t3code";
+export const LEGACY_DESKTOP_DEV_RENDERER_SCHEME = "t3code-dev";

@@ -19,6 +19,7 @@ import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 import type { OtlpProtocol } from "@goat/shared/observability";
+import { LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME } from "@goat/contracts/legacyT3Names";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -98,10 +99,18 @@ export class DesktopEnvironment extends Context.Service<
 /** Shown to people: About panel, app menu, branding injected into the web UI. */
 const APP_BASE_NAME = "GOAT";
 /**
- * Electron's runtime name (app.setName). It keys the macOS Keychain "Safe Storage" entry and
- * the Linux secret store that encrypt saved connections, so it must stay the upstream value.
+ * Electron's runtime name (app.setName). It keys the safeStorage key (macOS Keychain "Safe
+ * Storage" item, Linux Secret Service entry), which DesktopSafeStorageKeyMigration copies over
+ * from the legacy name before first use.
  */
-export const DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
+export const DESKTOP_RUNTIME_APP_BASE_NAME = "GOAT";
+
+export const desktopRuntimeAppName = (stageLabel: DesktopAppStageLabel) =>
+  `${DESKTOP_RUNTIME_APP_BASE_NAME} ${stageLabel}`;
+
+/** The runtime name builds before D13 used, whose safeStorage key holds existing secrets. */
+export const legacyDesktopRuntimeAppName = (stageLabel: DesktopAppStageLabel) =>
+  `${LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME} ${stageLabel}`;
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;

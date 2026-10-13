@@ -2946,7 +2946,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "GOAT",
-          schemes: ["t3code", "t3code-dev"],
+          schemes: ["goat", "goat-dev", "t3code", "t3code-dev"],
         },
         // Lets people choose T3 Code as their default web browser, which opens
         // each link in a new thread's browser panel.
@@ -3009,11 +3009,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       maintainer: "T3 Tools <hello@t3.codes>",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // t3code:// OAuth callbacks to the app.
+      // goat:// and t3code:// links and OAuth callbacks to the app.
       protocols: [
         {
           name: "GOAT",
-          schemes: ["t3code", "t3code-dev"],
+          schemes: ["goat", "goat-dev", "t3code", "t3code-dev"],
         },
       ],
       desktop: {
