@@ -3,12 +3,14 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
+  OrchestrationV2ProviderRef,
   type ServerSettings,
 } from "@goat/contracts";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -115,6 +117,16 @@ it.effect("inspects before resolve and inherits only the selected executable and
         assert.equal(selected.env.HOME, "/sibling-home");
         assert.equal(selected.env.XDG_DATA_HOME, "/sibling-data");
         assert.notInclude(Object.keys(selected), "args");
+        const refCodec = Schema.fromJsonString(OrchestrationV2ProviderRef);
+        const persistedRef = yield* Schema.encodeEffect(refCodec)({
+          driver: ProviderDriverKind.make("devinCloud"),
+          nativeId: "devin-saved",
+          strength: "strong",
+          fingerprint: selected.binding,
+          ordinal: 0,
+        });
+        const restoredRef = yield* Schema.decodeEffect(refCodec)(persistedRef);
+        assert.equal(restoredRef.fingerprint, selected.binding);
         const missing = yield* Effect.result(cli.resolve("missing-sibling", "/project"));
         assert.isTrue(Result.isFailure(missing));
         assert.deepEqual(steps, ["inspect", "resolve"]);

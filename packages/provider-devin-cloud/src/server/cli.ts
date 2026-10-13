@@ -134,7 +134,8 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((cause) => new DevinCloudCliError({ stage: "resolve", cause })));
     // Only executable and final credential/profile env are inherited. Never local ACP argv.
     const spawnEnv = resolved.spawn.env ?? env;
-    const binding = [
+    // The native-ref contract trims fingerprints; JSON preserves empty profile slots across persistence.
+    const binding = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)))([
       siblingId,
       resolved.spawn.command,
       spawnEnv.HOME ?? "",
@@ -143,7 +144,7 @@ const make = Effect.gen(function* () {
       spawnEnv.USERPROFILE ?? "",
       spawnEnv.APPDATA ?? "",
       spawnEnv.LOCALAPPDATA ?? "",
-    ].join("\n");
+    ]).pipe(Effect.mapError((cause) => new DevinCloudCliError({ stage: "resolve", cause })));
     return { command: resolved.spawn.command, env: spawnEnv, cwd, binding };
   });
   const probe = Effect.fn("DevinCloudCli.probe")(function* (launch: DevinCloudLaunch) {

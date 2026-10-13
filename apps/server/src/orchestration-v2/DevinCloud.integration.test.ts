@@ -297,7 +297,34 @@ const makeFixture = Effect.fnUntraced(function* (name: string) {
           ...(session.resumeTurn
             ? {
                 resumeTurn: (turn: Parameters<NonNullable<typeof session.resumeTurn>>[0]) =>
-                  session.resumeTurn!(instrument(turn)),
+                  Effect.gen(function* () {
+                    assert.equal(
+                      turn.providerThread.driver,
+                      original.driver,
+                      "restored thread driver",
+                    );
+                    assert.equal(
+                      turn.providerThread.providerInstanceId,
+                      INSTANCE,
+                      "restored provider instance",
+                    );
+                    assert.equal(
+                      turn.providerThread.nativeThreadRef?.driver,
+                      original.driver,
+                      "restored native driver",
+                    );
+                    assert.equal(
+                      turn.providerThread.nativeThreadRef?.fingerprint,
+                      launch.binding,
+                      "restored sibling binding",
+                    );
+                    assert.equal(
+                      turn.providerThread.cloudTask?.taskId,
+                      NATIVE_ID,
+                      "restored task identity",
+                    );
+                    yield* session.resumeTurn!(instrument(turn));
+                  }),
               }
             : {}),
         })),
@@ -443,7 +470,7 @@ it.effect("persists real Devin relay results and late metadata through manager a
       assert.equal(peer.methods.filter((method) => method === "session/cancel").length, 0);
       assert.isAtLeast(yield* Ref.get(callbackCount), 1);
     }).pipe(Effect.provide(runtime));
-  }).pipe(Effect.provide(ServerSettings.layerTest()), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.merge(ServerSettings.layerTest(), NodeServices.layer))),
 );
 
 it.effect(
@@ -611,5 +638,5 @@ it.effect(
           assert.equal(peer.methods.filter((seen) => seen === method).length, 0);
         }
       }).pipe(Effect.provide(runtime));
-    }).pipe(Effect.provide(ServerSettings.layerTest()), Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.merge(ServerSettings.layerTest(), NodeServices.layer))),
 );
