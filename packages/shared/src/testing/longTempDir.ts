@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - runs once at test setup, outside any Effect runtime.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
-import * as HostProcess from "../HostProcess.ts";
 
 /**
  * Point the process temp directory at the path git and `realpath` report.
@@ -20,7 +19,8 @@ export const canonicalizeProcessTempDir = (): void => {
     // Leave the host's value alone if it cannot be resolved.
     return;
   }
-  if (HostProcess.Platform.defaultValue() === "win32") {
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Every test config loads this setup, and HostProcess imports node:sea, which mobile tests cannot bundle.
+  if (NodeOS.platform() === "win32") {
     process.env.TEMP = canonical;
     process.env.TMP = canonical;
     return;
