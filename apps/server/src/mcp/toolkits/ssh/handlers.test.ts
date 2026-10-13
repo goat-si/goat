@@ -246,6 +246,8 @@ it.effect("watches an outside client's launch for the webhook at the client's ce
     expect(launched.registrations).toEqual([]);
     expect(launched.externalWatches).toEqual([
       {
+        // The watch belongs to the launching client alone.
+        owner: "session",
         host: "box",
         threadId: "remote-thread",
         projectId: null,
