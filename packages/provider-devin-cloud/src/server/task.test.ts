@@ -378,7 +378,8 @@ it.effect(
         assert.equal(task?.status, "unknown");
         assert.equal(patches.length, 1);
         assert.equal(patches[0]?.title, "Loaded task");
-        assert.include(patches[0]?.progress ?? "", "Waiting for input");
+        assert.include(task?.progress ?? "", "Waiting for input");
+        assert.isUndefined(patches[0]?.progress);
         assert.equal(events.filter((event) => event.type === "message.updated").length, 0);
         assert.equal(events.filter((event) => event.type === "turn.terminal").length, 1);
       }

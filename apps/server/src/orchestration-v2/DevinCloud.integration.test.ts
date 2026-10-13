@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   EventId,
@@ -19,6 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -213,6 +215,8 @@ const makePeer = Effect.gen(function* () {
 });
 
 const makeFixture = Effect.fnUntraced(function* (name: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-devin-relay-" });
   const peer = yield* makePeer;
   const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
   const configured = {
@@ -234,7 +238,7 @@ const makeFixture = Effect.fnUntraced(function* (name: string) {
       subscribe: Effect.succeed(Stream.never),
     },
     paths: {
-      cwd: "/fixture/project",
+      cwd,
       baseDir: "/fixture/home",
       stateDir: "/fixture/state",
       providerStatusCacheDir: "/fixture/cache",
@@ -268,7 +272,7 @@ const makeFixture = Effect.fnUntraced(function* (name: string) {
   );
   const original = yield* makeAdapter(INSTANCE, SIBLING).pipe(Effect.provide(dependencies));
   const cli = yield* Cli.DevinCloudCli.pipe(Effect.provide(dependencies));
-  const launch = yield* cli.resolve(SIBLING, "/fixture/project");
+  const launch = yield* cli.resolve(SIBLING, cwd);
   const metadataCommitted = yield* Deferred.make<void>();
   const callbackCount = yield* Ref.make(0);
   const instrument = <
@@ -286,20 +290,18 @@ const makeFixture = Effect.fnUntraced(function* (name: string) {
   const adapter: Adapter.ProviderAdapterV2["Service"] = {
     ...original,
     openSession: (input) =>
-      original
-        .openSession(input)
-        .pipe(
-          Effect.map((session) => ({
-            ...session,
-            startTurn: (turn) => session.startTurn(instrument(turn)),
-            ...(session.resumeTurn
-              ? {
-                  resumeTurn: (turn: Parameters<NonNullable<typeof session.resumeTurn>>[0]) =>
-                    session.resumeTurn!(instrument(turn)),
-                }
-              : {}),
-          })),
-        ),
+      original.openSession(input).pipe(
+        Effect.map((session) => ({
+          ...session,
+          startTurn: (turn) => session.startTurn(instrument(turn)),
+          ...(session.resumeTurn
+            ? {
+                resumeTurn: (turn: Parameters<NonNullable<typeof session.resumeTurn>>[0]) =>
+                  session.resumeTurn!(instrument(turn)),
+              }
+            : {}),
+        })),
+      ),
   };
   const projectId = ProjectId.make("project:devin-integration");
   const projects = Layer.mock(Projects.ProjectService)({
@@ -307,23 +309,27 @@ const makeFixture = Effect.fnUntraced(function* (name: string) {
       Effect.succeed(
         Option.some({
           id: projectId,
-          workspaceRoot: "/fixture/project",
+          workspaceRoot: cwd,
           defaultModelSelection: { instanceId: INSTANCE, model: "default" },
         } as Project),
       ),
   });
-  const runtime = layerWithRegistry({ name }, Registry.layerFromAdapters([adapter]), {
-    runEffectWorker: false,
-    projects,
-    cloudSources: Layer.succeed(CloudSource.CloudTaskSourceService, {
-      resolve: () =>
-        Effect.succeed({
-          source: SOURCE,
-          launchSource: { cwd: "/fixture/project", restriction: "published-ref" },
-          localChangesExcluded: true,
-        }),
-    }),
-  });
+  const runtime = layerWithRegistry(
+    { name, runtimePolicyOverride: { cwd } },
+    Registry.layerFromAdapters([adapter]),
+    {
+      runEffectWorker: false,
+      projects,
+      cloudSources: Layer.succeed(CloudSource.CloudTaskSourceService, {
+        resolve: () =>
+          Effect.succeed({
+            source: SOURCE,
+            launchSource: { cwd, restriction: "published-ref" },
+            localChangesExcluded: true,
+          }),
+      }),
+    },
+  );
   return {
     peer,
     runtime,
@@ -369,6 +375,10 @@ it.effect("persists real Devin relay results and late metadata through manager a
         dispatchMode: { type: "start_immediately" },
       });
       yield* worker.drain();
+      assert.notEqual(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.status,
+        "failed",
+      );
       yield* Deferred.await(peer.prompted);
       const accepted = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(accepted.providerThreads[0]?.nativeThreadRef?.ordinal, 0);
@@ -433,7 +443,7 @@ it.effect("persists real Devin relay results and late metadata through manager a
       assert.equal(peer.methods.filter((method) => method === "session/cancel").length, 0);
       assert.isAtLeast(yield* Ref.get(callbackCount), 1);
     }).pipe(Effect.provide(runtime));
-  }).pipe(Effect.provide(ServerSettings.layerTest())),
+  }).pipe(Effect.provide(ServerSettings.layerTest()), Effect.provide(NodeServices.layer)),
 );
 
 it.effect(
@@ -601,5 +611,5 @@ it.effect(
           assert.equal(peer.methods.filter((seen) => seen === method).length, 0);
         }
       }).pipe(Effect.provide(runtime));
-    }).pipe(Effect.provide(ServerSettings.layerTest())),
+    }).pipe(Effect.provide(ServerSettings.layerTest()), Effect.provide(NodeServices.layer)),
 );

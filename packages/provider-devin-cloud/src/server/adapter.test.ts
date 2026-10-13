@@ -19,6 +19,8 @@ import {
   textUpdate,
   thread,
   turnInput,
+  sessionMeta,
+  sessionUrl,
 } from "./testing/fixtures.ts";
 
 const open = (
@@ -112,6 +114,84 @@ it.effect(
       assert.equal(latest.nativeThreadRef?.fingerprint, launch.binding);
       const resumed = yield* runtime.resumeThread({ providerThread: latest });
       assert.equal(resumed.nativeThreadRef?.nativeId, "devin-fixture-session");
+    }),
+);
+
+it.effect(
+  "response-only session metadata survives setup failure and follow-up observation loss",
+  () =>
+    Effect.gen(function* () {
+      for (const mode of ["create", "load-mismatch", "prompt-loss"] as const)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const ended = yield* Deferred.make<void>();
+            const failedSnapshot = yield* Deferred.make<void>();
+            let prompts = 0;
+            let acceptedUrl: string | undefined;
+            let latest = thread;
+            const runtime = yield* open(
+              relay({
+                create: Effect.succeed({
+                  sessionId: "devin-fixture-session",
+                  configOptions: repoOptions,
+                  _meta: sessionMeta(),
+                }),
+                attach: () =>
+                  Effect.succeed({
+                    configOptions: mode === "load-mismatch" ? repoOptions : selectedRepoOptions,
+                    _meta: sessionMeta(),
+                  }),
+                configureSource: () =>
+                  Effect.fail(
+                    new Cli.DevinCloudCliError({
+                      stage: "relay",
+                      detail: "Repository configuration failed",
+                    }),
+                  ),
+                prompt: () =>
+                  Effect.sync(() => {
+                    prompts++;
+                  }).pipe(
+                    Effect.andThen(Effect.fail(new Cli.DevinCloudCliError({ stage: "relay" }))),
+                  ),
+              }),
+            );
+            yield* Stream.runForEach(runtime.events, (event) =>
+              Effect.gen(function* () {
+                if (event.type === "provider_thread.updated") {
+                  latest = event.providerThread;
+                  if (latest.cloudTask?.status === "failed")
+                    yield* Deferred.succeed(failedSnapshot, undefined);
+                }
+                if (event.type === "turn.terminal") yield* Deferred.succeed(ended, undefined);
+              }),
+            ).pipe(Effect.forkScoped);
+            const result = yield* Effect.result(
+              runtime.startTurn({
+                ...turnInput,
+                providerThread: {
+                  ...thread,
+                  nativeThreadRef: mode === "create" ? null : thread.nativeThreadRef,
+                },
+                commitCloudTask: (task) =>
+                  Effect.sync(() => {
+                    acceptedUrl = task.url;
+                  }),
+              }),
+            );
+            if (mode === "prompt-loss") {
+              assert.isTrue(Result.isSuccess(result));
+              yield* Deferred.await(ended);
+              assert.equal(latest.cloudTask?.status, "unknown");
+            } else {
+              assert.isTrue(Result.isFailure(result));
+              yield* Deferred.await(failedSnapshot);
+            }
+            assert.equal(acceptedUrl, sessionUrl);
+            assert.equal(latest.cloudTask?.url, sessionUrl);
+            assert.equal(prompts, mode === "prompt-loss" ? 1 : 0);
+          }),
+        );
     }),
 );
 it.effect("same-session follow-up retains source/ID and never resets repos", () =>

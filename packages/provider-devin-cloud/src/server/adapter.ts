@@ -8,7 +8,7 @@ import * as Stream from "effect/Stream";
 import * as Cli from "./cli.ts";
 import * as Relay from "./relay.ts";
 import { CAPABILITIES, DRIVER } from "./capabilities.ts";
-import { makeTaskObserver, sourcePrompt } from "./task.ts";
+import { makeTaskObserver, sessionMetadata, sourcePrompt } from "./task.ts";
 
 export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
   instanceId: ProviderInstanceId,
@@ -213,6 +213,7 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
         if (!prompt)
           return yield* fail("Cloud base did not resolve a pushed repository, branch and SHA");
         let acceptedThread = input.providerThread;
+        let repositoryConfirmed = true;
         if (needsNewSession) {
           if (creationAttempted || current?.nativeThreadRef?.nativeId)
             return yield* fail(
@@ -230,6 +231,7 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
             );
           acceptedThread = {
             ...acceptedThread,
+            cloudTask: { ...acceptedThread.cloudTask!, ...sessionMetadata(reply._meta) },
             nativeThreadRef: {
               driver: DRIVER,
               nativeId: reply.sessionId,
@@ -249,12 +251,14 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
                   fail("Existing cloud session could not be loaded", cause),
                 ),
               );
-            if (!Relay.validateRepositorySelection(reply.configOptions, savedSource)) {
-              return yield* fail(
-                "Devin did not confirm the saved repository; no prompt was sent. Review the session repository in Devin",
-              );
-            }
-            confirmedRepositoryId = id;
+            repositoryConfirmed = Relay.validateRepositorySelection(
+              reply.configOptions,
+              savedSource,
+            );
+            acceptedThread = {
+              ...acceptedThread,
+              cloudTask: { ...acceptedThread.cloudTask!, ...sessionMetadata(reply._meta) },
+            };
           }
         }
         const id = acceptedThread.nativeThreadRef!.nativeId!;
@@ -291,8 +295,14 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
                   .pipe(Effect.andThen(Effect.fail(fail(cause.message, cause)))),
               ),
             );
-          confirmedRepositoryId = id;
         }
+        if (!repositoryConfirmed) {
+          const reason =
+            "Devin did not confirm the saved repository; no prompt was sent. Review the session repository in Devin";
+          yield* observer.rejectSource(reason);
+          return yield* fail(reason);
+        }
+        confirmedRepositoryId = id;
         yield* observer.run(relay, prompt).pipe(Effect.forkIn(scope));
       });
       return {

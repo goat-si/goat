@@ -82,7 +82,7 @@ it.effect(
                 mode === "grouped"
                   ? [
                       {
-                        groupId: "fixture",
+                        group: "fixture",
                         name: "Repositories",
                         options: [{ name: "Example", value: "acme/example" }],
                       },
@@ -324,7 +324,8 @@ it.effect(
               const receipt = yield* remote.create;
               const id = receipt.sessionId;
               assert.equal(id, "devin-fixture-session");
-              assert.deepEqual(receipt.configOptions, options);
+              // ACP v1 uses `group`; the compatibility type names the v2 `groupId` field.
+              assert.deepEqual<unknown>(receipt.configOptions, options);
               assert.deepEqual(receipt._meta, sessionMeta());
               yield* Deferred.await(earlyMetadataSeen);
               assert.isTrue(
@@ -387,7 +388,7 @@ it.effect(
               }
               const loaded = yield* remote.attach(id);
               assert.deepEqual(loaded._meta, sessionMeta("blocked"));
-              assert.deepEqual(loaded.configOptions, loadedOptions);
+              assert.deepEqual<unknown>(loaded.configOptions, loadedOptions);
               yield* Deferred.await(replaySeen);
               assert.isTrue(
                 notices.some((notice) => notice.update.sessionUpdate === "agent_message_chunk"),
