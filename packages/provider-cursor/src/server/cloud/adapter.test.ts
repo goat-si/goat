@@ -40,9 +40,12 @@ const source = {
 };
 const agentId = "bc-fixture";
 const runId = "run-fixture";
+const appRunId = RunId.make("app-run-fixture");
+const previousAppRunId = RunId.make("previous-app-run-fixture");
 const instanceId = ProviderInstanceId.make("cursorCloud-fixture");
 const task = (status: Task["status"] = "running"): Task => ({
   taskId: runId,
+  acceptedAppRunId: appRunId,
   source,
   localChangesExcluded: true,
   status,
@@ -206,7 +209,7 @@ const harness = Effect.gen(function* () {
   const input: ProviderAdapter.ProviderAdapterV2TurnInput = {
     appThread,
     threadId,
-    runId: RunId.make("app-run-fixture"),
+    runId: appRunId,
     attemptId: RunAttemptId.make("attempt-fixture"),
     runOrdinal: 1,
     providerTurnOrdinal: 1,
@@ -302,7 +305,9 @@ describe("Cursor Cloud adapter", () => {
           task: { status: "submitting" },
           refs: { nativeThreadRef: { nativeId: agentId } },
         });
+        expect(h.sendReceipts[0]?.task).not.toHaveProperty("acceptedAppRunId");
         expect(h.streamReceipts[0]).toMatchObject({ status: "running", taskId: runId });
+        expect(h.streamReceipts[0]?.acceptedAppRunId).toBe(appRunId);
         yield* h.finish;
         const events = yield* collectTerminal(h.runtime);
         expect(
@@ -336,6 +341,7 @@ describe("Cursor Cloud adapter", () => {
           nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" },
           cloudTask: {
             ...task("submitting"),
+            acceptedAppRunId: previousAppRunId,
             summary: "previous summary",
             prUrl: "https://github.com/fixture/repo/pull/6",
           },
@@ -348,9 +354,13 @@ describe("Cursor Cloud adapter", () => {
         taskId: runId,
         status: "submitting",
         summary: "previous summary",
+        acceptedAppRunId: previousAppRunId,
         source,
       });
       expect(h.commits.find((value) => value.status === "running")).not.toHaveProperty("summary");
+      expect(h.commits.find((value) => value.status === "running")?.acceptedAppRunId).toBe(
+        appRunId,
+      );
       expect(h.send).toHaveBeenCalledWith(
         "Implement it",
         expect.objectContaining({ idempotencyKey: expect.stringContaining("attempt-fixture") }),
@@ -386,26 +396,63 @@ describe("Cursor Cloud adapter", () => {
       expect(h.nativeRun.stream).not.toHaveBeenCalled();
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
-  effectIt.effect("does not retry an ambiguous submitting record", () =>
-    Effect.gen(function* () {
-      const h = yield* harness;
-      const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
-      // Keep a previously accepted vendor ID: it still does not prove this prompt was sent.
-      yield* h.runtime.resumeTurn!({
-        ...attach,
-        cloudTask: task("submitting"),
-        providerThread: {
-          ...h.thread,
-          nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" },
-          cloudTask: task("submitting"),
-        },
-      }).pipe(Effect.flip);
-      expect(h.commits.at(-1)?.status).toBe("unknown");
-      expect(h.create).not.toHaveBeenCalled();
-      expect(h.send).not.toHaveBeenCalled();
-      expect(h.readKey).not.toHaveBeenCalled();
-      expect(h.getRun).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  effectIt.effect.each(["absent", "previous"] as const)(
+    "never looks up the previous task on repeated recovery with an %s acceptance marker",
+    (marker) =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+        const { acceptedAppRunId: _acceptedAppRunId, ...previousTask } = task("submitting");
+        let savedTask: Task = {
+          ...previousTask,
+          ...(marker === "previous" ? { acceptedAppRunId: previousAppRunId } : {}),
+          summary: "Previous result",
+          prUrl: "https://github.com/fixture/repo/pull/6",
+          branch: "cursor/previous",
+        };
+        const nativeThreadRef = { driver: DRIVER, nativeId: agentId, strength: "strong" as const };
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        for (let retry = 0; retry < 3; retry++) {
+          const failure = yield* h.runtime.resumeTurn!({
+            ...attach,
+            cloudTask: savedTask,
+            providerThread: { ...h.thread, nativeThreadRef, cloudTask: savedTask },
+          }).pipe(Effect.flip);
+          expect(failure._tag).toBe("ProviderAdapterProtocolError");
+          savedTask = h.commits.at(-1)!;
+          expect(savedTask).toMatchObject({
+            taskId: runId,
+            status: "unknown",
+            source,
+            url: `https://cursor.com/agents/${agentId}`,
+            summary: "Previous result",
+            prUrl: "https://github.com/fixture/repo/pull/6",
+            branch: "cursor/previous",
+          });
+          expect(savedTask.acceptedAppRunId).toBe(
+            marker === "previous" ? previousAppRunId : undefined,
+          );
+          const stopFailure = yield* h.runtime
+            .interruptTurn({
+              providerThread: { ...h.thread, nativeThreadRef, cloudTask: savedTask },
+              providerTurnId: ids.derive.providerTurn({
+                driver: DRIVER,
+                nativeTurnId: `${instanceId}:${runId}`,
+              }),
+            })
+            .pipe(Effect.flip);
+          expect(stopFailure._tag).toBe("ProviderAdapterProtocolError");
+        }
+        expect(h.commits).toHaveLength(3);
+        expect(h.refs).toEqual([undefined, undefined, undefined]);
+        expect(h.create).not.toHaveBeenCalled();
+        expect(h.resume).not.toHaveBeenCalled();
+        expect(h.send).not.toHaveBeenCalled();
+        expect(h.readKey).not.toHaveBeenCalled();
+        expect(h.getRun).not.toHaveBeenCalled();
+        expect(h.cancelRun).not.toHaveBeenCalled();
+        expect(h.nativeRun.stream).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
   effectIt.effect("cancels the exact remote run and waits for observed terminal cancellation", () =>
     Effect.gen(function* () {
@@ -427,6 +474,42 @@ describe("Cursor Cloud adapter", () => {
       });
       expect(h.commits.at(-1)?.status).toBe("cancelled");
       expect(events.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  effectIt.effect("ambiguous recovery cannot reuse or cancel the previous active observer", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.streamWaiting);
+      const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+      const retained = task("submitting");
+      const providerThread = {
+        ...h.thread,
+        nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" as const },
+        cloudTask: retained,
+      };
+      const failure = yield* h.runtime.resumeTurn!({
+        ...attach,
+        runId: RunId.make("next-app-run-fixture"),
+        providerThread,
+        cloudTask: retained,
+      }).pipe(Effect.flip);
+      expect(failure._tag).toBe("ProviderAdapterProtocolError");
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      yield* h.runtime
+        .interruptTurn({
+          providerThread,
+          providerTurnId: ids.derive.providerTurn({
+            driver: DRIVER,
+            nativeTurnId: `${instanceId}:${runId}`,
+          }),
+        })
+        .pipe(Effect.flip);
+      expect(h.cancelRun).not.toHaveBeenCalled();
+      expect(h.getRun).not.toHaveBeenCalled();
+      expect(h.nativeRun.stream).toHaveBeenCalledTimes(1);
+      yield* h.finish;
+      yield* collectTerminal(h.runtime);
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
   effectIt.effect("rejects absent remote SHA before creating or sending", () =>
@@ -651,6 +734,7 @@ describe("Cursor Cloud adapter", () => {
           status: "running",
           tracking: "polled",
           taskId: runId,
+          acceptedAppRunId: appRunId,
         });
         expect(h.commits.at(-1)).not.toHaveProperty("error");
         h.setRunningLookup(false);
@@ -659,6 +743,7 @@ describe("Cursor Cloud adapter", () => {
         const events = yield* Fiber.join(result);
         expect(events.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
         expect(h.commits.at(-1)?.status).toBe("succeeded");
+        expect(h.commits.at(-1)?.acceptedAppRunId).toBe(appRunId);
         expect(h.commits.at(-1)).not.toHaveProperty("error");
         expect(h.getRun).toHaveBeenCalledWith(runId, {
           runtime: "cloud",
@@ -671,6 +756,54 @@ describe("Cursor Cloud adapter", () => {
         expect(h.resume).not.toHaveBeenCalled();
         expect(h.cancelRun).not.toHaveBeenCalled();
       }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  effectIt.effect("Stop still cancels the exact run after accepted unknown recovery", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.setRunningLookup(true);
+      const cancelled = yield* Deferred.make<void>();
+      h.cancelRun.mockImplementation(async () => {
+        h.setResult({ id: runId, status: "cancelled" });
+        h.setRunningLookup(false);
+        Deferred.doneUnsafe(cancelled, Effect.void);
+      });
+      const savedTask: Task = { ...task("unknown"), error: "Tracking was unavailable." };
+      const providerThread = {
+        ...h.thread,
+        nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" as const },
+        cloudTask: savedTask,
+      };
+      const { message: _message, cloudLaunchSource: _launchSource, ...attach } = h.input;
+      yield* h.runtime.resumeTurn!({ ...attach, providerThread, cloudTask: savedTask });
+      yield* Deferred.await(h.runningObserved);
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      const stop = yield* h.runtime
+        .interruptTurn({
+          providerThread,
+          providerTurnId: ids.derive.providerTurn({
+            driver: DRIVER,
+            nativeTurnId: `${instanceId}:${runId}`,
+          }),
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(cancelled);
+      expect(h.cancelRun).toHaveBeenCalledWith(runId, {
+        runtime: "cloud",
+        agentId,
+        apiKey: "key-fixture",
+      });
+      yield* TestClock.adjust("15 seconds");
+      yield* Fiber.join(stop);
+      const events = yield* collectTerminal(h.runtime);
+      expect(events.filter((event) => event.type === "turn.terminal")).toEqual([
+        expect.objectContaining({ status: "interrupted" }),
+      ]);
+      expect(h.commits.at(-1)).toMatchObject({ status: "cancelled", acceptedAppRunId: appRunId });
+      expect(h.nativeRun.stream).not.toHaveBeenCalled();
+      expect(h.send).not.toHaveBeenCalled();
+      expect(h.create).not.toHaveBeenCalled();
+      expect(h.resume).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
   effectIt.effect("completion racing Stop stays succeeded and completed", () =>
     Effect.gen(function* () {

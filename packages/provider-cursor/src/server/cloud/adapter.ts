@@ -595,6 +595,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               // Commit accepted identities before exposing a safely recorded running task.
               const accepted: Task = {
                 taskId: sent.id,
+                acceptedAppRunId: input.runId,
                 url: submitting.url!,
                 status: "running",
                 tracking: "live",
@@ -614,16 +615,16 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             }),
           resumeTurn: (input) =>
             Effect.gen(function* () {
-              if (active) {
-                if (active.run.id === input.cloudTask.taskId) return;
-                return yield* protocol("Another Cursor Cloud observer owns this session.");
-              }
               const task = input.cloudTask;
               const agentId = input.providerThread.nativeThreadRef?.nativeId;
               const runId = task.taskId;
               if (!task || !input.commitCloudTask)
                 return yield* protocol("Persisted cloud state is unavailable.");
-              if (!agentId || task.status === "submitting" || runId === input.runId) {
+              if (
+                !agentId ||
+                task.status === "submitting" ||
+                task.acceptedAppRunId !== input.runId
+              ) {
                 yield* input.commitCloudTask({
                   ...task,
                   status: "unknown",
@@ -632,6 +633,10 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 return yield* protocol(
                   "Cloud submission could not be reconciled; remote outcome is unknown.",
                 );
+              }
+              if (active) {
+                if (active.input.runId === input.runId && active.run.id === runId) return;
+                return yield* protocol("Another Cursor Cloud observer owns this session.");
               }
               const apiKey = yield* key;
               const run = yield* call("get-run", () =>
@@ -678,10 +683,16 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
           interruptTurn: (input) =>
             Effect.gen(function* () {
               const ctx = active;
+              const requestedTask = input.providerThread.cloudTask;
               if (
                 !ctx ||
                 ctx.turn.id !== input.providerTurnId ||
-                ctx.thread.id !== input.providerThread.id
+                ctx.thread.id !== input.providerThread.id ||
+                ctx.thread.cloudTask?.acceptedAppRunId !== ctx.input.runId ||
+                (requestedTask !== undefined &&
+                  (requestedTask.status === "submitting" ||
+                    requestedTask.acceptedAppRunId !== ctx.input.runId ||
+                    requestedTask.taskId !== ctx.run.id))
               ) {
                 return yield* protocol("The requested Cursor Cloud turn is not attached.");
               }

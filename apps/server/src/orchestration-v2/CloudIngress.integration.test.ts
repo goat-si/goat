@@ -852,6 +852,8 @@ const seedCursorAccepted = Effect.fnUntraced(function* (
   const startedAt = DateTime.makeUnsafe("2026-10-10T00:00:00.000Z");
   const task = {
     taskId: `cursor-run-${ordinal}`,
+    acceptedAppRunId:
+      taskStatus === "submitting" ? RunId.make("run:cursor-previous-prompt") : run.id,
     status: taskStatus,
     tracking: "live" as const,
     source: cursorSource,
@@ -1182,6 +1184,10 @@ it.effect(
         const after = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(after.providerThreads[0]?.cloudTask?.status, "unknown");
         assert.equal(after.providerThreads[0]?.cloudTask?.taskId, saved.task.taskId);
+        assert.equal(
+          after.providerThreads[0]?.cloudTask?.acceptedAppRunId,
+          saved.task.acceptedAppRunId,
+        );
         assert.deepEqual(after.providerThreads[0]?.cloudTask?.source, cursorSource);
         assert.equal(after.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
         assert.equal(after.attempts[0]?.status, "failed");
@@ -1335,6 +1341,7 @@ it.effect(
         assert.equal(run.status, "running");
         assert.equal(creating.providerThreads[0]?.cloudTask?.status, "submitting");
         assert.equal(creating.providerThreads[0]?.cloudTask?.taskId, run.id);
+        assert.isUndefined(creating.providerThreads[0]?.cloudTask?.acceptedAppRunId);
         assert.deepEqual(creating.providerThreads[0]?.cloudTask?.source, cursorSource);
         assert.isTrue(creating.providerThreads[0]?.cloudTask?.localChangesExcluded);
         assert.isNull(creating.providerThreads[0]!.nativeThreadRef);
@@ -1349,6 +1356,7 @@ it.effect(
         const sending = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(sending.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
         assert.equal(sending.providerThreads[0]?.cloudTask?.status, "submitting");
+        assert.isUndefined(sending.providerThreads[0]?.cloudTask?.acceptedAppRunId);
         assert.equal(
           sending.providerThreads[0]?.cloudTask?.url,
           `https://cursor.com/agents/${cursorAgentId}`,
@@ -1359,6 +1367,7 @@ it.effect(
         const accepted = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(accepted.providerThreads[0]?.cloudTask?.taskId, "cursor-run-1");
         assert.equal(accepted.providerThreads[0]?.cloudTask?.status, "running");
+        assert.equal(accepted.providerThreads[0]?.cloudTask?.acceptedAppRunId, run.id);
         assert.deepEqual(accepted.providerThreads[0]?.cloudTask?.source, cursorSource);
         yield* Fiber.join(draining);
         yield* h.runs[0]!.finish();
@@ -1463,6 +1472,7 @@ it.effect.each(["direct", "queued"] as const)(
         const submitting = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(submitting.providerThreads[0]?.cloudTask?.status, "submitting");
         assert.equal(submitting.providerThreads[0]?.cloudTask?.taskId, "cursor-run-1");
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.acceptedAppRunId, first.id);
         assert.equal(submitting.providerThreads[0]?.cloudTask?.summary, "Completed task 1.");
         assert.equal(
           submitting.providerThreads[0]?.cloudTask?.prUrl,
@@ -1492,6 +1502,7 @@ it.effect.each(["direct", "queued"] as const)(
         assert.deepEqual(second.providerThreads[0]?.cloudTask?.source, cursorSource);
         assert.equal(second.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
         assert.equal(second.providerThreads[0]?.cloudTask?.taskId, "cursor-run-2");
+        assert.equal(second.providerThreads[0]?.cloudTask?.acceptedAppRunId, followUp.id);
         assert.isUndefined(second.providerThreads[0]?.cloudTask?.summary);
         assert.isUndefined(second.providerThreads[0]?.cloudTask?.prUrl);
         assert.equal(
