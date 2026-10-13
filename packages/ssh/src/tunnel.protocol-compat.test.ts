@@ -30,7 +30,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
-        [false, true].map((live) => ({ entry, live })),
+        // An owning launch on a stopped host installs its own release instead;
+        // tunnel.protocol-upgrade.test.ts covers that case.
+        (entry === "launch" ? [true] : [false, true]).map((live) => ({ entry, live })),
       ),
     )("reuses older compatible $entry; live=$live", ({ entry, live }) =>
       Effect.gen(function* () {

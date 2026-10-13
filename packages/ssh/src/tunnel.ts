@@ -111,15 +111,16 @@ export interface RemoteGoatRunnerOptions {
   /** Local gh executable used for authenticated acquisition; defaults to PATH lookup. */
   readonly ghCommand?: string | undefined;
   /**
-   * Reuse the remote's existing `run-t3.sh` for this target instead of
-   * replacing it. A second client of the same host (the server's own SSH
-   * dispatch, next to a desktop that already launched the remote) must not
-   * swap the runner: a changed runner restarts a managed remote server, which
-   * would cut off the client that started it. Reusing it also runs remote CLI
-   * commands with the binary that matches the running server.
+   * Reuse the remote's existing `run-t3.sh` instead of replacing it. Pairing and
+   * MCP-session helpers set it so remote CLI commands run with the binary that
+   * matches the running server. A launch with it never installs, refreshes, or
+   * replaces the host's runtime.
    */
   readonly keepExistingRunner?: boolean | null;
-  /** Packaged desktop startup may refresh an older owned runtime once, when idle. */
+  /**
+   * The first connection per manager may refresh an older owned runtime once,
+   * when idle. Packaged desktop and the server's SSH dispatch set it.
+   */
   readonly refreshOwnedRuntimeOnFirstConnection?: boolean;
   /**
    * The user confirmed replacing the live runtime even if its work outlasts the drain window.
@@ -2133,6 +2134,20 @@ export const prepareRemoteRuntime = (
       probe.retainedRunnerSha256 !== undefined &&
       probe.retainedSignals.serverVersion === probe.retainedVersion &&
       matchesSignals(probe.retainedSignals, version);
+    // No server runs, so no thread can be interrupted: an owning client installs
+    // its own release instead of restarting an older retained one. It keeps the
+    // retained runtime only when that one is newer, or when the requested
+    // archive cannot be acquired (handled below, with the reason logged).
+    const upgradeRetained =
+      owningLaunch &&
+      exact.mayUpgradeOwnedServer &&
+      retainedCompatible &&
+      probe.retainedVersion !== undefined &&
+      probe.retainedVersion !== version &&
+      !(
+        releasesOrderable(probe.retainedVersion, version) &&
+        compareSemverVersions(probe.retainedVersion, version) > 0
+      );
     const adoptLegacy =
       owningLaunch &&
       exact.mayUpgradeOwnedServer &&
@@ -2167,132 +2182,173 @@ export const prepareRemoteRuntime = (
     const selectedVersion =
       liveCompatible && !adoptLegacy && !refreshIfIdle
         ? probe.liveVersion
-        : retainedCompatible
+        : retainedCompatible && !upgradeRetained
           ? probe.retainedVersion
           : undefined;
-    if (selectedVersion !== undefined) {
+    const selectInstalled = (selectedVersion: string) => {
       const retained =
         selectedVersion === probe.retainedVersion &&
         probe.retainedSignals !== undefined &&
         probe.retainedSignals.serverVersion === selectedVersion &&
         matchesSignals(probe.retainedSignals, version) &&
         probe.retainedRunnerSha256 !== undefined;
-      yield* Effect.annotateCurrentSpan(
+      return Effect.annotateCurrentSpan(
         "t3.runtime.source",
         retained ? "retained-runner" : "live-runtime",
+      ).pipe(
+        Effect.as({
+          ...exact,
+          version: selectedVersion,
+          source: retained ? "retained" : "live",
+          requireInstalled: true,
+          runner: { ...runner, archiveVersion: selectedVersion },
+          retainedRunnerSha256: retained ? (probe.retainedRunnerSha256 ?? null) : null,
+        } satisfies PreparedRemoteRuntime),
       );
-      return {
-        ...exact,
-        version: selectedVersion,
-        source: retained ? "retained" : "live",
-        requireInstalled: true,
-        runner: { ...runner, archiveVersion: selectedVersion },
-        retainedRunnerSha256: retained ? (probe.retainedRunnerSha256 ?? null) : null,
-      } satisfies PreparedRemoteRuntime;
-    }
-    if (probe.ready) {
-      yield* Effect.annotateCurrentSpan("t3.runtime.source", "ready");
-      return { ...exact, requireInstalled: true };
-    }
-    const platformKey = cliArchivePlatformKey(probe.platform, probe.arch);
-    if (platformKey === undefined) {
-      if (mirror !== "") {
-        yield* Effect.annotateCurrentSpan("t3.runtime.source", "download");
-        return exact;
+    };
+    // Install the requested release: already present, bundled, cached, or downloaded.
+    const acquireRequested = Effect.gen(function* () {
+      if (probe.ready) {
+        yield* Effect.annotateCurrentSpan("t3.runtime.source", "ready");
+        return { ...exact, requireInstalled: true };
       }
-      const asset =
-        platformKey === undefined
-          ? `unsupported-${probe.platform}-${probe.arch}`
-          : cliArchiveFileName(version, platformKey);
-      return yield* new SshLaunchError({
-        reason: "archive-unavailable",
-        message: `Cannot acquire the SSH runtime archive (repo=${CLI_RELEASE_REPOSITORY}, tag=v${version}, asset=${asset}, archive directory=${directory || "<not configured>"}). Configure a local archive directory and use a supported SSH platform, or an explicit release mirror.`,
-        stdout: "",
-      });
-    }
-    const bundledArchive =
-      bundleDirectory === ""
-        ? null
-        : yield* readLocalRuntimeArchive(bundleDirectory, version, platformKey, true).pipe(
-            Effect.mapError(archiveSupplyError),
-          );
-    const localArchive =
-      bundledArchive !== null || directory === ""
-        ? null
-        : yield* readLocalRuntimeArchive(directory, version, platformKey).pipe(
-            Effect.mapError(archiveSupplyError),
-          );
-    if (bundledArchive === null && localArchive === null && mirror !== "") {
-      yield* Effect.annotateCurrentSpan("t3.runtime.source", "download");
-      return exact;
-    }
-    if (bundledArchive === null && localArchive === null) {
-      const path = yield* Path.Path;
-      if (
-        directory === "" ||
-        (bundleDirectory !== "" && path.resolve(directory) === path.resolve(bundleDirectory))
-      ) {
+      const platformKey = cliArchivePlatformKey(probe.platform, probe.arch);
+      if (platformKey === undefined) {
+        if (mirror !== "") {
+          yield* Effect.annotateCurrentSpan("t3.runtime.source", "download");
+          return exact;
+        }
+        const asset =
+          platformKey === undefined
+            ? `unsupported-${probe.platform}-${probe.arch}`
+            : cliArchiveFileName(version, platformKey);
         return yield* new SshLaunchError({
           reason: "archive-unavailable",
-          message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for ${CLI_RELEASE_REPOSITORY} release v${version} or rebuild the packaged archives.`,
+          message: `Cannot acquire the SSH runtime archive (repo=${CLI_RELEASE_REPOSITORY}, tag=v${version}, asset=${asset}, archive directory=${directory || "<not configured>"}). Configure a local archive directory and use a supported SSH platform, or an explicit release mirror.`,
           stdout: "",
         });
       }
-    }
-    const archive =
-      bundledArchive ??
-      localArchive ??
-      (yield* downloadRuntimeArchiveWithHttps(directory, version, platformKey).pipe(
+      const bundledArchive =
+        bundleDirectory === ""
+          ? null
+          : yield* readLocalRuntimeArchive(bundleDirectory, version, platformKey, true).pipe(
+              Effect.mapError(archiveSupplyError),
+            );
+      const localArchive =
+        bundledArchive !== null || directory === ""
+          ? null
+          : yield* readLocalRuntimeArchive(directory, version, platformKey).pipe(
+              Effect.mapError(archiveSupplyError),
+            );
+      if (bundledArchive === null && localArchive === null && mirror !== "") {
+        yield* Effect.annotateCurrentSpan("t3.runtime.source", "download");
+        return exact;
+      }
+      if (bundledArchive === null && localArchive === null) {
+        const path = yield* Path.Path;
+        if (
+          directory === "" ||
+          (bundleDirectory !== "" && path.resolve(directory) === path.resolve(bundleDirectory))
+        ) {
+          return yield* new SshLaunchError({
+            reason: "archive-unavailable",
+            message: `Cannot acquire ${cliArchiveFileName(version, platformKey)} for ${target.alias}: no writable user archive cache distinct from the bundle (${directory || "<not configured>"}). Configure archiveDirectory for ${CLI_RELEASE_REPOSITORY} release v${version} or rebuild the packaged archives.`,
+            stdout: "",
+          });
+        }
+      }
+      const archive =
+        bundledArchive ??
+        localArchive ??
+        (yield* downloadRuntimeArchiveWithHttps(directory, version, platformKey).pipe(
+          Effect.catchTags({
+            RuntimeArchiveNotPublished: () =>
+              downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SshLaunchError({
+                      reason: "archive-unavailable",
+                      message: `Public HTTPS release is not published and local gh acquisition failed: ${cause.message}`,
+                      stdout: "",
+                      cause,
+                    }),
+                ),
+              ),
+            RuntimeArchiveNetworkError: () =>
+              downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SshLaunchError({
+                      reason: "archive-unavailable",
+                      message: `Public HTTPS release download failed and local gh acquisition failed: ${cause.message}`,
+                      stdout: "",
+                      cause,
+                    }),
+                ),
+              ),
+          }),
+          Effect.mapError(archiveSupplyError),
+        ));
+      yield* Effect.annotateCurrentSpan(
+        "t3.runtime.acquisition",
+        bundledArchive !== null ? "bundle" : localArchive !== null ? "cache" : "https-or-gh",
+      );
+      yield* Effect.annotateCurrentSpan({
+        "t3.runtime.source": "upload",
+        "t3.runtime.upload.bytes": archive.bytes.byteLength,
+        "t3.runtime.upload.sha256": archive.sha256,
+        "t3.runtime.upload.installComplete": false,
+      });
+      const script = yield* Effect.try({
+        try: () => buildRemoteUploadScript({ ...runner, archiveVersion: version }, archive.sha256),
+        catch: runtimePreparationError,
+      });
+      yield* runSshCommand(target, {
+        ...authOptions,
+        remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
+        stdin: archive.bytes,
+        timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+      }).pipe(
+        // A remote reader that exits early (full disk, failed checksum) fails only
+        // this upload, with the remote's own reason. A connection failure or timeout
+        // stays an SshCommandError that names the host.
         Effect.catchTags({
-          RuntimeArchiveNotPublished: () =>
-            downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand).pipe(
-              Effect.mapError(
-                (cause) =>
+          SshCommandError: (error) =>
+            error.exitCode === null || error.exitCode === 255
+              ? Effect.fail(error)
+              : Effect.fail(
                   new SshLaunchError({
-                    reason: "archive-unavailable",
-                    message: `Public HTTPS release is not published and local gh acquisition failed: ${cause.message}`,
-                    stdout: "",
-                    cause,
+                    message: `Uploading the runtime archive failed (exit ${error.exitCode}): ${error.message}`,
+                    stdout: error.stdout ?? "",
+                    cause: error,
                   }),
-              ),
-            ),
-          RuntimeArchiveNetworkError: () =>
-            downloadRuntimeArchiveWithGh(directory, version, platformKey, runner?.ghCommand).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SshLaunchError({
-                    reason: "archive-unavailable",
-                    message: `Public HTTPS release download failed and local gh acquisition failed: ${cause.message}`,
-                    stdout: "",
-                    cause,
-                  }),
-              ),
-            ),
+                ),
         }),
-        Effect.mapError(archiveSupplyError),
-      ));
-    yield* Effect.annotateCurrentSpan(
-      "t3.runtime.acquisition",
-      bundledArchive !== null ? "bundle" : localArchive !== null ? "cache" : "https-or-gh",
-    );
-    yield* Effect.annotateCurrentSpan({
-      "t3.runtime.source": "upload",
-      "t3.runtime.upload.bytes": archive.bytes.byteLength,
-      "t3.runtime.upload.sha256": archive.sha256,
-      "t3.runtime.upload.installComplete": false,
+      );
+      yield* Effect.annotateCurrentSpan("t3.runtime.upload.installComplete", true);
+      return { ...exact, requireInstalled: true };
     });
-    const script = yield* Effect.try({
-      try: () => buildRemoteUploadScript({ ...runner, archiveVersion: version }, archive.sha256),
-      catch: runtimePreparationError,
-    });
-    yield* runSshCommand(target, {
-      ...authOptions,
-      remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
-      stdin: archive.bytes,
-      timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
-    });
-    yield* Effect.annotateCurrentSpan("t3.runtime.upload.installComplete", true);
-    return { ...exact, requireInstalled: true };
+    if (selectedVersion !== undefined) return yield* selectInstalled(selectedVersion);
+    if (upgradeRetained && probe.retainedVersion !== undefined) {
+      const retainedVersion = probe.retainedVersion;
+      yield* Effect.logInfo("ssh.runtime.upgrade.start", {
+        ...sshTargetLogFields(target),
+        installedVersion: retainedVersion,
+        requestedVersion: version,
+      });
+      return yield* acquireRequested.pipe(
+        Effect.catchTags({
+          SshLaunchError: (error) =>
+            Effect.logWarning("ssh.runtime.upgrade.skipped", {
+              ...sshTargetLogFields(target),
+              installedVersion: retainedVersion,
+              requestedVersion: version,
+              reason: `GOAT ${version} could not be installed, so the installed ${retainedVersion} starts instead: ${error.message}`,
+            }).pipe(Effect.andThen(selectInstalled(retainedVersion))),
+        }),
+      );
+    }
+    return yield* acquireRequested;
   }).pipe(
     Effect.mapError((error) =>
       error instanceof SshLaunchError
@@ -3200,6 +3256,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       return yield* new SshLaunchError({ message: "SSH connection was cancelled.", stdout: "" });
     }
     if (remoteLaunch.pending !== undefined && input.runner !== undefined) {
+      // The host keeps its current runtime for now; say why instead of pinning it silently.
+      yield* Effect.logWarning("ssh.runtime.refresh.deferred", {
+        ...sshTargetLogFields(input.resolvedTarget),
+        liveVersion: remoteLaunch.pending.liveVersion,
+        requestedVersion: remoteLaunch.pending.requestedVersion,
+        reason: remoteLaunch.pending.reason,
+        replacement: remoteLaunch.pending.replacement,
+        retryInMinutes: 10,
+      });
       pendingReplacements.set(input.key, {
         target: input.resolvedTarget,
         requestedRunner: input.runner,
