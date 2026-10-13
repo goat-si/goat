@@ -1184,6 +1184,56 @@ export function isSidebarPriorityMember(input: {
   );
 }
 
+export function countVisibleSidebarPriorityThreads<
+  T extends SidebarPriorityMember & Pick<SidebarThreadSummary, "environmentId" | "id">,
+>(input: {
+  readonly threads: readonly T[];
+  readonly now: string;
+  readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
+  readonly attentionByOwnerKey: ReadonlyMap<string, SidebarChildAttention>;
+  readonly supportsSnooze: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
+  readonly supportsSettlement: (environmentId: SidebarThreadSummary["environmentId"]) => boolean;
+}): number {
+  let count = 0;
+  for (const thread of input.threads) {
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    if (
+      isSidebarPriorityMember({
+        thread,
+        now: input.now,
+        localLastVisitedAt: input.localLastVisitedAtByKey[key],
+        hasChildAttention: input.attentionByOwnerKey.has(key),
+        supportsSnooze: input.supportsSnooze(thread.environmentId),
+        supportsSettlement: input.supportsSettlement(thread.environmentId),
+      })
+    ) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+let publishedSidebarPriorityCount: number | null = null;
+const sidebarPriorityCountListeners = new Set<() => void>();
+
+/** Activity publishes the Priority row count so the bell shows the same number. */
+export function publishSidebarPriorityCount(count: number | null): void {
+  if (publishedSidebarPriorityCount === count) return;
+  publishedSidebarPriorityCount = count;
+  for (const listener of sidebarPriorityCountListeners) listener();
+}
+
+export function subscribeSidebarPriorityCount(listener: () => void): () => void {
+  sidebarPriorityCountListeners.add(listener);
+  return () => {
+    sidebarPriorityCountListeners.delete(listener);
+  };
+}
+
+export function getPublishedSidebarPriorityCount(): number | null {
+  return publishedSidebarPriorityCount;
+}
+
 /**
  * Cache ranks before sorting. Within a rank, newer threads come first by
  * creation time: updatedAt moves on every streamed event of a running thread,

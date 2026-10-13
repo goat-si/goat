@@ -1,8 +1,23 @@
-import { SearchIcon } from "lucide-react";
-import { useCallback } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { BellIcon, SearchIcon } from "lucide-react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
+import { excludeGlobalAgentThreads } from "../../globalAgentRoute";
 import { openCommandPalette } from "../../commandPaletteBus";
+import { useGlobalAgentStore } from "../../globalAgentStore";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useLegacySidebarEnabled, useUpdateClientSettings } from "../../hooks/useSettings";
+import { shortcutLabelForCommand } from "../../keybindings";
+import { useThreadShells } from "../../state/entities";
+import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../../state/server";
+import { useUiStateStore } from "../../uiStateStore";
+import {
+  buildSidebarSubagentIndex,
+  countVisibleSidebarPriorityThreads,
+  filterSidebarV2VisibleThreads,
+  getPublishedSidebarPriorityCount,
+  subscribeSidebarPriorityCount,
+} from "../Sidebar.logic";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { requestSidebarSearchFocus } from "./sidebarSearchFocus";
@@ -17,19 +32,91 @@ export function useSidebarActivityToggle() {
   return { activityActive: projectsSidebar === false, toggleActivity };
 }
 
-/** Focuses Activity's inline thread search, or opens the command palette elsewhere. */
-export function SidebarSearchButton({ onBackdrop }: { onBackdrop: boolean }) {
+export function SidebarViewToggles({ onBackdrop }: { onBackdrop: boolean }) {
+  const { activityActive, toggleActivity } = useSidebarActivityToggle();
+  const publishedPriorityCount = useSyncExternalStore(
+    subscribeSidebarPriorityCount,
+    getPublishedSidebarPriorityCount,
+    getPublishedSidebarPriorityCount,
+  );
+  // Activity publishes the row count, holds included. Otherwise count the same
+  // membership Priority will show when it opens.
+  const threads = useThreadShells(publishedPriorityCount === null);
+  const nowMinute = useNowMinute();
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const localLastVisitedAtByKey = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const botRef = useGlobalAgentStore((state) => state.botRef);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const priorityCount = useMemo(() => {
+    if (publishedPriorityCount !== null) return publishedPriorityCount;
+    const index = buildSidebarSubagentIndex(threads);
+    const visible = excludeGlobalAgentThreads(
+      filterSidebarV2VisibleThreads(threads, null, new Set(index.attentionByOwnerKey.keys())),
+      globalAgentRef,
+      botRef,
+    );
+    return countVisibleSidebarPriorityThreads({
+      threads: visible,
+      now: `${nowMinute}:00.000Z`,
+      localLastVisitedAtByKey,
+      attentionByOwnerKey: index.attentionByOwnerKey,
+      supportsSnooze: (environmentId) =>
+        serverConfigs.get(environmentId)?.environment.capabilities.threadSnooze === true,
+      supportsSettlement: (environmentId) =>
+        serverConfigs.get(environmentId)?.environment.capabilities.threadSettlement === true,
+    });
+  }, [
+    botRef,
+    globalAgentRef,
+    localLastVisitedAtByKey,
+    nowMinute,
+    publishedPriorityCount,
+    serverConfigs,
+    threads,
+  ]);
+  const activityLabel = activityActive ? "Turn off activity view" : "View activity";
+  const activityName =
+    priorityCount > 0 ? `${activityLabel}, ${priorityCount} in Priority` : activityLabel;
+  const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggleActivity");
+  const variant = onBackdrop ? "media-navigation" : "ghost";
   const handleSearch = () => {
     if (!requestSidebarSearchFocus()) openCommandPalette();
   };
 
   return (
-    <div className="relative z-10 flex shrink-0 items-center [-webkit-app-region:no-drag]">
+    <div className="relative z-10 flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
       <Tooltip>
         <TooltipTrigger
           render={
             <Button
-              variant={onBackdrop ? "media-navigation" : "ghost"}
+              variant={variant}
+              size="icon-sm"
+              className="relative top-auto translate-y-0"
+              aria-label={activityName}
+              aria-pressed={activityActive}
+              data-pressed={activityActive ? "" : undefined}
+              onClick={() => void toggleActivity()}
+            >
+              <BellIcon />
+            </Button>
+          }
+        />
+        <TooltipPopup side="bottom">
+          {activityName}
+          {shortcutLabel ? ` (${shortcutLabel})` : ""}
+        </TooltipPopup>
+      </Tooltip>
+      {priorityCount > 0 ? (
+        <span className="min-w-4 text-center text-xs text-secondary-label tabular-nums">
+          {priorityCount}
+        </span>
+      ) : null}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant={variant}
               size="icon-sm"
               className="relative top-auto translate-y-0"
               aria-label="Search threads"

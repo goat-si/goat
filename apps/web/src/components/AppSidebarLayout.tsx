@@ -25,7 +25,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { useLegacySidebarEnabled } from "../hooks/useSettings";
+import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import {
   PanelAnimationSuppressionProvider,
   usePanelAnimationSettings,
@@ -35,17 +35,21 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
-import { SidebarChromeHeader, SidebarCollapsedBrand } from "./sidebar/SidebarChrome";
+import {
+  SidebarBrandWidthProbe,
+  SidebarChromeHeader,
+  SidebarCollapsedBrand,
+} from "./sidebar/SidebarChrome";
 import { MainAppLocationTracker } from "./sidebar/mainAppLocation";
-import { subscribeSidebarToggleRequest } from "./sidebar/sidebarToggleRequest";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
+import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
 import { useProjects } from "../state/entities";
 import {
   clampThreadSidebarWidth,
   resolveInitialThreadSidebarWidth,
   resolveThreadSidebarMaximumWidth,
+  resolveThreadSidebarMinimumWidth,
   THREAD_MAIN_CONTENT_MIN_WIDTH,
-  THREAD_SIDEBAR_MIN_WIDTH,
   THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
 } from "./threadSidebarWidth";
 import {
@@ -91,6 +95,10 @@ export function SidebarControl({
   const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
   const { toggleActivity } = useSidebarActivityToggle();
   const isSidebarVisible = useSidebarVisibility();
+  const environmentIdentificationMode = useEnvironmentIdentificationMode();
+  const stageBackdropVariant = useSidebarStageBackdropVariant(
+    environmentIdentificationMode === "artwork",
+  );
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
     context: { usagePageOpen },
   });
@@ -129,11 +137,9 @@ export function SidebarControl({
       if (action === "sidebar.toggle") toggleSidebar();
       else if (action === "sidebar.toggleActivity") void toggleActivity();
     });
-    const unsubscribeToggleRequest = subscribeSidebarToggleRequest(toggleSidebar);
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       unsubscribe?.();
-      unsubscribeToggleRequest();
     };
   }, [keybindings, toggleActivity, toggleSidebar, usagePageOpen]);
 
@@ -142,8 +148,6 @@ export function SidebarControl({
     // the panel), so the trigger mirrors it: both clusters sit one extra pixel
     // off their edge and the titlebar reads symmetric.
     // The sheet owns its trigger until its closing transition unmounts it.
-    // An open sidebar keeps its header clear, so the trigger only reopens a closed one;
-    // Mod+B and the command palette's "Toggle sidebar" close it.
     <div
       className={cn(
         "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
@@ -151,18 +155,25 @@ export function SidebarControl({
       )}
       data-sidebar-control=""
     >
-      {isSidebarVisible ? null : (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <SidebarTrigger className="pointer-events-auto" aria-label="Toggle main sidebar" />
-            }
-          />
-          <TooltipPopup side="bottom">
-            Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
-          </TooltipPopup>
-        </Tooltip>
-      )}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarTrigger
+              // Over the stage artwork the trigger is a control on imagery, like the media
+              // viewer's arrows; that variant positions itself, so the layout is reset here.
+              variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
+              className={cn(
+                "pointer-events-auto",
+                isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
+              )}
+              aria-label="Toggle main sidebar"
+            />
+          }
+        />
+        <TooltipPopup side="bottom">
+          Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
+        </TooltipPopup>
+      </Tooltip>
       <SidebarCollapsedBrand
         visible={!isSidebarVisible}
         onWidthChange={onCollapsedBrandWidthChange}
@@ -248,8 +259,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   // and a clamped drag ends with an unchanged width, which skips the re-render
   // that would otherwise refresh a render-time snapshot.
   const viewportWidth = useSyncExternalStore(subscribeToViewportWidth, readViewportWidth);
+  const [brandWidth, setBrandWidth] = useState(0);
   const [collapsedBrandWidth, setCollapsedBrandWidth] = useState(0);
-  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth);
+  const sidebarMinimumWidth = resolveThreadSidebarMinimumWidth(brandWidth);
+  const sidebarMaximumWidth = resolveThreadSidebarMaximumWidth(viewportWidth, sidebarMinimumWidth);
   const resetSidebarWidth = () => {
     try {
       removeLocalStorageItem(THREAD_SIDEBAR_WIDTH_STORAGE_KEY);
@@ -271,7 +284,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   ) as CSSProperties;
   const sidebarProviderStyle = {
     "--workspace-collapsed-brand-inline-size": `${collapsedBrandWidth}px`,
-    "--sidebar-width": `${clampThreadSidebarWidth(sidebarWidth, THREAD_SIDEBAR_MIN_WIDTH, sidebarMaximumWidth)}px`,
+    "--sidebar-width": `${clampThreadSidebarWidth(sidebarWidth, sidebarMinimumWidth, sidebarMaximumWidth)}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
     ...windowControlsInsetStyle,
   } as CSSProperties;
@@ -321,6 +334,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         defaultOpen
         style={sidebarProviderStyle}
       >
+        <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
         <ProjectProjectionRetention />
         <Sidebar
           side="left"
@@ -330,7 +344,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           aria-label={isOnSettings ? "Settings" : "Threads"}
           resizable={{
             maxWidth: sidebarMaximumWidth,
-            minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+            minWidth: sidebarMinimumWidth,
             shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
               nextWidth <= currentWidth ||
               wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,

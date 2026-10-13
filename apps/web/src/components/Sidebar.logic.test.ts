@@ -47,6 +47,7 @@ import {
   resolveSidebarViewIsProjects,
   resolveSidebarPriorityRank,
   resolveSidebarWokeAtForRow,
+  countVisibleSidebarPriorityThreads,
   isSidebarPriorityMember,
   holdSidebarPriorityRank,
   resolveSidebarThreadPresentation,
@@ -774,7 +775,7 @@ describe("Activity Priority", () => {
     ).toBe(2);
   });
 
-  it("admits the threads Priority shows, including wakes and running work", () => {
+  it("counts the threads Priority shows, including wakes and running work", () => {
     const now = "2026-03-09T10:10:00.000Z";
     const unread = makeThread({ latestRun: makeLatestRun(), lastVisitedAt: before });
     const woke = makeThread({
@@ -799,17 +800,26 @@ describe("Activity Priority", () => {
       hasPendingApprovals: true,
     });
     const idle = makeThread({ id: ThreadId.make("idle"), lastVisitedAt: after });
-    const members = [unread, woke, running, snoozedRunning, deleted, idle].filter((thread) =>
+    expect(
+      countVisibleSidebarPriorityThreads({
+        threads: [unread, woke, running, snoozedRunning, deleted, idle],
+        now,
+        localLastVisitedAtByKey: {},
+        attentionByOwnerKey: new Map(),
+        supportsSnooze: () => true,
+        supportsSettlement: () => true,
+      }),
+    ).toBe(3);
+    expect(
       isSidebarPriorityMember({
-        thread,
+        thread: snoozedRunning,
         now,
         localLastVisitedAt: undefined,
         hasChildAttention: false,
         supportsSnooze: true,
         supportsSettlement: true,
       }),
-    );
-    expect(members).toEqual([unread, woke, running]);
+    ).toBe(false);
   });
 
   it("keeps a read Priority row until Activity is shown again, unless its settled state changes", () => {

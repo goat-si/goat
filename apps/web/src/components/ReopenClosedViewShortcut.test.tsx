@@ -77,6 +77,7 @@ vi.mock("./LegacySidebar", () => ({ default: () => null }));
 vi.mock("./Sidebar", () => ({ default: () => null }));
 vi.mock("./settings/SettingsSidebarNav", () => ({ SettingsSidebarNav: () => null }));
 vi.mock("./sidebar/SidebarChrome", () => ({
+  SidebarBrandWidthProbe: () => null,
   SidebarChromeHeader: () => null,
   SidebarCollapsedBrand: () => null,
 }));
