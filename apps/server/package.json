@@ -39,6 +39,7 @@
     "@goat/provider-acp-registry": "workspace:*",
     "@goat/provider-core": "workspace:*",
     "@goat/provider-cursor": "workspace:*",
+    "@goat/provider-devin-cloud": "workspace:*",
     "@goat/provider-grok": "workspace:*",
     "@goat/provider-muse": "workspace:*",
     "@goat/provider-opencode": "workspace:*",

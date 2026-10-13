@@ -111,7 +111,7 @@ When a registry agent asks for approval, GOAT answers by the thread's
 **Auto-accept edits** approves edits and shows the rest, and **Auto** and **Full access** approve
 automatically. File reads and searches never wait for approval.
 
-Devin runs its commands through GOAT's terminals, and those commands follow the thread's
+The local Devin ACP provider runs its commands through GOAT's terminals, and those commands follow the thread's
 permission mode. For other agents, GOAT shows the command, output, and exit status the agent
 reports but does not run or stop their terminals.
 
@@ -128,6 +128,23 @@ conversation from before the checkpoint.
 Registry instances are not used for GOAT's app-owned text generation, such as thread titles, commit
 messages, branch names, or pull request descriptions. Configure a text-generation-capable provider
 for those actions.
+
+## Devin Cloud
+
+In **Settings → Providers**, add **Devin Cloud** and enter the instance ID of an existing
+Devin ACP provider on the same environment. It uses that provider's executable and CLI sign-in.
+Devin 3000.11.1 or newer is required. Sign in through the existing provider or with
+`devin auth login` on the server. The project folder must already be trusted by Devin, and your
+Devin organization must have access to the repository.
+
+Push the branch you want Devin to start from, then select Devin Cloud for a new thread. Local
+changes are not included. Work runs in Devin's cloud environment and creates no local checkpoints.
+The thread shows progress, the final response, and a matching PR link when Devin returns one.
+A completed response may still need more input or report a repository-access block.
+
+Follow-up messages continue the same cloud session. Stop waits for Devin to confirm cancellation.
+If GOAT loses tracking, the thread keeps its session link and blocks further messages while the
+prompt outcome is unknown. Reconnecting does not resend the original message.
 
 ## Advanced configuration
 

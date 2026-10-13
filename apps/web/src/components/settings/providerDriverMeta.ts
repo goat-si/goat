@@ -7,6 +7,7 @@ import {
 import { acpRegistryClient } from "@goat/provider-acp-registry/client";
 import { makeProviderClientRegistry } from "@goat/provider-core/client";
 import { cursorClient } from "@goat/provider-cursor/client";
+import { devinCloudClient } from "@goat/provider-devin-cloud/client";
 import { grokClient } from "@goat/provider-grok/client";
 import { museClient } from "@goat/provider-muse/client";
 import { openCodeClient } from "@goat/provider-opencode/client";
@@ -35,4 +36,5 @@ export const providerClients = makeProviderClientRegistry([
   museClient,
   piClient,
   acpRegistryClient,
+  devinCloudClient,
 ]);

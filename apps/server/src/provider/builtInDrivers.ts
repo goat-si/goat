@@ -25,6 +25,7 @@ import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/Antigrav
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import { CursorDriver, type CursorDriverEnv } from "@goat/provider-cursor/server";
+import { DevinCloudDriver, type DevinCloudDriverEnv } from "@goat/provider-devin-cloud/server";
 import { GrokDriver, type GrokDriverEnv } from "@goat/provider-grok/server";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "@goat/provider-opencode/server";
 import { MuseDriver, type MuseDriverEnv } from "@goat/provider-muse/server";
@@ -42,6 +43,7 @@ export type BuiltInDriversEnv =
   | ClaudeDriverEnv
   | CodexDriverEnv
   | CursorDriverEnv
+  | DevinCloudDriverEnv
   | GrokDriverEnv
   | OpenCodeDriverEnv
   | PiDriverEnv
@@ -62,6 +64,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   PiDriver,
   MuseDriver,
   AcpRegistryDriver,
+  DevinCloudDriver,
 ];
 
 /** Services the built-in usage readers need. */

@@ -26,6 +26,10 @@
     "./server/AcpRegistryRuntimeCoordinator": {
       "types": "./src/server/AcpRegistryRuntimeCoordinator.ts",
       "import": "./src/server/AcpRegistryRuntimeCoordinator.ts"
+    },
+    "./server/devinAcp": {
+      "types": "./src/server/devinAcp.ts",
+      "import": "./src/server/devinAcp.ts"
     }
   },
   "scripts": {
