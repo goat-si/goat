@@ -32,7 +32,7 @@ export function GuideNotice({ state }: { readonly state: ReturnType<typeof useRe
           size={19}
           tintColorClassName={failed ? "accent-danger-foreground" : "accent-icon-muted"}
         />
-        <Text className="text-base font-t3-semibold">
+        <Text className="text-base font-goat-semibold">
           {compact ? notice.title : "Review guide"}
         </Text>
       </View>
@@ -56,8 +56,8 @@ export function GuideNotice({ state }: { readonly state: ReturnType<typeof useRe
             <Text
               className={
                 compact
-                  ? "text-center font-t3-medium text-secondary-foreground"
-                  : "text-center font-t3-medium text-screen"
+                  ? "text-center font-goat-medium text-secondary-foreground"
+                  : "text-center font-goat-medium text-screen"
               }
             >
               {notice.action}

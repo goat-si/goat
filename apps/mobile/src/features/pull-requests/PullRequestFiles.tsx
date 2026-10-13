@@ -106,7 +106,7 @@ export function usePullRequestFilesContent(props: {
             >
               <PierreEntryIcon kind="file" path={file.path} size={20} />
               <View className="min-w-0 flex-1">
-                <Text className="text-sm font-t3-medium text-foreground" numberOfLines={2}>
+                <Text className="text-sm font-goat-medium text-foreground" numberOfLines={2}>
                   {file.path.split("/").at(-1)}
                 </Text>
                 {directory && !props.groupByDirectory ? (
@@ -269,7 +269,7 @@ export function usePullRequestFilesContent(props: {
             {result.isPending ? (
               <ActivityIndicator />
             ) : (
-              <Text className="text-sm font-t3-medium">
+              <Text className="text-sm font-goat-medium">
                 {result.error ? "Retry loading files" : "Load more files"}
               </Text>
             )}

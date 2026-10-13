@@ -43,7 +43,7 @@ export function CompactBrandTitle(
       <GoatWordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        className="font-t3-medium text-foreground-muted"
+        className="font-goat-medium text-foreground-muted"
         style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
       >
         Code
@@ -58,7 +58,7 @@ export function CompactBrandTitle(
       >
         <Text
           allowFontScaling={props.allowFontScaling}
-          className="font-t3-bold text-foreground-muted uppercase"
+          className="font-goat-bold text-foreground-muted uppercase"
           style={{ fontSize: 9 * scale, letterSpacing: 0.9 * scale }}
         >
           {stageLabel}

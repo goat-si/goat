@@ -38,7 +38,7 @@ export function ListFilterMenu(props: {
       <Text
         numberOfLines={1}
         className={cn(
-          "max-w-[180px] text-sm font-t3-medium",
+          "max-w-[180px] text-sm font-goat-medium",
           props.active ? "text-primary-foreground" : "text-foreground-muted",
         )}
       >

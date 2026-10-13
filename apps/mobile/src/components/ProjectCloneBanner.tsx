@@ -27,7 +27,7 @@ export function ProjectCloneBanner(props: {
       <View className="flex-row items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3">
         <AppActivityIndicator size="small" />
         <View className="min-w-0 flex-1">
-          <Text className="font-t3-medium text-sm" numberOfLines={1}>
+          <Text className="font-goat-medium text-sm" numberOfLines={1}>
             Cloning {name}
           </Text>
           <Text className="text-xs text-foreground-muted" numberOfLines={1}>
@@ -48,7 +48,7 @@ export function ProjectCloneBanner(props: {
     >
       <Text
         className={cn(
-          "font-t3-medium text-sm",
+          "font-goat-medium text-sm",
           cancelled ? "text-warning-foreground" : "text-danger-foreground",
         )}
         numberOfLines={1}
@@ -76,7 +76,7 @@ function BannerAction(props: { readonly label: string; readonly onPress: () => v
       className="rounded-full border border-border bg-card px-3 py-1.5"
       onPress={props.onPress}
     >
-      <Text className="font-t3-medium text-xs">{props.label}</Text>
+      <Text className="font-goat-medium text-xs">{props.label}</Text>
     </Pressable>
   );
 }

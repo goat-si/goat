@@ -15,7 +15,7 @@ export function ConnectionFormField({ label, className, ...inputProps }: Connect
       <AppText
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
-        className="text-2xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted"
+        className="text-2xs font-goat-bold tracking-[0.8px] uppercase text-foreground-muted"
       >
         {label}
       </AppText>

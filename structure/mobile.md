@@ -24,3 +24,8 @@ threads are separate from the bot transcript, are [`channels.md`](channels.md).
 
 The app talks to a server the user pairs. It does not bundle `apps/server`. Local Android builds
 and the EAS path are `apps/mobile/README.md` and `docs/operations/mobile-testflight.md`.
+
+The font utilities in `apps/mobile/global.css` are `font-goat-*`. The native modules under
+`apps/mobile/modules/` keep their upstream `t3-` module and `T3` view names, because renaming them
+needs an iOS and Android build. Android posts agent notifications on the `agent-alerts` and
+`agent-activity` channels.

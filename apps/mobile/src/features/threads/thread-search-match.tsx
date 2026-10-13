@@ -27,7 +27,7 @@ export function ThreadSearchMatchExcerpt(props: {
     >
       <Text
         className={cn(
-          props.compact ? "text-sm font-t3-medium" : "text-xs font-t3-medium",
+          props.compact ? "text-sm font-goat-medium" : "text-xs font-goat-medium",
           props.selected
             ? "text-thread-selected-foreground"
             : isUser
@@ -43,7 +43,7 @@ export function ThreadSearchMatchExcerpt(props: {
         <Text
           className={cn(
             props.compact ? "text-sm" : "text-xs",
-            part.highlighted && "font-t3-bold",
+            part.highlighted && "font-goat-bold",
             props.selected
               ? "text-thread-selected-foreground"
               : part.highlighted

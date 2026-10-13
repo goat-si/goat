@@ -145,7 +145,7 @@ export function EnvironmentRoutesSection({
             onPress={() => setEditing((value) => !value)}
             className="px-2 py-1 active:opacity-70"
           >
-            <Text className="text-sm font-t3-medium text-foreground android:text-primary-text">
+            <Text className="text-sm font-goat-medium text-foreground android:text-primary-text">
               {editing ? "Done" : "Edit"}
             </Text>
           </Pressable>

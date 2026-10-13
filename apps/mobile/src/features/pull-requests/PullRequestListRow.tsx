@@ -116,7 +116,7 @@ export const PullRequestListRow = memo(
                 </Text>
               </View>
               <Text
-                className={cn("text-base leading-5 font-t3-medium", foreground)}
+                className={cn("text-base leading-5 font-goat-medium", foreground)}
                 numberOfLines={2}
                 ellipsizeMode="tail"
               >
@@ -141,7 +141,7 @@ export const PullRequestListRow = memo(
                           />
                         ) : null}
                         <Text
-                          className={cn("shrink text-2xs font-t3-medium", mutedForeground)}
+                          className={cn("shrink text-2xs font-goat-medium", mutedForeground)}
                           numberOfLines={1}
                         >
                           {label.name}
