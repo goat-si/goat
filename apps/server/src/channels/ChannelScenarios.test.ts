@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CHANNEL_HOST_WORKSPACE_LABEL,
   type ChannelIngestInput,
+  type ChannelReceptionInput,
   ChannelGatewayError,
   CommandId,
   EnvironmentId,
@@ -1478,6 +1480,9 @@ describe("who may do what (scenario 4)", () => {
       assert.strictEqual(harness.world.launches.length, 0);
       const question = resultsTo(harness.slackSent, "question")[0];
       assert.include(question?.message.text ?? "", "Which project should I use?");
+      // Slack reads the choices as a list; the GOAT bot shows them as buttons.
+      assert.include(question?.message.text ?? "", "• Channel work");
+      assert.include(question?.message.text ?? "", "• Other work 1");
       // The answer names a project; the dispatcher launches there.
       harness.script.current = (input) =>
         input.mode === "input"
@@ -1496,6 +1501,67 @@ describe("who may do what (scenario 4)", () => {
       assert.strictEqual(harness.world.launches.length, 1);
       assert.strictEqual(harness.world.launches[0]?.projectId, projectId);
       assert.strictEqual((yield* onlyTask).status, "running");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("offers this machine and runs host-level work in the bot's workspace", () => {
+    const harness = makeHarness({ projects: 2, botWorkspace: true });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("do: which repo?", "Ev42"), slackContext);
+      yield* runtime.drain;
+      const question = resultsTo(harness.slackSent, "question")[0];
+      assert.include(question?.message.text ?? "", "• " + CHANNEL_HOST_WORKSPACE_LABEL);
+      // Picking this machine runs the work at the root of the bot's own workspace.
+      const task = yield* onlyTask;
+      harness.script.current = (input) =>
+        input.mode === "input"
+          ? Effect.succeed({
+              replyText: "Thanks.",
+              action: {
+                type: "answer_question",
+                taskId: task.taskId,
+                questionId: task.openQuestions[0]!.questionId,
+                answer: CHANNEL_HOST_WORKSPACE_LABEL,
+              },
+            })
+          : defaultScript(input);
+      yield* gateway.ingest(slackInput(CHANNEL_HOST_WORKSPACE_LABEL, "Ev43"), slackContext);
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.launches.length, 1);
+      assert.strictEqual(harness.world.launches[0]?.projectId, scratchProjectId);
+      assert.deepStrictEqual(harness.world.launches[0]?.workspaceStrategy, { type: "root" });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("answers from host facts and keeps notes the person asks it to remember", () => {
+    const harness = makeHarness();
+    const seen: Array<ChannelReceptionInput> = [];
+    harness.script.current = (input) => {
+      seen.push(input);
+      return input.inputText === "remember: reply in Korean"
+        ? Effect.succeed({
+            replyText: "I'll keep that.",
+            action: { type: "report_only" as const },
+            remember: "Reply in Korean.",
+          })
+        : defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("remember: reply in Korean", "notes-1"), rpcContext);
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), rpcContext);
+      yield* runtime.drain;
+      const later = seen.find((input) => input.inputText === "what machine is this?");
+      assert.include(later?.notes ?? "", "Reply in Korean.");
+      assert.include((later?.hostFacts ?? []).map((fact) => fact.value).join("\n"), "test-machine");
+      assert.strictEqual(harness.world.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 });

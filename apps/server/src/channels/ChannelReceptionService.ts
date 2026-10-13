@@ -13,9 +13,12 @@
  */
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- reception ids only need a random UUID.
 import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
 
 import {
+  CHANNEL_HOST_WORKSPACE_LABEL,
   type ChannelInputId,
+  type ChannelReceptionHostFact,
   type ChannelReceptionInput,
   type ChannelReceptionResult,
   type ChannelReplyAddress,
@@ -23,14 +26,21 @@ import {
   ChannelReceptionId,
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelOutboundKind,
+  type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
+import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { countHostThreads } from "../mcp/hostStatusModel.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -41,6 +51,12 @@ import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import {
+  appendChannelBotNote,
+  channelBotFilesFor,
+  listChannelBotSkills,
+  readChannelBotNotes,
+} from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { answerForwardIdsFor, deliveryIdFor, taskEventIdFor, taskIdFor } from "./channelIds.ts";
 import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
@@ -49,6 +65,24 @@ import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./ch
 const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
 /** How many recently active threads a reception pass sees by title. */
 const CHANNEL_RECEPTION_RECENT_THREADS = 20;
+
+const GIB = 1024 ** 3;
+const gib = (bytes: number) => (bytes / GIB).toFixed(bytes < 10 * GIB ? 1 : 0) + " GB";
+
+/** macOS reports a Darwin kernel release; its major number maps to the macOS version. */
+const macOsVersion = (release: string) => {
+  const major = Number.parseInt(release, 10);
+  if (!Number.isFinite(major) || major < 20) return "macOS (Darwin " + release + ")";
+  return "macOS " + (major >= 25 ? major + 1 : major - 9) + " (Darwin " + release + ")";
+};
+
+const duration = (seconds: number) => {
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  if (days > 0) return days + "d " + hours + "h";
+  return hours > 0 ? hours + "h " + minutes + "m" : minutes + "m";
+};
 
 export class ChannelReceptionService extends Context.Service<
   ChannelReceptionService,
@@ -133,37 +167,115 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const botFiles = channelBotFilesFor(path, serverConfig.stateDir);
+  const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
 
-  const allowedTargets = Effect.gen(function* () {
-    const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
-    return shells.map((shell) => ({ projectId: shell.id, label: shell.title }));
-  });
+  // Facts that do not change while the server runs.
+  const linuxName =
+    platform === "linux"
+      ? yield* fileSystem.readFileString("/etc/os-release").pipe(
+          Effect.map((text) => /^PRETTY_NAME="?([^"\n]+)"?/mu.exec(text)?.[1]),
+          Effect.orElseSucceed(() => undefined),
+        )
+      : undefined;
+  const osName =
+    platform === "darwin"
+      ? macOsVersion(NodeOS.release())
+      : platform === "win32"
+        ? NodeOS.version()
+        : (linuxName ?? NodeOS.type()) + " (kernel " + NodeOS.release() + ")";
+  const cpus = NodeOS.cpus();
+  const cpu = (cpus[0]?.model.trim() || "unknown CPU") + ", " + cpus.length + " cores";
+
+  /** What reception knows about this machine, read fresh for each message. */
+  const hostFacts = (
+    shells: ReadonlyArray<OrchestrationV2ThreadShell>,
+  ): Effect.Effect<ReadonlyArray<ChannelReceptionHostFact>> =>
+    Effect.gen(function* () {
+      const descriptor = yield* environment.getDescriptor;
+      const hostname = NodeOS.hostname();
+      const now = DateTime.toDateUtc(yield* DateTime.now);
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const counts = countHostThreads(shells);
+      const facts: Array<ChannelReceptionHostFact> = [
+        {
+          label: "Machine",
+          value:
+            descriptor.label === hostname
+              ? hostname
+              : descriptor.label + " (hostname " + hostname + ")",
+        },
+        { label: "Operating system", value: osName },
+        { label: "Architecture", value: architecture },
+        { label: "CPU", value: cpu },
+        {
+          label: "Memory",
+          value: gib(NodeOS.totalmem()) + " total, " + gib(NodeOS.freemem()) + " free",
+        },
+        { label: "Up for", value: duration(NodeOS.uptime()) },
+        { label: "GOAT version", value: packageJson.version },
+        {
+          label: "Local time",
+          value:
+            now.toLocaleString("en-US", { timeZone, dateStyle: "full", timeStyle: "short" }) +
+            " (" +
+            timeZone +
+            ")",
+        },
+        {
+          label: "Threads",
+          value:
+            counts.running +
+            " running, " +
+            counts.waiting +
+            " waiting on a person, " +
+            counts.queued +
+            " queued",
+        },
+      ];
+      return facts;
+    }).pipe(Effect.orElseSucceed(() => []));
+
+  /** Every project, with the bot's own workspace offered as the place for host-level work. */
+  const allowedTargets = (botProjectId: string | undefined) =>
+    Effect.gen(function* () {
+      const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
+      return shells.map((shell) => ({
+        projectId: shell.id,
+        label: shell.id === botProjectId ? CHANNEL_HOST_WORKSPACE_LABEL : shell.title,
+      }));
+    });
+
+  const listThreads = threads
+    .listProjectThreads({ projectId: undefined, includeSubagents: false })
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<OrchestrationV2ThreadShell> => []));
 
   /** Newest first, leaving out the bot's own thread. Titles only; contents stay private. */
   const recentThreads = (
+    shells: ReadonlyArray<OrchestrationV2ThreadShell>,
     targets: ReadonlyArray<{ readonly projectId: string; readonly label: string }>,
     botThreadId: string | undefined,
-  ) =>
-    threads.listProjectThreads({ projectId: undefined, includeSubagents: false }).pipe(
-      Effect.map((shells) => {
-        const labels = new Map(targets.map((target) => [target.projectId, target.label]));
-        return shells
-          .filter(
-            (shell) =>
-              shell.id !== botThreadId && shell.archivedAt === null && shell.title.trim() !== "",
-          )
-          .slice(0, CHANNEL_RECEPTION_RECENT_THREADS)
-          .map((shell) => {
-            const project = labels.get(shell.projectId)?.trim();
-            return {
-              title: shell.title.trim(),
-              ...(project ? { project } : {}),
-              working: shell.activeRunId !== null,
-            };
-          });
-      }),
-      Effect.orElseSucceed(() => []),
-    );
+  ) => {
+    const labels = new Map(targets.map((target) => [target.projectId, target.label]));
+    return shells
+      .filter(
+        (shell) =>
+          shell.id !== botThreadId && shell.archivedAt === null && shell.title.trim() !== "",
+      )
+      .slice(0, CHANNEL_RECEPTION_RECENT_THREADS)
+      .map((shell) => {
+        const project = labels.get(shell.projectId)?.trim();
+        return {
+          title: shell.title.trim(),
+          ...(project ? { project } : {}),
+          working: shell.activeRunId !== null,
+        };
+      });
+  };
 
   const generate = (input: ChannelReceptionInput) =>
     Effect.gen(function* () {
@@ -257,9 +369,9 @@ const make = Effect.gen(function* () {
       }
 
       const tasks = yield* ledger.listConversationTasks(conversationId);
-      const targets = yield* allowedTargets;
       const hosts = yield* remoteWorkers.knownHosts;
       const bot = (yield* ledger.getBot(stored.ownerId))?.bot;
+      const targets = yield* allowedTargets(bot?.projectId);
       const decision: ChannelReceptionResult | undefined =
         message.intent === "answer" &&
         message.taskId !== undefined &&
@@ -279,7 +391,11 @@ const make = Effect.gen(function* () {
                   conversationId,
                   CHANNEL_RECEPTION_TAIL_LIMITS.messages,
                 );
-                const recent = yield* recentThreads(targets, bot?.threadId);
+                const shells = yield* listThreads;
+                const recent = recentThreads(shells, targets, bot?.threadId);
+                const facts = yield* hostFacts(shells);
+                const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+                const skills = yield* listChannelBotSkills(fileSystem, path, botFiles);
                 return yield* generate({
                   mode: "input",
                   conversationId,
@@ -318,6 +434,9 @@ const make = Effect.gen(function* () {
                   allowedTargets: targets,
                   ...(hosts.length === 0 ? {} : { allowedHosts: hosts }),
                   ...(recent.length === 0 ? {} : { recentThreads: recent }),
+                  ...(facts.length === 0 ? {} : { hostFacts: facts }),
+                  ...(notes === "" ? {} : { notes }),
+                  ...(skills.length === 0 ? {} : { skills }),
                   requester,
                 });
               }),
@@ -344,6 +463,13 @@ const make = Effect.gen(function* () {
         });
         yield* wake.wake;
         return;
+      }
+
+      // Notes shape every later reply, so only people may add them.
+      if (decision.remember !== undefined && requester.originKind !== "mcp") {
+        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt).pipe(
+          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
+        );
       }
 
       let replyText = decision.replyText;
@@ -445,13 +571,13 @@ const make = Effect.gen(function* () {
           const hasWorker = stored.task.worker !== undefined;
           // A dispatcher question picks the project: match the answer to a project name or id.
           const answerText = action.answer.toLowerCase();
+          // The longest matching name wins, so "goat-si" is not read as "goat".
           const matched = hasWorker
             ? undefined
-            : targets.find(
-                (target) =>
-                  target.projectId === action.answer.trim() ||
-                  answerText.includes(target.label.toLowerCase()),
-              );
+            : (targets.find((target) => target.projectId === action.answer.trim()) ??
+              targets
+                .filter((target) => answerText.includes(target.label.toLowerCase()))
+                .toSorted((left, right) => right.label.length - left.label.length)[0]);
           const prepared = prepareTransition(
             stored,
             {
@@ -555,7 +681,11 @@ const make = Effect.gen(function* () {
       case "task.cancelled":
         return { kind: "failure" as const, text: "Stopped: " + task.title };
       case "task.question.opened":
-        return { kind: "question" as const, text: event.payload.question.text };
+        return {
+          kind: "question" as const,
+          text: event.payload.question.text,
+          options: event.payload.question.options,
+        };
       default:
         return undefined;
     }
@@ -603,6 +733,7 @@ const make = Effect.gen(function* () {
           text: worded,
           task,
           mentionActorId: mentionFor(origin, task.requester.externalActorId),
+          options: "options" in base ? base.options : undefined,
         }),
       ];
       // Work started elsewhere shows up in the bot as its chip and its final result only.

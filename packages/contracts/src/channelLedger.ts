@@ -137,6 +137,8 @@ export const ChannelOpenQuestion = Schema.Struct({
   askedAt: IsoDateTime,
   /** The original requester to tag, kept from the task even when someone else replies. */
   requesterExternalActorId: Schema.optional(TrimmedNonEmptyString),
+  /** Suggested answers, recommended first; clients may show them as buttons. */
+  options: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ChannelOpenQuestion = typeof ChannelOpenQuestion.Type;
 

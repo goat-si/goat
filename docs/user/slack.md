@@ -28,7 +28,17 @@ GOAT Bot screen shows only a chip for the work and its final report.
 - Replies, questions, and results go to the thread where you asked, and
   questions tag the person who asked.
 - **Default project** decides where work from Slack runs when your message
-  doesn't name a project. Without it, GOAT asks when there is more than one.
+  doesn't name a project. Without it, GOAT picks the project from the
+  conversation and asks only when it can't tell, suggesting the one you worked
+  in most recently. **This machine (no project)** runs work that isn't about a
+  repository.
+- GOAT Bot answers questions about the machine it runs on, such as its name,
+  OS, memory, and what is running, without starting work.
+- Ask GOAT Bot to remember a standing rule ("always reply in Korean") and it
+  follows it from then on, in Slack and in GOAT. Notes live in
+  `goat-bot/memory.md` in GOAT's data folder on that machine; edit the file
+  to change them. Put written procedures in `goat-bot/skills/` as Markdown
+  files, and the bot points its coding agents to the one that fits.
 - Work you start from Slack is capped at the access level chosen when you
   created the link code.
 - When you connect to several machines, Slack runs only on the machine GOAT

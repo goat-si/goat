@@ -59,8 +59,28 @@ export const ChannelReceptionThreadSummary = Schema.Struct({
 });
 export type ChannelReceptionThreadSummary = typeof ChannelReceptionThreadSummary.Type;
 
+/** One fact about the machine reception runs on, such as its name, OS, or memory. */
+export const ChannelReceptionHostFact = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  value: TrimmedNonEmptyString,
+});
+export type ChannelReceptionHostFact = typeof ChannelReceptionHostFact.Type;
+
+/** A written procedure in the bot's skills folder, offered by name. */
+export const ChannelReceptionSkill = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  summary: Schema.String,
+});
+export type ChannelReceptionSkill = typeof ChannelReceptionSkill.Type;
+
 /** The most choices a clarifying question offers. */
 export const CHANNEL_RECEPTION_MAX_OPTIONS = 4;
+
+/**
+ * The label of the bot's own workspace when it is offered as a target: work about the machine
+ * itself, or anything not tied to a repository, runs there.
+ */
+export const CHANNEL_HOST_WORKSPACE_LABEL = "This machine (no project)";
 
 export const ChannelReceptionInput = Schema.Struct({
   mode: ChannelReceptionMode,
@@ -77,6 +97,12 @@ export const ChannelReceptionInput = Schema.Struct({
   allowedHosts: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /** Titles of the requester's most recently active threads, newest first. */
   recentThreads: Schema.optional(Schema.Array(ChannelReceptionThreadSummary)),
+  /** Facts about this machine, so questions about it are answered without starting work. */
+  hostFacts: Schema.optional(Schema.Array(ChannelReceptionHostFact)),
+  /** Standing notes the people using the bot asked it to keep, newest last. */
+  notes: Schema.optional(Schema.String),
+  /** Written procedures workers can follow. */
+  skills: Schema.optional(Schema.Array(ChannelReceptionSkill)),
   requester: ChannelRequester,
 });
 export type ChannelReceptionInput = typeof ChannelReceptionInput.Type;
@@ -118,6 +144,8 @@ export type ChannelReceptionAction = typeof ChannelReceptionAction.Type;
 export const ChannelReceptionResult = Schema.Struct({
   replyText: TrimmedNonEmptyString,
   action: ChannelReceptionAction,
+  /** A lasting rule or fact the person asked the bot to keep, added to its notes. */
+  remember: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelReceptionResult = typeof ChannelReceptionResult.Type;
 

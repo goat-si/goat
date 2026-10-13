@@ -190,6 +190,8 @@ export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
 export function makeHarness(
   options: {
     readonly projects?: number;
+    /** List the bot's own workspace among the projects, as a real server does. */
+    readonly botWorkspace?: boolean;
     /** Settings overrides, including a publisher for live home changes. */
     readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
     /** The channel services under test; defaults to the assembled core without background loops. */
@@ -302,15 +304,30 @@ export function makeHarness(
       }),
   });
 
-  const shells = Array.from({ length: options.projects ?? 1 }, (_, index) => ({
-    id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
-    title: index === 0 ? "Channel work" : "Other work " + index,
-    workspaceRoot: "/nonexistent/channel-work-" + index,
-    defaultModelSelection: modelSelection,
-    scripts: [],
-    createdAt: "2026-10-12T00:00:00.000Z",
-    updatedAt: "2026-10-12T00:00:00.000Z",
-  }));
+  const shells = [
+    ...Array.from({ length: options.projects ?? 1 }, (_, index) => ({
+      id: index === 0 ? projectId : ProjectId.make("project:channel-work-" + index),
+      title: index === 0 ? "Channel work" : "Other work " + index,
+      workspaceRoot: "/nonexistent/channel-work-" + index,
+      defaultModelSelection: modelSelection,
+      scripts: [],
+      createdAt: "2026-10-12T00:00:00.000Z",
+      updatedAt: "2026-10-12T00:00:00.000Z",
+    })),
+    ...(options.botWorkspace
+      ? [
+          {
+            id: scratchProjectId,
+            title: "Scratch",
+            workspaceRoot: "/nonexistent/scratch",
+            defaultModelSelection: modelSelection,
+            scripts: [],
+            createdAt: "2026-10-12T00:00:00.000Z",
+            updatedAt: "2026-10-12T00:00:00.000Z",
+          },
+        ]
+      : []),
+  ];
 
   const layerExternal = Layer.mergeAll(
     Layer.mock(TextGeneration.TextGeneration)({
@@ -326,6 +343,7 @@ export function makeHarness(
     }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(environmentId),
+      getDescriptor: Effect.succeed({ environmentId, label: "test-machine" } as never),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
       namedProjectsRoot: "/unused",

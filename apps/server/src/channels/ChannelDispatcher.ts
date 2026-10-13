@@ -12,6 +12,8 @@
  * @module ChannelDispatcher
  */
 import {
+  CHANNEL_HOST_WORKSPACE_LABEL,
+  CHANNEL_RECEPTION_MAX_OPTIONS,
   type ChannelDispatchTarget,
   type ChannelTask,
   type ChannelTaskId,
@@ -35,6 +37,7 @@ import {
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as ServerConfig from "../config.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -43,6 +46,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
 import { answerForwardIdsFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -64,7 +68,7 @@ export class ChannelDispatcher extends Context.Service<
 >()("goat/channels/ChannelDispatcher") {}
 
 /** What the worker thread is told besides the instruction itself. */
-const workerInstruction = (task: ChannelTask) =>
+const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
   [
     task.instruction,
     "",
@@ -74,6 +78,13 @@ const workerInstruction = (task: ChannelTask) =>
       " (generation " +
       task.generation +
       ").",
+    "Standing notes from the person are in " +
+      files.notes +
+      "; follow them. Reusable procedures (skills) are in " +
+      files.skills +
+      "; read the one the instruction names. Edit the notes file only when asked to change or forget a note.",
+    'For progress on long work, call channel_task_report with status "running" at meaningful milestones.',
+    "Before anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing), ask first: show the draft or plan in a waiting_input question.",
     'If you need a decision from the person who asked, call channel_task_report with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.',
     "When you finish, end with a short summary of the result.",
   ].join("\n");
@@ -97,6 +108,7 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
+  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
 
   /**
    * The Slack connection's default project and model, for work that came in through it. A
@@ -118,7 +130,10 @@ const make = Effect.gen(function* () {
     stored: ChannelLedger.ChannelStoredTask,
     text: string,
     owner: string,
-    options: { readonly clearPendingAnswer?: boolean } = {},
+    options: {
+      readonly clearPendingAnswer?: boolean;
+      readonly choices?: ReadonlyArray<string>;
+    } = {},
   ) =>
     Effect.gen(function* () {
       const askedAt = DateTime.formatIso(yield* DateTime.now);
@@ -132,6 +147,9 @@ const make = Effect.gen(function* () {
               questionId: questionIdFor(stored.task.taskId, stored.task.version + 1),
               text,
               askedAt,
+              ...(options.choices === undefined || options.choices.length < 2
+                ? {}
+                : { options: options.choices }),
               ...(stored.task.requester.externalActorId === undefined
                 ? {}
                 : { requesterExternalActorId: stored.task.requester.externalActorId }),
@@ -144,6 +162,47 @@ const make = Effect.gen(function* () {
           ...(options.clearPendingAnswer ? { pendingAnswerMessageId: null } : {}),
         },
       );
+    });
+
+  /**
+   * The project choice to offer when none was named: the project of the most recently active
+   * thread first, then the others, then the bot's workspace for work about the machine itself.
+   */
+  const projectChoices = (
+    allowed: ReadonlyArray<{ readonly id: string; readonly title: string }>,
+    hostWorkspace: boolean,
+  ) =>
+    Effect.gen(function* () {
+      const recent = yield* threads
+        .listProjectThreads({ projectId: undefined, includeSubagents: false })
+        .pipe(Effect.orElseSucceed(() => []));
+      const allowedIds = new Set(allowed.map((shell) => shell.id));
+      const recentFirst: ReadonlyArray<string> = [
+        ...new Set(
+          recent
+            .filter((shell) => shell.archivedAt === null && allowedIds.has(shell.projectId))
+            .map((shell) => shell.projectId),
+        ),
+      ];
+      const ordered = [
+        ...recentFirst.flatMap((id) => allowed.filter((shell) => shell.id === id)),
+        ...allowed.filter((shell) => !recentFirst.includes(shell.id)),
+      ];
+      const room = CHANNEL_RECEPTION_MAX_OPTIONS - (hostWorkspace ? 1 : 0);
+      const choices = [
+        ...ordered.slice(0, room).map((shell) => shell.title),
+        ...(hostWorkspace ? [CHANNEL_HOST_WORKSPACE_LABEL] : []),
+      ];
+      const recommended = recentFirst.length > 0 ? ordered[0]?.title : undefined;
+      const text =
+        "Which project should I use?" +
+        (recommended === undefined
+          ? ""
+          : " I'd go with " + recommended + ", where you worked most recently.") +
+        (ordered.length > room
+          ? " All projects: " + ordered.map((shell) => shell.title).join(", ")
+          : "");
+      return { type: "question" as const, text, choices };
     });
 
   /** Whether this machine has the provider instance and, when it lists models, that model. */
@@ -166,26 +225,28 @@ const make = Effect.gen(function* () {
       const shells = yield* projects.listShells().pipe(Effect.orElseSucceed(() => []));
       const real = shells.filter((shell) => shell.id !== bot?.bot.projectId);
       const allowed = real.length > 0 ? real : shells;
-      const names = allowed.map((shell) => shell.title).join(", ");
+      const hostWorkspace = shells.some((shell) => shell.id === bot?.bot.projectId);
       const defaults = yield* originDefaults(task);
       // A project named with the work wins over the channel's default project.
       const projectId = task.projectId ?? defaults?.projectId;
-      let chosen = allowed.find((shell) => shell.id === projectId);
+      // Named work may also go to the bot's own workspace, for work about the machine itself.
+      let chosen = shells.find((shell) => shell.id === projectId);
       if (projectId !== undefined && chosen === undefined) {
+        const choices = yield* projectChoices(allowed, hostWorkspace);
         return {
-          type: "question" as const,
-          text: "I can't start work in that project. Which one should I use? " + names,
+          ...choices,
+          text: "I can't start work in that project. " + choices.text,
         };
       }
       if (chosen === undefined && allowed.length === 1) chosen = allowed[0];
       if (chosen === undefined) {
-        return {
-          type: "question" as const,
-          text:
-            allowed.length === 0
-              ? "There is no project to work in yet. Add one in GOAT, then answer with its name."
-              : "Which project should I use? " + names,
-        };
+        if (allowed.length === 0) {
+          return {
+            type: "question" as const,
+            text: "There is no project to work in yet. Add one in GOAT, then answer with its name.",
+          };
+        }
+        return yield* projectChoices(allowed, hostWorkspace);
       }
       const settings = resolveProjectSettings(
         yield* serverSettings.getSettings.pipe(Effect.orDie),
@@ -257,7 +318,7 @@ const make = Effect.gen(function* () {
           workspaceStrategy: toLaunchStrategy(target.workspaceStrategy),
           initialMessage: {
             messageId: ids.messageId,
-            text: workerInstruction(task),
+            text: workerInstruction(task, botFiles),
             attachments: [],
           },
           createdBy: "system",
@@ -389,7 +450,14 @@ const make = Effect.gen(function* () {
         return yield* remoteWorkers.dispatch(taskId, owner, yield* remoteHints(stored));
       }
       const resolved = yield* resolveTarget(stored);
-      if (resolved.type === "question") return yield* askRequester(stored, resolved.text, owner);
+      if (resolved.type === "question") {
+        return yield* askRequester(
+          stored,
+          resolved.text,
+          owner,
+          "choices" in resolved ? { choices: resolved.choices } : {},
+        );
+      }
       const claimedAt = DateTime.formatIso(yield* DateTime.now);
       const claimed = yield* commitTransition(
         ledger,
