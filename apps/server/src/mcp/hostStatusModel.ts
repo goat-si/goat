@@ -73,6 +73,24 @@ export function unsupportedHostStatus(host: string): HostStatusEntry {
   };
 }
 
+/**
+ * Flags a reachable remote whose GOAT version differs from this machine's. A
+ * remote that reports no version predates version reporting, so it differs too.
+ */
+export function markVersionMismatch(entry: HostStatusEntry, localVersion: string): HostStatusEntry {
+  if (entry.reachability !== "ok" || entry.host === null) return entry;
+  if (entry.serverVersion === localVersion) return entry;
+  const remote =
+    entry.serverVersion === undefined
+      ? `an older GOAT that does not report its version`
+      : `GOAT ${entry.serverVersion}`;
+  return {
+    ...entry,
+    versionMismatch: true,
+    message: `${entry.host} runs ${remote}; this machine runs GOAT ${localVersion}. Tools and launch options can differ between them. Update GOAT on the older machine.`,
+  };
+}
+
 export function unreachableHostStatus(
   host: string | null,
   message: string,

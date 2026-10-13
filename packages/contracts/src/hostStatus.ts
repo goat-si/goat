@@ -87,6 +87,13 @@ export const HostStatusEntry = Schema.Struct({
   reachability: HostStatusReachability,
   lastKnown: Schema.optional(Schema.Literal(true)),
   metrics: Schema.optional(HostStatusMetrics),
+  /** GOAT version that machine runs. Older hosts omit it. */
+  serverVersion: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The host answered, but runs a different GOAT version than the machine that
+   * fanned out, or does not say which. `message` then explains what to update.
+   */
+  versionMismatch: Schema.optional(Schema.Literal(true)),
   message: Schema.optional(Schema.String),
 });
 export type HostStatusEntry = typeof HostStatusEntry.Type;

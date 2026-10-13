@@ -40,6 +40,7 @@ import * as Layer from "effect/Layer";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import { buildRemoteGoatRunnerScript } from "@goat/ssh/tunnel";
 
+import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import { hostFailure } from "../mcp/hostFailure.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
@@ -2780,6 +2781,7 @@ describe("SSH launcher transport", () => {
             httpBaseUrl: "http://box:3773/",
             wsBaseUrl: "ws://box:3773/",
             pairingToken: null,
+            remoteServerVersion: "0.0.1-older",
           }),
         disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
         revalidateTunnels: () => Effect.void,
@@ -2856,6 +2858,10 @@ describe("SSH launcher transport", () => {
             'scope:"launched" cannot find its questions',
           );
       }
+      if (result._tag === "Success")
+        expect(result.success.notes).toContain(
+          `GOAT on box runs 0.0.1-older; this machine runs ${packageJson.version}. Tools and launch options can differ between them; update GOAT on the older machine if this thread misbehaves.`,
+        );
       expect(creates).toBe(scenario.success || scenario.name === "ambiguous" ? 1 : 0);
     }),
   );

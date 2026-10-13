@@ -233,6 +233,16 @@ const decodeRemoteIdentity = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
 
+/** A launch note when the remote GOAT runs another build than this machine. */
+export function remoteVersionNote(
+  host: string,
+  remoteVersion: string | undefined,
+  localVersion: string,
+): string | null {
+  if (remoteVersion === undefined || remoteVersion === localVersion) return null;
+  return `GOAT on ${host} runs ${remoteVersion}; this machine runs ${localVersion}. Tools and launch options can differ between them; update GOAT on the older machine if this thread misbehaves.`;
+}
+
 const sessionKey = (
   target: DesktopSshEnvironmentTarget,
   ceiling: RuntimeMode,
@@ -1060,6 +1070,12 @@ const make = Effect.gen(function* () {
         pendingRuntimeMessage(target.alias, bootstrap.pending.reason, bootstrap.pending.detail),
       );
     connected.add(target.alias);
+    const versionNote = remoteVersionNote(
+      target.alias,
+      bootstrap.remoteServerVersion,
+      packageJson.version,
+    );
+    if (versionNote !== null) notes.push(versionNote);
     // Bootstrap may have taken a while; the session carries the caller's authority.
     yield* beforeLaunch;
     const session = yield* sessionFor(target, input.callerRuntimeMode);

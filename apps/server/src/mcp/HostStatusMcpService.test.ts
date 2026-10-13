@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
+import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -233,6 +234,52 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(calls.every((call) => call.arguments.local === true)).toBe(true);
     expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
     expect(refreshes).toEqual(["codex"]);
+  }),
+);
+
+it.effect("reports each machine's GOAT version and flags a host on another build", () =>
+  Effect.gen(function* () {
+    const withVersion = (serverVersion: string | undefined) => {
+      const answer = remoteOk(3);
+      return {
+        hosts: answer.hosts.map((entry) =>
+          serverVersion === undefined ? entry : { ...entry, serverVersion },
+        ),
+      };
+    };
+    const { value } = yield* run(
+      {
+        hosts: ["same", "newer", "old"],
+        hostCall: (call) =>
+          Effect.succeed(
+            withVersion(
+              call.host === "same"
+                ? packageJson.version
+                : call.host === "newer"
+                  ? "99.0.0"
+                  : undefined,
+            ),
+          ),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const [local, newer, old, same] = decode(value.success).hosts;
+    expect(local).toMatchObject({ host: null, serverVersion: packageJson.version });
+    expect(local?.versionMismatch).toBeUndefined();
+    expect(same).toMatchObject({ host: "same", serverVersion: packageJson.version });
+    expect(same?.versionMismatch).toBeUndefined();
+    expect(same?.message).toBeUndefined();
+    expect(newer).toMatchObject({
+      host: "newer",
+      reachability: "ok",
+      serverVersion: "99.0.0",
+      versionMismatch: true,
+      message: `newer runs GOAT 99.0.0; this machine runs GOAT ${packageJson.version}. Tools and launch options can differ between them. Update GOAT on the older machine.`,
+    });
+    expect(old).toMatchObject({ host: "old", versionMismatch: true });
+    expect(old?.message).toContain("does not report its version");
   }),
 );
 

@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
+import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -24,6 +25,7 @@ import {
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
+  markVersionMismatch,
   quotaRefreshDue,
   tagRemoteHostStatus,
   unreachableHostStatus,
@@ -126,6 +128,7 @@ const make = Effect.gen(function* () {
     const entry = {
       host: null,
       reachability: "ok" as const,
+      serverVersion: packageJson.version,
       metrics: {
         ...snapshot,
         platform,
@@ -184,7 +187,12 @@ const make = Effect.gen(function* () {
         return yield* failure("invalid_request", "Pass either host or local:true, not both.");
       }
       if (input.local === true) return { hosts: [yield* localEntry] };
-      if (input.host !== undefined) return { hosts: [yield* readRemote(scope, input.host, true)] };
+      if (input.host !== undefined)
+        return {
+          hosts: [
+            markVersionMismatch(yield* readRemote(scope, input.host, true), packageJson.version),
+          ],
+        };
       const aliases = [...(yield* dispatch.connectedHosts)].toSorted();
       const [local, remote] = yield* Effect.all(
         [
@@ -193,7 +201,9 @@ const make = Effect.gen(function* () {
         ],
         { concurrency: "unbounded" },
       );
-      return { hosts: [local, ...remote] };
+      return {
+        hosts: [local, ...remote.map((entry) => markVersionMismatch(entry, packageJson.version))],
+      };
     },
   );
 
