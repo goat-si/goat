@@ -69,14 +69,18 @@ const handlers = {
         Effect.flatMap(inventoryService, (service) => service.inventory(local)),
       ),
   ),
-  goat_worktree_remove: McpToolAccess.writes((input) =>
-    hereOrOnHost("goat_worktree_remove", input, true, decodeRemove, (local) =>
-      Effect.flatMap(inventoryService, (service) => service.remove(local)),
-    ),
+  goat_worktree_remove: McpToolAccess.removesCheckouts(
+    () => true,
+    () => true,
+    (input) =>
+      hereOrOnHost("goat_worktree_remove", input, true, decodeRemove, (local) =>
+        Effect.flatMap(inventoryService, (service) => service.remove(local)),
+      ),
   ),
-  // A dry run changes nothing, so only a real sweep needs a writing caller.
-  goat_worktree_cleanup: McpToolAccess.readsOrReachesHost(
-    (input) => input.host !== undefined || input.dryRun === false,
+  // A dry run changes nothing, so only a real sweep needs a full-access caller.
+  goat_worktree_cleanup: McpToolAccess.removesCheckouts(
+    (input) => input.dryRun === false,
+    (input) => input.host !== undefined,
     (input) =>
       hereOrOnHost("goat_worktree_cleanup", input, input.dryRun === false, decodeCleanup, (local) =>
         Effect.flatMap(inventoryService, (service) => service.cleanup(local)),

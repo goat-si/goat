@@ -292,6 +292,31 @@ export const writesEnvironment = <P, A, E, R>(
 /** What a declaration's own check needs. */
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
 
+const removesCheckoutsRequired =
+  "Removing worktrees needs a live full-access/default calling thread or a full-access client.";
+
+/**
+ * Deletes checkouts when `removes` says so, which needs a full-access/default
+ * caller: a plan or approval-required thread, or an `auto` client, may not
+ * destroy a working tree. Otherwise it reads, and needs thread control only
+ * when `reachesHost` says the call uses this machine's SSH keys.
+ */
+export const removesCheckouts = <P, A, E, R>(
+  removes: (params: P) => boolean,
+  reachesHost: (params: P) => boolean,
+  handle: (params: P) => Effect.Effect<A, E, R>,
+) =>
+  declare((params: P) =>
+    removes(params)
+      ? orchestratingCaller.pipe(
+          Effect.tap((caller) => assertFullAccess(caller, removesCheckoutsRequired)),
+          Effect.flatMap(() => handle(params)),
+        )
+      : reachesHost(params)
+        ? orchestratingCaller.pipe(Effect.flatMap(() => handle(params)))
+        : handle(params),
+  );
+
 /**
  * Each handler of `Handlers`, built by one of the declarations above. A
  * declaration is never callable, which rules out a handler function wearing a

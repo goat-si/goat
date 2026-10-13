@@ -27,7 +27,12 @@ interface HostCall {
 const call = (
   tool: "goat_worktree_inventory" | "goat_worktree_remove" | "goat_worktree_cleanup",
   params: Record<string, unknown>,
-  options: { readonly readOnlyClient?: boolean } = {},
+  options: {
+    /** An outside client with this access calls instead of a GOAT thread. */
+    readonly clientAccess?: "read-only" | "auto" | "full-access";
+    readonly threadRuntimeMode?: "approval-required" | "auto-accept-edits" | "full-access";
+    readonly threadInteractionMode?: "default" | "plan";
+  } = {},
 ) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("caller");
@@ -58,7 +63,7 @@ const call = (
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
         thread:
-          options.readOnlyClient === true
+          options.clientAccess !== undefined
             ? undefined
             : {
                 threadId,
@@ -66,23 +71,36 @@ const call = (
                 providerInstanceId: ProviderInstanceId.make("codex"),
               },
         client:
-          options.readOnlyClient === true
-            ? { sessionId: "client", label: "Viewer", access: "read-only" }
+          options.clientAccess !== undefined
+            ? { sessionId: "client", label: "Outside agent", access: options.clientAccess }
             : undefined,
         issuedAt: 0,
         capabilities: new Set(["orchestration", "worktree"] as const),
       }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
+        getThreadShell: () =>
+          Effect.succeed(
+            liveThreadShell(threadId, {
+              ...(options.threadRuntimeMode === undefined
+                ? {}
+                : { runtimeMode: options.threadRuntimeMode }),
+              ...(options.threadInteractionMode === undefined
+                ? {}
+                : { interactionMode: options.threadInteractionMode }),
+            }),
+          ),
       }),
       Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({
         readOnHost: onHost(false) as never,
         writeOnHost: onHost(true) as never,
       }),
       Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({
-        inventory: () => Effect.sync(() => localCalls.push("inventory")).pipe(Effect.as(answer)),
-        remove: () => Effect.sync(() => localCalls.push("remove")).pipe(Effect.as(answer)),
-        cleanup: () => Effect.sync(() => localCalls.push("cleanup")).pipe(Effect.as(answer)),
+        inventory: () =>
+          Effect.sync(() => localCalls.push("inventory")).pipe(Effect.as(remoteAnswer as never)),
+        remove: () =>
+          Effect.sync(() => localCalls.push("remove")).pipe(Effect.as(remoteAnswer as never)),
+        cleanup: () =>
+          Effect.sync(() => localCalls.push("cleanup")).pipe(Effect.as(remoteAnswer as never)),
       }),
       Layer.mock(WorktreeMcpService.WorktreeMcpService)({}),
       Layer.mock(ProjectService.ProjectService)({}),
@@ -130,10 +148,48 @@ it.effect("opens a writing host session only for a real cleanup sweep", () =>
 
 it.effect("lets a read-only client preview a cleanup but not run one", () =>
   Effect.gen(function* () {
-    const preview = yield* call("goat_worktree_cleanup", {}, { readOnlyClient: true });
+    const preview = yield* call("goat_worktree_cleanup", {}, { clientAccess: "read-only" });
     expect(preview.localCalls).toEqual(["cleanup"]);
-    const sweep = yield* call("goat_worktree_cleanup", { dryRun: false }, { readOnlyClient: true });
+    const sweep = yield* call(
+      "goat_worktree_cleanup",
+      { dryRun: false },
+      { clientAccess: "read-only" },
+    );
     expect(sweep.localCalls).toEqual([]);
     expect(sweep.result).toMatchObject({ code: "capability_denied" });
+  }),
+);
+
+it.effect.each([
+  ["an approval-required thread", { threadRuntimeMode: "approval-required" }],
+  ["a plan-mode thread", { threadInteractionMode: "plan" }],
+  ["an auto client", { clientAccess: "auto" }],
+] as const)("refuses %s removing worktrees, while it may still preview", ([, options]) =>
+  Effect.gen(function* () {
+    const remove = yield* call("goat_worktree_remove", { path: "/r/wt" }, options);
+    const sweep = yield* call("goat_worktree_cleanup", { dryRun: false }, options);
+    for (const denied of [remove, sweep]) {
+      expect(denied.localCalls).toEqual([]);
+      expect(denied.result).toMatchObject({
+        code: "capability_denied",
+        message: expect.stringContaining("Removing worktrees needs"),
+      });
+    }
+    const preview = yield* call("goat_worktree_cleanup", {}, options);
+    expect(preview.localCalls).toEqual(["cleanup"]);
+  }),
+);
+
+it.effect("lets a full-access thread or client remove worktrees", () =>
+  Effect.gen(function* () {
+    const thread = yield* call("goat_worktree_remove", { path: "/r/wt" });
+    const client = yield* call(
+      "goat_worktree_cleanup",
+      { dryRun: false },
+      {
+        clientAccess: "full-access",
+      },
+    );
+    expect([...thread.localCalls, ...client.localCalls]).toEqual(["remove", "cleanup"]);
   }),
 );
