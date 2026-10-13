@@ -3439,7 +3439,8 @@ export default function LegacySidebar() {
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const goatBotRef = useGlobalAgentStore((state) => state.botRef);
   const allThreadShells = useThreadShells();
-  // The global agent opens from the logo; keep it out of rows, shortcuts and keyboard order.
+  // The global agent opens from the command palette and collapsed logo; keep it out of rows,
+  // shortcuts and keyboard order.
   const sidebarThreads = useMemo(
     () => excludeGlobalAgentThreads(allThreadShells, globalAgentRef, goatBotRef),
     [allThreadShells, globalAgentRef, goatBotRef],

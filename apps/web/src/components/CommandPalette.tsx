@@ -75,6 +75,7 @@ import {
   MonitorIcon,
   MoonIcon,
   PaletteIcon,
+  PanelLeftIcon,
   RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -151,6 +152,10 @@ import {
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
 import { useSidebarActivityToggle } from "./sidebar/SidebarViewToggles";
+import { requestSidebarToggle } from "./sidebar/sidebarToggleRequest";
+import { globalAgentLogoTarget } from "../globalAgentRoute";
+import { GoatWordmark } from "./GoatWordmark";
+import { useGoatBotPreferred } from "./goatBot/GoatBotModeButton";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -633,6 +638,7 @@ function OpenCommandPaletteDialog(props: {
   }
   const clientSettings = useClientSettings();
   const { activityActive, toggleActivity } = useSidebarActivityToggle();
+  const globalAgentTarget = globalAgentLogoTarget(useGoatBotPreferred());
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -1831,6 +1837,28 @@ function OpenCommandPaletteDialog(props: {
     icon: <BellIcon className={ITEM_ICON_CLASS} />,
     shortcutCommand: "sidebar.toggleActivity",
     run: toggleActivity,
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:toggle-sidebar",
+    searchTerms: ["sidebar", "toggle", "collapse", "hide", "show", "panel"],
+    title: "Toggle sidebar",
+    icon: <PanelLeftIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "sidebar.toggle",
+    run: async () => requestSidebarToggle(),
+  });
+
+  // The sidebar header no longer carries the logo, so the palette keeps its destination.
+  actionItems.push({
+    kind: "action",
+    value: "action:open-global-agent",
+    searchTerms: ["goat", "logo", "home", "global agent", "bot"],
+    title: globalAgentTarget.label,
+    icon: <GoatWordmark aria-hidden className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: globalAgentTarget.to });
+    },
   });
 
   if (projects.length > 0) {

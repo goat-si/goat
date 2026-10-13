@@ -217,7 +217,6 @@ import {
   isSidebarNestedLinkClick,
   isSidebarThreadWoke,
   holdSidebarPriorityRank,
-  publishSidebarPriorityCount,
   resolveSidebarPriorityRank,
   resolveSidebarWokeAtForRow,
   resolveSidebarThreadPresentation,
@@ -993,7 +992,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       if (session.promotedTo != null) {
         continue;
       }
-      // The global agent opens from the logo, not from the draft rows.
+      // The global agent opens from the command palette and collapsed logo, not from the draft rows.
       if (draftKey === globalDraftId) {
         continue;
       }
@@ -3019,10 +3018,6 @@ export default function Sidebar() {
       if (!next.has(key)) priorityReleaseRef.current.delete(key);
     }
   }, [priorityThreads]);
-  useEffect(() => {
-    publishSidebarPriorityCount(priorityThreads.length);
-    return () => publishSidebarPriorityCount(null);
-  }, [priorityThreads.length]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => subscribeSidebarSearchFocus(() => threadSearchInputRef.current?.focus()), []);

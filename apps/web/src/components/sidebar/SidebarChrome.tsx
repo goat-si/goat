@@ -22,7 +22,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -35,8 +34,14 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 import { useGoatBotPreferred } from "../goatBot/GoatBotModeButton";
 import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
-import { SidebarViewToggles } from "./SidebarViewToggles";
+import { SidebarSearchButton } from "./SidebarViewToggles";
 
+/**
+ * The titlebar row above the thread list. It leaves room for the macOS window controls and
+ * the fixed sidebar control, which only shows while the sidebar is closed, so it holds just
+ * the environment pill and thread search. The brand and activity live elsewhere: the logo
+ * in the collapsed titlebar and the command palette, activity in the palette and its shortcut.
+ */
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
 }: {
@@ -61,77 +66,28 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     // The titlebar row, not a padded SidebarHeader: it aligns to the window controls.
     <div
       className={cn(
-        "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3",
+        // oxlint-disable-next-line shadcn/no-arbitrary-values -- Clear the window controls inside the sheet's safe area.
+        "relative flex h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-2 pr-3 pl-[calc(var(--workspace-controls-left)-env(safe-area-inset-left))]",
         isElectron && "drag-region",
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
-      {/* Match the fixed control's inset and border compensation inside the sheet's safe area. */}
-      <div className="relative top-[calc(var(--workspace-controls-top)-env(safe-area-inset-top))] z-10 ml-[calc(var(--workspace-controls-left)+1px-env(safe-area-inset-left))] flex shrink-0 items-center md:hidden">
-        <SidebarTrigger
-          // Over the stage artwork: the media viewer's control-on-imagery treatment.
-          variant={backdropVariant ? "media-navigation" : "ghost"}
-          className="relative top-auto translate-y-0"
-          aria-label="Toggle main sidebar"
-        />
-      </div>
-      {/* One visible line: the pill wraps onto the clipped second line once it no longer fits.
-          The padding keeps the brand's focus ring inside the clip. */}
-      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
-        <SidebarBrand onBackdrop={backdropVariant !== null} />
+      {/* One visible line: the pill wraps onto the clipped second line once it no longer fits. */}
+      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center overflow-hidden py-0.5">
         {pillLabel ? (
-          <div className="ml-1 flex h-7 items-center">
+          <div className="flex h-7 items-center">
             <Badge data-environment-identification="pill" size="sm" variant="secondary">
               {pillLabel}
             </Badge>
           </div>
         ) : null}
       </div>
-      {!isOnSettings ? <SidebarViewToggles onBackdrop={backdropVariant !== null} /> : null}
+      {!isOnSettings ? <SidebarSearchButton onBackdrop={backdropVariant !== null} /> : null}
     </div>
   );
 });
 
-// Measures the brand at its titlebar inset, plus the header's right padding and the
-// sidebar border, so the sidebar minimum follows font size, zoom and macOS window controls.
-export function SidebarBrandWidthProbe({
-  onWidthChange,
-}: {
-  onWidthChange: (width: number) => void;
-}) {
-  const observeWidth = useCallback(
-    (probe: HTMLDivElement) => {
-      return observeResize(probe, ([entry]) => {
-        if (entry) onWidthChange(entry.borderBoxSize[0]?.inlineSize ?? probe.offsetWidth);
-      });
-    },
-    [onWidthChange],
-  );
-
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none invisible fixed top-0 left-0 flex w-max items-center gap-2 border-r border-transparent pr-3"
-      ref={observeWidth}
-    >
-      <div className="ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] flex px-1.5">
-        <SidebarBrandContents onBackdrop={false} />
-      </div>
-      <span className="flex items-center gap-1">
-        <span className="size-8 sm:size-7" />
-        <span className="size-8 sm:size-7" />
-      </span>
-    </div>
-  );
-}
-
-function SidebarBrand({
-  onBackdrop,
-  placement = "header",
-}: {
-  onBackdrop: boolean;
-  placement?: "header" | "collapsed";
-}) {
+function SidebarBrand() {
   const enabled = useGoatBotPreferred();
   const botRef = useGlobalAgentStore((state) => state.botRef);
   const logo = globalAgentLogoTarget(enabled);
@@ -148,20 +104,13 @@ function SidebarBrand({
       aria-current={active ? "page" : undefined}
       data-active={active}
       className={cn(
-        // Padding holds the selected fill off the letters. The left margin keeps the letters at
-        // the titlebar inset; the right padding stays in flow (and in the width probe above) so
-        // the header's overflow clip never cuts the selected fill at the minimum sidebar width.
-        "relative z-10 h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5 outline-hidden ring-ring focus-visible:ring-2 focus-visible:ring-inset",
-        placement === "header"
-          ? "ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] hidden md:flex"
-          : "pointer-events-auto flex [-webkit-app-region:no-drag]",
-        onBackdrop ? "text-white" : "text-foreground",
-        active && !onBackdrop ? "bg-sidebar-row-selected" : null,
-        active && onBackdrop ? "bg-white/15" : null,
+        // Padding holds the selected fill off the letters.
+        "pointer-events-auto relative z-10 flex h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5 text-foreground outline-hidden ring-ring [-webkit-app-region:no-drag] focus-visible:ring-2 focus-visible:ring-inset",
+        active ? "bg-sidebar-row-selected" : null,
       )}
       to={logo.to}
     >
-      <SidebarBrandContents onBackdrop={onBackdrop} />
+      <SidebarBrandContents />
     </Link>
   );
 }
@@ -194,23 +143,23 @@ export function SidebarCollapsedBrand({
       )}
     >
       {visible ? (
-        <SidebarBrand placement="collapsed" onBackdrop={false} />
+        <SidebarBrand />
       ) : (
         // Keep the measured width without adding a focus target or a no-drag region.
         <span className="flex h-7 w-fit min-w-0 shrink-0 items-center overflow-hidden rounded-md px-1.5">
-          <SidebarBrandContents onBackdrop={false} />
+          <SidebarBrandContents />
         </span>
       )}
     </div>
   );
 }
 
-/** The visible brand and both width probes measure the same waiting badge. */
-function SidebarBrandContents({ onBackdrop }: { onBackdrop: boolean }) {
+/** The visible brand and its width probe measure the same waiting badge. */
+function SidebarBrandContents() {
   const waitingCount = useGoatBotWaitingCount();
   return (
     <>
-      <SidebarBrandMark onBackdrop={onBackdrop} />
+      <SidebarBrandMark />
       {waitingCount !== undefined && waitingCount > 0 ? (
         <span className="ml-1 text-xs">{waitingCount}</span>
       ) : null}
@@ -218,18 +167,15 @@ function SidebarBrandContents({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrandMark() {
   return (
     // Center the visible capitals, without the font's ascender/descender space.
     // Padding keeps ascenders and round-letter overshoot inside the truncation clip.
     <span className="inline-flex min-w-0 items-center gap-1.5 text-sm">
       <GoatWordmark aria-hidden className="size-4 shrink-0" />
       <span
-        className={cn(
-          // oxlint-disable-next-line shadcn/no-arbitrary-values -- Brand letter spacing follows the approved wordmark.
-          "font-brand truncate font-bold tracking-[0.04em] [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1",
-          onBackdrop ? "text-white" : "text-foreground",
-        )}
+        // oxlint-disable-next-line shadcn/no-arbitrary-values -- Brand letter spacing follows the approved wordmark.
+        className="font-brand truncate font-bold tracking-[0.04em] text-foreground [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1"
       >
         GOAT
       </span>
