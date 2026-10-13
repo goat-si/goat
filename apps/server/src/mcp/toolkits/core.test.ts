@@ -208,8 +208,11 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_thread_watch",
     "goat_thread_watch_list",
     "goat_workflow_stop",
+    "goat_worktree_cleanup",
     "goat_worktree_handoff",
+    "goat_worktree_inventory",
     "goat_worktree_list",
+    "goat_worktree_remove",
     "goat_worktree_status",
   ]);
   expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([

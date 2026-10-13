@@ -1081,6 +1081,7 @@ export const CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__goat__goat_thread_transfers",
   "mcp__goat__goat_worktree_status",
   "mcp__goat__goat_worktree_list",
+  "mcp__goat__goat_worktree_inventory",
   "mcp__goat__goat_project_list",
   "mcp__goat__goat_project_read",
   "mcp__goat__goat_thread_search",
