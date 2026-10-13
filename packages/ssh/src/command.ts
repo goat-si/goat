@@ -228,6 +228,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     ...(input.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
     ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
   }).pipe(
+    Effect.provideService(Scope.Scope, commandScope),
     Effect.mapError(
       (cause) =>
         new SshCommandError({

@@ -3063,6 +3063,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
       ? {}
       : { interactiveAuth: input.authOptions.interactiveAuth }),
   }).pipe(
+    Effect.provideService(Scope.Scope, input.scope),
     Effect.mapError(
       (cause) =>
         new SshCommandError({

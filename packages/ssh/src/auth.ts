@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import type * as Scope from "effect/Scope";
 
 import { SshPasswordPromptError } from "./errors.ts";
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
@@ -100,11 +101,12 @@ if ($null -ne $env:GOAT_SSH_AUTH_SECRET) {\r
 exit 1\r
 `;
 
+// The helper lives as long as the SSH child that uses it: the caller's scope deletes it.
 const getDefaultSshAskpassDirectory = Effect.fn("ssh/auth.getDefaultSshAskpassDirectory")(
   function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const parentDirectory = yield* fs.makeTempDirectory({ prefix: "goat-ssh-runtime-" });
+    const parentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-runtime-" });
     return path.join(parentDirectory, SSH_ASKPASS_DIR_NAME);
   },
 );
@@ -176,7 +178,7 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
 ): Effect.fn.Return<
   NodeJS.ProcessEnv,
   PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | Scope.Scope
 > {
   const baseEnv = { ...input.baseEnv };
   if (!input.interactiveAuth) {
