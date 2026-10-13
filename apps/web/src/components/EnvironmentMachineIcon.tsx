@@ -4,7 +4,7 @@ import type { FunctionComponent, SVGProps } from "react";
 import { LinuxIcon } from "./Icons";
 
 // Solar has no Apple desktops, so these two are drawn to its grammar (24 unit
-// grid, 1.5 unit stroke, round joins) and share the icon prop surface so
+// grid, 1.75 unit stroke, round joins) and share the icon prop surface so
 // callers can swap freely.
 function SolarLike(props: SVGProps<SVGSVGElement>) {
   return (
@@ -15,7 +15,7 @@ function SolarLike(props: SVGProps<SVGSVGElement>) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       {...props}

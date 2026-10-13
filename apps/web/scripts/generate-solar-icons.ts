@@ -49,6 +49,13 @@ function resolveBody(name: string): string {
 
 type Attrs = Record<string, string>;
 
+/** Solar draws a 1.5 stroke; the app uses it slightly bolder (1.75), scaling every stroke alike. */
+const STROKE_SCALE = 1.75 / 1.5;
+
+function scaleStroke(width: string): string {
+  return String(Math.round(Number(width) * STROKE_SCALE * 1000) / 1000);
+}
+
 function parseAttrs(source: string): Attrs {
   const attrs: Attrs = {};
   for (const match of source.matchAll(/([\w:-]+)="([^"]*)"/g)) attrs[match[1]!] = match[2]!;
@@ -77,6 +84,7 @@ function toNode(body: string): Array<[string, Attrs]> {
     if (merged.fill === "none") delete merged.fill;
     if (merged.stroke === "currentColor") delete merged.stroke;
     if (merged.stroke === "none") delete merged["stroke-width"];
+    else merged["stroke-width"] = scaleStroke(merged["stroke-width"]!);
     nodes.push([tag!, merged]);
   }
   return nodes;

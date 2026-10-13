@@ -74,7 +74,7 @@ export function ProjectFavicon(input: {
           <DynamicIcon
             name={project.projectIcon.name as IconName}
             className={cn("size-full", colorClassName)}
-            strokeWidth={1.5}
+            strokeWidth={1.75}
             fallback={DynamicProjectIconFallback}
           />
         </Suspense>
