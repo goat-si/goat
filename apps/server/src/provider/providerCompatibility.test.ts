@@ -70,6 +70,34 @@ describe("provider compatibility", () => {
     }
   });
 
+  it("matches Devin Cloud's minimum CLI gate", () => {
+    const devinCloud = ProviderDriverKind.make("devinCloud");
+    for (const [version, expected] of [
+      ["3000.11.0", "unsupported"],
+      ["3000.11.1", "supported"],
+      ["3000.11.3", "supported"],
+      ["3001.0.0", "supported"],
+      ["3000.11.3-beta", "unknown"],
+    ] as const) {
+      const advisory = resolveProviderCompatibility(
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+        devinCloud,
+        version,
+        V2_RELEASE,
+      );
+      assert.strictEqual(advisory?.status, expected);
+      assert.strictEqual(advisory?.recommendedRange, ">=3000.11.1");
+    }
+    assert.isUndefined(
+      resolveProviderCompatibility(
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+        devinCloud,
+        "3000.11.3",
+        "0.0.45",
+      ),
+    );
+  });
+
   it("keeps releases before V2 on the OpenCode 1 policy they shipped with", () => {
     // Every installed build fetches main's manifest, and 0.0.45 and older run the
     // V1 orchestrator, which cannot drive OpenCode 2.
