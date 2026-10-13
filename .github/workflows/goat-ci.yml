@@ -85,6 +85,17 @@ jobs:
         if: matrix.task == 'check' || matrix.task == 'typecheck' || matrix.task == 'test' || matrix.task == 'test-desktop' || matrix.task == 'build'
         run: vp run --filter @goat/desktop ensure:electron
 
+      # Tests get a temp directory of their own, so the shared /tmp tmpfs never collects their
+      # leftovers and the guard at the end sees only this job's. Each test file also fails when it
+      # leaves goat-* entries behind (packages/shared/src/testing/testTempSandbox.ts).
+      - name: Isolate test temp directory
+        if: startsWith(matrix.task, 'test')
+        run: |
+          dir=$(mktemp -d "${TMPDIR:-/tmp}/goat-ci-XXXXXXXX")
+          echo "GOAT_CI_TMPDIR=$dir" >> "$GITHUB_ENV"
+          echo "TMPDIR=$dir" >> "$GITHUB_ENV"
+          echo "GOAT_TEST_TMP_GUARD=fail" >> "$GITHUB_ENV"
+
       - name: Check
         if: matrix.task == 'check'
         run: vp check
@@ -146,6 +157,14 @@ jobs:
       - name: Test PR screenshot gate
         if: matrix.task == 'test'
         run: node --test .github/scripts/pr-screenshot-gate.test.cjs
+
+      - name: Check for leaked temp files
+        if: always() && env.GOAT_CI_TMPDIR != ''
+        run: |
+          status=0
+          node scripts/test-tmp-guard.ts "$GOAT_CI_TMPDIR" || status=$?
+          rm -rf "$GOAT_CI_TMPDIR"
+          exit "$status"
 
       - name: Build desktop pipeline
         if: matrix.task == 'build'

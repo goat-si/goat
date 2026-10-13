@@ -2,6 +2,10 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
+import { afterAll } from "vite-plus/test";
+
+import { describeLeaks, enterTestTempSandbox, GUARD_ENV } from "./testTempSandbox.ts";
+
 /**
  * Point the process temp directory at the path git and `realpath` report.
  *
@@ -31,3 +35,15 @@ export const canonicalizeProcessTempDir = (): void => {
 };
 
 canonicalizeProcessTempDir();
+
+// Each test file gets its own temp directory, deleted after the file's own hooks run.
+const sandbox = enterTestTempSandbox();
+if (sandbox !== undefined) {
+  afterAll(() => {
+    const leaked = sandbox.close();
+    if (leaked.length === 0) return;
+    const message = describeLeaks(leaked);
+    if (process.env[GUARD_ENV] === "fail") throw new Error(message);
+    process.stderr.write(`${message}\n`);
+  });
+}
