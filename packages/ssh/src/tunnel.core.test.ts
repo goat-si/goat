@@ -339,7 +339,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(devLaunch, `GOAT_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(devLaunch, "does not satisfy required range ");
     // A failed cold start still cleans up the child this script launched.
-    assert.include(launch, 'kill "$REMOTE_PID" 2>/dev/null || true');
+    assert.include(launch, 'server_kill "$REMOTE_PID" || true');
     assert.include(launch, "wait_ready");
     assert.include(launch, '"$RUNNER_FILE" serve --host 127.0.0.1');
     assert.include(launch, '--base-dir "$DEFAULT_SERVER_HOME"');
@@ -366,10 +366,7 @@ describe("ssh tunnel scripts", () => {
       SshTunnel.buildRemoteStopScript(stateKey),
       'if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then',
     );
-    assert.include(
-      SshTunnel.buildRemoteStopScript(stateKey),
-      'kill "$REMOTE_PID" 2>/dev/null || true',
-    );
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), 'server_kill "$REMOTE_PID" || true');
     assert.include(
       SshTunnel.buildRemoteStopScript(stateKey),
       'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"',

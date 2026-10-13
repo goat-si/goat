@@ -33,6 +33,11 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import { extractJsonObject, fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeBuilds, satisfiesSemverRange } from "@goat/shared/semver";
+import {
+  encodePowerShellCommand,
+  WINDOWS_DETACHED_SPAWN_POWERSHELL,
+  WINDOWS_PROCESS_INFO_POWERSHELL,
+} from "@goat/shared/windowsHostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -757,6 +762,7 @@ if ! goat_runtime_ready; then
   case "$(uname -s)" in
     Darwin) GOAT_PLATFORM="darwin" ;;
     Linux) GOAT_PLATFORM="linux" ;;
+    MINGW* | MSYS* | CYGWIN*) GOAT_PLATFORM="win32" ;;
     *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
   esac
   case "$(uname -m)" in
@@ -765,6 +771,7 @@ if ! goat_runtime_ready; then
     *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -m)" >&2; exit 1 ;;
   esac
   GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"
+  if [ "$GOAT_PLATFORM" = win32 ]; then GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.zip"; fi
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
   goat_fetch() {
     if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
@@ -783,7 +790,12 @@ if ! goat_runtime_ready; then
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
+  if [ "$GOAT_PLATFORM" = win32 ]; then
+    # Git Bash's GNU tar cannot read zip; Windows ships bsdtar in System32.
+    "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
+  else
+    tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
+  fi
   rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
@@ -805,10 +817,83 @@ fi
 exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
+// Process inspection for the lock owner (this shell) and the server it launches. On a Windows
+// host, Git Bash and Cygwin list only their own processes in /proc and ps, while the server is a
+// native process: PowerShell reads its identity, and the identity's Windows paths are mapped back
+// to the POSIX form the launch script records.
+export const REMOTE_HOST_PROCESS_SCRIPT = String.raw`case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    GOAT_HOST_WINDOWS=1
+    # By default ln -s copies, so the lock's dangling owner link could not be created.
+    MSYS="winsymlinks:sys${"${MSYS:+ $MSYS}"}"; CYGWIN="winsymlinks:sys${"${CYGWIN:+ $CYGWIN}"}"; export MSYS CYGWIN ;;
+  *) GOAT_HOST_WINDOWS=0 ;;
+esac
+if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+  process_start() { [ -r "/proc/$1/stat" ] && sed 's/^.*) //' "/proc/$1/stat" | awk '{ print $20 }'; }
+  process_presence() {
+    [ -d /proc/self ] || return 1
+    if [ -d "/proc/$1" ]; then echo present; else echo absent; fi
+  }
+  windows_process_info() {
+    win_info="$(GOAT_PROCESS_ID="$1" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_PROCESS_INFO_POWERSHELL)}' </dev/null 2>/dev/null)" || return 1
+    printf '%s\n' "$win_info" | tr -d '\r'
+  }
+  server_alive() {
+    MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
+  }
+  server_kill() { MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$1" /F >/dev/null 2>&1; }
+  server_uid() {
+    win_info="$(windows_process_info "$1")" || return 1
+    if [ "$(printf '%s\n' "$win_info" | sed -n 1p)" = self ]; then id -u; else echo other; fi
+  }
+  server_start() {
+    win_info="$(windows_process_info "$1")" || return 1
+    printf '%s\n' "$win_info" | sed -n 2p
+  }
+  server_command() {
+    win_info="$(windows_process_info "$1")" || return 1
+    win_words="$(printf '%s\n' "$win_info" | sed '1,2d')"
+    [ -n "$win_words" ] || return 1
+    win_line=; win_first=1
+    while IFS= read -r win_word; do
+      case "$win_word" in [A-Za-z]:[\\/]*) win_word="$(cygpath -u "$win_word")" || return 1 ;; esac
+      if [ "$win_first" = 1 ]; then
+        win_line="$(printf '%s' "$win_word" | sed 's/\.[Ee][Xx][Ee]$//')"; win_first=0
+      else win_line="$win_line $win_word"; fi
+    done <<GOAT_WORDS
+$win_words
+GOAT_WORDS
+    printf '%s\n' "$win_line"
+  }
+  # Starts a program outside the SSH session's job, appending its output to $1; prints its PID.
+  # The program and arguments are passed as given, so callers convert paths with cygpath -w.
+  windows_spawn_detached() {
+    win_log="$(cygpath -w "$1")" || return 1; shift
+    win_args=
+    for win_word in "$@"; do
+      win_args="$win_args$win_word
+"
+    done
+    win_pid="$(GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
+    printf '%s\n' "$win_pid" | tr -d '\r'
+  }
+else
+  process_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; }
+  process_presence() {
+    process_table="$(ps -e -o pid= 2>/dev/null)" || return 1
+    printf '%s\n' "$process_table" | awk -v p="$1" '$1==p { found=1 } END { print found ? "present" : "absent" }'
+  }
+  server_alive() { kill -0 "$1" 2>/dev/null; }
+  server_kill() { kill "$1" 2>/dev/null; }
+  server_uid() { ps -o uid= -p "$1" 2>/dev/null; }
+  server_start() { process_start "$1"; }
+  server_command() { ps -o command= -p "$1" 2>/dev/null; }
+fi
+`;
+
 // One host-wide mutex protects publication and server lifecycle across SSH aliases.
-const REMOTE_REPLACEMENT_LOCK_SCRIPT = String.raw`LOCK="$DEFAULT_SERVER_HOME/ssh-launch/replacement.lock"
+const REMOTE_REPLACEMENT_LOCK_SCRIPT = String.raw`${REMOTE_HOST_PROCESS_SCRIPT}LOCK="$DEFAULT_SERVER_HOME/ssh-launch/replacement.lock"
 RECOVERY="$DEFAULT_SERVER_HOME/ssh-launch/replacement.recovery"
-process_start() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null; }
 LOCK_HELD=0; OWNER=; LOCK_DETAIL=
 release_replacement_lock() {
   if [ -n "$OWNER" ] && [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ]; then rm -f "$LOCK"; fi
@@ -824,8 +909,7 @@ owner_proven_dead() {
     valid_positive "$3" && [ -n "$4" ] && [ -n "$5" ] || return 1
   owner_pid="$3"; owner_start="$4"
   # Failure to inspect the process table is not proof of death (nor is age).
-  process_table="$(ps -e -o pid= 2>/dev/null)" || return 1
-  presence="$(printf '%s\n' "$process_table" | awk -v p="$owner_pid" '$1==p { found=1 } END { print found ? "present" : "absent" }')" || return 1
+  presence="$(process_presence "$owner_pid")" || return 1
   case "$presence" in absent) return 0 ;; present) ;; *) return 1 ;; esac
   current_start="$(process_start "$owner_pid")" || return 1
   [ -n "$current_start" ] && [ "$current_start" != "$owner_start" ]
@@ -1264,13 +1348,13 @@ read_legacy_value() {
 }
 verify_legacy_process() {
   legacy_files_regular || return 1
-  legacy_uid="$(ps -o uid= -p "$1" 2>/dev/null)" || return 1
+  legacy_uid="$(server_uid "$1")" || return 1
   legacy_uid="$(printf '%s\n' "$legacy_uid" | awk 'NF==1 { print $1 }')"
   [ "$legacy_uid" = "$(id -u)" ] || return 1
-  legacy_start="$(ps -o lstart= -p "$1" 2>/dev/null)" || return 1
+  legacy_start="$(server_start "$1")" || return 1
   [ -n "$legacy_start" ] || return 1
   case "$legacy_start" in *[[:cntrl:]]*) return 1 ;; esac
-  legacy_command="$(ps -o command= -p "$1" 2>/dev/null)" || return 1
+  legacy_command="$(server_command "$1")" || return 1
   [ "$legacy_command" = "$2" ] || return 1
   if [ "$LEGACY_PENDING" = 1 ]; then
     [ "$legacy_uid" = "$LEGACY_UID" ] && [ "$legacy_start" = "$LEGACY_START" ] || return 1
@@ -1292,7 +1376,7 @@ verify_legacy_identity() {
   legacy_port="$(read_legacy_value "$PORT_FILE")" || return 1
   [ "$(read_legacy_value "$MANAGED_FILE")" = managed ] &&
     valid_positive "$legacy_pid" && valid_positive "$legacy_port" && valid_port "$legacy_port" &&
-    kill -0 "$legacy_pid" 2>/dev/null || return 1
+    server_alive "$legacy_pid" || return 1
   legacy_version="$(decode_retained_assignment GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" || return 1
   legacy_entry="$(decode_retained_assignment GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" || return 1
   [ -z "$legacy_entry" ] || return 1
@@ -1358,7 +1442,7 @@ const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
   valid_positive "$owned_pid" && valid_positive "$owned_port" && valid_port "$owned_port" || return 1
   [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] || return 1
   [ -f "$STATE_DIR/identity" ] && [ ! -L "$STATE_DIR/identity" ] || return 1
-  owned_uid="$(ps -o uid= -p "$owned_pid" 2>/dev/null)" || return 1
+  owned_uid="$(server_uid "$owned_pid")" || return 1
   [ "$(printf '%s\\n' "$owned_uid" | awk 'NF==1 { print $1 }')" = "$(id -u)" ] || return 1
   owned_identity="$(cat "$STATE_DIR/identity" 2>/dev/null)" || return 1
   [ -n "$owned_identity" ] || return 1
@@ -1366,7 +1450,7 @@ const REMOTE_OWNED_IDENTITY_SCRIPT = `verify_owned_identity() {
     *" --port $owned_port --base-dir $DEFAULT_SERVER_HOME") ;;
     *) return 1 ;;
   esac
-  owned_command="$(ps -o command= -p "$owned_pid" 2>/dev/null)" || return 1
+  owned_command="$(server_command "$owned_pid")" || return 1
   case "$owned_identity" in
     "$HOME/.goat/runtime/goat/versions/"*)
       # An archive's identity includes its executable, so no prefix is allowed.
@@ -1439,7 +1523,7 @@ NODE
 wait_for_pid_exit() {
   PID_TO_WAIT="$1"
   WAIT_COUNT=0
-  while kill -0 "$PID_TO_WAIT" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do
+  while server_alive "$PID_TO_WAIT" && [ "$WAIT_COUNT" -lt 20 ]; do
     WAIT_COUNT=$((WAIT_COUNT + 1))
     sleep 0.1
   done
@@ -1470,13 +1554,18 @@ REMOTE_MANAGED=""
 if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   UPGRADE_PID="$LIVE_PID"; UPGRADE_PORT="$LIVE_PORT"; UPGRADE_VERSION="$LIVE_VERSION"
   UPGRADE_INSTANCE="$LIVE_INSTANCE_ID"
+  if [ "$GOAT_HOST_WINDOWS" = 1 ] &&
+     { [ "$GOAT_ARCHIVE_MODE" != 1 ] || [ ! -x "$HOME/.goat/runtime/goat/versions/$UPGRADE_VERSION/goat" ]; }; then
+    # The Windows supervisor restarts installed release executables only.
+    printf 'Live GOAT PID=%s port=%s can only be replaced by a GOAT release on this Windows host; it was left running. Stop it when its work is done, then reconnect.\\n' "$UPGRADE_PID" "$UPGRADE_PORT" >&2; exit 1
+  fi
   # Validate bytes and authority before the final PID-validated idle probe.
   check_candidate_protocol
   check_retained_runner
   if [ "$LEGACY_PENDING" = 1 ] && [ "$LEGACY_COMMITTED" = 0 ]; then
     verify_legacy_identity || ownership_unverified
   else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified; fi
-  UPGRADE_START="$(process_start "$UPGRADE_PID")" || ownership_unverified
+  UPGRADE_START="$(server_start "$UPGRADE_PID")" || ownership_unverified
   [ -n "$UPGRADE_START" ] || ownership_unverified
   if [ "$REPLACEMENT_REASON" != incompatible ]; then
     # An optional refresh drains only an idle server, so its retries never hold up new turns.
@@ -1490,7 +1579,7 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   if [ "$LEGACY_PENDING" = 1 ]; then
     verify_legacy_process "$UPGRADE_PID" "$LEGACY_IDENTITY" || ownership_unverified
   fi
-  [ "$(process_start "$UPGRADE_PID")" = "$UPGRADE_START" ] || ownership_unverified
+  [ "$(server_start "$UPGRADE_PID")" = "$UPGRADE_START" ] || ownership_unverified
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || ownership_unverified
   PREVIOUS_IDENTITY="$(cat "$STATE_DIR/identity")" || ownership_unverified
   PREVIOUS_RUNNER="$STATE_DIR/run-t3.previous"
@@ -1518,8 +1607,21 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   rm -f "$SUPERVISE_RESULT"
   # Detached, so a dropped SSH session cannot leave the host without a server.
   trap '' HUP
-  nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
-  wait "$!" || true
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    # Windows OpenSSH ends every process left in the session, so the supervisor also starts
+    # outside it and this script waits on its PID. Paths are native; identities stay POSIX.
+    # cmd.exe cannot append to a log another cmd.exe holds, so the supervisor writes its own.
+    SUPERVISE_LOG="$STATE_DIR/supervisor.log"
+    SUPERVISE_PID="$(windows_spawn_detached "$SUPERVISE_LOG" "$(cygpath -w "$SPAWN_IDENTITY")" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")" --state-dir "$(cygpath -w "$STATE_DIR")" --runner "$(cygpath -w "$RUNNER_FILE")" --previous-runner "$(cygpath -w "$PREVIOUS_RUNNER")" --executable "$(cygpath -w "$SPAWN_IDENTITY")" --previous-executable "$(cygpath -w "$HOME/.goat/runtime/goat/versions/$UPGRADE_VERSION/goat")" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$(cygpath -w "$LOG_FILE")" --result "$(cygpath -w "$SUPERVISE_RESULT")")" || SUPERVISE_PID=
+    if valid_positive "$SUPERVISE_PID"; then
+      while server_alive "$SUPERVISE_PID"; do sleep 1; done
+    fi
+    # A running replacement may hold server.log; then the supervisor log is kept beside it.
+    if cat "$SUPERVISE_LOG" >>"$LOG_FILE" 2>/dev/null; then rm -f "$SUPERVISE_LOG"; fi
+  else
+    nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
+    wait "$!" || true
+  fi
   supervise_status=failed; supervise_pid=0; supervise_version=
   if [ -f "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
   rm -f "$SUPERVISE_RESULT"
@@ -1570,8 +1672,20 @@ if [ -z "$REMOTE_PORT" ]; then
   else
     SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
-  nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
-  REMOTE_PID="$!"
+  if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
+    # Windows OpenSSH ends every process left in the session, so the server starts outside it.
+    if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then set -- "$(cygpath -w "$SPAWN_IDENTITY")"
+    else set -- "$(cygpath -w "$(command -v node)")" "$(cygpath -w "$SPAWN_IDENTITY")"; fi
+    REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
+    if ! valid_positive "$REMOTE_PID"; then
+      printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
+      tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
+      exit 1
+    fi
+  else
+    nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
+    REMOTE_PID="$!"
+  fi
   printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
   mv "$IDENTITY_NEXT" "$STATE_DIR/identity"
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
@@ -1584,7 +1698,7 @@ if [ -z "$REMOTE_PORT" ]; then
     else
       printf 'It wrote nothing to %s, so it exited before producing any output.\\n' "$LOG_FILE" >&2
     fi
-    kill "$REMOTE_PID" 2>/dev/null || true
+    server_kill "$REMOTE_PID" || true
     wait_for_pid_exit "$REMOTE_PID"
     rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
     exit 1
@@ -1659,7 +1773,7 @@ ownership_unverified() {
 @@GOAT_OWNED_IDENTITY@@
 if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
   valid_positive "$REMOTE_PID" || ownership_unverified
-  if kill -0 "$REMOTE_PID" 2>/dev/null; then
+  if server_alive "$REMOTE_PID"; then
     verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
     # Other clients share this server, and its threads outlive any one tunnel:
     # stopping is only safe when the server itself reports no active work.
@@ -1673,20 +1787,20 @@ if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
       exit 0
     fi
     verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
-    kill "$REMOTE_PID" 2>/dev/null || true
+    server_kill "$REMOTE_PID" || true
     WAIT_COUNT=0
-    while kill -0 "$REMOTE_PID" 2>/dev/null && [ "$WAIT_COUNT" -lt 20 ]; do
+    while server_alive "$REMOTE_PID" && [ "$WAIT_COUNT" -lt 20 ]; do
       WAIT_COUNT=$((WAIT_COUNT + 1))
       sleep 0.1
     done
-    if kill -0 "$REMOTE_PID" 2>/dev/null; then
+    if server_alive "$REMOTE_PID"; then
       printf 'Remote GOAT server with PID %s did not stop within 2 seconds. Its ownership files were kept.\\n' "$REMOTE_PID" >&2
       exit 1
     fi
   fi
 elif [ "$REMOTE_MANAGED" != external ] && [ -n "$REMOTE_PID" ]; then
   valid_positive "$REMOTE_PID" || ownership_unverified
-  if kill -0 "$REMOTE_PID" 2>/dev/null; then ownership_unverified; fi
+  if server_alive "$REMOTE_PID"; then ownership_unverified; fi
 fi
 rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
 printf '{"stopped":true}\\n'
@@ -1940,6 +2054,28 @@ sh -c ${shellSingleQuote(installer)} -- --version
 `;
 }
 
+/**
+ * The SSH invocation that runs the upload script with the archive on stdin. Windows OpenSSH
+ * truncates a remote command near 8 KiB, so a Windows host reads the script from the front of
+ * stdin, ahead of the archive. dd reads it a byte at a time: a buffered reader such as BSD head
+ * would also consume the start of the archive.
+ */
+export function remoteUploadCommand(
+  script: string,
+  archive: Uint8Array,
+  platform: "darwin" | "linux" | "win32",
+): { readonly remoteCommandArgs: ReadonlyArray<string>; readonly stdin: Uint8Array } {
+  if (platform !== "win32") {
+    return { remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)], stdin: archive };
+  }
+  const scriptBytes = new TextEncoder().encode(script);
+  const stdin = new Uint8Array(scriptBytes.byteLength + archive.byteLength);
+  stdin.set(scriptBytes);
+  stdin.set(archive, scriptBytes.byteLength);
+  const bootstrap = `upload_script="$(mktemp)" && dd bs=1 count=${scriptBytes.byteLength} of="$upload_script" 2>/dev/null && sh "$upload_script"; upload_status=$?; rm -f "$upload_script"; exit "$upload_status"`;
+  return { remoteCommandArgs: ["sh", "-c", shellSingleQuote(bootstrap)], stdin };
+}
+
 export function buildRemoteRuntimeProbeScript(
   version: string,
   stateKey?: string,
@@ -2049,7 +2185,9 @@ for candidate in "$live_hint" "$retained_version" "$V"; do
     break
   fi
 done
-case "$(uname -s)" in Darwin) platform=darwin ;; Linux) platform=linux ;; *) exit 1 ;; esac
+case "$(uname -s)" in
+  Darwin) platform=darwin ;; Linux) platform=linux ;; MINGW*|MSYS*|CYGWIN*) platform=win32 ;; *) exit 1 ;;
+esac
 case "$(uname -m)" in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x64 ;; *) exit 1 ;; esac
 ready=false
 if ready_version "$V"; then ready=true; fi
@@ -2060,7 +2198,7 @@ printf '{"platform":"%s","arch":"%s","ready":%s,"liveOwned":%s,"identityAbsent":
 const decodeRemoteRuntimeProbe = Schema.decodeEffect(
   fromLenientJson(
     Schema.Struct({
-      platform: Schema.Literals(["darwin", "linux"]),
+      platform: Schema.Literals(["darwin", "linux", "win32"]),
       arch: Schema.Literals(["arm64", "x64"]),
       ready: Schema.Boolean,
       retained: Schema.optionalKey(Schema.Literals(["ready", "missing"])),
@@ -2390,8 +2528,7 @@ export const prepareRemoteRuntime = (
       });
       yield* runSshCommand(target, {
         ...authOptions,
-        remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
-        stdin: archive.bytes,
+        ...remoteUploadCommand(script, archive.bytes, probe.platform),
         timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
       }).pipe(
         // A remote reader that exits early (full disk, failed checksum) fails only
