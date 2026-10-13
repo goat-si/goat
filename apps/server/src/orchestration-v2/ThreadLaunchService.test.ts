@@ -2941,9 +2941,67 @@ it.effect("still opens a person's client launch so the folder failure shows in t
   const harness = makeHarness({ missingPaths: new Set(["/repo"]) });
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;
-    const launched = yield* launches.launch(
-      launchInput({ command: "command:client-missing", thread: "thread:client-missing" }),
-    );
+    const launched = yield* launches.launch({
+      ...launchInput({ command: "command:client-missing", thread: "thread:client-missing" }),
+      fromClient: true,
+    });
     assert.strictEqual(launched.threadId, ThreadId.make("thread:client-missing"));
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect(
+  "refuses a scheduled launch into a missing folder even when a client created the task",
+  () => {
+    const harness = makeHarness({ missingPaths: new Set(["/repo"]) });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      // A scheduled task keeps the creation source of the client that made it.
+      const error = yield* Effect.flip(
+        launches.launch({
+          ...launchInput({
+            command: "command:scheduled-missing",
+            thread: "thread:scheduled-missing",
+            message: "Nightly check",
+          }),
+          createdBy: "user",
+          creationSource: "web",
+        }),
+      );
+      assert.strictEqual(error._tag, "ThreadLaunchWorkspaceMissingError");
+      assert.isNull(yield* threads.getThreadShell(ThreadId.make("thread:scheduled-missing")));
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect("lets an agent launch into a Scratch project whose folder was deleted", () => {
+  // The project root stands in for the Scratch folder; claiming a thread folder recreates it.
+  const missingPaths = new Set(["/repo"]);
+  const claimed: Array<ThreadId> = [];
+  const harness = makeHarness({
+    missingPaths,
+    managedFolders: Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+      namedProjectsRoot: "/projects",
+      folderForThread: (input) =>
+        Effect.sync(() => {
+          missingPaths.delete("/repo");
+          claimed.push(input.threadId);
+          return Option.some("/repo/2026-10-13-recover");
+        }),
+    }),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launched = yield* launches.launch({
+      ...launchInput({
+        command: "command:scratch-recover",
+        thread: "thread:scratch-recover",
+        message: "Go",
+      }),
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    assert.deepEqual(claimed, [launched.threadId]);
+    assert.equal(launched.projection.thread.worktreePath, "/repo/2026-10-13-recover");
   }).pipe(Effect.provide(harness.layer));
 });

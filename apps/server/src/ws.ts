@@ -2078,6 +2078,7 @@ const layerWsRpc = (
                         }),
                     createdBy: "user",
                     creationSource: input.creationSource ?? "web",
+                    fromClient: true,
                   }).pipe(Effect.provide(intakeContext)),
                 )
                 .pipe(

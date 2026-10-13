@@ -98,6 +98,13 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /**
+   * Set when a person launches from a web, desktop, or mobile client. A missing
+   * project folder then shows as a failed thread they can fix there. Every
+   * other launch, including a scheduled task first created in a client, is
+   * refused before a thread exists.
+   */
+  readonly fromClient?: boolean;
   /** The agent thread that asked for this launch; descriptive only. */
   readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
 }
@@ -881,14 +888,6 @@ const make = Effect.gen(function* () {
       }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
-      // Only a first attempt is checked: a replay must keep answering with the thread it made.
-      if (
-        Option.isNone(launchReceipt) &&
-        input.importedNativeThread === undefined &&
-        input.creationSource !== "web" &&
-        input.creationSource !== "mobile"
-      )
-        yield* assertWorkspaceExists(project, input.workspaceStrategy);
       yield* threads.assertProviderInstanceEnabled({
         projectId: input.projectId,
         commandId: input.commandId,
@@ -951,6 +950,15 @@ const make = Effect.gen(function* () {
                 },
               )
             : input.workspaceStrategy;
+        // Checked after a Scratch launch claims its folder, which recreates a
+        // deleted Scratch folder. Only a first attempt is checked: a replay must
+        // keep answering with the thread it made.
+        if (
+          Option.isNone(launchReceipt) &&
+          input.importedNativeThread === undefined &&
+          input.fromClient !== true
+        )
+          yield* assertWorkspaceExists(project, workspaceStrategy);
         const initialBranch = workspaceStrategy.branch ?? null;
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
