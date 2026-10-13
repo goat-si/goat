@@ -1,4 +1,4 @@
-import { LEGACY_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
+import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
@@ -3652,7 +3652,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         yield* executeGit(
           "GitVcsDriver.refreshCheckedOutBranch.keepPrevious",
           input.cwd,
-          ["update-ref", LEGACY_PRE_REFRESH_REF, headCommit],
+          ["update-ref", GOAT_PRE_REFRESH_REF, headCommit],
           { fallbackErrorDetail: "git failed to record the previous checkout commit" },
         );
       }
