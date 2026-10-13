@@ -1,0 +1,182 @@
+import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NetService from "@goat/shared/Net";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
+import { TestClock } from "effect/testing";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
+import * as SshAuth from "./auth.ts";
+import * as SshTunnel from "./tunnel.ts";
+import {
+  commandArgs,
+  makeDelayedSuccessfulProcess,
+  makeProtocolTestSpawner,
+  makeRunningProcess,
+  makeSuccessfulProcess,
+  PROTOCOL_ARCHIVE,
+  testNetService,
+  uploadTarget,
+} from "./tunnel.fixture.ts";
+
+// A server that answers every request after `latencyMs`, like a healthy
+// remote reached over a ~600 ms RTT link.
+const slowClient = (latencyMs: number) =>
+  HttpClient.make((request) =>
+    Effect.sleep(Duration.millis(latencyMs)).pipe(
+      Effect.as(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
+    ),
+  );
+
+const refusingClient = HttpClient.make((request) =>
+  Effect.fail(
+    new HttpClientError.HttpClientError({
+      reason: new HttpClientError.TransportError({ request, description: "ECONNREFUSED" }),
+    }),
+  ),
+);
+
+// Steps the test clock so work scheduled after each wake-up sees ordered time.
+const advance = (total: Duration.Duration) =>
+  Effect.gen(function* () {
+    for (let elapsed = 0; elapsed < Duration.toMillis(total); elapsed += 100) {
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.millis(100));
+    }
+  });
+
+const waitWithClock = (
+  client: HttpClient.HttpClient,
+  input: Parameters<typeof SshTunnel.waitForHttpReady>[0],
+  elapse: Duration.Duration,
+) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(Effect.result(SshTunnel.waitForHttpReady(input)));
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust(elapse);
+    return yield* Fiber.join(fiber);
+  }).pipe(
+    Effect.provide(Layer.merge(TestClock.layer(), Layer.succeed(HttpClient.HttpClient, client))),
+  );
+
+describe("SSH forward readiness", () => {
+  it("keeps fast-host defaults and scales the budget with a slow launch", () => {
+    assert.deepEqual(SshTunnel.sshReadinessBudget(300), {
+      probeTimeoutMs: 1_000,
+      timeoutMs: 20_000,
+    });
+    // About 6 s for the launch over a phone hotspot relayed through London.
+    assert.deepEqual(SshTunnel.sshReadinessBudget(6_000), {
+      probeTimeoutMs: 1_500,
+      timeoutMs: 30_000,
+    });
+    assert.deepEqual(SshTunnel.sshReadinessBudget(600_000), {
+      probeTimeoutMs: 5_000,
+      timeoutMs: 60_000,
+    });
+  });
+
+  it.effect("reaches a server that answers slower than the first probe allows", () =>
+    Effect.gen(function* () {
+      const result = yield* waitWithClock(
+        slowClient(1_300),
+        { baseUrl: "http://127.0.0.1:41773/", timeoutMs: 20_000, probeTimeoutMs: 1_000 },
+        Duration.seconds(20),
+      );
+      assert.isTrue(Result.isSuccess(result));
+    }),
+  );
+
+  it.effect("reports a slow server as high latency once the probes stop growing", () =>
+    Effect.gen(function* () {
+      const result = yield* waitWithClock(
+        slowClient(1_300),
+        {
+          baseUrl: "http://127.0.0.1:41773/",
+          timeoutMs: 20_000,
+          probeTimeoutMs: 1_000,
+          maxProbeTimeoutMs: 1_000,
+        },
+        Duration.seconds(20),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.equal(result.failure.reason, "slow");
+        assert.include(result.failure.message, "Timed out waiting 20000ms");
+        assert.include(result.failure.message, "high latency");
+      }
+    }),
+  );
+
+  it.effect("reports a forward with nothing behind it as unreachable", () =>
+    Effect.gen(function* () {
+      const result = yield* waitWithClock(
+        refusingClient,
+        { baseUrl: "http://127.0.0.1:41773/", timeoutMs: 2_000 },
+        Duration.seconds(2),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.equal(result.failure.reason, "unreachable");
+        assert.include(result.failure.message, "did not answer through the SSH tunnel");
+      }
+    }),
+  );
+
+  it.effect("connects and reconnects over a high-latency link", () =>
+    Effect.gen(function* () {
+      let forwards = 0;
+      let kills = 0;
+      const spawner = makeProtocolTestSpawner((command) =>
+        Effect.sync(() => {
+          const args = commandArgs(command);
+          if (args.includes("-G"))
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+          if (args.includes("-N")) {
+            forwards++;
+            return makeRunningProcess(() => {
+              kills++;
+            });
+          }
+          if (args.includes("--"))
+            return makeDelayedSuccessfulProcess(
+              '{"status":"ready","selectedVersion":"1.2.3-preview.20260911.4","remotePort":3773,"serverKind":"managed"}',
+              6_000,
+            );
+          return makeSuccessfulProcess("");
+        }),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, slowClient(1_300)),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({
+          resolveCliRunner: Effect.succeed(PROTOCOL_ARCHIVE),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const connect = yield* Effect.forkChild(
+          Effect.result(manager.ensureEnvironment(uploadTarget)),
+        );
+        yield* advance(Duration.seconds(40));
+        const first = yield* Fiber.join(connect);
+        if (Result.isFailure(first)) assert.fail(String(first.failure.message));
+
+        const reconnect = yield* Effect.forkChild(
+          Effect.result(manager.ensureEnvironment(uploadTarget)),
+        );
+        yield* advance(Duration.seconds(10));
+        assert.isTrue(Result.isSuccess(yield* Fiber.join(reconnect)));
+        // The answering forward is kept, not torn down as stale.
+        assert.equal(forwards, 1);
+        assert.equal(kills, 0);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+});

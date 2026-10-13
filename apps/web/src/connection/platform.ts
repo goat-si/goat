@@ -187,6 +187,15 @@ function sshPreparationError(cause: unknown) {
       detail: message,
     });
   }
+  // The SSH tunnel opened but the server answered too late; say so instead of
+  // reading like a stopped server. The supervisor keeps retrying.
+  if (message.includes("(high latency)")) {
+    return new ConnectionTransientError({
+      reason: "network",
+      detail:
+        "The SSH host is reachable, but the network to it is too slow (high latency) for GOAT to finish connecting. Retrying.",
+    });
+  }
   return new ConnectionTransientError({
     reason: "remote-unavailable",
     detail: `Could not prepare the SSH environment: ${message}`,

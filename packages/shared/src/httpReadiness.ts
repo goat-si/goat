@@ -43,10 +43,16 @@ export function describeReadinessCause(cause: unknown): unknown {
  * single hung request cannot stall the retry loop, and the retry cadence is
  * `intervalMs` bounded to roughly `timeoutMs / intervalMs` attempts.
  *
+ * With `maxProbeTimeoutMs`, every probe that times out doubles the next probe's
+ * bound up to that ceiling, so a slow link (high RTT) still gets an answer
+ * instead of abandoning each request just before it arrives.
+ *
  * The error type is left to the caller via `makeError`, so each consumer keeps
  * its own tagged error. `makeError` is called at every failure site; callers can
  * inspect `cause` (which carries a `kind` discriminator for the probe-timeout and
- * overall-timeout cases) to reproduce phase-specific messages, or ignore it.
+ * overall-timeout cases) to reproduce phase-specific messages, or ignore it. The
+ * overall-timeout cause also counts how many probes timed out versus failed
+ * outright, which tells a slow server from one that is not answering.
  */
 export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady")(function* <
   E,
@@ -56,6 +62,7 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
   readonly timeoutMs?: number;
   readonly intervalMs?: number;
   readonly probeTimeoutMs?: number;
+  readonly maxProbeTimeoutMs?: number;
   readonly makeError: (info: {
     readonly requestUrl: string;
     readonly probeTimeoutMs: number;
@@ -65,7 +72,11 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
 }): Effect.fn.Return<void, E, HttpClient.HttpClient> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const intervalMs = input.intervalMs ?? 100;
-  const probeTimeoutMs = input.probeTimeoutMs ?? DEFAULT_HTTP_READY_PROBE_TIMEOUT_MS;
+  let probeTimeoutMs = input.probeTimeoutMs ?? DEFAULT_HTTP_READY_PROBE_TIMEOUT_MS;
+  const maxProbeTimeoutMs = Math.max(probeTimeoutMs, input.maxProbeTimeoutMs ?? probeTimeoutMs);
+  let probeTimeouts = 0;
+  let probeFailures = 0;
+  let lastProbeTimeoutMs = probeTimeoutMs;
   const retryPolicy = Schedule.spaced(Duration.millis(intervalMs)).pipe(
     Schedule.upTo({ times: Math.max(0, Math.ceil(timeoutMs / intervalMs)) }),
   );
@@ -102,23 +113,28 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
     HttpClient.transform((effect) =>
       Effect.gen(function* () {
         attempt += 1;
+        const boundMs = probeTimeoutMs;
+        lastProbeTimeoutMs = boundMs;
         const responseOption = yield* effect.pipe(
-          Effect.timeoutOption(Duration.millis(probeTimeoutMs)),
+          Effect.timeoutOption(Duration.millis(boundMs)),
           Effect.mapError((cause) => fail(cause)),
         );
-        return yield* Effect.fromOption(responseOption, () =>
-          fail({
-            kind: "probe-timeout",
-            attempt,
-            probeTimeoutMs,
-          }),
-        );
+        if (Option.isNone(responseOption)) {
+          probeTimeouts += 1;
+          const error = fail({ kind: "probe-timeout", attempt, probeTimeoutMs: boundMs });
+          probeTimeoutMs = Math.min(maxProbeTimeoutMs, boundMs * 2);
+          return yield* Effect.fail(error);
+        }
+        return responseOption.value;
       }).pipe(
         Effect.mapError((cause) => (isMadeError(cause) ? cause : fail(cause))),
         Effect.tapError((cause) =>
-          Ref.set(lastProbeFailure, {
-            attempt,
-            cause: describeReadinessCause(cause),
+          Effect.suspend(() => {
+            probeFailures += 1;
+            return Ref.set(lastProbeFailure, {
+              attempt,
+              cause: describeReadinessCause(cause),
+            });
           }),
         ),
       ),
@@ -149,6 +165,7 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
           intervalMs,
           probeTimeoutMs,
           attempts: attempt,
+          probeTimeouts,
           lastFailure,
         });
         return yield* Effect.fail(
@@ -156,6 +173,11 @@ export const waitForHttpReady = Effect.fn("shared.httpReadiness.waitForHttpReady
             kind: "overall-timeout",
             baseUrl: input.baseUrl,
             timeoutMs,
+            attempts: attempt,
+            probeTimeouts,
+            // Probes that failed without timing out (refused, reset, non-2xx).
+            otherFailures: probeFailures - probeTimeouts,
+            lastProbeTimeoutMs,
             lastFailure,
           }),
         );

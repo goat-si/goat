@@ -14,6 +14,20 @@ describe.each([
   { label: "existing SSH connection", consumer: prepareDesktopSshEnvironment },
   { label: "new SSH connection", consumer: provisionDesktopSshEnvironment },
 ])("$label", ({ consumer }) => {
+  it.effect("explains a tunnel that answers too slowly as high latency", () =>
+    Effect.gen(function* () {
+      const bridge = {
+        ensureSshEnvironment: async () => {
+          throw new Error(
+            "Error invoking remote method 'desktop:ensure-ssh-environment': Timed out waiting 30000ms for backend readiness at http://127.0.0.1:41773/. The SSH tunnel is open, but the GOAT server answered none of 9 checks within 5000ms. The network to this host is too slow (high latency); GOAT will keep retrying.",
+          );
+        },
+      } as unknown as DesktopBridge;
+      const error = yield* consumer(bridge, target).pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "ConnectionTransientError", reason: "network" });
+      expect(error.detail).toContain("high latency");
+    }),
+  );
   it.effect("stranded recovery lock explains remote cleanup before authentication", () =>
     Effect.gen(function* () {
       const bridge = {

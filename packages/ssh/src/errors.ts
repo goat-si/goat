@@ -39,6 +39,8 @@ export class SshHttpBridgeError extends Data.TaggedError("SshHttpBridgeError")<{
 }> {}
 
 export class SshReadinessError extends Data.TaggedError("SshReadinessError")<{
+  /** `slow`: requests reached the server but answered too late. `unreachable`: nothing answered. */
+  readonly reason?: "slow" | "unreachable";
   readonly message: string;
   readonly cause?: unknown;
 }> {}

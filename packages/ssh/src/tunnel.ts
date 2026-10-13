@@ -81,6 +81,10 @@ const DEFAULT_REMOTE_PORT = 3773;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
+// Ceilings for a slow link. A forwarded probe costs at least one round trip,
+// which reaches ~600 ms over a phone hotspot relayed across continents.
+const SSH_READY_MAX_PROBE_TIMEOUT_MS = 5_000;
+const SSH_READY_MAX_TIMEOUT_MS = 60_000;
 // How long an open forward has to answer before it counts as dead. A forward
 // whose TCP connection died during sleep accepts locally and never answers.
 const EXISTING_TUNNEL_CHECK_TIMEOUT_MS = 2_000;
@@ -255,6 +259,7 @@ interface SshTunnelEntry {
   readonly wsBaseUrl: string;
   readonly process: ChildProcessSpawner.ChildProcessHandle;
   readonly scope: Scope.Closeable;
+  readonly readiness: SshReadinessBudget;
 }
 
 type SshEnvironmentEffectContext =
@@ -2904,11 +2909,34 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   return result.stdout.trim();
 });
 
+export interface SshReadinessBudget {
+  /** Bound on the first forwarded probe; each timed-out probe doubles it up to 5 s. */
+  readonly probeTimeoutMs: number;
+  /** Overall wait for the forward to answer. */
+  readonly timeoutMs: number;
+}
+
+/**
+ * Readiness budget for a forward to a host whose remote launch took `launchMs`.
+ * A launch is one SSH connection plus several remote round trips, so a quarter
+ * of it estimates one forwarded HTTP exchange. A fast host keeps the 1 s / 20 s
+ * defaults; a slow link gets longer probes and up to 60 s overall.
+ */
+export function sshReadinessBudget(launchMs: number): SshReadinessBudget {
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, Math.ceil(Number.isFinite(value) ? value : 0)));
+  return {
+    probeTimeoutMs: clamp(launchMs / 4, SSH_READY_PROBE_TIMEOUT_MS, SSH_READY_MAX_PROBE_TIMEOUT_MS),
+    timeoutMs: clamp(launchMs * 5, SSH_READY_TIMEOUT_MS, SSH_READY_MAX_TIMEOUT_MS),
+  };
+}
+
 export const waitForHttpReady = (input: {
   readonly baseUrl: string;
   readonly timeoutMs?: number;
   readonly intervalMs?: number;
   readonly probeTimeoutMs?: number;
+  readonly maxProbeTimeoutMs?: number;
   readonly path?: string;
 }): Effect.Effect<void, SshReadinessError, HttpClient.HttpClient> =>
   waitForHttpReadyShared({
@@ -2917,11 +2945,13 @@ export const waitForHttpReady = (input: {
     ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     ...(input.intervalMs === undefined ? {} : { intervalMs: input.intervalMs }),
     probeTimeoutMs: input.probeTimeoutMs ?? SSH_READY_PROBE_TIMEOUT_MS,
+    maxProbeTimeoutMs: input.maxProbeTimeoutMs ?? SSH_READY_MAX_PROBE_TIMEOUT_MS,
     makeError: ({ requestUrl, probeTimeoutMs, cause }) => {
       if (typeof cause === "object" && cause !== null && "kind" in cause) {
         const kind = (cause as { readonly kind?: unknown }).kind;
         if (kind === "probe-timeout") {
           return new SshReadinessError({
+            reason: "slow",
             message: `Backend readiness probe exceeded ${probeTimeoutMs}ms at ${requestUrl}.`,
             cause,
           });
@@ -2930,15 +2960,26 @@ export const waitForHttpReady = (input: {
           const overall = cause as unknown as {
             readonly baseUrl: string;
             readonly timeoutMs: number;
+            readonly attempts: number;
+            readonly probeTimeouts: number;
+            readonly otherFailures: number;
+            readonly lastProbeTimeoutMs: number;
             readonly lastFailure: unknown;
           };
+          // Every check timing out means requests reached a server that answered
+          // too late; refused or failed checks mean nothing answered at all.
+          const slow = overall.probeTimeouts > 0 && overall.otherFailures === 0;
           return new SshReadinessError({
-            message: `Timed out waiting ${overall.timeoutMs}ms for backend readiness at ${overall.baseUrl}.`,
+            reason: slow ? "slow" : "unreachable",
+            message: slow
+              ? `Timed out waiting ${overall.timeoutMs}ms for backend readiness at ${overall.baseUrl}. The SSH tunnel is open, but the GOAT server answered none of ${overall.attempts} checks within ${overall.lastProbeTimeoutMs}ms. The network to this host is too slow (high latency); GOAT will keep retrying.`
+              : `Timed out waiting ${overall.timeoutMs}ms for backend readiness at ${overall.baseUrl}. The GOAT server did not answer through the SSH tunnel; it may have stopped on the remote host.`,
             cause: overall.lastFailure,
           });
         }
       }
       return new SshReadinessError({
+        reason: "unreachable",
         message: `Backend readiness probe failed at ${requestUrl}.`,
         cause,
       });
@@ -2980,6 +3021,17 @@ const reserveLocalTunnelPort = Effect.fn("ssh/tunnel.reserveLocalTunnelPort")(fu
   return yield* net.reserveLoopbackPort();
 });
 
+/**
+ * Liveness check for an open forward. On a slow link a healthy forward needs
+ * longer than the fast-host window, or every reconnect would tear it down, so
+ * the window covers at least two of the forward's own probes.
+ */
+const existingTunnelCheck = (entry: SshTunnelEntry, minimumMs: number) => ({
+  baseUrl: entry.httpBaseUrl,
+  timeoutMs: Math.max(minimumMs, entry.readiness.probeTimeoutMs * 2),
+  probeTimeoutMs: entry.readiness.probeTimeoutMs,
+});
+
 const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
   readonly key: string;
@@ -2991,6 +3043,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   readonly authOptions: SshAuth.SshAuthOptions;
   readonly remoteServerKind: "external" | "managed" | null;
   readonly scope: Scope.Closeable;
+  readonly readiness: SshReadinessBudget;
 }): Effect.fn.Return<
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
@@ -3101,6 +3154,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
     wsBaseUrl: input.wsBaseUrl,
     process: child,
     scope,
+    readiness: input.readiness,
   };
   const exitFailure = Effect.all(
     [collectProcessOutput(child.stderr), child.exitCode.pipe(Effect.map(Number))],
@@ -3144,7 +3198,8 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   yield* Effect.raceFirst(
     waitForHttpReady({
       baseUrl: input.httpBaseUrl,
-      timeoutMs: SSH_READY_TIMEOUT_MS,
+      timeoutMs: input.readiness.timeoutMs,
+      probeTimeoutMs: input.readiness.probeTimeoutMs,
     }),
     exitFailure,
   ).pipe(
@@ -3187,6 +3242,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
           localPortListening: localPortAvailable === null ? null : !localPortAvailable,
           remotePort: input.remotePort,
           httpBaseUrl: input.httpBaseUrl,
+          readiness: input.readiness,
           ...(Exit.isSuccess(localPortAvailableExit)
             ? {}
             : { localPortProbeError: localPortAvailableExit.cause }),
@@ -3467,6 +3523,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // Only an observed remote pending result grants background replacement intent.
     const operation = (authOptions: SshAuth.SshAuthOptions) =>
       launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner);
+    const launchStartedAt = yield* Clock.currentTimeMillis;
     const remoteLaunch = yield* (
       input.background
         ? operation(backgroundAuth(input.key))
@@ -3490,6 +3547,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         },
       }),
     );
+    // The launch round trip measures this link; the forward's readiness budget scales with it.
+    const launchMs = (yield* Clock.currentTimeMillis) - launchStartedAt;
     if (closed || (generations.get(input.key) ?? 0) !== generation) {
       const stop = remoteLaunch.status === "ready" && remoteLaunch.pending === undefined;
       if (closed) {
@@ -3568,6 +3627,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         remoteServerKind: remoteLaunch.remoteServerKind,
         selectedRuntime: remoteLaunch.selectedRuntime,
         scope: entryScope,
+        readiness: sshReadinessBudget(launchMs),
       });
     const tunnelEntry = yield* (
       input.background
@@ -3681,7 +3741,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     };
     yield* Effect.logDebug("ssh.environment.tunnel.existing.check", logFields);
     const readinessExit = yield* Effect.exit(
-      waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: EXISTING_TUNNEL_CHECK_TIMEOUT_MS }),
+      waitForHttpReady(existingTunnelCheck(entry, EXISTING_TUNNEL_CHECK_TIMEOUT_MS)),
     );
     if (Exit.isSuccess(readinessExit)) {
       yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
@@ -3717,9 +3777,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.has(key) || runner?.refreshOwnedRuntimeOnFirstConnection === true;
       if (!replace && (yield* keepAnsweringTunnel(key, entry))) return entry;
       if (replace) {
-        const readiness = yield* Effect.exit(
-          waitForHttpReady({ baseUrl: entry.httpBaseUrl, timeoutMs: 2_000 }),
-        );
+        const readiness = yield* Effect.exit(waitForHttpReady(existingTunnelCheck(entry, 2_000)));
         if (Exit.isSuccess(readiness)) {
           return yield* createTunnelEntry({
             key,
