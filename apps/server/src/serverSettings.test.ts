@@ -1753,6 +1753,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           secret: "hook-secret",
           allLaunches: false,
           externalLaunches: false,
+          targets: {},
         });
         const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
         assert.notInclude(raw, "hook-secret");
@@ -1774,11 +1775,61 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           secret: "hook-secret",
           allLaunches: true,
           externalLaunches: true,
+          targets: {},
         });
 
         const cleared = yield* serverSettings.updateSettings({ completionWebhook: { secret: "" } });
         assert.equal(cleared.completionWebhook.secret, "");
         assert.isTrue(Option.isNone(yield* secrets.get("completion-webhook-secret")));
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect(
+    "keeps each named completion webhook target's secret in the secret store, per name",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const storeName = (name: string) =>
+          `completion-webhook-target-${Buffer.from(name).toString("base64url")}-secret`;
+
+        const saved = yield* serverSettings.updateSettings({
+          completionWebhook: {
+            enabled: true,
+            targets: {
+              "bot-a": { url: "https://a.example/hook", secret: "secret-a" },
+              "bot-b": { url: "https://b.example/hook", secret: "secret-b" },
+            },
+          },
+        });
+        assert.deepEqual(saved.completionWebhook.targets, {
+          "bot-a": { url: "https://a.example/hook", secret: "secret-a" },
+          "bot-b": { url: "https://b.example/hook", secret: "secret-b" },
+        });
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.notInclude(raw, "secret-a");
+        assert.notInclude(raw, "secret-b");
+        assert.include(raw, "https://a.example/hook");
+        assert.isTrue(Option.isSome(yield* secrets.get(storeName("bot-b"))));
+
+        const forClient = ServerSettingsModule.redactServerSettingsForClient(saved);
+        assert.notInclude(JSON.stringify(forClient.completionWebhook), "secret-a");
+
+        // Changing one target's url keeps its secret; null removes the other and its secret.
+        yield* serverSettings.updateSettings({
+          completionWebhook: {
+            targets: { "bot-a": { url: "https://a.example/v2" }, "bot-b": null },
+          },
+        });
+        const after = yield* serverSettings.getSettings;
+        assert.deepEqual(after.completionWebhook.targets, {
+          "bot-a": { url: "https://a.example/v2", secret: "secret-a" },
+        });
+        assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), "b.example");
+        assert.isTrue(Option.isNone(yield* secrets.get(storeName("bot-b"))));
+        assert.isTrue(Option.isSome(yield* secrets.get(storeName("bot-a"))));
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 

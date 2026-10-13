@@ -32,6 +32,7 @@ import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as CompletionWebhook from "../../completionWebhook.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
@@ -41,12 +42,17 @@ import { ProjectToolkit } from "./tools.ts";
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
+type Route = Parameters<LaunchWatchService.LaunchWatchServiceShape["releaseRoute"]>[0];
 
-/** Records the launch watches a handler asks for. */
+/**
+ * Records the launch watches a handler asks for. A notifyTarget named "unknown" is refused like
+ * an unconfigured one; any other name resolves to that named target.
+ */
 const launchWatches = (
   registrations: Array<Registration> = [],
   externalWatches: Array<ExternalWatch> = [],
   webhookWatchesExternal = false,
+  released: Array<Route> = [],
 ) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
     register: (input) =>
@@ -59,6 +65,18 @@ const launchWatches = (
         externalWatches.push(input);
         return webhookWatchesExternal ? ({} as never) : null;
       }),
+    resolveRoute: (input) =>
+      input.notifyTarget?.name === "unknown"
+        ? Effect.fail(
+            new CompletionWebhook.CompletionWebhookTargetError({
+              message: 'Unknown notify target "unknown".',
+            }),
+          )
+        : Effect.succeed({
+            notifyWebhook: false,
+            webhookTarget: { type: "named" as const, name: input.notifyTarget?.name ?? "" },
+          }),
+    releaseRoute: (route) => Effect.sync(() => void released.push(route)),
   });
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
@@ -67,6 +85,7 @@ const launchFromThread = (params: {
   readonly message?: string;
   readonly notifyOnCompletion?: boolean;
   readonly notifyWebhook?: boolean;
+  readonly notifyTarget?: { readonly name: string };
   readonly launchedBy?: ThreadLaunch.ThreadLaunchInput["launchedBy"];
   readonly standingInstructions?: boolean;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
@@ -100,11 +119,12 @@ const launchFromThread = (params: {
     let launchedBy: ThreadLaunch.ThreadLaunchInput["launchedBy"];
     const registrations: Array<Registration> = [];
     const externalWatches: Array<ExternalWatch> = [];
+    const released: Array<Route> = [];
     let launchedInput: ThreadLaunch.ThreadLaunchInput | undefined;
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(settings),
       NodeCrypto.layer,
-      launchWatches(registrations, externalWatches, webhookWatchesExternal === true),
+      launchWatches(registrations, externalWatches, webhookWatchesExternal === true, released),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
@@ -183,6 +203,7 @@ const launchFromThread = (params: {
       launchedInput,
       registrations,
       externalWatches,
+      released,
       sourceThreadId,
       projectId,
       modelSelection,
@@ -314,7 +335,9 @@ it.effect("leaves an outside client's launch unwatched while the webhook does no
     });
     expect(launched.result).toMatchObject({ runId: "launched-run", watching: false });
     expect(launched.registrations).toEqual([]);
-    expect(launched.externalWatches).toEqual([expect.objectContaining({ requested: false })]);
+    expect(launched.externalWatches).toEqual([
+      expect.objectContaining({ route: { notifyWebhook: false, webhookTarget: null } }),
+    ]);
   }),
 );
 
@@ -337,7 +360,7 @@ it.effect("watches an outside client's launch for the completion webhook", () =>
         title: "Audit",
         runId: "launched-run",
         ceiling: "full-access",
-        requested: true,
+        route: { notifyWebhook: true, webhookTarget: null },
       },
     ]);
 
@@ -1211,4 +1234,54 @@ it.effect(
       yield* handle(launcher.environmentId, "delegate_task");
       expect(launched[1]?.launchedBy).toEqual({ ...launcher, via: "delegate_task" });
     }),
+);
+
+it.effect("refuses an unknown notify target before creating a thread", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyTarget: { name: "unknown" },
+    });
+    expect(launched.result).toMatchObject({
+      code: "invalid_request",
+      message: 'Unknown notify target "unknown".',
+    });
+    expect(launched.launchedInput).toBeUndefined();
+    expect(launched.registrations).toEqual([]);
+  }),
+);
+
+it.effect("records a launch's notify target with its watch", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyTarget: { name: "bot-a" },
+    });
+    expect(launched.result).toMatchObject({ watching: true });
+    expect(launched.registrations).toEqual([
+      expect.objectContaining({
+        notifyWebhook: false,
+        webhookTarget: { type: "named", name: "bot-a" },
+      }),
+    ]);
+    expect(launched.released).toEqual([]);
+  }),
+);
+
+it.effect("releases a notify target whose launch records no watch", () =>
+  Effect.gen(function* () {
+    // An outside client's idle launch has no run, so nothing is watched.
+    const launched = yield* launchFromThread({
+      title: "Idle",
+      notifyTarget: { name: "bot-a" },
+      outsideClient: true,
+      webhookWatchesExternal: true,
+    });
+    expect(launched.result).toMatchObject({ watching: false });
+    expect(launched.released).toEqual([
+      { notifyWebhook: false, webhookTarget: { type: "named", name: "bot-a" } },
+    ]);
+  }),
 );

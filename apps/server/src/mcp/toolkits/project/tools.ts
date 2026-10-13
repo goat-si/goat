@@ -1,5 +1,6 @@
 import { GOAT_THREAD_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { McpAttachmentInput } from "../attachment/input.ts";
+import { NotifyTargetInput } from "../../completionWebhook.ts";
 import {
   NonNegativeInt,
   ModelSelection,
@@ -171,7 +172,13 @@ const ThreadLaunchTool = Tool.make("goat_thread_launch", {
     notifyWebhook: Schema.optional(
       Schema.Boolean.annotate({
         description:
-          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the completion webhook configured in server settings, for an agent outside GOAT. Needs the launch watch (notifyOnCompletion not false). From a client outside any GOAT thread, this asks for a watch that reports only to the webhook; the result says watching:true when one was recorded. Does nothing while the webhook is off. Default false.",
+          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the server's default completion webhook (completionWebhook.url in settings), for an agent outside GOAT. Prefer notifyTarget when several agents share this server. Needs the launch watch (notifyOnCompletion not false). From a client outside any GOAT thread, this asks for a watch that reports only to the webhook; the result says watching:true when one was recorded. Does nothing while the webhook is off. Default false: no launch posts anywhere unless it opts in.",
+      }),
+    ),
+    notifyTarget: Schema.optional(
+      NotifyTargetInput.annotate({
+        description:
+          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, or webhooks switched off in settings refuse the launch before any thread is created.",
       }),
     ),
     launchedBy: Schema.optional(

@@ -29,12 +29,16 @@ The follower reads local projections, or long-polls through `SshRemoteDispatch` 
 remote. `deliver` dispatches `message.dispatch` onto `watch.launcherThreadId`. A finished run, a
 question the thread is waiting on, and a host that stays unreachable each produce one wake.
 With a report attached, a settled wake also goes to `CompletionWebhook` in
-`apps/server/src/mcp/completionWebhook.ts`, which posts it to the `completionWebhook` server
-setting.
+`apps/server/src/mcp/completionWebhook.ts`. It posts to the watch's `webhookTarget` when the
+launch chose one (a named `completionWebhook.targets` entry, or an inline URL whose signing secret
+sits in the secret store under the name the watch keeps), else to `completionWebhook.url` when the
+launch opted in. Launch handlers resolve the target through `LaunchWatchService.resolveRoute` before
+creating the thread, so a bad target refuses the launch. The service deletes an inline secret once no
+saved watch refers to it, and the handler releases it when the launch records no watch.
 
 A launch from an MCP client outside any thread has no launcher to wake. `watchExternal` gives it a
 launcherless watch only when the completion webhook takes it: the webhook is on and the launch
-passed `notifyWebhook: true`, or `completionWebhook.externalLaunches` is set. Otherwise it records
+chose a target or passed `notifyWebhook: true`, or `completionWebhook.externalLaunches` is set. Otherwise it records
 nothing, as before. Such a watch has `launcherThreadId: null` and stores the client's runtime
 mode ceiling in `ceiling`, so its remote reads never go above what that client was approved for.
 Its reports go only to the webhook, with `launcherThreadId: null` in the payload. It is deleted once

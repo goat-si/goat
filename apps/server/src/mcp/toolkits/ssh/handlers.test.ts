@@ -152,7 +152,8 @@ const launchRaw = (options: LaunchOptions = {}) =>
                   launcherThreadId: null,
                   host: input.host ?? null,
                   incarnation: "external-watch",
-                  notifyWebhook: input.requested,
+                  notifyWebhook: input.route.notifyWebhook,
+                  webhookTarget: input.route.webhookTarget,
                   now: 0,
                 })
               : null;
@@ -223,7 +224,9 @@ it.effect("launches for an outside client without naming a launcher", () =>
 it.effect("leaves an outside client's launch unwatched while the webhook does not take it", () =>
   Effect.gen(function* () {
     const launched = yield* launchFromThread({ outsideClient: true });
-    expect(launched.externalWatches).toEqual([expect.objectContaining({ requested: false })]);
+    expect(launched.externalWatches).toEqual([
+      expect.objectContaining({ route: { notifyWebhook: false, webhookTarget: null } }),
+    ]);
     expect(launched.result).toEqual({
       ...launched.remoteResult,
       correlationId: null,
@@ -249,7 +252,7 @@ it.effect("watches an outside client's launch for the webhook at the client's ce
         title: "Audit",
         runId: "remote-run",
         ceiling: "full-access",
-        requested: true,
+        route: { notifyWebhook: true, webhookTarget: null },
       },
     ]);
     expect(launched.result).toMatchObject({
@@ -294,6 +297,7 @@ it.effect("watches the remote run for its calling thread and explains how to sto
         projectId: null,
         title: "Audit",
         notifyWebhook: false,
+        webhookTarget: null,
       },
     ]);
     expect(launched.result).toMatchObject({

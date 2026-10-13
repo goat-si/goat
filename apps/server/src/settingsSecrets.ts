@@ -146,12 +146,16 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["usageLimitSources"];
 
-  // GOAT: the launch watch completion webhook signs its posts with this secret.
-  const completionWebhook = mapFields(
-    settings.completionWebhook,
-    ["secret"],
-    () => "completion-webhook-secret",
-  ) as ServerSettings["completionWebhook"];
+  // GOAT: the launch watch completion webhook, and each named target, sign their posts with these.
+  const completionWebhook = {
+    ...mapFields(settings.completionWebhook, ["secret"], () => "completion-webhook-secret"),
+    targets: Object.fromEntries(
+      Object.entries(settings.completionWebhook.targets).map(([name, target]) => [
+        name,
+        mapFields(target, ["secret"], () => `completion-webhook-target-${encode(name)}-secret`),
+      ]),
+    ),
+  } as ServerSettings["completionWebhook"];
 
   return {
     ...settings,

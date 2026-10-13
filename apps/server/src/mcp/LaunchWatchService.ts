@@ -41,6 +41,7 @@ import {
   launchWatchId,
   type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
+  type LaunchWatchWebhookTarget,
   newLaunchWatch,
   normalizeHost,
   outageWake,
@@ -112,8 +113,8 @@ interface ExternalLaunchWatchInput {
   readonly runId: RunId;
   /** The outside caller's runtime mode ceiling; the watch's remote reads never exceed it. */
   readonly ceiling: RuntimeMode;
-  /** The launch passed notifyWebhook: true. */
-  readonly requested: boolean;
+  /** The launch's webhook choice, from CompletionWebhook.resolveRoute. */
+  readonly route: CompletionWebhook.WebhookRoute;
 }
 
 export interface LaunchWatchServiceShape {
@@ -128,6 +129,8 @@ export interface LaunchWatchServiceShape {
       readonly runId: RunId | null;
       /** Also post reports to the completion webhook. Omitted keeps an existing watch's choice. */
       readonly notifyWebhook?: boolean;
+      /** The launch's chosen webhook receiver. Omitted keeps an existing watch's choice. */
+      readonly webhookTarget?: LaunchWatchWebhookTarget | null;
     },
   ) => Effect.Effect<LaunchWatch, LaunchWatchStoreError>;
   /** Adds a run to an existing watch; without a watch it does nothing. */
@@ -144,12 +147,16 @@ export interface LaunchWatchServiceShape {
   ) => Effect.Effect<ReadonlyArray<LaunchWatch>, LaunchWatchStoreError>;
   /**
    * Watches a launch from outside any thread when the completion webhook takes
-   * it (`notifyWebhook` on the launch, or `completionWebhook.externalLaunches`).
+   * it (a notifyTarget or notifyWebhook on the launch, or `completionWebhook.externalLaunches`).
    * Returns null, touching nothing, otherwise.
    */
   readonly watchExternal: (
     input: ExternalLaunchWatchInput,
   ) => Effect.Effect<LaunchWatch | null, LaunchWatchStoreError>;
+  /** Checks a launch's notifyWebhook/notifyTarget before the launch starts; see CompletionWebhook. */
+  readonly resolveRoute: CompletionWebhook.CompletionWebhookShape["resolveRoute"];
+  /** Frees what resolveRoute kept, for a launch that recorded no watch. */
+  readonly releaseRoute: (route: CompletionWebhook.WebhookRoute) => Effect.Effect<void>;
 }
 
 export class LaunchWatchService extends Context.Service<
@@ -302,14 +309,40 @@ export const make = Effect.gen(function* () {
           }),
       ),
       Effect.tap(() =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
+          const previous = watches;
           watches = next;
           for (const watchId of missingEscalations.keys()) {
             if (!next.has(watchId)) missingEscalations.delete(watchId);
           }
+          return releaseDroppedTargets(previous, next);
         }),
       ),
     );
+
+  /** An inline target's secret goes once the last saved watch that used it does. */
+  const releaseDroppedTargets = (
+    previous: Map<string, LaunchWatch>,
+    next: Map<string, LaunchWatch>,
+  ) => {
+    const kept = new Set(
+      [...next.values()].flatMap((watch) =>
+        watch.webhookTarget?.type === "inline" && watch.webhookTarget.secretName !== null
+          ? [watch.webhookTarget.secretName]
+          : [],
+      ),
+    );
+    return Effect.forEach(
+      [...previous.values()],
+      (watch) =>
+        watch.webhookTarget?.type === "inline" &&
+        watch.webhookTarget.secretName !== null &&
+        !kept.has(watch.webhookTarget.secretName)
+          ? webhook.release(watch.webhookTarget)
+          : Effect.void,
+      { discard: true },
+    );
+  };
 
   /** Applies one change to the map and saves it; memory moves only after the write lands. */
   const save = (change: (current: Map<string, LaunchWatch>) => void) => {
@@ -1063,6 +1096,10 @@ export const make = Effect.gen(function* () {
         .map((watch) => [watch.id, watch]),
     );
     loaded = true;
+    yield* releaseDroppedTargets(
+      new Map(stored.watches.map((watch) => [watch.id, watch])),
+      watches,
+    );
     if (stored.misplaced) {
       yield* persist(watches).pipe(
         Effect.catch((error) =>
@@ -1097,6 +1134,7 @@ export const make = Effect.gen(function* () {
               ),
             ),
             notifyWebhook: input.notifyWebhook ?? false,
+            webhookTarget: input.webhookTarget ?? null,
             now,
           });
         const withMeta = {
@@ -1104,6 +1142,8 @@ export const make = Effect.gen(function* () {
           projectId: base.projectId ?? input.projectId,
           title: input.title ?? base.title,
           notifyWebhook: input.notifyWebhook ?? base.notifyWebhook,
+          webhookTarget:
+            input.webhookTarget === undefined ? base.webhookTarget : input.webhookTarget,
         };
         const watch = input.runId === null ? withMeta : addPendingRun(withMeta, input.runId, now);
         yield* save((map) => map.set(id, watch));
@@ -1165,31 +1205,36 @@ export const make = Effect.gen(function* () {
 
   const watchExternal: LaunchWatchServiceShape["watchExternal"] = (input) =>
     Effect.gen(function* () {
-      if (!(yield* webhook.watchesExternal(input.requested))) return null;
+      if (!(yield* webhook.watchesExternal(input.route))) return null;
       return yield* locked(
         Effect.gen(function* () {
           yield* ensureLoaded;
           const host = normalizeHost(input.host);
           const id = launchWatchId({ launcherThreadId: null, host, threadId: input.threadId });
           const now = yield* Clock.currentTimeMillis;
+          const existing = watches.get(id);
           const base =
-            watches.get(id) ??
-            newLaunchWatch({
-              launcherThreadId: null,
-              ceiling: input.ceiling,
-              host,
-              threadId: input.threadId,
-              projectId: input.projectId,
-              title: input.title,
-              incarnation: yield* crypto.randomUUIDv4.pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
-                ),
-              ),
-              notifyWebhook: input.requested,
-              now,
-            });
+            existing === undefined
+              ? newLaunchWatch({
+                  launcherThreadId: null,
+                  ceiling: input.ceiling,
+                  host,
+                  threadId: input.threadId,
+                  projectId: input.projectId,
+                  title: input.title,
+                  incarnation: yield* crypto.randomUUIDv4.pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),
+                    ),
+                  ),
+                  notifyWebhook: input.route.notifyWebhook,
+                  webhookTarget: input.route.webhookTarget,
+                  now,
+                })
+              : input.route.webhookTarget === null
+                ? existing
+                : { ...existing, webhookTarget: input.route.webhookTarget };
           const watch = addPendingRun(base, input.runId, now);
           yield* save((map) => map.set(id, watch));
           yield* ensureFollower(watch);
@@ -1211,7 +1256,16 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  return LaunchWatchService.of({ register, rearm, unwatch, list, listRemote, watchExternal });
+  return LaunchWatchService.of({
+    register,
+    rearm,
+    unwatch,
+    list,
+    listRemote,
+    watchExternal,
+    resolveRoute: webhook.resolveRoute,
+    releaseRoute: (route) => webhook.release(route.webhookTarget),
+  });
 });
 
 export const layerWithoutDependencies = Layer.effect(LaunchWatchService, make);

@@ -19,6 +19,7 @@ import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
+import { NotifyTargetInput } from "../../completionWebhook.ts";
 
 const shared = {
   failure: OrchestratorMcpFailure,
@@ -141,7 +142,13 @@ const SshThreadLaunchTool = Tool.make("goat_ssh_thread_launch", {
     notifyWebhook: Schema.optional(
       Schema.Boolean.annotate({
         description:
-          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the completion webhook configured in this machine's server settings, for an agent outside GOAT. Needs the launch watch (notifyOnCompletion not false). From a client outside any GOAT thread, this asks for a watch that reports only to the webhook; the result says watching:true when one was recorded. Does nothing while the webhook is off. Default false.",
+          "Also post this launch watch's reports (run ended, waiting on a question, host unavailable) to the default completion webhook in this machine's server settings (completionWebhook.url), for an agent outside GOAT. Prefer notifyTarget when several agents share this server. Needs the launch watch (notifyOnCompletion not false). From a client outside any GOAT thread, this asks for a watch that reports only to the webhook; the result says watching:true when one was recorded. Does nothing while the webhook is off. Default false: no launch posts anywhere unless it opts in.",
+      }),
+    ),
+    notifyTarget: Schema.optional(
+      NotifyTargetInput.annotate({
+        description:
+          "Route this launch's watch reports (run ended, waiting on a question, host unavailable) to ONE webhook receiver, for the agent outside GOAT that dispatched it: {name} for a target configured in this machine's server settings (completionWebhook.targets), or {url, secretRef?} for an inline receiver, where secretRef comes from request_secret and signs each post. Only this receiver gets the reports; the server's default webhook does not. Needs the launch watch (notifyOnCompletion not false). An unknown name, a non-http(s) url, or webhooks switched off in settings refuse the launch before any thread is created.",
       }),
     ),
   }),

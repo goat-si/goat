@@ -1,33 +1,48 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ProjectId, RunId, ThreadId, type CompletionWebhookSettings } from "@goat/contracts";
+import {
+  ProjectId,
+  RunId,
+  SecretRef,
+  SecretRequestError,
+  ThreadId,
+  type CompletionWebhookSettings,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { verifyWebhookSignature } from "../scheduledTasks/webhookVerification.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CompletionWebhook from "./completionWebhook.ts";
-import { newLaunchWatch, type LaunchWatch } from "./launchWatch.ts";
+import { newLaunchWatch, type LaunchWatch, type LaunchWatchWebhookTarget } from "./launchWatch.ts";
 
 const launcher = ThreadId.make("launcher");
 const target = ThreadId.make("target");
 const run1 = RunId.make("run-1");
+const project = ProjectId.make("project");
+/** The one ref the fake secret requests know: entered in `project`, holding "inline-secret". */
+const enteredRef = SecretRef.make("secret-ref:0123456789abcdef0123456789abcdef");
 
 const watchFor = (input: {
   notifyWebhook: boolean;
   host?: string | null;
   launcherThreadId?: ThreadId | null;
+  webhookTarget?: LaunchWatchWebhookTarget | null;
 }): LaunchWatch =>
   newLaunchWatch({
     launcherThreadId: input.launcherThreadId === undefined ? launcher : input.launcherThreadId,
     host: input.host ?? null,
     threadId: target,
-    projectId: ProjectId.make("project"),
+    projectId: project,
     title: "Fix the flake",
     incarnation: "incarnation-1",
     notifyWebhook: input.notifyWebhook,
+    webhookTarget: input.webhookTarget ?? null,
     now: 0,
   });
 
@@ -50,6 +65,7 @@ const enabled = {
   secret: "s3cret",
   allLaunches: false,
   externalLaunches: false,
+  targets: {},
 } satisfies CompletionWebhookSettings;
 
 interface Received {
@@ -70,6 +86,8 @@ const harness = (
     const received = yield* Queue.unbounded<Received>();
     const log: Array<Received> = [];
     const reads = { count: 0 };
+    /** The server secret store, by name. */
+    const secrets = new Map<string, Uint8Array>();
     const client = HttpClient.make((request) =>
       Effect.suspend(() => {
         const entry = {
@@ -107,8 +125,23 @@ const harness = (
     const layer = CompletionWebhook.layer.pipe(
       Layer.provideMerge(countingSettings),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+      Layer.provide(
+        Layer.mock(ServerSecretStore.ServerSecretStore)({
+          get: (name) => Effect.sync(() => Option.fromUndefinedOr(secrets.get(name))),
+          set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+          remove: (name) => Effect.sync(() => void secrets.delete(name)),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(SecretRequests.SecretRequests)({
+          consume: ({ ref, projectId }) =>
+            ref === enteredRef && projectId === project
+              ? Effect.succeed("inline-secret")
+              : Effect.fail(new SecretRequestError({ reason: "not_found" })),
+        }),
+      ),
     );
-    return { received, log, reads, layer };
+    return { received, log, reads, secrets, layer };
   });
 
 const withWebhook = <A, E, LE>(
@@ -451,7 +484,7 @@ describe("CompletionWebhook", () => {
       Effect.gen(function* () {
         const h = yield* harness(settings);
         const watched = yield* withWebhook(h.layer, (webhook) =>
-          webhook.watchesExternal(requested),
+          webhook.watchesExternal({ notifyWebhook: requested, webhookTarget: null }),
         );
         expect(watched).toBe(expected);
       }),
@@ -477,6 +510,235 @@ describe("CompletionWebhook", () => {
           expect(verifySignature(request, "s3cret")).toBe(true);
         }),
       );
+    }),
+  );
+});
+
+describe("CompletionWebhook notify targets", () => {
+  const routed = {
+    ...enabled,
+    targets: {
+      "bot-a": { url: "https://a.example/hook", secret: "secret-a" },
+      "bot-b": { url: "https://b.example/hook", secret: "secret-b" },
+    },
+  } satisfies CompletionWebhookSettings;
+  const named = (name: string): LaunchWatchWebhookTarget => ({ type: "named", name });
+
+  it.effect(
+    "sends each launch's reports only to its own target, signed with that target's secret",
+    () =>
+      Effect.gen(function* () {
+        // allLaunches would send an unrouted watch to the default url; a routed one still goes only to its target.
+        const h = yield* harness({ ...routed, allLaunches: true });
+        yield* withWebhook(h.layer, (webhook) =>
+          Effect.gen(function* () {
+            yield* webhook.notify(
+              watchFor({ notifyWebhook: false, webhookTarget: named("bot-a") }),
+              runReport("report-a"),
+            );
+            yield* webhook.notify(
+              watchFor({ notifyWebhook: false, webhookTarget: named("bot-b") }),
+              runReport("report-b"),
+            );
+            yield* Queue.take(h.received);
+            yield* Queue.take(h.received);
+            yield* settle;
+          }),
+        );
+        expect(h.log.map((request) => request.url).toSorted()).toEqual([
+          "https://a.example/hook",
+          "https://b.example/hook",
+        ]);
+        const toA = h.log.find((request) => request.url === "https://a.example/hook")!;
+        const toB = h.log.find((request) => request.url === "https://b.example/hook")!;
+        expect(toA.headers.get("x-goat-delivery")).toBe("report-a");
+        expect(toB.headers.get("x-goat-delivery")).toBe("report-b");
+        expect(JSON.parse(toA.body)).toMatchObject({ threadId: target, title: "Fix the flake" });
+        expect(verifySignature(toA, "secret-a")).toBe(true);
+        expect(verifySignature(toA, "secret-b")).toBe(false);
+        expect(verifySignature(toB, "secret-b")).toBe(true);
+        expect(verifySignature(toB, "s3cret")).toBe(false);
+      }),
+  );
+
+  it.effect("sends nothing for a launch that chose no target and did not opt in", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          yield* webhook.notify(watchFor({ notifyWebhook: false }), runReport());
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, launcherThreadId: null }),
+            runReport("outside"),
+          );
+          yield* settle;
+          yield* TestClock.adjust(60 * 60_000);
+          yield* settle;
+          expect(yield* webhook.wants(watchFor({ notifyWebhook: false }))).toBe(false);
+        }),
+      );
+      expect(h.log).toEqual([]);
+    }),
+  );
+
+  it.effect("stops sending to a named target once it is removed from settings", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      yield* withWebhook(h.layer, (webhook, settings) =>
+        Effect.gen(function* () {
+          yield* settings.updateSettings({ completionWebhook: { targets: { "bot-a": null } } });
+          const watch = watchFor({ notifyWebhook: false, webhookTarget: named("bot-a") });
+          expect(yield* webhook.wants(watch)).toBe(false);
+          yield* webhook.notify(watch, runReport());
+          yield* settle;
+        }),
+      );
+      expect(h.log).toEqual([]);
+    }),
+  );
+
+  it.effect("resolves a launch's choice, refusing what it cannot honor", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          const resolve = (
+            notifyTarget: CompletionWebhook.NotifyTargetInput | undefined,
+            notifyWebhook?: boolean,
+          ) =>
+            webhook.resolveRoute({
+              notifyWebhook,
+              notifyOnCompletion: undefined,
+              notifyTarget,
+              projectId: project,
+            });
+          const refusal = (
+            notifyTarget: CompletionWebhook.NotifyTargetInput | undefined,
+            notifyWebhook?: boolean,
+          ) =>
+            resolve(notifyTarget, notifyWebhook).pipe(
+              Effect.flip,
+              Effect.map((error) => error.message),
+            );
+
+          expect(yield* resolve(undefined)).toEqual({ notifyWebhook: false, webhookTarget: null });
+          expect(yield* resolve(undefined, true)).toEqual({
+            notifyWebhook: true,
+            webhookTarget: null,
+          });
+          expect(yield* resolve({ name: "bot-a" })).toEqual({
+            notifyWebhook: false,
+            webhookTarget: { type: "named", name: "bot-a" },
+          });
+          expect(yield* refusal({ name: "bot-c" })).toBe(
+            'Unknown notify target "bot-c". Configured targets: bot-a, bot-b.',
+          );
+          expect(yield* refusal({ name: "bot-a", url: "https://a.example/hook" })).toContain(
+            "exactly one of name and url",
+          );
+          expect(yield* refusal({ name: "bot-a", secretRef: enteredRef })).toContain(
+            "pass secretRef only with url",
+          );
+          expect(yield* refusal({ url: "file:///etc/passwd" })).toContain("http(s)");
+          expect(yield* refusal({ name: "bot-a" }, false)).toContain("notifyWebhook:false");
+          expect(
+            yield* refusal({
+              url: "https://c.example/hook",
+              secretRef: SecretRef.make("secret-ref:ff"),
+            }),
+          ).toContain("notifyTarget.secretRef");
+        }),
+      );
+      // Nothing was kept for a refused launch.
+      expect(h.secrets.size).toBe(0);
+    }),
+  );
+
+  it.effect("refuses every target while webhooks are off", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ ...routed, enabled: false });
+      const error = yield* withWebhook(h.layer, (webhook) =>
+        webhook
+          .resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { name: "bot-a" },
+            projectId: null,
+          })
+          .pipe(Effect.flip),
+      );
+      expect(error.message).toContain("off on this server");
+    }),
+  );
+
+  it.effect("keeps an inline target's secret in the store, signs with it, and releases it", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          const route = yield* webhook.resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { url: "https://inline.example/hook", secretRef: enteredRef },
+            projectId: project,
+          });
+          // The route names where the secret is kept; it never carries the value.
+          expect(JSON.stringify(route)).not.toContain("inline-secret");
+          expect(route.webhookTarget).toMatchObject({
+            type: "inline",
+            url: "https://inline.example/hook",
+          });
+          expect([...h.secrets.values()].map((value) => new TextDecoder().decode(value))).toEqual([
+            "inline-secret",
+          ]);
+
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
+            runReport(),
+          );
+          const request = yield* Queue.take(h.received);
+          expect(request.url).toBe("https://inline.example/hook");
+          expect(verifySignature(request, "inline-secret")).toBe(true);
+
+          yield* webhook.release(route.webhookTarget);
+          expect(h.secrets.size).toBe(0);
+          // A signed target whose secret is gone posts nothing rather than posting unsigned.
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
+            runReport("after-release"),
+          );
+          yield* settle;
+        }),
+      );
+      expect(h.log).toHaveLength(1);
+    }),
+  );
+
+  it.effect("needs a calling thread's project to use a secretRef", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      const error = yield* withWebhook(h.layer, (webhook) =>
+        webhook
+          .resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { url: "https://inline.example/hook", secretRef: enteredRef },
+            projectId: null,
+          })
+          .pipe(Effect.flip),
+      );
+      expect(error.message).toContain("request_secret");
+      expect(h.secrets.size).toBe(0);
+    }),
+  );
+
+  it.effect("watches an outside launch that chose a target even without a default url", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ ...routed, url: "" });
+      const watched = yield* withWebhook(h.layer, (webhook) =>
+        webhook.watchesExternal({ notifyWebhook: false, webhookTarget: named("bot-a") }),
+      );
+      expect(watched).toBe(true);
     }),
   );
 });

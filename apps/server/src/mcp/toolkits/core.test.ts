@@ -1458,6 +1458,7 @@ it.effect.each([false, true])(
                 title: "Remote",
                 runId: null,
                 notifyWebhook: false,
+                webhookTarget: null,
               },
             ]
           : [],

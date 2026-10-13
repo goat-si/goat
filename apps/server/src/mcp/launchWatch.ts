@@ -32,6 +32,21 @@ export const LaunchWatchOutage = Schema.Struct({
 });
 export type LaunchWatchOutage = typeof LaunchWatchOutage.Type;
 
+/**
+ * Where a launch routed its webhook reports, kept with the watch so it survives a restart. A
+ * named target is looked up in settings on each post; an inline one keeps its signing secret
+ * in the server secret store under `secretName`, never in this file.
+ */
+export const LaunchWatchWebhookTarget = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("named"), name: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("inline"),
+    url: Schema.String,
+    secretName: Schema.NullOr(Schema.String),
+  }),
+]);
+export type LaunchWatchWebhookTarget = typeof LaunchWatchWebhookTarget.Type;
+
 export const LaunchWatch = Schema.Struct({
   id: Schema.String,
   /** Fresh whenever an absent watch is registered, so a stale follower cannot act on it. */
@@ -66,8 +81,12 @@ export const LaunchWatch = Schema.Struct({
   deliveryAttempts: Schema.Record(Schema.String, Schema.Number).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-  /** Whether reports also go to the completion webhook (`completionWebhook` server setting). */
+  /** Whether reports also go to the default completion webhook (`completionWebhook.url`). */
   notifyWebhook: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** The one receiver this launch chose; when set, the default webhook never gets its reports. */
+  webhookTarget: Schema.NullOr(LaunchWatchWebhookTarget).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });
@@ -125,6 +144,7 @@ export function newLaunchWatch(input: {
   readonly title: string | null;
   readonly incarnation: string;
   readonly notifyWebhook: boolean;
+  readonly webhookTarget?: LaunchWatchWebhookTarget | null;
   readonly now: number;
 }): LaunchWatch {
   return {
@@ -143,6 +163,7 @@ export function newLaunchWatch(input: {
     outage: null,
     deliveryAttempts: {},
     notifyWebhook: input.notifyWebhook,
+    webhookTarget: input.webhookTarget ?? null,
     createdAt: input.now,
     updatedAt: input.now,
   };

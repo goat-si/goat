@@ -30,7 +30,7 @@ import {
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as CompletionWebhook from "./completionWebhook.ts";
-import type { LaunchWatch } from "./launchWatch.ts";
+import type { LaunchWatch, LaunchWatchWebhookTarget } from "./launchWatch.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 
 const launcher = ThreadId.make("launcher");
@@ -89,6 +89,8 @@ interface World {
   webhookWatchesExternal: boolean;
   /** Whether the completion webhook still posts a watch's reports. */
   webhookWants: boolean;
+  /** Webhook targets whose kept secret the service released. */
+  readonly releasedTargets: Array<LaunchWatchWebhookTarget | null>;
   /** One entry per time the service asked whether the webhook still posts a watch's reports. */
   readonly wantsAsked: Queue.Queue<void>;
 }
@@ -131,6 +133,7 @@ const makeWorld = Effect.gen(function* () {
     webhookReports: [],
     webhookWatchesExternal: true,
     webhookWants: true,
+    releasedTargets: [],
     wantsAsked: yield* Queue.unbounded<void>(),
   };
   return world;
@@ -230,6 +233,7 @@ const layerFor = (world: World, baseDir: string) =>
             }),
           watchesExternal: () => Effect.sync(() => world.webhookWatchesExternal),
           wants: () => Queue.offer(world.wantsAsked, undefined).pipe(Effect.as(world.webhookWants)),
+          release: (target) => Effect.sync(() => void world.releasedTargets.push(target)),
         }),
         ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
         NodeCrypto.layer,
@@ -1352,6 +1356,53 @@ describe("LaunchWatchService", () => {
     }),
   );
 
+  it.effect("keeps a launch's webhook target across restarts and releases it with the watch", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const inline: LaunchWatchWebhookTarget = {
+        type: "inline",
+        url: "https://bot.example/hook",
+        secretName: "completion-webhook-watch-1",
+      };
+      yield* withService(world, baseDir, (service) =>
+        service.register({ ...local, projectId, title: null, runId: null, webhookTarget: inline }),
+      );
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          // goat_thread_watch passes no choice and leaves it as it was.
+          const watch = yield* watchLocal(service, null);
+          expect(watch.webhookTarget).toEqual(inline);
+          expect(watch.notifyWebhook).toBe(false);
+          expect(world.releasedTargets).toEqual([]);
+          // Choosing another target frees the inline one's secret.
+          yield* service.register({
+            ...local,
+            projectId,
+            title: null,
+            runId: null,
+            webhookTarget: { type: "named", name: "bot-b" },
+          });
+          expect(world.releasedTargets).toEqual([inline]);
+        }),
+      );
+      world.releasedTargets.length = 0;
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.register({
+            ...local,
+            projectId,
+            title: null,
+            runId: null,
+            webhookTarget: inline,
+          });
+          expect(yield* service.unwatch(local)).toBe(true);
+          expect(world.releasedTargets).toEqual([inline]);
+        }),
+      );
+    }),
+  );
+
   it.effect("settles a wake the orchestrator refuses for good", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
@@ -1497,6 +1548,7 @@ describe("LaunchWatchService launcherless watches", () => {
       readonly host?: string;
       readonly ceiling?: "full-access" | "auto-accept-edits";
       readonly requested?: boolean;
+      readonly webhookTarget?: LaunchWatchWebhookTarget;
     } = {},
   ) => ({
     host: input.host ?? null,
@@ -1505,7 +1557,7 @@ describe("LaunchWatchService launcherless watches", () => {
     title: "Fix the flake",
     runId: run1,
     ceiling: input.ceiling ?? ("full-access" as const),
-    requested: input.requested ?? true,
+    route: { notifyWebhook: input.requested ?? true, webhookTarget: input.webhookTarget ?? null },
   });
 
   const stateFile = (baseDir: string, file = LaunchWatchService.LAUNCHERLESS_WATCH_FILE) =>

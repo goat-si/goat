@@ -214,6 +214,29 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 input.message ?? "",
               )
             : { text: input.message ?? "", block: null };
+        // A webhook choice is checked, and an inline secret kept, before any thread exists.
+        const launchWatches = yield* LaunchWatchService.LaunchWatchService;
+        const route =
+          input.notifyTarget === undefined
+            ? { notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null }
+            : yield* launchWatches
+                .resolveRoute({
+                  notifyWebhook: input.notifyWebhook,
+                  notifyOnCompletion: input.notifyOnCompletion,
+                  notifyTarget: input.notifyTarget,
+                  projectId: caller?.projectId ?? null,
+                })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new OrchestratorMcpFailure({
+                        code: "invalid_request",
+                        message: error.message,
+                      }),
+                  ),
+                );
+        const releaseRoute =
+          route.webhookTarget === null ? Effect.void : launchWatches.releaseRoute(route);
         const launch = ThreadMessageIntake.launchThread({
           commandId,
           threadId,
@@ -277,10 +300,10 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
             return unavailable();
           }),
         );
-        const result =
+        const result = yield* (
           report === undefined
-            ? yield* launch
-            : yield* Effect.gen(function* () {
+            ? launch
+            : Effect.gen(function* () {
                 const reports = yield* RemoteReportService.RemoteReportService;
                 // The binding commits before the agent can run. Only a launch that
                 // never created its thread loses it again; an accepted or uncertain
@@ -302,7 +325,8 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                     ),
                   ),
                 );
-              });
+              })
+        ).pipe(Effect.onError(() => releaseRoute));
         const thread = result.projection.thread;
         const run = result.projection.runs.find((run) => run.userMessageId === messageId);
         // A launch another machine's GOAT forwards is watched by that machine.
@@ -313,35 +337,35 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           run !== undefined;
         const watching =
           input.notifyOnCompletion !== false && (caller !== undefined || external)
-            ? yield* LaunchWatchService.LaunchWatchService.pipe(
-                Effect.flatMap((watches) =>
-                  caller !== undefined
-                    ? watches
-                        .register({
-                          launcherThreadId: caller.id,
+            ? yield* (
+                caller !== undefined
+                  ? launchWatches
+                      .register({
+                        launcherThreadId: caller.id,
+                        host: null,
+                        threadId: thread.id,
+                        projectId: thread.projectId,
+                        title: thread.title,
+                        runId: run?.id ?? null,
+                        notifyWebhook: route.notifyWebhook,
+                        webhookTarget: route.webhookTarget,
+                      })
+                      .pipe(Effect.as(true))
+                  : run === undefined
+                    ? Effect.succeed(false)
+                    : // An outside client's launch is watched only for the completion webhook.
+                      launchWatches
+                        .watchExternal({
                           host: null,
                           threadId: thread.id,
                           projectId: thread.projectId,
                           title: thread.title,
-                          runId: run?.id ?? null,
-                          notifyWebhook: input.notifyWebhook ?? false,
+                          runId: run.id,
+                          ceiling: context.limits.runtimeMode,
+                          route,
                         })
-                        .pipe(Effect.as(true))
-                    : run === undefined
-                      ? Effect.succeed(false)
-                      : // An outside client's launch is watched only for the completion webhook.
-                        watches
-                          .watchExternal({
-                            host: null,
-                            threadId: thread.id,
-                            projectId: thread.projectId,
-                            title: thread.title,
-                            runId: run.id,
-                            ceiling: context.limits.runtimeMode,
-                            requested: input.notifyWebhook === true,
-                          })
-                          .pipe(Effect.map((watch) => watch !== null)),
-                ),
+                        .pipe(Effect.map((watch) => watch !== null))
+              ).pipe(
                 // The thread exists either way; a watch that failed to save is reported, not fatal.
                 Effect.catch((error) =>
                   Effect.logWarning("launch watch not recorded", {
@@ -351,6 +375,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
                 ),
               )
             : false;
+        if (!watching) yield* releaseRoute;
         return {
           threadId: thread.id,
           projectId: thread.projectId,

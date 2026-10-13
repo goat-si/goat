@@ -403,14 +403,31 @@ Only `goat_thread_send` relays, and only for ordinary launched threads.
 
 The launch watch's reports can also be posted to an agent outside GOAT. Turn on
 the `completionWebhook` server setting (`{ enabled, url, secret, allLaunches,
-externalLaunches }`, off by default) and pass `notifyWebhook: true` to
-`goat_thread_launch` or `goat_ssh_thread_launch`; `allLaunches: true` posts for
-every watch instead. The webhook rides on the launch watch, so it needs
+externalLaunches, targets }`, off by default) and opt in per launch. Nothing posts
+for a launch that does not opt in. The webhook rides on the launch watch, so it needs
 `notifyOnCompletion` left on. The launcher's server posts, also for SSH launches.
 
+Several agents can share one server and each hear only the launches they
+dispatched. Pass `notifyTarget` to `goat_thread_launch` or
+`goat_ssh_thread_launch`:
+
+- `{ name }` routes to `completionWebhook.targets.<name>` (`{ url, secret }`). The
+  secret lives in the server secret store like every settings secret, and a
+  settings patch merges targets per name, with `null` removing one.
+- `{ url, secretRef? }` routes to an inline receiver. `secretRef` comes from
+  `request_secret` in the calling thread; the launch consumes it and keeps the
+  value in the secret store until the watch ends.
+
+A launch with a target posts only there; the default `url` never sees it. An
+unknown name, a non-http(s) url, a used or foreign `secretRef`, or webhooks
+switched off refuse the launch before any thread is created. The target is saved
+with the watch, so it survives a restart; a named target removed from settings
+stops receiving. `notifyWebhook: true` without a target posts to the default
+`url`, and `allLaunches: true` sends every watch without a target there too.
+
 A launch from an MCP client outside any GOAT thread has no thread to wake. With
-the webhook on, `notifyWebhook: true` on that launch, or `externalLaunches: true`
-for every such launch, gives it a launcherless watch: its run end, questions, and
+the webhook on, a `notifyTarget` or `notifyWebhook: true` on that launch, or
+`externalLaunches: true` for every such launch, gives it a launcherless watch: its run end, questions, and
 host outages are posted to the webhook only, and the launch returns
 `watching: true`. Without either, nothing changes: the launch returns
 `watching: false` and nothing is posted. The watch follows remote threads at the

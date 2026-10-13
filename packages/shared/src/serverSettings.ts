@@ -265,6 +265,24 @@ function mergeSettingsEntries<Value>(
   return Object.fromEntries(next);
 }
 
+/** Top-level fields replace; each named target merges its patched fields, and `null` removes it. */
+function mergeCompletionWebhook(
+  current: ServerSettings["completionWebhook"],
+  patch: NonNullable<ServerSettingsPatch["completionWebhook"]>,
+): ServerSettings["completionWebhook"] {
+  const { targets: targetsPatch, ...fields } = patch;
+  if (targetsPatch === undefined) return { ...current, ...fields };
+  const targets = { ...current.targets };
+  for (const [name, target] of Object.entries(targetsPatch)) {
+    if (target === null) {
+      delete targets[name];
+    } else {
+      targets[name] = { url: "", secret: "", ...targets[name], ...target };
+    }
+  }
+  return { ...current, ...fields, targets };
+}
+
 /**
  * `projectSettingsOverrides` entries otherwise replace whole (see the field's
  * doc comment in contracts), but `providerInstances` was added after clients
@@ -412,6 +430,8 @@ export function applyServerSettingsPatch(
     projectScriptOverrides: _legacyScripts,
     // Claims only move forward; a smaller one (a delayed resync) is ignored below.
     goatBotHome: goatBotHomePatch,
+    // Its targets merge per name below; their `null` removals must not reach deepMerge.
+    completionWebhook: completionWebhookPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -588,6 +608,14 @@ export function applyServerSettingsPatch(
           usageLimitSources: mergeSettingsEntries(
             current.usageLimitSources,
             usageLimitSourcesPatch,
+          ),
+        }
+      : {}),
+    ...(completionWebhookPatch !== undefined
+      ? {
+          completionWebhook: mergeCompletionWebhook(
+            current.completionWebhook,
+            completionWebhookPatch,
           ),
         }
       : {}),

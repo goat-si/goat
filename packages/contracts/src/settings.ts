@@ -850,14 +850,22 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 /**
  * An outbound webhook that also receives launch watch reports (a launched thread's run ended, it
- * waits on a question, or its host stays unreachable), for agents outside GOAT. A watch posts only
- * when its launch passed `notifyWebhook: true`, or for every watch with `allLaunches`. The secret
- * signs each body (`x-goat-signature: sha256=<hex>`); the server keeps it in its secret store.
+ * waits on a question, or its host stays unreachable), for agents outside GOAT. Delivery is opt in
+ * per launch: a watch posts to `url` only when its launch passed `notifyWebhook: true` (or with
+ * `allLaunches`/`externalLaunches`), and to one of `targets` only when its launch named it. A
+ * secret signs each body (`x-goat-signature: sha256=<hex>`); the server keeps it in its secret store.
  */
+export const CompletionWebhookTarget = Schema.Struct({
+  url: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  secret: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+export type CompletionWebhookTarget = typeof CompletionWebhookTarget.Type;
+
 export const CompletionWebhookSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   url: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   secret: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  /** Watches for launches that did not choose a target post to `url`. Off by default. */
   allLaunches: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
    * Also watch launches from outside any GOAT thread (an MCP client without a
@@ -865,6 +873,13 @@ export const CompletionWebhookSettings = Schema.Struct({
    * watched only when it passes notifyWebhook: true.
    */
   externalLaunches: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Named receivers a launch can route its reports to with `notifyTarget: {name}`, so two
+   * dispatchers sharing one server each hear only their own launches.
+   */
+  targets: Schema.Record(Schema.String, CompletionWebhookTarget).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type CompletionWebhookSettings = typeof CompletionWebhookSettings.Type;
 
@@ -1689,7 +1704,10 @@ export const ServerSettingsPatch = Schema.Struct({
    * secret is removed from the secret store.
    */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
-  /** An empty secret clears it; an omitted one keeps what the server has. */
+  /**
+   * An empty secret clears it; an omitted one keeps what the server has. `targets` merges per
+   * name: `null` removes a target, and a patched field replaces the saved one.
+   */
   completionWebhook: Schema.optionalKey(
     Schema.Struct({
       enabled: Schema.optionalKey(Schema.Boolean),
@@ -1697,6 +1715,17 @@ export const ServerSettingsPatch = Schema.Struct({
       secret: Schema.optionalKey(TrimmedString),
       allLaunches: Schema.optionalKey(Schema.Boolean),
       externalLaunches: Schema.optionalKey(Schema.Boolean),
+      targets: Schema.optionalKey(
+        Schema.Record(
+          TrimmedNonEmptyString,
+          Schema.NullOr(
+            Schema.Struct({
+              url: Schema.optionalKey(TrimmedString),
+              secret: Schema.optionalKey(TrimmedString),
+            }),
+          ),
+        ),
+      ),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual

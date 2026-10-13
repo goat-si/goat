@@ -1,21 +1,35 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac.
 import * as NodeCrypto from "node:crypto";
 
-import type { CompletionWebhookSettings, RunId, ThreadId } from "@goat/contracts";
+import {
+  type CompletionWebhookSettings,
+  type ProjectId,
+  type RunId,
+  SecretRef,
+  type ThreadId,
+  TrimmedNonEmptyString,
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { backoffMs, type LaunchWatch } from "./launchWatch.ts";
+import { backoffMs, type LaunchWatch, type LaunchWatchWebhookTarget } from "./launchWatch.ts";
 
 /**
- * Posts launch watch reports to the `completionWebhook` server setting, so an
- * agent outside GOAT hears what the launcher thread hears. Delivery runs on its
+ * Posts launch watch reports to a webhook, so an agent outside GOAT hears what
+ * the launcher thread hears. Delivery is opt in per launch: a watch posts to
+ * the target its launch chose (a named one from `completionWebhook.targets`
+ * or an inline URL), else to `completionWebhook.url` when the launch passed
+ * notifyWebhook or the settings take every such launch. Delivery runs on its
  * own fiber and never holds back the wake. A launcherless watch, for a launch
  * from outside any thread, has no wake and reports only here. It is best effort: a report whose
  * POST has not succeeded when the server stops is lost, and one whose wake is
@@ -60,6 +74,34 @@ export interface CompletionWebhookPayload {
 export const MAX_ATTEMPTS = 6;
 const REQUEST_TIMEOUT_MS = 10_000;
 const SEEN_LIMIT = 500;
+/** Store names for inline targets' signing secrets; one per launch that passed a secretRef. */
+const INLINE_SECRET_PREFIX = "completion-webhook-watch-";
+
+/** The `notifyTarget` launch argument. Exactly one of name and url. */
+export const NotifyTargetInput = Schema.Struct({
+  name: Schema.optional(TrimmedNonEmptyString).annotate({
+    description: "A target configured in server settings (completionWebhook.targets.<name>).",
+  }),
+  url: Schema.optional(TrimmedNonEmptyString).annotate({
+    description: "An http(s) URL to post this launch's reports to, instead of a named target.",
+  }),
+  secretRef: Schema.optional(SecretRef).annotate({
+    description:
+      "With url: a signing secret the user entered through request_secret. Posts carry x-goat-signature: sha256=<hex HMAC of the body>. It is consumed by this launch. Omit to post unsigned.",
+  }),
+});
+export type NotifyTargetInput = typeof NotifyTargetInput.Type;
+
+/** How a launch's watch reaches a webhook, as stored on the watch. */
+export interface WebhookRoute {
+  readonly notifyWebhook: boolean;
+  readonly webhookTarget: LaunchWatchWebhookTarget | null;
+}
+
+/** A launch's webhook choice that cannot be honored; the launch is refused before it starts. */
+export class CompletionWebhookTargetError extends Data.TaggedError("CompletionWebhookTargetError")<{
+  readonly message: string;
+}> {}
 
 export function completionWebhookPayload(
   watch: LaunchWatch,
@@ -90,22 +132,43 @@ function signCompletionWebhook(body: string, secret: string): string {
   return `sha256=${NodeCrypto.createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-function completionWebhookWanted(settings: CompletionWebhookSettings, watch: LaunchWatch): boolean {
-  return (
-    settings.enabled &&
-    settings.url.length > 0 &&
-    (watch.notifyWebhook ||
-      settings.allLaunches ||
-      (watch.launcherThreadId === null && settings.externalLaunches))
-  );
+/**
+ * The receiver a watch's reports go to now, without its secret. A watch with a target goes only
+ * there; one without goes to the default URL when its launch opted in or the settings take it.
+ */
+function receiverFor(
+  settings: CompletionWebhookSettings,
+  watch: LaunchWatch,
+): { readonly url: string; readonly secret: string | { readonly secretName: string } } | null {
+  if (!settings.enabled) return null;
+  const target = watch.webhookTarget;
+  if (target?.type === "named") {
+    const named = settings.targets[target.name];
+    return named === undefined || named.url.length === 0
+      ? null
+      : { url: named.url, secret: named.secret };
+  }
+  if (target?.type === "inline") {
+    return {
+      url: target.url,
+      secret: target.secretName === null ? "" : { secretName: target.secretName },
+    };
+  }
+  const optedIn =
+    watch.notifyWebhook ||
+    settings.allLaunches ||
+    (watch.launcherThreadId === null && settings.externalLaunches);
+  return optedIn && settings.url.length > 0 ? { url: settings.url, secret: settings.secret } : null;
 }
 
 /** Whether a launch from outside any thread should get a launcherless watch. */
 function completionWebhookWatchesExternal(
   settings: CompletionWebhookSettings,
-  requested: boolean,
+  route: WebhookRoute,
 ): boolean {
-  return settings.enabled && isHttpUrl(settings.url) && (requested || settings.externalLaunches);
+  if (!settings.enabled) return false;
+  if (route.webhookTarget !== null) return true;
+  return isHttpUrl(settings.url) && (route.notifyWebhook || settings.externalLaunches);
 }
 
 const isHttpUrl = (url: string) => {
@@ -128,14 +191,28 @@ export interface CompletionWebhookShape {
   readonly notify: (watch: LaunchWatch, report: CompletionWebhookReport) => Effect.Effect<void>;
   /**
    * Whether a launch from outside any thread is watched: the webhook is on and
-   * the launch asked for it (notifyWebhook) or the settings watch every such launch.
+   * the launch chose a target or asked for the default (notifyWebhook), or the
+   * settings watch every such launch.
    */
-  readonly watchesExternal: (requested: boolean) => Effect.Effect<boolean>;
+  readonly watchesExternal: (route: WebhookRoute) => Effect.Effect<boolean>;
   /**
    * Whether this watch's reports would be posted now. Settings that cannot be
    * read count as yes, so a passing read failure makes nothing drop a watch.
    */
   readonly wants: (watch: LaunchWatch) => Effect.Effect<boolean>;
+  /**
+   * Checks a launch's webhook choice before the launch starts, and keeps an
+   * inline target's secret. `projectId` is the calling thread's project, where
+   * a secretRef was entered. Release the result if the launch records no watch.
+   */
+  readonly resolveRoute: (input: {
+    readonly notifyWebhook: boolean | undefined;
+    readonly notifyOnCompletion: boolean | undefined;
+    readonly notifyTarget: NotifyTargetInput | undefined;
+    readonly projectId: ProjectId | null;
+  }) => Effect.Effect<WebhookRoute, CompletionWebhookTargetError>;
+  /** Deletes the signing secret an inline target kept, once no watch uses it. */
+  readonly release: (target: LaunchWatchWebhookTarget | null) => Effect.Effect<void>;
 }
 
 export class CompletionWebhook extends Context.Service<CompletionWebhook, CompletionWebhookShape>()(
@@ -146,6 +223,8 @@ export class CompletionWebhook extends Context.Service<CompletionWebhook, Comple
 export const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const http = yield* HttpClient.HttpClient;
+  const secretStore = yield* ServerSecretStore.ServerSecretStore;
+  const secretRequests = yield* SecretRequests.SecretRequests;
   const scope = yield* Effect.scope;
   /** Report ids delivered or in flight, oldest first. */
   const seen = new Set<string>();
@@ -166,19 +245,34 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<Attempt> =>
     Effect.gen(function* () {
       const settings = (yield* serverSettings.getSettings).completionWebhook;
-      if (!completionWebhookWanted(settings, watch)) return "skipped" satisfies Attempt;
-      if (!isHttpUrl(settings.url)) {
-        yield* Effect.logWarning("completion webhook: url is not http(s)", { url: settings.url });
+      const receiver = receiverFor(settings, watch);
+      if (receiver === null) return "skipped" satisfies Attempt;
+      if (!isHttpUrl(receiver.url)) {
+        yield* Effect.logWarning("completion webhook: url is not http(s)", { id: report.id });
         return "skipped" satisfies Attempt;
       }
+      const secret =
+        typeof receiver.secret === "string"
+          ? receiver.secret
+          : yield* secretStore
+              .get(receiver.secret.secretName)
+              .pipe(
+                Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+                Effect.map(Option.getOrNull),
+              );
+      // A signed target whose secret is gone must not start posting unsigned.
+      if (secret === null) {
+        yield* Effect.logWarning("completion webhook: target secret missing", { id: report.id });
+        return "stop" satisfies Attempt;
+      }
       const response = yield* http.execute(
-        HttpClientRequest.post(settings.url).pipe(
+        HttpClientRequest.post(receiver.url).pipe(
           HttpClientRequest.setHeaders({
             "x-goat-event": report.event,
             "x-goat-delivery": report.id,
-            ...(settings.secret.length === 0
+            ...(secret.length === 0
               ? {}
-              : { "x-goat-signature": signCompletionWebhook(body, settings.secret) }),
+              : { "x-goat-signature": signCompletionWebhook(body, secret) }),
           }),
           HttpClientRequest.bodyText(body, "application/json"),
         ),
@@ -224,11 +318,9 @@ export const make = Effect.gen(function* () {
       yield* deliver(watch, report, at).pipe(Effect.interruptible, Effect.forkIn(scope));
     });
 
-  const watchesExternal: CompletionWebhookShape["watchesExternal"] = (requested) =>
+  const watchesExternal: CompletionWebhookShape["watchesExternal"] = (route) =>
     serverSettings.getSettings.pipe(
-      Effect.map((settings) =>
-        completionWebhookWatchesExternal(settings.completionWebhook, requested),
-      ),
+      Effect.map((settings) => completionWebhookWatchesExternal(settings.completionWebhook, route)),
       Effect.catch((cause) =>
         Effect.logWarning("completion webhook: settings unreadable", { cause }).pipe(
           Effect.as(false),
@@ -238,11 +330,10 @@ export const make = Effect.gen(function* () {
 
   const wants: CompletionWebhookShape["wants"] = (watch) =>
     serverSettings.getSettings.pipe(
-      Effect.map(
-        (settings) =>
-          completionWebhookWanted(settings.completionWebhook, watch) &&
-          isHttpUrl(settings.completionWebhook.url),
-      ),
+      Effect.map((settings) => {
+        const receiver = receiverFor(settings.completionWebhook, watch);
+        return receiver !== null && isHttpUrl(receiver.url);
+      }),
       Effect.catch((cause) =>
         Effect.logWarning("completion webhook: settings unreadable", { cause }).pipe(
           Effect.as(true),
@@ -250,7 +341,97 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  return CompletionWebhook.of({ notify, watchesExternal, wants });
+  const refuse = (message: string) => Effect.fail(new CompletionWebhookTargetError({ message }));
+
+  const resolveRoute: CompletionWebhookShape["resolveRoute"] = (input) =>
+    Effect.gen(function* () {
+      const target = input.notifyTarget;
+      if (target === undefined) {
+        return { notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null };
+      }
+      if (input.notifyWebhook === false) {
+        return yield* refuse("notifyTarget sends reports to a webhook; drop notifyWebhook:false.");
+      }
+      if (input.notifyOnCompletion === false) {
+        return yield* refuse(
+          "notifyTarget reports through the launch watch; drop notifyOnCompletion:false.",
+        );
+      }
+      if ((target.name === undefined) === (target.url === undefined)) {
+        return yield* refuse("notifyTarget needs exactly one of name and url.");
+      }
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.map((all) => all.completionWebhook),
+        Effect.catch(() => refuse("Server settings could not be read; try again.")),
+      );
+      if (!settings.enabled) {
+        return yield* refuse(
+          "Completion webhooks are off on this server (completionWebhook.enabled).",
+        );
+      }
+      if (target.name !== undefined) {
+        if (target.secretRef !== undefined) {
+          return yield* refuse(
+            "A named target signs with the secret in server settings; pass secretRef only with url.",
+          );
+        }
+        const named = settings.targets[target.name];
+        if (named === undefined) {
+          const known = Object.keys(settings.targets);
+          return yield* refuse(
+            `Unknown notify target "${target.name}". ${
+              known.length === 0
+                ? "This server has no named targets (completionWebhook.targets)."
+                : `Configured targets: ${known.join(", ")}.`
+            }`,
+          );
+        }
+        if (!isHttpUrl(named.url)) {
+          return yield* refuse(`Notify target "${target.name}" has no http(s) url in settings.`);
+        }
+        return {
+          notifyWebhook: false,
+          webhookTarget: { type: "named", name: target.name },
+        } satisfies WebhookRoute;
+      }
+      const url = target.url ?? "";
+      if (!isHttpUrl(url)) return yield* refuse("notifyTarget.url must be an http(s) URL.");
+      if (target.secretRef === undefined) {
+        return {
+          notifyWebhook: false,
+          webhookTarget: { type: "inline", url, secretName: null },
+        } satisfies WebhookRoute;
+      }
+      if (input.projectId === null) {
+        return yield* refuse(
+          "secretRef comes from request_secret in a GOAT thread; call from one.",
+        );
+      }
+      const value = yield* secretRequests
+        .consume({ ref: target.secretRef, projectId: input.projectId })
+        .pipe(Effect.catch((error) => refuse(`notifyTarget.secretRef: ${error.message}`)));
+      const secretName = `${INLINE_SECRET_PREFIX}${NodeCrypto.randomUUID()}`;
+      yield* secretStore
+        .set(secretName, new TextEncoder().encode(value))
+        .pipe(Effect.catch(() => refuse("The signing secret could not be stored; try again.")));
+      return {
+        notifyWebhook: false,
+        webhookTarget: { type: "inline", url, secretName },
+      } satisfies WebhookRoute;
+    });
+
+  const release: CompletionWebhookShape["release"] = (target) =>
+    target?.type !== "inline" || target.secretName === null
+      ? Effect.void
+      : secretStore
+          .remove(target.secretName)
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("completion webhook: target secret not deleted", { cause }),
+            ),
+          );
+
+  return CompletionWebhook.of({ notify, watchesExternal, wants, resolveRoute, release });
 });
 
 export const layer = Layer.effect(CompletionWebhook, make);

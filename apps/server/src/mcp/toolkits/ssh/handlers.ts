@@ -100,6 +100,26 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         launchedBy,
         standingInstructions: input.standingInstructions,
       };
+      // A webhook choice is checked, and an inline secret kept, before anything runs remotely.
+      const launchWatches = yield* LaunchWatchService.LaunchWatchService;
+      const route =
+        input.notifyTarget === undefined
+          ? { notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null }
+          : yield* launchWatches
+              .resolveRoute({
+                notifyWebhook: input.notifyWebhook,
+                notifyOnCompletion: input.notifyOnCompletion,
+                notifyTarget: input.notifyTarget,
+                projectId: launcher?.projectId ?? null,
+              })
+              .pipe(
+                Effect.mapError(
+                  (error) =>
+                    new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+                ),
+              );
+      const releaseRoute =
+        route.webhookTarget === null ? Effect.void : launchWatches.releaseRoute(route);
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const result = yield* Effect.gen(function* () {
         if (scope.thread === undefined) {
@@ -127,39 +147,40 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                 })
               : error,
         ),
+        Effect.onError(() => releaseRoute),
       );
       const runId = result.runId === null ? null : RunId.make(result.runId);
       const watching =
         input.notifyOnCompletion !== false && (launcher !== undefined || runId !== null)
-          ? yield* LaunchWatchService.LaunchWatchService.pipe(
-              Effect.flatMap((watches) =>
-                launcher !== undefined
-                  ? watches
-                      .register({
-                        launcherThreadId: launcher.id,
+          ? yield* (
+              launcher !== undefined
+                ? launchWatches
+                    .register({
+                      launcherThreadId: launcher.id,
+                      host: result.host,
+                      threadId: ThreadId.make(result.threadId),
+                      projectId: null,
+                      title: input.title,
+                      runId,
+                      notifyWebhook: route.notifyWebhook,
+                      webhookTarget: route.webhookTarget,
+                    })
+                    .pipe(Effect.as(true))
+                : runId === null
+                  ? Effect.succeed(false)
+                  : // An outside client's launch is watched only for the completion webhook.
+                    launchWatches
+                      .watchExternal({
                         host: result.host,
                         threadId: ThreadId.make(result.threadId),
                         projectId: null,
                         title: input.title,
                         runId,
-                        notifyWebhook: input.notifyWebhook ?? false,
+                        ceiling: caller.limits.runtimeMode,
+                        route,
                       })
-                      .pipe(Effect.as(true))
-                  : runId === null
-                    ? Effect.succeed(false)
-                    : // An outside client's launch is watched only for the completion webhook.
-                      watches
-                        .watchExternal({
-                          host: result.host,
-                          threadId: ThreadId.make(result.threadId),
-                          projectId: null,
-                          title: input.title,
-                          runId,
-                          ceiling: caller.limits.runtimeMode,
-                          requested: input.notifyWebhook === true,
-                        })
-                        .pipe(Effect.map((watch) => watch !== null)),
-              ),
+                      .pipe(Effect.map((watch) => watch !== null))
+            ).pipe(
               // The remote thread exists either way; a watch that failed to save is reported, not fatal.
               Effect.catch((error) =>
                 Effect.logWarning("launch watch not recorded", {
@@ -170,6 +191,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               ),
             )
           : false;
+      if (!watching) yield* releaseRoute;
       return {
         ...result,
         watching,
