@@ -110,6 +110,7 @@ Anything missing from the list becomes an unavailable snapshot.
 | `pi`          | `packages/provider-pi/src/server/driver.ts`             |
 | `muse`        | `packages/provider-muse/src/server/driver.ts`           |
 | `acpRegistry` | `packages/provider-acp-registry/src/server/driver.ts`   |
+| `devinCloud`  | `packages/provider-devin-cloud/src/server/driver.ts`    |
 
 `BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2` in
 `apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts` lists the v2 turn adapters for
@@ -120,6 +121,8 @@ adapters on the driver: `makeAntigravityAdapterV2` inside `AntigravityDriver.ts`
 `packages/provider-core` holds the driver and adapter-driver interfaces those packages implement.
 `packages/provider-acp` is the ACP client stack the ACP drivers sit on. Shared provider behavior
 that must not branch through the orchestrator belongs at this boundary.
+`packages/provider-devin-cloud` supplies Devin Cloud's transport and lifecycle, with its v2 adapter
+attached on the driver.
 
 Cloud execution belongs to the provider adapter, while GOAT owns durable launch
 intent, source preflight and observation. The session's execution location bypasses
