@@ -1,3 +1,4 @@
+import { DesktopConnectionCatalogUnreadableSchema } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -23,6 +24,16 @@ export const setConnectionCatalog = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.connectionCatalog.set")(function* (catalog) {
     const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
     return yield* store.set(catalog);
+  }),
+});
+
+export const getConnectionCatalogUnreadable = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.GET_CONNECTION_CATALOG_UNREADABLE_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(DesktopConnectionCatalogUnreadableSchema),
+  handler: Effect.fn("desktop.ipc.connectionCatalog.unreadable")(function* () {
+    const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+    return Option.getOrNull(yield* store.unreadable);
   }),
 });
 

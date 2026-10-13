@@ -25,6 +25,7 @@ import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { ConnectionCatalogUnreadableToast } from "../components/desktop/ConnectionCatalogUnreadableNotice";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
@@ -257,6 +258,7 @@ function RootRouteView() {
           <CustomSnoozeDialogHost />
           <SlowRpcRequestToastCoordinator />
           <PermissionUpdateNotice />
+          {isElectron ? <ConnectionCatalogUnreadableToast /> : null}
           {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
           <ProjectCloneToastCoordinator />
           <PullRequestGuideRunCoordinator />

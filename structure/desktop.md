@@ -30,6 +30,27 @@ accepts both renderer origins (`DESKTOP_RENDERER_ORIGINS` in `apps/server/src/ht
 
 > Decision record: [ADR-0014](decisions/ADR-0014-desktop-runtime-identity.md)
 
+## Shared connection catalog
+
+GOAT, GOAT (Nightly), and development builds share one GOAT home, so they share the saved
+connection catalog, `connection-catalog.json` in its state directory. Each runtime name has its
+own safeStorage key, so a catalog one channel saved does not decrypt through another channel's
+`safeStorage`. `apps/desktop/src/app/DesktopConnectionCatalogStore.ts` then asks
+`apps/desktop/src/app/DesktopSafeStorageSiblingKeys.ts`, which reads the other channels' keys from
+the same key store and decrypts with Chromium's OSCrypt scheme. macOS asks once before an app may
+read another app's key. A result counts only when it decodes as a connection catalog, because the
+renderer replaces a catalog it cannot parse.
+
+- **Recovered.** The original file is copied to `connection-catalog.<channel>.backup.json` first,
+  then the catalog is re-encrypted under this app's key. If the copy fails, the file keeps the
+  sibling's encryption and is recovered again on the next read.
+- **Unreadable.** The file stays in place, and a byte-for-byte copy goes to
+  `connection-catalog.unreadable-<hash>.backup.json`, never replacing a different file. Reads
+  fail, and the same file is not retried until the app restarts, so a refused prompt does not
+  repeat. Settings → Connections and a launch toast explain where both files are
+  (`apps/web/src/components/desktop/ConnectionCatalogUnreadableNotice.tsx`). Start fresh removes
+  the catalog only once its copy exists.
+
 ## Shell
 
 The bundled server entry is `backendEntryPath` in `apps/desktop/src/app/DesktopEnvironment.ts`:

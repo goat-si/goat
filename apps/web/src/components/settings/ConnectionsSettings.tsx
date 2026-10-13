@@ -134,6 +134,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Alert, AlertDescription } from "../ui/alert";
+import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
@@ -4065,6 +4066,7 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer>
+      <ConnectionCatalogUnreadableAlert />
       {primarySettings}
       <SettingsSection
         {...searchableSetting("remote-environments")}
