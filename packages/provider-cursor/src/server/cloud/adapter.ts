@@ -85,6 +85,7 @@ export const capabilities = {
 type Task = NonNullable<OrchestrationV2ProviderThread["cloudTask"]>;
 type TurnInput = ProviderAdapter.ProviderAdapterV2TurnInput;
 type AttachInput = Omit<TurnInput, "message" | "cloudLaunchSource">;
+type Progress = { assistantText: string; text: string };
 type Active = {
   input: AttachInput;
   thread: OrchestrationV2ProviderThread;
@@ -95,7 +96,7 @@ type Active = {
   stopRequested: boolean;
   finalized: boolean;
   observing: boolean;
-  progress: string;
+  progress: Progress;
   lastPublishMs: number;
 };
 
@@ -156,23 +157,74 @@ export function resultTask(task: Task, result: RunResult): Task {
   };
 }
 
-export function progressText(previous: string, message: SDKMessage): string {
+const toolProgressLabels = new Map<string, readonly [string, string]>([
+  ["run_terminal_cmd", ["Running a command", "Command"]],
+  ["shell", ["Running a command", "Command"]],
+  ["read_file", ["Reading a file", "File read"]],
+  ["read", ["Reading a file", "File read"]],
+  ["edit_file", ["Editing a file", "File edit"]],
+  ["edit", ["Editing a file", "File edit"]],
+  ["apply_patch", ["Editing a file", "File edit"]],
+  ["grep", ["Searching the code", "Code search"]],
+  ["ripgrep", ["Searching the code", "Code search"]],
+  ["glob", ["Finding files", "File search"]],
+  ["glob_file_search", ["Finding files", "File search"]],
+  ["ls", ["Listing files", "File listing"]],
+  ["web_search", ["Searching the web", "Web search"]],
+  ["webSearch", ["Searching the web", "Web search"]],
+  ["web_fetch", ["Reading a web page", "Web page read"]],
+  ["webFetch", ["Reading a web page", "Web page read"]],
+  ["task", ["Working on a delegated task", "Delegated task"]],
+]);
+
+function progressLine(text: string): string {
+  const sentence =
+    text
+      .trim()
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .at(-1) ?? "";
+  return sentence.length > 240 ? `${sentence.slice(0, 239)}…` : sentence;
+}
+
+export function progressText(previous: Progress, message: SDKMessage): Progress {
   switch (message.type) {
-    case "assistant":
-      return (
-        previous +
-        message.message.content
-          .flatMap((part) => (part.type === "text" ? [part.text] : []))
-          .join("")
-      ).slice(-8000);
+    case "assistant": {
+      // SDK 1.0.35 assistant content is a text delta, not a display-status suffix.
+      const delta = message.message.content
+        .flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("");
+      if (!delta) return previous;
+      const assistantText = (previous.assistantText + delta).slice(-8000);
+      return { assistantText, text: progressLine(assistantText) || previous.text };
+    }
     case "thinking":
       return previous;
-    case "tool_call":
-      return `${message.name}: ${message.status}`.slice(0, 8000);
-    case "status":
-      return (message.message || `Cursor Cloud: ${message.status.toLowerCase()}`).slice(0, 8000);
+    case "tool_call": {
+      const [running, finished] = toolProgressLabels.get(message.name) ?? ["Using a tool", "Tool"];
+      return {
+        ...previous,
+        // The SDK accumulator starts a new assistant step after a completed tool.
+        assistantText: message.status === "running" ? previous.assistantText : "",
+        text:
+          message.status === "running"
+            ? `${running}.`
+            : `${finished} ${message.status === "completed" ? "completed" : "failed"}.`,
+      };
+    }
+    case "status": {
+      const text = {
+        CREATING: "Cursor Cloud is starting.",
+        RUNNING: "Cursor Cloud is running.",
+        FINISHED: "Cursor Cloud finished.",
+        ERROR: "Cursor Cloud reported an error. Open the agent for details.",
+        CANCELLED: "Cursor Cloud was cancelled.",
+        EXPIRED: "Cursor Cloud expired.",
+      }[message.status];
+      return { ...previous, text };
+    }
     case "task":
-      return (message.text || previous).slice(0, 8000);
+      return { ...previous, text: progressLine(message.text ?? "") || previous.text };
     default:
       return previous;
   }
@@ -274,7 +326,10 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                   : ctx.stopRequested
                     ? "interrupted"
                     : "cancelled";
-            const task = resultTask({ ...ctx.thread.cloudTask!, progress: ctx.progress }, result);
+            const task = resultTask(
+              { ...ctx.thread.cloudTask!, progress: ctx.progress.text },
+              result,
+            );
             const turn = {
               ...ctx.turn,
               status,
@@ -357,10 +412,13 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                     const next = progressText(ctx.progress, message);
                     const ms = yield* Clock.currentTimeMillis;
                     ctx.progress = next;
-                    if (ms - ctx.lastPublishMs < 250 || ctx.thread.cloudTask?.progress === next)
+                    if (
+                      ms - ctx.lastPublishMs < 250 ||
+                      ctx.thread.cloudTask?.progress === next.text
+                    )
                       return;
                     ctx.lastPublishMs = ms;
-                    yield* commit(ctx, { ...ctx.thread.cloudTask!, progress: next });
+                    yield* commit(ctx, { ...ctx.thread.cloudTask!, progress: next.text });
                   }),
               ).pipe(Effect.ignore);
               // The observed handle may have synthesized an error for a timeout/disconnect.
@@ -589,7 +647,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 stopRequested: false,
                 finalized: false,
                 observing: false,
-                progress: "",
+                progress: { assistantText: "", text: "" },
                 lastPublishMs: 0,
               };
               // Commit accepted identities before exposing a safely recorded running task.
@@ -602,6 +660,8 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 source,
                 localChangesExcluded: submitting.localChangesExcluded,
                 ...(submitting.title === undefined ? {} : { title: submitting.title }),
+                ...(submitting.prUrl === undefined ? {} : { prUrl: submitting.prUrl }),
+                ...(submitting.branch === undefined ? {} : { branch: submitting.branch }),
                 updatedAt: submitting.updatedAt,
               };
               yield* commit(ctx, accepted);
@@ -667,7 +727,7 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
                 stopRequested: false,
                 finalized: false,
                 observing: false,
-                progress: task.progress ?? "",
+                progress: { assistantText: "", text: task.progress ?? "" },
                 lastPublishMs: 0,
               };
               yield* emit({

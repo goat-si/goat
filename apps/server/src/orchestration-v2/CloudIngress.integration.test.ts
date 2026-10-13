@@ -514,6 +514,7 @@ const makeCursorIngress = Effect.fnUntraced(function* (
   const resumeGate = Promise.withResolvers<void>();
   const cancelled = yield* Deferred.make<void>();
   const sourceReads = yield* Ref.make(0);
+  const adapterAssistantFinals = yield* Ref.make(0);
   const capturedTerminal =
     yield* Deferred.make<
       Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }>
@@ -641,12 +642,34 @@ const makeCursorIngress = Effect.fnUntraced(function* (
     cursorInstanceId,
     Effect.succeed("fixture-key"),
   ).pipe(Effect.provideService(CursorCloudSdk, sdk), Effect.provide(IdAllocator.layer));
+  // Observe real adapter delivery: shared finalization owns the ordinary result item.
+  const observedAdapter = {
+    ...adapter,
+    openSession: (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
+      adapter.openSession(input).pipe(
+        Effect.map((runtime) => ({
+          ...runtime,
+          events: runtime.events.pipe(
+            Stream.tap((event) =>
+              (event.type === "message.updated" &&
+                event.message.role === "assistant" &&
+                !event.message.streaming) ||
+              (event.type === "turn_item.updated" &&
+                event.turnItem.type === "assistant_message" &&
+                !event.turnItem.streaming)
+                ? Ref.update(adapterAssistantFinals, (count) => count + 1)
+                : Effect.void,
+            ),
+          ),
+        })),
+      ),
+  };
   // Replay a captured event at the existing adapter stream boundary; all runtime methods stay real.
   const registeredAdapter = options.replayTerminal
     ? {
-        ...adapter,
+        ...observedAdapter,
         openSession: (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
-          adapter.openSession(input).pipe(
+          observedAdapter.openSession(input).pipe(
             Effect.map((runtime) => ({
               ...runtime,
               events: Stream.merge(
@@ -662,7 +685,7 @@ const makeCursorIngress = Effect.fnUntraced(function* (
             })),
           ),
       }
-    : adapter;
+    : observedAdapter;
   const database = SqlitePersistence.layerMemory;
   const runtime = layerWithRegistry({ name }, Registry.layerFromAdapters([registeredAdapter]), {
     databaseLayer: database,
@@ -706,6 +729,7 @@ const makeCursorIngress = Effect.fnUntraced(function* (
     cancelled,
     runs,
     sourceReads,
+    adapterAssistantFinals,
     create,
     resume,
     send,
@@ -819,7 +843,33 @@ function assertCursorResult(
   assert.include(results[0]!.text, `cursor/result-${ordinal}`);
   assert.notInclude(results[0]!.text, "unrelated");
   assert.isFalse(results[0]!.streaming);
+  // The real SQLite read must also contain the item consumed by client timelines.
+  const assistantItems = projection.turnItems
+    .filter((item) => item.type === "assistant_message")
+    .filter((item) => item.runId === runId);
+  assert.equal(assistantItems.length, 1, "one persisted assistant result item per run");
+  const item = assistantItems[0]!;
+  assert.equal(item.id, `turn-item:cloud-result:${runId}`);
+  assert.equal(item.messageId, results[0]!.id);
+  assert.equal(item.threadId, projection.thread.id);
+  assert.equal(item.nodeId, run.rootNodeId);
+  assert.equal(item.text, results[0]!.text);
+  assert.include(item.text, `Completed task ${ordinal}.`);
+  assert.include(item.text, `https://github.com/fixture/repo/pull/${ordinal}`);
+  assert.include(item.text, `cursor/result-${ordinal}`);
+  assert.notInclude(item.text, "unrelated");
+  assert.isFalse(item.streaming);
+  assert.isNotNull(item.completedAt);
+  if (status === "completed") assert.equal(item.status, "completed");
+  const visibleResults = projection.visibleTurnItems.filter(
+    (row) => row.item.type === "assistant_message" && row.item.runId === runId,
+  );
+  assert.equal(visibleResults.length, 1, "one ordinary assistant result in the client timeline");
+  assert.equal(visibleResults[0]!.sourceItemId, item.id);
+  assert.equal(visibleResults[0]!.sourceThreadId, projection.thread.id);
+  assert.deepEqual(visibleResults[0]!.item, item);
   assert.equal(projection.checkpointScopes.length, 0);
+  return { message: results[0]!, item, visible: visibleResults[0]! };
 }
 
 const seedCursorAccepted = Effect.fnUntraced(function* (
@@ -1064,7 +1114,10 @@ it.effect(
         assert.deepEqual(afterDuplicate.attempts, beforeDuplicate.attempts);
         assert.deepEqual(afterDuplicate.nodes, beforeDuplicate.nodes);
         assert.deepEqual(afterDuplicate.messages, beforeDuplicate.messages);
+        assert.deepEqual(afterDuplicate.turnItems, beforeDuplicate.turnItems);
+        assert.deepEqual(afterDuplicate.visibleTurnItems, beforeDuplicate.visibleTurnItems);
         assert.equal(yield* orchestrator.getThreadEventSequence(threadId), beforeSequence);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
         assert.equal(h.create.mock.calls.length, 1);
         assert.equal(h.send.mock.calls.length, 1);
         assert.equal(h.cancelRun.mock.calls.length, 0);
@@ -1384,6 +1437,7 @@ it.effect(
         // An extra drain must not repeat finalization or create another provider result.
         yield* worker.drain();
         assertCursorResult(yield* orchestrator.getThreadProjection(threadId), run.id, 1);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
         assert.equal(h.create.mock.calls.length, 1);
         assert.equal(h.send.mock.calls.length, 1);
         assert.equal(h.cancelRun.mock.calls.length, 0);
@@ -1465,11 +1519,15 @@ it.effect.each(["direct", "queued"] as const)(
         }
         yield* h.runs[0]!.finish();
         yield* awaitCursorRun(threadId, first.id, "completed");
+        const firstCompleted = yield* orchestrator.getThreadProjection(threadId);
+        const firstResult = assertCursorResult(firstCompleted, first.id, 1);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
         if (mode === "direct")
           yield* dispatchCursorMessage(threadId, 2, { type: "start_immediately" });
         const resuming = yield* worker.drain().pipe(Effect.forkChild);
         yield* Deferred.await(h.resuming);
         const submitting = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(assertCursorResult(submitting, first.id, 1), firstResult);
         assert.equal(submitting.providerThreads[0]?.cloudTask?.status, "submitting");
         assert.equal(submitting.providerThreads[0]?.cloudTask?.taskId, "cursor-run-1");
         assert.equal(submitting.providerThreads[0]?.cloudTask?.acceptedAppRunId, first.id);
@@ -1494,6 +1552,7 @@ it.effect.each(["direct", "queued"] as const)(
         )!;
         yield* awaitCursorTurn(threadId, followUp.activeAttemptId!);
         const second = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(assertCursorResult(second, first.id, 1), firstResult);
         assert.equal(h.create.mock.calls.length, 1);
         assert.equal(h.resume.mock.calls.length, 1);
         assert.equal(h.resume.mock.calls[0]![0], cursorAgentId);
@@ -1504,7 +1563,10 @@ it.effect.each(["direct", "queued"] as const)(
         assert.equal(second.providerThreads[0]?.cloudTask?.taskId, "cursor-run-2");
         assert.equal(second.providerThreads[0]?.cloudTask?.acceptedAppRunId, followUp.id);
         assert.isUndefined(second.providerThreads[0]?.cloudTask?.summary);
-        assert.isUndefined(second.providerThreads[0]?.cloudTask?.prUrl);
+        assert.equal(
+          second.providerThreads[0]?.cloudTask?.prUrl,
+          "https://github.com/fixture/repo/pull/1",
+        );
         assert.equal(
           second.providerTurns.find((turn) => turn.runAttemptId === first.activeAttemptId)?.ordinal,
           1,
@@ -1518,8 +1580,26 @@ it.effect.each(["direct", "queued"] as const)(
         yield* awaitCursorRun(threadId, followUp.id, "completed");
         yield* worker.drain();
         const completed = yield* orchestrator.getThreadProjection(threadId);
-        assertCursorResult(completed, first.id, 1);
+        assert.deepEqual(assertCursorResult(completed, first.id, 1), firstResult);
         assertCursorResult(completed, followUp.id, 2);
+        assert.equal(
+          completed.messages.filter((message) => message.role === "assistant").length,
+          2,
+        );
+        assert.equal(
+          completed.turnItems.filter((item) => item.type === "assistant_message").length,
+          2,
+        );
+        assert.equal(
+          completed.visibleTurnItems.filter((row) => row.item.type === "assistant_message").length,
+          2,
+        );
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        yield* worker.drain();
+        const redrained = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(redrained.messages, completed.messages);
+        assert.deepEqual(redrained.turnItems, completed.turnItems);
+        assert.deepEqual(redrained.visibleTurnItems, completed.visibleTurnItems);
       }).pipe(Effect.provide(h.layer));
     }).pipe(Effect.scoped),
 );

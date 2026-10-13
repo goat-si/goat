@@ -260,6 +260,7 @@ const harness = Effect.gen(function* () {
     sendReceipts,
     streamReceipts,
     detachedAfterClose,
+    messages,
     setRunningLookup: (value: boolean) => {
       runningLookup = value;
     },
@@ -308,6 +309,8 @@ describe("Cursor Cloud adapter", () => {
         expect(h.sendReceipts[0]?.task).not.toHaveProperty("acceptedAppRunId");
         expect(h.streamReceipts[0]).toMatchObject({ status: "running", taskId: runId });
         expect(h.streamReceipts[0]?.acceptedAppRunId).toBe(appRunId);
+        expect(h.streamReceipts[0]).not.toHaveProperty("prUrl");
+        expect(h.streamReceipts[0]).not.toHaveProperty("branch");
         yield* h.finish;
         const events = yield* collectTerminal(h.runtime);
         expect(
@@ -331,11 +334,16 @@ describe("Cursor Cloud adapter", () => {
         });
       }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
-  effectIt.effect("uses resume and send for a follow-up without creating a new cloud agent", () =>
+  effectIt.effect("keeps prior follow-up links until the new result replaces them", () =>
     Effect.gen(function* () {
       const h = yield* harness;
       yield* h.runtime.startTurn({
         ...h.input,
+        cloudSource: {
+          repository: "https://github.com/fixture/other",
+          branch: "other",
+          sha: "b".repeat(40),
+        },
         providerThread: {
           ...h.thread,
           nativeThreadRef: { driver: DRIVER, nativeId: agentId, strength: "strong" },
@@ -343,7 +351,10 @@ describe("Cursor Cloud adapter", () => {
             ...task("submitting"),
             acceptedAppRunId: previousAppRunId,
             summary: "previous summary",
+            progress: "Previous progress",
+            error: "Previous error",
             prUrl: "https://github.com/fixture/repo/pull/6",
+            branch: "cursor/previous",
           },
         },
       });
@@ -358,6 +369,13 @@ describe("Cursor Cloud adapter", () => {
         source,
       });
       expect(h.commits.find((value) => value.status === "running")).not.toHaveProperty("summary");
+      expect(h.commits.find((value) => value.status === "running")).not.toHaveProperty("progress");
+      expect(h.commits.find((value) => value.status === "running")).not.toHaveProperty("error");
+      expect(h.streamReceipts[0]).toMatchObject({
+        prUrl: "https://github.com/fixture/repo/pull/6",
+        branch: "cursor/previous",
+        source,
+      });
       expect(h.commits.find((value) => value.status === "running")?.acceptedAppRunId).toBe(
         appRunId,
       );
@@ -365,8 +383,16 @@ describe("Cursor Cloud adapter", () => {
         "Implement it",
         expect.objectContaining({ idempotencyKey: expect.stringContaining("attempt-fixture") }),
       );
+      expect(h.send).toHaveBeenCalledTimes(1);
       yield* h.finish;
       yield* collectTerminal(h.runtime);
+      expect(h.commits.at(-1)).toMatchObject({
+        status: "succeeded",
+        summary: completed.result,
+        prUrl: "https://github.com/fixture/repo/pull/7",
+        branch: "cursor/output",
+        source,
+      });
     }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
   );
   effectIt.effect("reattaches the saved run and never consumes an unowned stream or resends", () =>
@@ -867,6 +893,24 @@ describe("Cursor Cloud adapter", () => {
     expect(output.branch).toBeUndefined();
   });
   it.each(["finished", "cancelled", "error"] as const)(
+    "retains previous links when the authoritative %s result omits new git metadata",
+    (status) => {
+      const output = resultTask(
+        {
+          ...task(),
+          prUrl: "https://github.com/fixture/repo/pull/6",
+          branch: "cursor/previous",
+        },
+        { id: runId, status, result: "New result" },
+      );
+      expect(output).toMatchObject({
+        summary: "New result",
+        prUrl: "https://github.com/fixture/repo/pull/6",
+        branch: "cursor/previous",
+      });
+    },
+  );
+  it.each(["finished", "cancelled", "error"] as const)(
     "replaces the stale observation alert for an authoritative %s result",
     (status) => {
       const output = resultTask(
@@ -884,22 +928,219 @@ describe("Cursor Cloud adapter", () => {
       }
     },
   );
-  it("retains only bounded progress and ignores duplicate user content", () => {
-    const output = progressText("x".repeat(9000), {
-      type: "assistant",
+  effectIt.effect("persists assistant progress separately from status and tool labels", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.messages.push(
+        assistant("I'll locate"),
+        tool("run_terminal_cmd", "running"),
+        assistant(" the relevant file."),
+        { ...assistant("Unowned text"), run_id: "another-run" },
+        { ...assistant("Unowned agent"), agent_id: "another-agent" },
+      );
+      yield* h.runtime.startTurn(h.input);
+      yield* Deferred.await(h.streamWaiting);
+      yield* h.finish;
+      const events = yield* collectTerminal(h.runtime);
+      expect(h.commits.at(-1)?.progress).toBe("I'll locate the relevant file.");
+      expect(events.some((event) => event.type === "turn_item.updated")).toBe(false);
+      expect(h.send).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  effectIt.effect(
+    "publishes at most every 250ms while retaining unpublished assistant deltas",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        const milestones = [
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+        ];
+        const releases: Array<() => void> = [];
+        const gates = milestones.map(() => new Promise<void>((resolve) => releases.push(resolve)));
+        const messages = [assistant("I'll locate"), assistant(" the"), assistant(" file.")];
+        let index = 0;
+        const iterator: AsyncGenerator<SDKMessage, void> = {
+          next: async () => {
+            if (index > 0) {
+              // The next pull proves the previous delta was processed, including any commit.
+              Deferred.doneUnsafe(milestones[index - 1]!, Effect.void);
+              await gates[index - 1];
+            }
+            if (index === messages.length) return { done: true, value: undefined };
+            return { done: false, value: messages[index++]! };
+          },
+          return: async () => ({ done: true, value: undefined }),
+          throw: async (error) => {
+            throw error;
+          },
+          [Symbol.asyncIterator]: () => iterator,
+          [Symbol.asyncDispose]: async () => {
+            await iterator.return();
+          },
+        };
+        vi.mocked(h.nativeRun.stream).mockReturnValue(iterator);
+        yield* TestClock.adjust("250 millis");
+        yield* h.runtime.startTurn(h.input);
+        yield* Deferred.await(milestones[0]!);
+        expect(h.commits.at(-1)?.progress).toBe("I'll locate");
+        const firstPublishCount = h.commits.length;
+        yield* TestClock.adjust("249 millis");
+        releases[0]!();
+        yield* Deferred.await(milestones[1]!);
+        expect(h.commits).toHaveLength(firstPublishCount);
+        yield* TestClock.adjust("1 millis");
+        releases[1]!();
+        yield* Deferred.await(milestones[2]!);
+        expect(h.commits).toHaveLength(firstPublishCount + 1);
+        expect(h.commits.at(-1)?.progress).toBe("I'll locate the file.");
+        releases[2]!();
+        yield* collectTerminal(h.runtime);
+      }).pipe(Effect.provide(IdAllocator.layer), Effect.scoped),
+  );
+  const assistant = (text: string): SDKMessage => ({
+    type: "assistant",
+    agent_id: agentId,
+    run_id: runId,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const tool = (name: string, status: "running" | "completed" | "error"): SDKMessage => ({
+    type: "tool_call",
+    agent_id: agentId,
+    run_id: runId,
+    call_id: "tool-fixture",
+    name,
+    status,
+    args: { command: "private command" },
+    result: "private tool result",
+  });
+  const emptyProgress = { assistantText: "", text: "" };
+  it("replaces status with the assistant sentence instead of concatenating them", () => {
+    const running = progressText(emptyProgress, {
+      type: "status",
       agent_id: agentId,
       run_id: runId,
-      message: { role: "assistant", content: [{ type: "text", text: "tail" }] },
+      status: "RUNNING",
     });
-    expect(output.length).toBe(8000);
-    expect(output.endsWith("tail")).toBe(true);
+    expect(running.text).toBe("Cursor Cloud is running.");
+    expect(progressText(running, assistant("I'll locate the relevant file.")).text).toBe(
+      "I'll locate the relevant file.",
+    );
+  });
+  it("keeps fragmented assistant context across tools and status updates", () => {
+    let state = progressText(emptyProgress, assistant("I'll locate"));
+    state = progressText(state, tool("run_terminal_cmd", "running"));
+    expect(state.text).toBe("Running a command.");
+    state = progressText(state, assistant(" the relevant file."));
+    expect(state.text).toBe("I'll locate the relevant file.");
+    state = progressText(state, {
+      type: "status",
+      agent_id: agentId,
+      run_id: runId,
+      status: "RUNNING",
+    });
+    state = progressText(state, assistant(" Now I'll fix"));
+    state = progressText(state, assistant(" the adapter."));
+    expect(state.text).toBe("Now I'll fix the adapter.");
+    expect(state.assistantText).toBe("I'll locate the relevant file. Now I'll fix the adapter.");
+  });
+  it("normalizes display whitespace without removing whitespace from deltas", () => {
+    let state = progressText(emptyProgress, assistant("First step.\n\nI'll"));
+    state = progressText(state, assistant("\n\t locate"));
+    state = progressText(state, assistant(" "));
+    state = progressText(state, assistant("the file.\r\n"));
+    expect(state.text).toBe("I'll locate the file.");
+    expect(state.assistantText).toBe("First step.\n\nI'll\n\t locate the file.\r\n");
+    expect(progressText(state, assistant("\t\n")).text).toBe("I'll locate the file.");
+  });
+  it.each(["completed", "error"] as const)(
+    "starts fresh assistant text after a %s tool step",
+    (status) => {
+      let state = progressText(emptyProgress, assistant("I'll locate the file."));
+      state = progressText(state, tool("read_file", status));
+      state = progressText(state, assistant("I've found"));
+      state = progressText(state, assistant(" the cause."));
+      expect(state.text).toBe("I've found the cause.");
+      expect(state.assistantText).toBe("I've found the cause.");
+    },
+  );
+  it.each([
+    ["run_terminal_cmd", "running", "Running a command."],
+    ["shell", "completed", "Command completed."],
+    ["edit_file", "error", "File edit failed."],
+    ["read_file", "running", "Reading a file."],
+    ["webSearch", "running", "Searching the web."],
+    ["unknown_vendor_tool", "running", "Using a tool."],
+    ["__proto__", "error", "Tool failed."],
+  ] as const)("humanizes %s %s without exposing identifiers or payloads", (name, status, text) => {
+    expect(progressText(emptyProgress, tool(name, status)).text).toBe(text);
+  });
+  it("redacts vendor error status details", () => {
     expect(
-      progressText("progress", {
+      progressText(emptyProgress, {
+        type: "status",
+        agent_id: agentId,
+        run_id: runId,
+        status: "ERROR",
+        message: "private vendor error",
+      }).text,
+    ).toBe("Cursor Cloud reported an error. Open the agent for details.");
+  });
+  it("shows a short task line without mixing it into later assistant deltas", () => {
+    const state = progressText(emptyProgress, {
+      type: "task",
+      agent_id: agentId,
+      run_id: runId,
+      text: "Inspecting\n\t the repository. Updating the adapter.",
+    });
+    expect(state.text).toBe("Updating the adapter.");
+    expect(progressText(state, assistant("I'll check the result.")).text).toBe(
+      "I'll check the result.",
+    );
+  });
+  it("retains a bounded assistant accumulator and a short progress line", () => {
+    const output = progressText(
+      { assistantText: "x".repeat(8000), text: "Running a command." },
+      {
+        type: "assistant",
+        agent_id: agentId,
+        run_id: runId,
+        message: { role: "assistant", content: [{ type: "text", text: "tail" }] },
+      },
+    );
+    expect(output.assistantText.length).toBe(8000);
+    expect(output.assistantText.endsWith("tail")).toBe(true);
+    expect(output.text.length).toBeLessThanOrEqual(240);
+  });
+  it("ignores duplicate user content and thinking", () => {
+    const previous = { assistantText: "I'll locate the file.", text: "Reading a file." };
+    expect(
+      progressText(previous, {
         type: "user",
         agent_id: agentId,
         run_id: runId,
         message: { role: "user", content: [{ type: "text", text: "echo" }] },
       }),
-    ).toBe("progress");
+    ).toEqual(previous);
+    expect(
+      progressText(previous, {
+        type: "assistant",
+        agent_id: agentId,
+        run_id: runId,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tool-fixture", name: "raw_tool", input: {} }],
+        },
+      }),
+    ).toEqual(previous);
+    expect(
+      progressText(previous, {
+        type: "thinking",
+        agent_id: agentId,
+        run_id: runId,
+        text: "private reasoning",
+      }),
+    ).toEqual(previous);
   });
 });
