@@ -72,6 +72,11 @@ const layerDesktopClerk = (
       Effect.sync(() => {
         events.push(`setPath:${name}:${value}`);
       }),
+    setAsDefaultProtocolClient: (scheme: string) =>
+      Effect.sync(() => {
+        events.push(`protocol:${scheme}`);
+        return true;
+      }),
   } as unknown as ElectronApp.ElectronApp["Service"];
 
   return DesktopClerk.layer.pipe(
@@ -176,7 +181,12 @@ describe("DesktopClerk", () => {
         ),
       );
 
-      assert.deepEqual(events, [`setPath:userData:${userData}`, "createClerkBridge"]);
+      // Windows also claims the legacy link scheme, which only installers register elsewhere.
+      assert.deepEqual(events, [
+        `setPath:userData:${userData}`,
+        "createClerkBridge",
+        ...(platform === "win32" ? [`protocol:${isDevelopment ? "t3code-dev" : "t3code"}`] : []),
+      ]);
     },
   );
 

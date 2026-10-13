@@ -20,24 +20,35 @@ const memoryStore = (initial: Record<string, string>) => {
   return { keys, store };
 };
 
-it.effect("copies the legacy key once and never replaces a key the new name has", () =>
+it.effect("copies the first legacy key it finds and never replaces the new name's key", () =>
   Effect.promise(async () => {
-    const legacyOnly = memoryStore({ "T3 Code Alpha": "old-key" });
+    // Older builds keyed safeStorage to their initial package name; that one wins.
+    const packaged = memoryStore({ GOAT: "package-key", "T3 Code Alpha": "stale-key" });
     assert.equal(
-      await copySafeStorageKey(legacyOnly.store, "T3 Code Alpha", "GOAT Alpha"),
+      await copySafeStorageKey(packaged.store, ["GOAT", "T3 Code Alpha"], "GOAT Alpha"),
       "copied",
     );
-    assert.equal(legacyOnly.keys.get("GOAT Alpha"), "old-key");
+    assert.equal(packaged.keys.get("GOAT Alpha"), "package-key");
     // The legacy key stays for a rolled-back build.
-    assert.equal(legacyOnly.keys.get("T3 Code Alpha"), "old-key");
+    assert.equal(packaged.keys.get("GOAT"), "package-key");
 
-    const both = memoryStore({ "T3 Code Alpha": "old-key", "GOAT Alpha": "new-key" });
-    assert.equal(await copySafeStorageKey(both.store, "T3 Code Alpha", "GOAT Alpha"), "present");
-    assert.equal(both.keys.get("GOAT Alpha"), "new-key");
+    const fallback = memoryStore({ "T3 Code Alpha": "old-key" });
+    assert.equal(
+      await copySafeStorageKey(fallback.store, ["GOAT", "T3 Code Alpha"], "GOAT Alpha"),
+      "copied",
+    );
+    assert.equal(fallback.keys.get("GOAT Alpha"), "old-key");
+
+    const same = memoryStore({ GOAT: "key", "GOAT Alpha": "key" });
+    assert.equal(await copySafeStorageKey(same.store, ["GOAT"], "GOAT Alpha"), "present");
+
+    const diverged = memoryStore({ GOAT: "old-key", "GOAT Alpha": "fresh-key" });
+    assert.equal(await copySafeStorageKey(diverged.store, ["GOAT"], "GOAT Alpha"), "conflict");
+    assert.equal(diverged.keys.get("GOAT Alpha"), "fresh-key");
 
     const fresh = memoryStore({});
     assert.equal(
-      await copySafeStorageKey(fresh.store, "T3 Code Alpha", "GOAT Alpha"),
+      await copySafeStorageKey(fresh.store, ["GOAT", "T3 Code Alpha"], "GOAT Alpha"),
       "no-legacy-key",
     );
     assert.isFalse(fresh.keys.has("GOAT Alpha"));
@@ -53,22 +64,26 @@ it.effect("marks success, retries after a store failure, and skips unkeyed platf
     const markerPath = path.join(userDataPath, MARKER_FILE_NAME);
 
     let opened = 0;
-    const failing = yield* makeWith(async () => {
-      opened++;
-      throw new Error("keyring locked");
-    }, "linux");
+    const failing = yield* makeWith(
+      async () => {
+        opened++;
+        throw new Error("keyring locked");
+      },
+      "linux",
+      "GOAT",
+    );
     yield* failing.run(input);
     assert.equal(opened, 1);
     assert.isFalse(yield* fs.exists(markerPath));
 
-    const unkeyed = yield* makeWith(async () => null, "win32");
+    const unkeyed = yield* makeWith(async () => null, "win32", "GOAT");
     yield* unkeyed.run(input);
     assert.isFalse(yield* fs.exists(markerPath));
 
-    const { keys, store } = memoryStore({ "T3 Code Alpha": "old-key" });
-    const working = yield* makeWith(async () => store, "darwin");
+    const { keys, store } = memoryStore({ GOAT: "package-key" });
+    const working = yield* makeWith(async () => store, "darwin", "GOAT");
     yield* working.run(input);
-    assert.equal(keys.get("GOAT Alpha"), "old-key");
+    assert.equal(keys.get("GOAT Alpha"), "package-key");
     assert.include(yield* fs.readFileString(markerPath), "copied");
 
     // Marked: the store is not opened again.

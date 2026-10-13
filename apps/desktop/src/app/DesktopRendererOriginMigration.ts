@@ -132,7 +132,12 @@ const make = Effect.gen(function* () {
           legacyOrigin: ElectronProtocol.getLegacyDesktopOrigin(environment.isDevelopment),
           origin: ElectronProtocol.getDesktopOrigin(environment.isDevelopment),
           runPage: runDetachedPage,
-        }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          // Once the window opens the app creates its own data, which a later import never
+          // replaces, so a transient failure gets one more try now.
+          Effect.retry({ times: 1 }),
+        );
       }),
     ).pipe(
       Effect.catch((error) =>

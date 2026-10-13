@@ -10,14 +10,17 @@ development) by `apps/desktop/src/electron/ElectronProtocol.ts`.
 ## Runtime identity
 
 The Electron runtime name is `GOAT <stage>` (`DESKTOP_RUNTIME_APP_BASE_NAME` in
-`apps/desktop/src/app/DesktopEnvironment.ts`). It keys the safeStorage key that encrypts saved
-connections and Clerk tokens. The renderer origin keys localStorage and IndexedDB. Builds before
-#110 used `T3 Code <stage>` and `t3code://app`; both migrate forward once per profile and leave the
-originals for a rolled-back build:
+`apps/desktop/src/app/DesktopEnvironment.ts`). Electron reads it once, before the event loop
+starts, to name the safeStorage key that encrypts saved connections and Clerk tokens, so
+`apps/desktop/src/main.ts` sets it synchronously at load. The renderer origin keys localStorage and
+IndexedDB. Builds before #110 set the name too late, so their key sits under the initial package
+name, and they served `t3code://app`. Both migrate forward once per profile and leave the originals
+for a rolled-back build:
 
-- `apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts` copies the old name's key to the new name
-  before anything reads safeStorage (macOS Keychain, Linux Secret Service; Windows keeps its key in
-  the profile). Marker: `safe-storage-key-migrated` in the profile.
+- `apps/desktop/src/app/DesktopSafeStorageKeyMigration.ts` copies the key of the initial package name
+  (or `T3 Code <stage>`) to the new name before anything reads safeStorage (macOS Keychain, Linux
+  Secret Service; Windows keeps its key in the profile). A differing key already under the new
+  name is logged as a conflict and left alone. Marker: `safe-storage-key-migrated` in the profile.
 - `apps/desktop/src/app/DesktopRendererOriginMigration.ts` copies localStorage and every IndexedDB
   database from the legacy origin before the first window, never replacing existing data. Marker:
   `renderer-origin-migrated`.

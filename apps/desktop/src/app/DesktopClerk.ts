@@ -126,6 +126,13 @@ export const make = Effect.gen(function* () {
           }),
       }).pipe(Effect.orDie),
   );
+  // The bridge registers the renderer scheme. Windows has no installer-level registration, so the
+  // legacy scheme that existing links and the Codex sign-in handoff use is registered here too.
+  if (environment.platform === "win32") {
+    yield* electronApp.setAsDefaultProtocolClient(
+      ElectronProtocol.getLegacyDesktopScheme(environment.isDevelopment),
+    );
+  }
 
   return DesktopClerk.of({
     configure: Effect.gen(function* () {

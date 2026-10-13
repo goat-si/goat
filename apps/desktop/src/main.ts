@@ -96,6 +96,19 @@ if (process.argv.includes("--version")) {
   Electron.app.exit(0);
 }
 
+// Electron reads app.name once, before the event loop starts, to name the safeStorage key (macOS
+// Keychain item, Linux keyring entry). Set the runtime name here, synchronously. Builds that set
+// it later left their key under the initial package name, which the key migration copies from.
+const initialRuntimeName = Electron.app.name;
+Electron.app.setName(
+  DesktopEnvironment.desktopRuntimeAppName(
+    DesktopEnvironment.resolveDesktopAppBranding({
+      isDevelopment: (process.env.VITE_DEV_SERVER_URL ?? "").trim() !== "",
+      appVersion: Electron.app.getVersion(),
+    }).stageLabel,
+  ),
+);
+
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
     const metadata = yield* Effect.service(ElectronApp.ElectronApp).pipe(
@@ -163,7 +176,7 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopState.layer,
   DesktopShutdown.layer,
   DesktopLegacyLocalStorage.layer,
-  DesktopSafeStorageKeyMigration.layer,
+  DesktopSafeStorageKeyMigration.layer({ initialRuntimeName }),
   DesktopRendererOriginMigration.layer,
   DesktopAppSettings.layer,
   DesktopClientSettings.layer,
