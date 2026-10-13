@@ -264,6 +264,12 @@ it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideServic
                   `${input.baseCommit}...HEAD`,
                 ]);
                 const head = yield* readCheckout(input.cwd, ["rev-parse", "HEAD"]);
+                const baseRefs = yield* readCheckout(repositories.workspace, [
+                  "for-each-ref",
+                  "--format=%(refname)",
+                  "refs/goat/review-guide",
+                ]);
+                assert.match(baseRefs, /^refs\/goat\/review-guide\/[^\n]+\/base$/);
                 // Another layer's head is readable from the checkout, to check a seam.
                 const upper = yield* readCheckout(input.cwd, [
                   "show",

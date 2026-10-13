@@ -1,3 +1,4 @@
+import { ProjectToolkit } from "../project/tools.ts";
 import { assert, describe, it } from "@effect/vitest";
 import { Tool } from "effect/ai";
 
@@ -10,6 +11,17 @@ import {
 } from "./tools.ts";
 
 describe("orchestrator MCP tool guidance", () => {
+  it("describes GOAT thread links on each reader and launcher tool", () => {
+    for (const tool of [
+      OrchestratorToolkit.tools.goat_thread_list,
+      OrchestratorToolkit.tools.goat_thread_read,
+      ProjectToolkit.tools.goat_thread_launch,
+    ]) {
+      assert.include(tool.description ?? "", "[title](goat-thread://v1/<threadId>)");
+      assert.notInclude(tool.description ?? "", "t3-thread://");
+    }
+  });
+
   it("directs subagent requests to delegation instead of ordinary threads", () => {
     assert.include(DelegateTaskTool.description ?? "", "child agent/subagent");
     assert.include(DelegateTaskTool.description ?? "", "cross-provider");

@@ -43,7 +43,7 @@ internal object T3ComposerClipboard {
         ClipData.newHtmlText(
           "GOAT",
           text,
-          "<pre data-t3-context-fragment=\"$encoded\">$escaped</pre>" // goat-rename: legacy
+          "<pre data-goat-context-fragment=\"$encoded\">$escaped</pre>"
         )
       }
     )

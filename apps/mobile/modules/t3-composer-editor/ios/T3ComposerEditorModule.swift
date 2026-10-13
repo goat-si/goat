@@ -2,7 +2,8 @@ import ExpoModulesCore
 import UIKit
 
 enum T3ComposerClipboard {
-  static let fragmentType = "app.t3.context-fragment"
+  static let fragmentType = "app.goat.context-fragment"
+  static let legacyFragmentType = "app.t3.context-fragment" // goat-rename: legacy
 
   static func write(text: String, fragment: String) {
     var items: [String: Any] = ["public.utf8-plain-text": text]
@@ -20,7 +21,7 @@ enum T3ComposerClipboard {
         let attribute = raw.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         let escaped = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
         items[fragmentType] = encoded
-        items["public.html"] = Data("<pre data-t3-context-fragment=\"\(attribute)\">\(escaped)</pre>".utf8) // goat-rename: legacy
+        items["public.html"] = Data("<pre data-goat-context-fragment=\"\(attribute)\">\(escaped)</pre>".utf8)
       }
     }
     UIPasteboard.general.items = [items]
@@ -30,7 +31,7 @@ enum T3ComposerClipboard {
     let board = UIPasteboard.general
     return [
       "text": board.string ?? "",
-      "fragment": board.data(forPasteboardType: fragmentType).flatMap { String(data: $0, encoding: .utf8) } ?? "",
+      "fragment": (board.data(forPasteboardType: fragmentType) ?? board.data(forPasteboardType: legacyFragmentType)).flatMap { String(data: $0, encoding: .utf8) } ?? "",
       "html": board.data(forPasteboardType: "public.html").flatMap { String(data: $0, encoding: .utf8) } ?? "",
     ]
   }

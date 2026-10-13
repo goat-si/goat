@@ -170,6 +170,9 @@ export const LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-t3-context-fragment";
 export const GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-goat-context-fragment";
 export const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
 export const GOAT_CONTEXT_CLIPBOARD_MIME = "application/x-goat-context-fragment+json";
+/** Native iOS clipboard type; HTML remains the portable flavor. */
+export const LEGACY_CONTEXT_CLIPBOARD_UTI = "app.t3.context-fragment";
+export const GOAT_CONTEXT_CLIPBOARD_UTI = "app.goat.context-fragment";
 export const CONTEXT_CLIPBOARD_MIMES = [
   `web ${LEGACY_CONTEXT_CLIPBOARD_MIME}`,
   LEGACY_CONTEXT_CLIPBOARD_MIME,
