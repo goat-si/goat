@@ -189,7 +189,10 @@ export type WorktreeMcpInventoryResult = typeof WorktreeMcpInventoryResult.Type;
 export const WorktreeMcpRemoveInput = Schema.Struct({
   host: Schema.optional(OrchestratorMcpHost),
   path: Schema.optional(
-    TrimmedNonEmptyString.annotate({ description: "Absolute path of the worktree to remove." }),
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Absolute path of the worktree to remove, as goat_worktree_inventory lists it. A symlink to a worktree is refused.",
+    }),
   ),
   threadId: Schema.optional(
     ThreadId.annotate({ description: "Remove the worktree this thread is bound to." }),
@@ -203,7 +206,13 @@ export const WorktreeMcpRemoveInput = Schema.Struct({
   deleteBranch: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "Also delete the worktree's local branch. Default false. A bound thread can then no longer recreate its checkout.",
+        "Also delete the worktree's local branch. Default false. Never deletes the repository's default branch, and refuses a branch whose commits no remote, other branch, or merged pull request holds unless deleteUnsavedBranch is true. A bound thread can then no longer recreate its checkout.",
+    }),
+  ),
+  deleteUnsavedBranch: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "With deleteBranch, delete the branch even when its commits exist nowhere else, losing them. Default false. Separate from force, which only covers the checkout.",
     }),
   ),
 });

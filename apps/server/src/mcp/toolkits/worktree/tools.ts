@@ -118,7 +118,7 @@ const WorktreeInventoryTool = Tool.make("goat_worktree_inventory", {
 
 const WorktreeRemoveTool = Tool.make("goat_worktree_remove", {
   description:
-    "Remove one git worktree, by path or by the threadId bound to it, with git worktree remove and prune. Always refuses a worktree whose thread is running, queued, or waiting on a question, a repository's main checkout, and a GOAT project's folder. Also refuses uncommitted changes and commits that no remote, other local branch, or merged pull request holds, unless force is true. The branch is kept unless deleteBranch is true, so a finished thread still bound to the path recreates its checkout if it runs again." +
+    "Remove one git worktree, by path or by the threadId bound to it, with git worktree remove and prune. Always refuses a worktree whose thread is running, queued, or waiting on a question, a repository's main checkout, and a GOAT project's folder. Also refuses uncommitted changes and commits that no remote, other local branch, or merged pull request holds, unless force is true. Only worktrees of registered GOAT projects are accepted. The branch is kept unless deleteBranch is true, so a finished thread still bound to the path recreates its checkout if it runs again. Needs a full-access caller." +
     ON_HOST,
   parameters: WorktreeMcpRemoveInput,
   success: WorktreeMcpRemoveResult,
@@ -134,7 +134,7 @@ const WorktreeRemoveTool = Tool.make("goat_worktree_remove", {
 
 const WorktreeCleanupTool = Tool.make("goat_worktree_cleanup", {
   description:
-    "Sweep stale git worktrees. A worktree is removed when every bound thread finished (completed, failed, interrupted, cancelled) or is archived, or no thread is bound and it sits in GOAT's worktrees folder, and it has no uncommitted changes and its commits are on a remote, on another local branch, or in a merged pull request. Branches are kept. Defaults to dryRun:true, which only reports; pass dryRun:false to remove. Returns removed and kept worktrees with a reason for each; main checkouts are left out." +
+    "Sweep stale git worktrees. A worktree is removed when every bound thread finished (completed, failed, interrupted, cancelled) or is archived, or no thread is bound and it sits in GOAT's worktrees folder, and it has no uncommitted changes and its commits are on a remote, on another local branch, or in a merged pull request. Branches are kept. Only registered GOAT projects are swept; repo must be an absolute path in one. Defaults to dryRun:true, which only reports; pass dryRun:false to remove, which needs a full-access caller. Returns removed and kept worktrees with a reason for each; main checkouts are left out." +
     ON_HOST,
   parameters: WorktreeMcpCleanupInput,
   success: WorktreeMcpCleanupResult,

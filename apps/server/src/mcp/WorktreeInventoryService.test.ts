@@ -65,6 +65,8 @@ const fixture = Effect.gen(function* () {
   const worktreesDir = yield* fs.realPath(config.worktreesDir);
   let threads: Array<ThreadFixture> = [];
   let mergedPullRequest: { branch: string; headSha: string } | null = null;
+  // Runs while removal waits on the pull request lookup, between its checks and the deletion.
+  let duringPullRequestLookup: () => void = () => {};
 
   const addWorktree = (branch: string, at = worktreesDir + "/" + branch) =>
     run(repo, ["worktree", "add", "-b", branch, at]).pipe(Effect.as(at));
@@ -94,16 +96,17 @@ const fixture = Effect.gen(function* () {
     } as unknown as ProjectService.ProjectService["Service"]),
     Effect.provideService(GitManager.GitManager, {
       branchPullRequest: (input: { branch: string }) =>
-        Effect.sync(() =>
-          mergedPullRequest?.branch === input.branch
+        Effect.sync(() => {
+          duringPullRequestLookup();
+          return mergedPullRequest?.branch === input.branch
             ? {
                 number: 7,
                 state: "merged",
                 headRef: input.branch,
                 headSha: mergedPullRequest.headSha,
               }
-            : null,
-        ),
+            : null;
+        }),
     } as unknown as GitManager.GitManager["Service"]),
   );
   const service = Context.get(context, WorktreeInventoryService.WorktreeInventoryService);
@@ -121,6 +124,10 @@ const fixture = Effect.gen(function* () {
     setMergedPullRequest: (next: { branch: string; headSha: string } | null) => {
       mergedPullRequest = next;
     },
+    setDuringPullRequestLookup: (next: () => void) => {
+      duringPullRequestLookup = next;
+    },
+    root,
   };
 });
 
@@ -272,6 +279,115 @@ describe("WorktreeInventoryService", () => {
       );
       for (const path of [archived, finished, orphan]) expect(yield* fs.exists(path)).toBe(false);
       for (const path of [idle, unsaved, outside]) expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("never deletes the default branch, even with force", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, repo } = yield* fixture;
+      yield* run(repo, ["remote", "set-head", "origin", "main"]);
+      // The default branch can sit in a secondary worktree once the main checkout moves off it.
+      yield* run(repo, ["switch", "-c", "elsewhere"]);
+      const path = repo + "-main";
+      yield* run(repo, ["worktree", "add", path, "main"]);
+
+      const message = yield* refusal(service.remove({ path, force: true, deleteBranch: true }));
+      expect(message).toContain("is the repository's default branch");
+      expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("keeps a branch with unsaved commits unless deleteUnsavedBranch is set", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, repo, addWorktree, commit } = yield* fixture;
+      const path = yield* addWorktree("only-copy");
+      yield* commit(path);
+
+      // force covers the checkout, not the branch that alone holds the commit.
+      const message = yield* refusal(service.remove({ path, force: true, deleteBranch: true }));
+      expect(message).toContain("deleteUnsavedBranch:true");
+      expect(yield* fs.exists(path)).toBe(true);
+
+      const result = yield* service.remove({
+        path,
+        force: true,
+        deleteBranch: true,
+        deleteUnsavedBranch: true,
+      });
+      expect(result.branchDeleted).toBe(true);
+      expect((yield* run(repo, ["branch", "--list", "only-copy"])).stdout.trim()).toBe("");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("refuses repositories that belong to no GOAT project", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, root } = yield* fixture;
+      const stranger = root + "/stranger";
+      yield* run(root, ["init", "-b", "main", stranger]);
+      yield* run(stranger, [
+        "-c",
+        "user.email=s@example.test",
+        "-c",
+        "user.name=S",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "s",
+      ]);
+      const path = root + "/stranger-wt";
+      yield* run(stranger, ["worktree", "add", "-b", "side", path]);
+
+      expect(yield* refusal(service.remove({ path, force: true }))).toContain(
+        "is not a repository of a GOAT project",
+      );
+      expect(yield* refusal(service.cleanup({ repo: stranger, dryRun: false }))).toContain(
+        "is not a repository of a GOAT project",
+      );
+      expect(yield* refusal(service.cleanup({ repo: "relative/repo" }))).toContain(
+        "repo must be an absolute path",
+      );
+      expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("refuses a symlink to a worktree instead of following it", () =>
+    Effect.gen(function* () {
+      const { service, fs, root, addWorktree } = yield* fixture;
+      const path = yield* addWorktree("aliased");
+      const alias = root + "/alias";
+      yield* fs.symlink(path, alias);
+
+      expect(yield* refusal(service.remove({ path: alias, force: true }))).toContain(
+        "is an alias of the worktree at " + path,
+      );
+      expect(yield* fs.exists(path)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live("rechecks the thread right before deleting, after the slow commit checks", () =>
+    Effect.gen(function* () {
+      const {
+        service,
+        fs,
+        addWorktree,
+        commit,
+        setThreads,
+        setMergedPullRequest,
+        setDuringPullRequestLookup,
+      } = yield* fixture;
+      const path = yield* addWorktree("racing");
+      const head = yield* commit(path);
+      setMergedPullRequest({ branch: "racing", headSha: head });
+      setThreads([{ id: "t1", worktreePath: path, status: "completed" }]);
+      // The thread starts while removal waits on the pull request lookup.
+      setDuringPullRequestLookup(() =>
+        setThreads([{ id: "t1", worktreePath: path, status: "starting", activeRunId: "run-2" }]),
+      );
+
+      expect(yield* refusal(service.remove({ path }))).toContain(
+        "thread t1 started while this removal was checked",
+      );
+      expect(yield* fs.exists(path)).toBe(true);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 });

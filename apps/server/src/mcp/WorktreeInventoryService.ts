@@ -117,6 +117,11 @@ interface WorktreeFacts {
   readonly head: string | null;
   /** The folder is, or contains, a registered project's workspace root. */
   readonly holdsProject: boolean;
+  /**
+   * The worktree's own path and every bound thread's recorded path: the keys
+   * turn start and storage cleanup take the workspace lease under.
+   */
+  readonly leaseKeys: ReadonlyArray<string>;
 }
 
 interface ScanContext {
@@ -281,25 +286,55 @@ const make = Effect.gen(function* () {
             entry,
             head: record.head,
             holdsProject: context.projectRoots.some((root) => within(key, root)),
+            leaseKeys: [
+              ...new Set([
+                worktreePath,
+                ...shells.map((thread) => path.resolve(thread.worktreePath!)),
+              ]),
+            ].toSorted(),
           } satisfies WorktreeFacts;
         }),
       { concurrency: 8 },
     );
   });
 
-  /** Worktrees of `repo`, or of every project repository, each repository once. */
+  /** The main checkout of the repository at `cwd`, canonical, or null when it is none. */
+  const repositoryOf = (cwd: string) =>
+    gitRead(cwd, ["worktree", "list", "--porcelain", "-z"]).pipe(
+      Effect.flatMap((listed) => {
+        const first = listed === null ? undefined : parseWorktreeRecords(listed.stdout)[0];
+        return first === undefined
+          ? Effect.succeed(null)
+          : real(path.resolve(cwd, first.path)).pipe(Effect.map((key): string | null => key));
+      }),
+    );
+
+  /**
+   * Worktrees of `repo`, or of every project repository, each repository once.
+   * Only registered projects' repositories count: these tools must never reach
+   * a checkout GOAT does not manage.
+   */
   const scan = Effect.fn("WorktreeInventory.scan")(function* (repo: string | undefined) {
     const { context, repositories } = yield* loadContext;
-    const roots = repo === undefined ? repositories : [repo];
+    if (repo !== undefined) {
+      if (!path.isAbsolute(repo))
+        return yield* failure("invalid_request", "repo must be an absolute path.");
+      const repository = yield* repositoryOf(repo);
+      if (repository === null)
+        return yield* failure("invalid_request", repo + " is not inside a git repository.");
+      const registered = yield* Effect.forEach(repositories, repositoryOf, { concurrency: 8 });
+      if (!registered.includes(repository))
+        return yield* failure(
+          "invalid_request",
+          repo + " is not a repository of a GOAT project. goat_project_list lists them.",
+        );
+      return (yield* scanRepository(repo, context)) ?? [];
+    }
     const seen = new Set<string>();
     const facts: Array<WorktreeFacts> = [];
-    for (const root of roots) {
+    for (const root of repositories) {
       const scanned = yield* scanRepository(root, context);
-      if (scanned === null) {
-        if (repo !== undefined)
-          return yield* failure("invalid_request", repo + " is not inside a git repository.");
-        continue;
-      }
+      if (scanned === null) continue;
       const repository = scanned[0]?.entry.repository;
       if (repository === undefined || seen.has(repository)) continue;
       seen.add(repository);
@@ -362,19 +397,21 @@ const make = Effect.gen(function* () {
     return null;
   };
 
-  /** Refusals `force` overrides, with why removal is safe otherwise. */
+  /**
+   * Refusals `force` overrides, and what holds the commits (null when nothing
+   * outside this worktree's branch does), which also decides branch deletion.
+   */
   const unsavedWork = Effect.fn("WorktreeInventory.unsavedWork")(function* (facts: WorktreeFacts) {
     const { entry } = facts;
-    if (!entry.missing) {
-      if (entry.dirtyCount === null)
-        return { blocker: "its status could not be read", saved: null };
-      if (entry.dirtyCount > 0)
-        return {
-          blocker: "it has " + files(entry.dirtyCount) + " with uncommitted changes",
-          saved: null,
-        };
-    }
     const saved = yield* savedBy(facts);
+    const dirty = entry.missing
+      ? null
+      : entry.dirtyCount === null
+        ? "its status could not be read"
+        : entry.dirtyCount > 0
+          ? "it has " + files(entry.dirtyCount) + " with uncommitted changes"
+          : null;
+    if (dirty !== null) return { blocker: dirty, saved };
     if (saved !== null) return { blocker: null, saved };
     return {
       blocker:
@@ -399,14 +436,70 @@ const make = Effect.gen(function* () {
       return null;
     });
 
-  /** Removes one worktree under its workspace lease, after checking it again. */
+  /** Why a branch must outlive its worktree, or null when deleting it loses nothing. */
+  const branchBlocker = Effect.fn("WorktreeInventory.branchBlocker")(function* (
+    facts: WorktreeFacts,
+    saved: string | null,
+    deleteUnsavedBranch: boolean,
+  ) {
+    const branch = facts.entry.branch;
+    if (branch === null) return null;
+    const remote = yield* git
+      .resolvePrimaryRemoteName(facts.entry.repository)
+      .pipe(Effect.orElseSucceed(() => null));
+    const defaultBranch =
+      remote === null
+        ? null
+        : yield* git
+            .resolveDefaultBranchName(facts.entry.repository, remote)
+            .pipe(Effect.orElseSucceed(() => null));
+    // Without a remote HEAD to name it, assume the usual default names.
+    if (
+      defaultBranch === null ? branch === "main" || branch === "master" : branch === defaultBranch
+    )
+      return "branch " + branch + " is the repository's default branch";
+    if (saved === null && !deleteUnsavedBranch)
+      return (
+        "branch " +
+        branch +
+        " holds commits on no remote, other branch, or merged pull request. Pass deleteUnsavedBranch:true to delete it anyway"
+      );
+    return null;
+  });
+
+  /** Runs `effect` holding every lease in `keys`, taken in sorted order. */
+  const withLeases = <A, E, R>(
+    keys: ReadonlyArray<string>,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    keys.reduceRight((inner, key) => withWorkspaceLease(key, inner), effect);
+
+  /** A thread bound to the worktree at `key` that is busy now, read fresh. */
+  const busyNow = (key: string) =>
+    loadContext.pipe(
+      Effect.map(({ context }) =>
+        (context.threadsByPath.get(key) ?? []).find((thread) =>
+          worktreeThreadBusy(thread, context.nowMs),
+        ),
+      ),
+    );
+
+  /**
+   * Removes one worktree under the workspace leases turn start and storage
+   * cleanup take, after checking it again. The busy check repeats right before
+   * deletion, since the commit and pull request checks above it can take seconds.
+   */
   const removeChecked = Effect.fn("WorktreeInventory.removeChecked")(function* (
     target: WorktreeFacts,
-    options: { readonly force: boolean; readonly deleteBranch: boolean },
+    options: {
+      readonly force: boolean;
+      readonly deleteBranch: boolean;
+      readonly deleteUnsavedBranch: boolean;
+    },
   ) {
     const key = yield* real(target.entry.path);
-    return yield* withWorkspaceLease(
-      target.entry.path,
+    return yield* withLeases(
+      target.leaseKeys,
       Effect.gen(function* () {
         const facts = yield* reread(target.entry.repository, key);
         if (facts === null)
@@ -421,6 +514,14 @@ const make = Effect.gen(function* () {
         const work = yield* unsavedWork(facts);
         if (work.blocker !== null && !options.force)
           return yield* refuse(work.blocker + ". Pass force:true to remove it anyway");
+        const branch = facts.entry.branch;
+        if (options.deleteBranch) {
+          const blocker = yield* branchBlocker(facts, work.saved, options.deleteUnsavedBranch);
+          if (blocker !== null) return yield* refuse(blocker);
+        }
+        const busy = yield* busyNow(key);
+        if (busy !== undefined)
+          return yield* refuse("thread " + busy.id + " started while this removal was checked");
         yield* git
           .removeWorktree({
             cwd: facts.entry.repository,
@@ -439,7 +540,6 @@ const make = Effect.gen(function* () {
         const notes: Array<string> = [];
         if (work.blocker !== null) notes.push("Forced past: " + work.blocker + ".");
         let branchDeleted = false;
-        const branch = facts.entry.branch;
         if (options.deleteBranch && branch !== null) {
           yield* git
             .deleteLocalBranch({ cwd: facts.entry.repository, refName: branch, force: true })
@@ -493,13 +593,12 @@ const make = Effect.gen(function* () {
     }
     if (!path.isAbsolute(targetPath!))
       return yield* failure("invalid_request", "path must be absolute.");
-    const key = yield* real(targetPath!);
-    // A folder that still exists names its own repository; a missing one is
-    // found among the project repositories, which still list it.
-    const exists = yield* fs.exists(targetPath!).pipe(Effect.orElseSucceed(() => false));
-    const candidates = yield* (exists ? scan(targetPath!) : scan(undefined)).pipe(
-      Effect.orElseSucceed((): ReadonlyArray<WorktreeFacts> => []),
-    );
+    const requested = path.resolve(targetPath!);
+    const key = yield* real(requested);
+    // A folder that still exists names its own repository, which must be a
+    // project's; a missing one is found among the project repositories.
+    const exists = yield* fs.exists(requested).pipe(Effect.orElseSucceed(() => false));
+    const candidates = yield* scan(exists ? requested : undefined);
     let target: WorktreeFacts | undefined;
     for (const facts of candidates)
       if ((yield* real(facts.entry.path)) === key) {
@@ -509,12 +608,22 @@ const make = Effect.gen(function* () {
     if (target === undefined)
       return yield* failure(
         "invalid_request",
-        targetPath +
-          " is not a git worktree of a GOAT project. goat_worktree_inventory lists them.",
+        requested + " is not a git worktree of a GOAT project. goat_worktree_inventory lists them.",
+      );
+    // A symlink to a worktree resolves to it; deleting through an alias would
+    // remove a checkout the caller did not name.
+    if (!target.leaseKeys.includes(requested))
+      return yield* failure(
+        "invalid_request",
+        requested +
+          " is an alias of the worktree at " +
+          target.entry.path +
+          ". Pass the worktree's own path.",
       );
     const { saved: _saved, ...result } = yield* removeChecked(target, {
       force: input.force === true,
       deleteBranch: input.deleteBranch === true,
+      deleteUnsavedBranch: input.deleteUnsavedBranch === true,
     });
     return result;
   });
@@ -558,7 +667,11 @@ const make = Effect.gen(function* () {
         removed.push({ ...entry, reason });
         continue;
       }
-      yield* removeChecked(fact, { force: false, deleteBranch: false }).pipe(
+      yield* removeChecked(fact, {
+        force: false,
+        deleteBranch: false,
+        deleteUnsavedBranch: false,
+      }).pipe(
         Effect.match({
           onFailure: (error) => kept.push({ ...entry, reason: error.message }),
           onSuccess: () => removed.push({ ...entry, reason }),
