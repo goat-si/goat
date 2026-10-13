@@ -1215,6 +1215,13 @@ it.effect(
         yield* worker.drain();
         const firstFailure = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(firstFailure.providerThreads[0]?.cloudTask?.status, "unknown");
+        assert.equal(
+          firstFailure.turnItems.filter(
+            (item) => item.runId === saved.run.id && item.type === "assistant_message",
+          ).length,
+          0,
+          "Recoverable observation failures must not add a final assistant result",
+        );
         assert.equal(h.getRun.mock.calls.length, 0);
         // The default worker makes five attempts. Drive the four remaining durable deadlines,
         // never the vendor poll clock: this prompt has no accepted remote run to observe.
@@ -1249,8 +1256,35 @@ it.effect(
         assert.equal(results.length, 1);
         assert.equal(results[0]?.id, `message:cloud-result:${saved.run.id}`);
         assert.include(results[0]!.text, saved.task.url);
+        const assistantItems = after.turnItems.filter(
+          (item) => item.runId === saved.run.id && item.type === "assistant_message",
+        );
+        assert.equal(assistantItems.length, 1, "Exhausted recovery must persist an assistant item");
+        const item = assistantItems[0]!;
+        assert.equal(item.id, `turn-item:cloud-result:${saved.run.id}`);
+        assert.equal(item.messageId, results[0]!.id);
+        assert.equal(item.threadId, threadId);
+        assert.equal(item.nodeId, saved.root.id);
+        assert.equal(item.text, results[0]!.text);
+        assert.include(item.text, "remote work may continue");
+        assert.include(item.text, saved.task.url);
+        assert.equal(item.status, "completed");
+        assert.isFalse(item.streaming);
+        assert.isNotNull(item.completedAt);
+        const visible = after.visibleTurnItems.filter(
+          (row) => row.item.runId === saved.run.id && row.item.type === "assistant_message",
+        );
+        assert.equal(visible.length, 1, "Exhausted recovery must appear in ordinary history");
+        assert.equal(visible[0]!.sourceItemId, item.id);
+        assert.equal(visible[0]!.sourceThreadId, threadId);
+        assert.deepEqual(visible[0]!.item, item);
         yield* recovery.recover;
         yield* worker.drain();
+        const repeated = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(repeated.messages, after.messages);
+        assert.deepEqual(repeated.turnItems, after.turnItems);
+        assert.deepEqual(repeated.visibleTurnItems, after.visibleTurnItems);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
         assert.equal(h.getRun.mock.calls.length, 0);
         assert.equal(h.create.mock.calls.length, 0);
         assert.equal(h.resume.mock.calls.length, 0);

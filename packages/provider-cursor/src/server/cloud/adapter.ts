@@ -184,7 +184,10 @@ function progressLine(text: string): string {
       .replace(/\s+/g, " ")
       .split(/(?<=[.!?])\s+/)
       .at(-1) ?? "";
-  return sentence.length > 240 ? `${sentence.slice(0, 239)}…` : sentence;
+  if (sentence.length <= 240) return sentence;
+  // Reserve one UTF-16 unit for the ellipsis without splitting a surrogate pair.
+  const end = (sentence.codePointAt(238) ?? 0) > 0xffff ? 238 : 239;
+  return `${sentence.slice(0, end)}…`;
 }
 
 export function progressText(previous: Progress, message: SDKMessage): Progress {
@@ -195,7 +198,11 @@ export function progressText(previous: Progress, message: SDKMessage): Progress 
         .flatMap((part) => (part.type === "text" ? [part.text] : []))
         .join("");
       if (!delta) return previous;
-      const assistantText = (previous.assistantText + delta).slice(-8000);
+      const accumulated = previous.assistantText + delta;
+      let start = Math.max(0, accumulated.length - 8000);
+      // A cut inside a surrogate pair must discard both units to stay within the cap.
+      if ((accumulated.codePointAt(start - 1) ?? 0) > 0xffff) start += 1;
+      const assistantText = accumulated.slice(start);
       return { assistantText, text: progressLine(assistantText) || previous.text };
     }
     case "thinking":

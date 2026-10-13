@@ -1113,6 +1113,54 @@ describe("Cursor Cloud adapter", () => {
     expect(output.assistantText.endsWith("tail")).toBe(true);
     expect(output.text.length).toBeLessThanOrEqual(240);
   });
+  it.each(["assistant", "task"] as const)(
+    "clips %s progress at code point boundaries within 240 UTF-16 units",
+    (type) => {
+      for (const prefixLength of [237, 238, 239]) {
+        const prefix = "x".repeat(prefixLength);
+        const text = `${prefix}🚀more`;
+        const output = progressText(
+          emptyProgress,
+          type === "assistant" ? assistant(text) : { type, agent_id: agentId, run_id: runId, text },
+        );
+        expect(output.text).toBe(`${prefix}${prefixLength === 237 ? "🚀" : ""}…`);
+        expect(output.text.length).toBeLessThanOrEqual(240);
+      }
+    },
+  );
+  it("keeps a complete non-BMP character at the exact display limit", () => {
+    const text = `${"x".repeat(238)}🚀`;
+    expect(progressText(emptyProgress, assistant(text)).text).toBe(text);
+  });
+  it.each([7998, 7999, 8000])(
+    "clips the assistant accumulator at code point boundaries with %s trailing UTF-16 units",
+    (tailLength) => {
+      const tail = "x".repeat(tailLength);
+      const output = progressText(emptyProgress, assistant(`head🚀${tail}`));
+      expect(output.assistantText).toBe(`${tailLength === 7998 ? "🚀" : ""}${tail}`);
+      expect(output.assistantText.length).toBeLessThanOrEqual(8000);
+    },
+  );
+  it("clips display progress after joining a surrogate pair split across deltas", () => {
+    const prefix = "x".repeat(238);
+    let state = progressText(emptyProgress, assistant(`${prefix}\uD83D`));
+    state = progressText(state, assistant("\uDE80more"));
+    expect(state.assistantText).toBe(`${prefix}🚀more`);
+    expect(state.text).toBe(`${prefix}…`);
+  });
+  it("clips a reassembled surrogate pair as later deltas move the accumulator boundary", () => {
+    const tail = "y".repeat(7998);
+    let state = progressText(emptyProgress, assistant("head\uD83D"));
+    state = progressText(state, assistant(`\uDE80${tail}`));
+    expect(state.assistantText).toBe(`🚀${tail}`);
+    expect(state.assistantText.length).toBe(8000);
+    state = progressText(state, assistant("z"));
+    expect(state.assistantText).toBe(`${tail}z`);
+    expect(state.assistantText.length).toBe(7999);
+    state = progressText(state, assistant("!"));
+    expect(state.assistantText).toBe(`${tail}z!`);
+    expect(state.assistantText.length).toBe(8000);
+  });
   it("ignores duplicate user content and thinking", () => {
     const previous = { assistantText: "I'll locate the file.", text: "Reading a file." };
     expect(
