@@ -5,7 +5,10 @@ import {
   type ExecutionEnvironmentDescriptor,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import {
+  SSH_RUNTIME_PROTOCOL_VERSION,
+  ownRuntimeProtocolRanges,
+} from "@goat/shared/sshRuntimeProtocol";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -13,6 +16,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+
+import * as RuntimeIdentity from "../runtimeIdentity.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -190,6 +195,7 @@ export const make = Effect.gen(function* () {
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
   const environmentId = yield* identity.getEnvironmentId;
+  const { instanceId } = yield* RuntimeIdentity.RuntimeIdentity;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
   const machine = yield* detectServerEnvironmentMachineKind();
@@ -215,6 +221,8 @@ export const make = Effect.gen(function* () {
       ...(machine === null ? {} : { machine }),
     },
     serverVersion: packageJson.version,
+    instanceId,
+    protocol: ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
@@ -266,6 +274,7 @@ export const make = Effect.gen(function* () {
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
       sshActivity: true,
+      drainRestart: true,
       channelLedger: true,
       goatBotHome: true,
       goatBotStatus: true,
@@ -298,5 +307,6 @@ export const layerIdentity = Layer.effect(ServerEnvironmentIdentity, makeIdentit
  */
 export const layer = Layer.effect(ServerEnvironment, make).pipe(
   Layer.provideMerge(layerIdentity),
+  Layer.provideMerge(RuntimeIdentity.layer),
   Layer.provide(ProcessRunner.layer),
 );

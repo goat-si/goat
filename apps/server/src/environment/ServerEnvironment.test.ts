@@ -14,6 +14,9 @@ import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 
+import * as RuntimeIdentity from "../runtimeIdentity.ts";
+import { makePersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import {
   PUBLISH_AGENT_ACTIVITY_SECRET,
@@ -81,6 +84,32 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+  it.effect(
+    "shares one start identity between descriptor and runtime state, and changes it on restart",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const observe = Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          const identity = yield* RuntimeIdentity.RuntimeIdentity;
+          const descriptor = yield* environment.getDescriptor;
+          const state = yield* makePersistedServerRuntimeState({
+            config: { host: undefined, devUrl: undefined },
+            port: 13773,
+            instanceId: identity.instanceId,
+          });
+          expect(descriptor.instanceId).toBe(identity.instanceId);
+          expect(state.instanceId).toBe(descriptor.instanceId);
+          expect(descriptor.protocol).toEqual(
+            ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
+          );
+          expect(descriptor.capabilities.drainRestart).toBe(true);
+          return identity.instanceId;
+        }).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));
+        expect(yield* observe).not.toBe(yield* observe);
+      }),
+  );
   it.effect("advertises the Slack channel in the assembled server descriptor", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

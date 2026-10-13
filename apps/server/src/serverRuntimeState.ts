@@ -16,6 +16,7 @@ export const PersistedServerRuntimeState = Schema.Struct({
   serverVersion: Schema.optionalKey(Schema.String),
   sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Int),
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
+  instanceId: Schema.optionalKey(Schema.String),
   pid: Schema.Int,
   host: Schema.optional(Schema.String),
   port: Schema.Int,
@@ -61,6 +62,7 @@ const runtimeOriginForConfig = (
 
 export const makePersistedServerRuntimeState = (input: {
   readonly config: Pick<ServerConfig.ServerConfig["Service"], "host" | "devUrl">;
+  readonly instanceId?: string;
   readonly port: number;
   readonly serviceManaged?: boolean;
 }): Effect.Effect<PersistedServerRuntimeState> =>
@@ -69,6 +71,7 @@ export const makePersistedServerRuntimeState = (input: {
     serverVersion: packageJson.version,
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    ...(input.instanceId === undefined ? {} : { instanceId: input.instanceId }),
     pid: process.pid,
     ...(input.config.host ? { host: input.config.host } : {}),
     port: input.port,

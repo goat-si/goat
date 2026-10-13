@@ -118,7 +118,10 @@ type MessageDispatchMode = Extract<
 
 /** Resolve client intent from the state serialized by the thread dispatch lock. */
 export function resolveMessageDispatchIntent(
-  projection: OrchestrationV2ThreadProjection,
+  projection: Pick<
+    OrchestrationV2ThreadProjection,
+    "runs" | "providerThreads" | "providerSessions"
+  >,
   requestedMode: MessageDispatchMode,
   deliveryIntent?: "auto" | "steer" | "restart",
 ): MessageDispatchMode {

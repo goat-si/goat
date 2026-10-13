@@ -3171,7 +3171,7 @@ const layerWsRpc = (
               );
             }),
           ),
-        [WS_METHODS.subscribeServerLifecycle]: (_input) =>
+        [WS_METHODS.subscribeServerLifecycle]: (input) =>
           Stream.unwrap(
             Effect.gen(function* () {
               const liveBuffer = yield* Queue.unbounded<ServerLifecycleStreamEvent>();
@@ -3182,11 +3182,15 @@ const layerWsRpc = (
                 { startImmediately: true },
               );
               const snapshot = yield* lifecycleEvents.snapshot;
-              const snapshotEvents = Array.from(snapshot.events).toSorted(
-                (left, right) => left.sequence - right.sequence,
-              );
+              const snapshotEvents = Array.from(snapshot.events)
+                .filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true)
+                .toSorted((left, right) => left.sequence - right.sequence);
               const liveEvents = Stream.fromQueue(liveBuffer).pipe(
-                Stream.filter((event) => event.sequence > snapshot.sequence),
+                Stream.filter(
+                  (event) =>
+                    event.sequence > snapshot.sequence &&
+                    (event.type !== "runtimeDrain" || input.runtimeDrain === true),
+                ),
               );
               return Stream.concat(rpcInitialItems(snapshotEvents), liveEvents);
             }),

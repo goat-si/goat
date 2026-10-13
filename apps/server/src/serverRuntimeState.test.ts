@@ -30,8 +30,10 @@ describe("serverRuntimeState", () => {
       const state = yield* ServerRuntimeState.makePersistedServerRuntimeState({
         config: { host: undefined, devUrl: undefined },
         port: 13773,
+        instanceId: "test-start",
       });
       assert.equal(state.version, 1);
+      assert.equal(state.instanceId, "test-start");
       assert.equal(state.serverVersion, packageJson.version);
       assert.equal(state.sshRuntimeProtocolVersion, SSH_RUNTIME_PROTOCOL_VERSION);
       assert.equal(state.orchestrationProtocolVersion, ORCHESTRATION_PROTOCOL_VERSION);

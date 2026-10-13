@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 type LifecycleEventInput =
+  | Omit<Extract<ServerLifecycleStreamEvent, { type: "runtimeDrain" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "welcome" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "ready" }>, "sequence">
   | Omit<Extract<ServerLifecycleStreamEvent, { type: "legacyThreadMigration" }>, "sequence">;

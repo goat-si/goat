@@ -1,3 +1,7 @@
+import * as RuntimeAdmission from "./runtimeAdmission.ts";
+import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeControl from "./runtimeControl.ts";
+import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
 import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
@@ -613,6 +617,14 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   // Core Services
   Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    RuntimeDrain.layer.pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(RuntimeDrain.layerShutdown),
+      Layer.provideMerge(RuntimeAdmission.layer),
+      Layer.provideMerge(RuntimeIdentity.layer),
+    ),
+  ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(layerServerSettings),
@@ -708,6 +720,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(DirectEndpoints.layer),
+  Layer.provideMerge(RuntimeControl.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
@@ -738,6 +751,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
     ),
+    ServerHttp.layerRuntimeDrainRoute,
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
@@ -825,6 +839,7 @@ const layerMakeServer = Layer.unwrap(
           const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
           const state = yield* makePersistedServerRuntimeState({
             config,
+            instanceId: (yield* RuntimeIdentity.RuntimeIdentity).instanceId,
             port: address.port,
             serviceManaged: launcher.managed,
           });

@@ -1,9 +1,14 @@
+import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeControl from "./runtimeControl.ts";
 import packageJson from "../package.json" with { type: "json" };
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as Mime from "effect/http/Mime";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  GOAT_RUNTIME_DRAIN_PATH,
+  GOAT_RUNTIME_CONTROL_HEADER,
+  RuntimeDrainRequest,
   EnvironmentHttpApi,
   EnvironmentHttpForbiddenError,
 } from "@goat/contracts";
@@ -725,4 +730,36 @@ export const layerStaticAndDevRoute = Layer.unwrap(
   loadImmutableBuildAssets.pipe(
     Effect.map((assets) => HttpRouter.add("GET", "*", handleStaticAndDevRequest(assets))),
   ),
+);
+
+/** Local runtime control is authenticated independently of browser/relay sessions. */
+export const layerRuntimeDrainRoute = HttpRouter.add(
+  "POST",
+  GOAT_RUNTIME_DRAIN_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const control = yield* RuntimeControl.RuntimeControl;
+    const peer = Option.getOrUndefined(request.remoteAddress);
+    if (
+      peer === undefined ||
+      !isLoopbackHostname(peer) ||
+      !control.authenticate(request.headers[GOAT_RUNTIME_CONTROL_HEADER])
+    ) {
+      return yield* HttpServerResponse.json(
+        { message: "Runtime drain requires a loopback peer and runtime control token." },
+        { status: 403 },
+      );
+    }
+    const input = yield* request.json.pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(RuntimeDrainRequest)),
+      Effect.result,
+    );
+    if (input._tag === "Failure")
+      return yield* HttpServerResponse.json(
+        { message: "Invalid runtime drain request." },
+        { status: 400 },
+      );
+    const drain = yield* RuntimeDrain.RuntimeDrain;
+    return yield* HttpServerResponse.json(yield* drain.request(input.success));
+  }),
 );
