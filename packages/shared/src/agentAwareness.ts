@@ -1,4 +1,5 @@
 import type { EnvironmentId, OrchestrationV2ThreadShell, Project, ThreadId } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { backgroundWorkHoldsCompletion } from "./orchestrationV2PendingBackgroundWork.ts";
@@ -43,6 +44,7 @@ export interface ProjectThreadAwarenessV2Input {
     | "modelSelection"
     | "pendingBackgroundTasks"
     | "pendingRuntimeRequest"
+    | "sideChatOf"
     | "status"
     | "title"
     | "updatedAt"
@@ -54,7 +56,7 @@ export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
-  if (thread.lineage.relationshipToParent === "subagent") return null;
+  if (thread.lineage.relationshipToParent === "subagent" || isSideChatThread(thread)) return null;
   const phase = resolveThreadAwarenessPhaseV2(thread);
   if (phase === null) {
     return null;

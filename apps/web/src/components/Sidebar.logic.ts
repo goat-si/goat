@@ -9,6 +9,7 @@ import {
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
@@ -831,7 +832,7 @@ export function resolveSidebarViewIsProjects(input: {
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "sideChatOf"> & {
     environmentId: string;
     projectId: string;
     id?: SidebarThreadSummary["id"];
@@ -844,7 +845,8 @@ export function filterSidebarV2VisibleThreads<
   retainedArchivedKeys?: ReadonlySet<string>,
 ): T[] {
   return threads.filter((thread) => {
-    if (thread.deletedAt != null || isSidebarSubagentThread(thread)) return false;
+    if (thread.deletedAt != null || isSidebarSubagentThread(thread) || isSideChatThread(thread))
+      return false;
     if (thread.archivedAt !== null) {
       if (retainedArchivedKeys === undefined || thread.id === undefined) return false;
       const key = scopedThreadKey(

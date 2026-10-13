@@ -7,7 +7,7 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@goat/contracts";
-import { isProviderNativeSubagentThread } from "@goat/contracts";
+import { isProviderNativeSubagentThread, isSideChatThread } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
@@ -254,7 +254,11 @@ export function createEnvironmentThreadShellAtoms(input: {
     const next: EnvironmentThreadShell[] = [];
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
+        if (
+          thread.archivedAt !== null ||
+          thread.lineage.relationshipToParent === "subagent" ||
+          isSideChatThread(thread)
+        )
           continue;
         next.push(scopedThread(environmentId, thread));
       }

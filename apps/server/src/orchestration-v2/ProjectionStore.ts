@@ -1508,6 +1508,7 @@ export function threadShellFromProjection(
     ...(projection.thread.launchedBy === undefined
       ? {}
       : { launchedBy: projection.thread.launchedBy }),
+    ...(projection.thread.sideChatOf == null ? {} : { sideChatOf: projection.thread.sideChatOf }),
     ...(projection.thread.linkedPullRequest === undefined
       ? {}
       : { linkedPullRequest: projection.thread.linkedPullRequest }),

@@ -62,6 +62,8 @@ export interface ThreadForkServiceV2Shape {
     readonly transferId: ContextTransferId;
     readonly targetThreadId: ThreadId;
     readonly title?: string;
+    /** Makes the fork a hidden side chat of the source thread. */
+    readonly sideChat?: boolean;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
     readonly createdAt: DateTime.Utc;
@@ -85,8 +87,13 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             cause: forkableSourceRunStatusError(input.sourceRun),
           });
         }
-        // A fork is the user's own thread: it does not inherit who launched the source.
-        const { launchedBy: _sourceLauncher, ...sourceThread } = input.sourceProjection.thread;
+        // A fork is the user's own thread: it does not inherit who launched the source,
+        // and it is a side chat only when asked, even when its source is one.
+        const {
+          launchedBy: _sourceLauncher,
+          sideChatOf: _sourceSideChatOf,
+          ...sourceThread
+        } = input.sourceProjection.thread;
         const targetThread: OrchestrationV2AppThread = {
           ...sourceThread,
           createdBy: input.createdBy,
@@ -99,6 +106,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             relationshipToParent: "fork",
             rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
           },
+          ...(input.sideChat === true ? { sideChatOf: input.sourceProjection.thread.id } : {}),
           forkedFrom: {
             type: "run",
             threadId: input.sourceProjection.thread.id,

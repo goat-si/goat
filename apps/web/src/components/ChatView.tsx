@@ -483,6 +483,9 @@ import {
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import { SideChatPanel } from "./sideChat/SideChatPanel";
+import { canOpenSideChat, parseSideChatCommand } from "./sideChat/sideChat.logic";
+import { useSideChatStore } from "./sideChat/sideChatStore";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   type EnvironmentOption,
@@ -2339,6 +2342,20 @@ export default function ChatView(props: ChatViewProps) {
     widthStorageKey: `goat:preview-panel-width:${activeThreadKey}`,
   });
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
+  // A side chat cannot open its own side chat; it is already the place for side questions.
+  const sideChatAvailable = isServerThread && canOpenSideChat(activeThreadShell);
+  const sideChatPanelOpen = useSideChatStore(
+    (state) => activeThreadKey !== null && activeThreadKey in state.panels,
+  );
+  const sideChatOpen = sideChatAvailable && sideChatPanelOpen;
+  const toggleSideChat = useCallback(() => {
+    if (!sideChatAvailable || activeThreadKey === null) return;
+    useSideChatStore.getState().toggle(activeThreadKey);
+  }, [activeThreadKey, sideChatAvailable]);
+  const closeSideChat = useCallback(() => {
+    if (activeThreadKey === null) return;
+    useSideChatStore.getState().close(activeThreadKey);
+  }, [activeThreadKey]);
   const timelineThreadError =
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
@@ -8293,6 +8310,14 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "sideChat.toggle") {
+        if (!sideChatAvailable) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) toggleSideChat();
+        return;
+      }
+
       if (command === "rightPanel.close") {
         // Nothing open: leave the event alone so the shortcut keeps its
         // native meaning (close window on desktop, close tab in a browser).
@@ -8518,6 +8543,8 @@ export default function ChatView(props: ChatViewProps) {
     toggleRightPanel,
     toggleRightPanelMaximized,
     toggleThreadPanel,
+    sideChatAvailable,
+    toggleSideChat,
     toggleTerminalVisibility,
     composerRef,
     draftId,
@@ -9593,6 +9620,25 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         handleNewThreadInActiveProject();
       }
+      return;
+    }
+    // `/side` asks in the side chat instead of this thread, so it never reaches the provider.
+    const sideChatCommand =
+      sideChatAvailable &&
+      activeThreadKey !== null &&
+      composerImages.length === 0 &&
+      composerFiles.length === 0 &&
+      sendableComposerTerminalContexts.length === 0 &&
+      composerPreviewAnnotations.length === 0 &&
+      composerReviewComments.length === 0 &&
+      composerThreadContexts.length === 0
+        ? parseSideChatCommand(trimmed)
+        : null;
+    if (sideChatCommand && activeThreadKey !== null) {
+      useSideChatStore.getState().open(activeThreadKey, sideChatCommand.prompt);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
       return;
     }
     // Providers without the legacy toggle receive their native commands unchanged.
@@ -11862,6 +11908,13 @@ export default function ChatView(props: ChatViewProps) {
             onOpenScopedThread={onOpenScopedThread}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
             onNewThreadInProject={handleNewThreadInActiveProject}
+            {...(sideChatAvailable
+              ? {
+                  onToggleSideChat: toggleSideChat,
+                  sideChatOpen,
+                  sideChatShortcutLabel: shortcutLabelForCommand(keybindings, "sideChat.toggle"),
+                }
+              : {})}
             {...(activeDraftLogicalProjectKey && !isGlobalAgentActive
               ? { onOpenProjectSettings: handleOpenDraftProjectSettings }
               : {})}
@@ -11870,6 +11923,16 @@ export default function ChatView(props: ChatViewProps) {
 
         {/* Main content area with optional plan sidebar */}
         <div className="relative flex min-h-0 min-w-0 flex-1">
+          {sideChatOpen && activeThreadShell ? (
+            <SideChatPanel
+              key={activeThreadKey}
+              parent={activeThreadShell}
+              cwd={gitCwd ?? undefined}
+              shortcutLabel={shortcutLabelForCommand(keybindings, "sideChat.toggle")}
+              onOpenThread={onOpenScopedThread}
+              onClose={closeSideChat}
+            />
+          ) : null}
           {/* Chat column */}
           <ThreadFindCanvas
             findOptions={{
@@ -12175,6 +12238,7 @@ export default function ChatView(props: ChatViewProps) {
                               canResume={resumableRunId !== null || hasHeldQueuedRuns}
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sshWorktreeSelected={sshDestination !== null}
+                              sideChatAvailable={sideChatAvailable}
                               sendDisabledReason={
                                 sshSendBlockReason ??
                                 (!canOperateThread

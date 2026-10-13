@@ -4,6 +4,7 @@ import type {
   EnvironmentPresentation,
 } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { isDesktopLocalConnectionTarget, isWslConnectionTarget } from "../connection/desktopLocal";
@@ -69,13 +70,17 @@ export function createProjectsViewEnvironmentAtoms(input: {
 
 /** Forks are standalone chats; subagents belong to their parent's Agents surface. */
 export function isProjectsViewPinnedThread(
-  thread: Pick<SidebarThreadSummary, "pinnedAt" | "archivedAt" | "deletedAt" | "lineage">,
+  thread: Pick<
+    SidebarThreadSummary,
+    "pinnedAt" | "archivedAt" | "deletedAt" | "lineage" | "sideChatOf"
+  >,
 ) {
   return (
     thread.pinnedAt != null &&
     thread.archivedAt === null &&
     thread.deletedAt === null &&
-    thread.lineage.relationshipToParent !== "subagent"
+    thread.lineage.relationshipToParent !== "subagent" &&
+    !isSideChatThread(thread)
   );
 }
 
@@ -85,10 +90,13 @@ export function isProjectsViewPinnedThread(
  * still carries a child's request or the open subagent.
  */
 export function isProjectsViewListedThread(
-  thread: Pick<SidebarThreadSummary, "pinnedAt" | "archivedAt" | "deletedAt" | "lineage">,
+  thread: Pick<
+    SidebarThreadSummary,
+    "pinnedAt" | "archivedAt" | "deletedAt" | "lineage" | "sideChatOf"
+  >,
   retainArchived = false,
 ) {
-  if (thread.lineage.relationshipToParent === "subagent") return false;
+  if (thread.lineage.relationshipToParent === "subagent" || isSideChatThread(thread)) return false;
   if (thread.archivedAt !== null) return retainArchived && thread.deletedAt === null;
   return !isProjectsViewPinnedThread(thread);
 }

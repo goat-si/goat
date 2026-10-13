@@ -309,6 +309,14 @@ describe("sidebar subagent index", () => {
     expect(filterSidebarV2VisibleThreads(all, null)).toEqual([parent, remoteParent]);
   });
 
+  it("keeps side chats out of the thread list; they open beside their parent", () => {
+    const sideChat = {
+      ...makeThreadFixture({ id: ThreadId.make("side"), environmentId: localEnvironmentId }),
+      sideChatOf: parent.id,
+    };
+    expect(filterSidebarV2VisibleThreads([parent, sideChat], null)).toEqual([parent]);
+  });
+
   it("keeps an open subagent beneath its owner row in every state", () => {
     const owners = buildSidebarSubagentIndex(all).ownerKeyByChildKey;
     for (const child of [running, queued, finished, native]) {

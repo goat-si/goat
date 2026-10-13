@@ -55,6 +55,7 @@ import {
   resolveEnvironmentMachineKind,
   ThreadId,
 } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import {
   parseScopedThreadKey,
   scopedProjectKey,
@@ -3729,7 +3730,9 @@ export default function LegacySidebar() {
     () =>
       sidebarThreads.filter(
         (thread) =>
-          thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
+          thread.archivedAt === null &&
+          thread.lineage.relationshipToParent !== "subagent" &&
+          !isSideChatThread(thread),
       ),
     [sidebarThreads],
   );

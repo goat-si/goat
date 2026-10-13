@@ -2,6 +2,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
 } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import type {
   ProjectionRecordField,
   ProjectionRecordFilter,
@@ -866,7 +867,9 @@ const make = Effect.gen(function* () {
           snapshot.threads
             .filter(
               (thread) =>
-                input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",
+                // Side chats belong to the user's view of their parent, like subagents.
+                input.includeSubagents ||
+                (thread.lineage.relationshipToParent !== "subagent" && !isSideChatThread(thread)),
             )
             .toSorted(
               (left, right) =>

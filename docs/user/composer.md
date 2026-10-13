@@ -217,6 +217,19 @@ Provider commands must start the message to run. GOAT commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
+## Side chat
+
+On web and desktop, send `/side <question>` to ask about the current thread without
+adding to it. The question opens in a side chat to the left of the conversation, and
+the answer never enters the thread's history. Send `/side` alone, use the side chat
+button in the thread header, or press `Mod+/` to open or close it.
+
+The side chat uses the thread's model and workspace and sees the conversation up to
+the last finished turn, so you can ask while the agent is still working. It is meant
+for questions: it leaves files alone unless you ask it to change something. Use
+**Start a new side chat** to discard it, or **Open as a full thread** to answer an
+approval or keep going with the full composer.
+
 ## Goals
 
 With Codex and Claude, send `/goal` followed by what "done" means, for example

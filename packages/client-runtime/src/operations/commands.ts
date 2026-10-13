@@ -76,6 +76,8 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  /** Makes the new thread a side chat of this thread. */
+  readonly sideChatOf?: ThreadId;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
@@ -221,6 +223,13 @@ export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly targetThreadId: ThreadId;
   readonly runId: RunId;
   readonly title?: string;
+}
+
+/** Forks the source's latest settled run into a hidden side chat. */
+export interface ForkThreadAsSideChatInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly title: string;
 }
 
 export interface MergeThreadBackInput extends CommandMetadata {
@@ -411,6 +420,7 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.sideChatOf === undefined ? {} : { sideChatOf: input.sideChatOf }),
   });
 });
 
@@ -974,6 +984,22 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     ...(input.title === undefined ? {} : { title: input.title }),
   });
 });
+
+export const forkThreadAsSideChat = Effect.fn("EnvironmentCommands.forkThreadAsSideChat")(
+  function* (input: ForkThreadAsSideChatInput) {
+    return yield* dispatch({
+      type: "thread.fork",
+      commandId: yield* allocateCommandId(input),
+      createdBy: "user",
+      creationSource: input.creationSource ?? "web",
+      sourceThreadId: input.sourceThreadId,
+      targetThreadId: input.targetThreadId,
+      sourcePoint: { type: "latest_stable" },
+      title: input.title,
+      sideChat: true,
+    });
+  },
+);
 
 export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(function* (
   input: MergeThreadBackInput,

@@ -408,6 +408,19 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/**
+ * A side chat (`/side`) is a hidden thread that answers questions about its parent
+ * without adding to the parent's history. Clients keep it out of thread lists and show it
+ * beside the parent instead. Optional so older payloads and servers still decode.
+ */
+const SideChatOf = Schema.optional(Schema.NullOr(ThreadId));
+
+export function isSideChatThread(thread: {
+  readonly sideChatOf?: ThreadId | null | undefined;
+}): boolean {
+  return thread.sideChatOf != null;
+}
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -430,6 +443,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lineage: OrchestrationV2AppThreadLineage,
   /** Who started this thread; absent for user-created threads and older servers. */
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
+  sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -2021,6 +2035,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   lineage: OrchestrationV2AppThreadLineage,
   /** Who started this thread; absent for user-created threads and older servers. */
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
+  sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
@@ -2808,6 +2823,8 @@ export const OrchestrationV2Command = Schema.Union([
     ),
     /** Agent thread or user action that started this thread; descriptive only. */
     launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
+    /** Makes the new thread a side chat of this thread. */
+    sideChatOf: Schema.optional(ThreadId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
@@ -3192,6 +3209,8 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
+    /** Makes the fork a side chat of its source thread. */
+    sideChat: Schema.optional(Schema.Boolean),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
   Schema.Struct({

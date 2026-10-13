@@ -2,6 +2,7 @@ import { presentThreadShell } from "@goat/client-runtime/state/models";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import * as Option from "effect/Option";
 import {
   CircleAlertIcon,
@@ -123,7 +124,9 @@ function EnvironmentNotifications({
     }
     const next = new Map<ThreadId, NotificationState>();
     for (const rawThread of threads) {
-      if (rawThread.lineage.relationshipToParent === "subagent") continue;
+      // Subagents report through their parent; a side chat answers in its open panel.
+      if (rawThread.lineage.relationshipToParent === "subagent" || isSideChatThread(rawThread))
+        continue;
       const prior = previous.current.get(rawThread.id);
       // The same object cannot produce a new notification.
       if (prior?.raw === rawThread) {

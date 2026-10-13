@@ -113,6 +113,8 @@ export interface EnvironmentThreadShell {
   readonly worktreePath: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
+  /** Set on a side chat; side chats stay out of thread lists. */
+  readonly sideChatOf?: ThreadId | null | undefined;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
@@ -259,6 +261,7 @@ export function presentThreadShell(
     branchPullRequest: thread.branchPullRequest ?? null,
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
+    ...(thread.sideChatOf == null ? {} : { sideChatOf: thread.sideChatOf }),
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
     runtime: shellRuntime(thread),

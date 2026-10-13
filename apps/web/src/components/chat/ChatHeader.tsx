@@ -11,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { ChevronDownIcon, GlobeIcon } from "~/components/solar";
+import { ChevronDownIcon, GlobeIcon, MessagesSquareIcon } from "~/components/solar";
 import {
   memo,
   useCallback,
@@ -23,6 +23,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { isTrailingDoubleClick } from "../Sidebar.logic";
+import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
@@ -77,6 +78,10 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
+  /** Present when this thread can open a side chat. */
+  onToggleSideChat?: (() => void) | undefined;
+  sideChatOpen?: boolean | undefined;
+  sideChatShortcutLabel?: string | null | undefined;
 }
 
 /**
@@ -115,6 +120,9 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   onNewThreadInProject,
   onOpenProjectSettings,
+  onToggleSideChat,
+  sideChatOpen = false,
+  sideChatShortcutLabel = null,
 }: ChatHeaderProps) {
   const relatedThreadLink = parentThreadLink ?? (onOpenScopedThread ? launcherThreadLink : null);
   const launcherOnly =
@@ -506,6 +514,25 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {onToggleSideChat ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={sideChatOpen}
+              onPressedChange={onToggleSideChat}
+              aria-label="Toggle side chat"
+              variant="ghost"
+              size="sm"
+            >
+              <MessagesSquareIcon className="size-4" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            Side chat{sideChatShortcutLabel ? ` (${sideChatShortcutLabel})` : ""}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {globalAgent ? (
         <div className="flex shrink-0 items-center">
           <GoatBotModeButton to="bot" />
