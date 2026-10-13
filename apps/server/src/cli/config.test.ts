@@ -51,7 +51,7 @@ const makeDesktopBootstrap = (
   mode: "desktop",
   noBrowser: true,
   port: 4888,
-  t3Home: "/tmp/t3-bootstrap-home",
+  goatHome: "/tmp/t3-bootstrap-home",
   host: "127.0.0.1",
   desktopBootstrapToken: "desktop-bootstrap-token",
   tailscaleServeEnabled: false,
@@ -483,7 +483,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         makeDesktopBootstrap({
           port: 4888,
           host: "127.0.0.2",
-          t3Home: "/tmp/t3-bootstrap-home",
+          goatHome: "/tmp/t3-bootstrap-home",
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
           desktopTelemetryFd: 4,
@@ -574,7 +574,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           [undefined, custom, custom],
           [custom, path.join(home, "env"), custom],
         ] as const) {
-          const fd = yield* openBootstrapFd(makeDesktopBootstrap({ t3Home: desktop }));
+          const fd = yield* openBootstrapFd(makeDesktopBootstrap({ goatHome: desktop }));
           const config = yield* resolveServerConfig(
             { ...minimalDesktopFlags(home), baseDir: Option.fromUndefinedOr(flag) },
             Option.none(),
@@ -687,7 +687,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         makeDesktopBootstrap({
           port: 4888,
           host: "127.0.0.2",
-          t3Home: "/tmp/t3-bootstrap-home",
+          goatHome: "/tmp/t3-bootstrap-home",
           noBrowser: false,
           desktopBootstrapToken: "desktop-token",
           tailscaleServeEnabled: false,

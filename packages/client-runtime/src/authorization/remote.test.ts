@@ -122,7 +122,7 @@ describe("remote environment authorization", () => {
         headers: {
           "content-type": "application/x-www-form-urlencoded",
         },
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3Agoat%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
       });
     }),
   );
@@ -163,7 +163,7 @@ describe("remote environment authorization", () => {
         url: "https://remote.example.com/oauth/token",
         method: "POST",
         headers: { dpop: "token-proof", "content-type": "application/x-www-form-urlencoded" },
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=one-time-credential&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=one-time-credential&subject_token_type=urn%3Agoat%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
       });
       expectFetchCall(fetch.calls, 2, {
         url: "https://remote.example.com/api/auth/websocket-ticket",
@@ -205,7 +205,7 @@ describe("remote environment authorization", () => {
       expectFetchCall(fetch.calls, 1, {
         url: "https://remote.example.com/oauth/token",
         method: "POST",
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3Agoat%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
       });
     }),
   );
@@ -275,7 +275,7 @@ describe("remote environment authorization", () => {
       expectFetchCall(fetch.calls, 1, {
         url: "https://remote.example.com/oauth/token",
         method: "POST",
-        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&scope=orchestration%3Aread",
+        body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3Agoat%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&scope=orchestration%3Aread",
       });
     }),
   );
@@ -360,7 +360,7 @@ describe("remote environment authorization", () => {
       });
 
       expectFetchCall(fetch.calls, 1, {
-        url: "https://remote.example.com/.well-known/t3/environment",
+        url: "https://remote.example.com/.well-known/goat/environment",
         method: "GET",
       });
       expectFetchCall(fetch.calls, 2, {
@@ -394,7 +394,7 @@ describe("remote environment authorization", () => {
 
       expect(error).toBeInstanceOf(RemoteEnvironmentAuthTimeoutError);
       expect(error.message).toBe(
-        "Remote environment endpoint http://remote.example.com/.well-known/t3/environment timed out after 25ms.",
+        "Remote environment endpoint http://remote.example.com/.well-known/goat/environment timed out after 25ms.",
       );
     }).pipe(Effect.provide(TestClock.layer())),
   );
@@ -484,6 +484,123 @@ describe("remote environment authorization", () => {
       expect(url).toBe(
         "wss://remote.example.com/ws?wsTicket=ws-ticket&clientSurface=mobile&clientAppVersion=1.2.3&clientDeviceType=phone&clientOs=Android&clientOsMajorVersion=15&clientDeviceModel=Pixel+9&connectionMethod=relay",
       );
+    }),
+  );
+});
+
+describe.each(["bearer", "dpop"] as const)("%s bootstrap URN compatibility", (method) => {
+  const exchange = () =>
+    method === "dpop"
+      ? exchangeRemoteDpopAccessToken({
+          httpBaseUrl: "https://remote.example.com",
+          credential: "bootstrap",
+          dpopProof: "proof",
+          scopes: ["orchestration:read"],
+        })
+      : bootstrapRemoteBearerSession({
+          httpBaseUrl: "https://remote.example.com",
+          credential: "bootstrap",
+          scopes: ["orchestration:read"],
+        });
+
+  it.effect.each([false, true])(
+    "retries a schema rejection once with the legacy URN, declared=%s",
+    (declared) =>
+      Effect.gen(function* () {
+        const fetch = recordedFetch(
+          declared
+            ? Response.json(
+                {
+                  _tag: "EnvironmentRequestInvalidError",
+                  code: "invalid_request",
+                  reason: "invalid_scope",
+                  traceId: "fixture",
+                },
+                { status: 400 },
+              )
+            : new Response("old schema", { status: 400 }),
+          Response.json({
+            access_token: "access",
+            token_type: method === "dpop" ? "DPoP" : "Bearer",
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            expires_in: 3600,
+            scope: "orchestration:read",
+          }),
+        );
+        const result = yield* exchange().pipe(provideRemoteHttp(fetch.fetchFn));
+        expect(result.access_token).toBe("access");
+        expect(fetch.calls).toHaveLength(2);
+        const first = new URLSearchParams(String(fetch.calls[0]![1].body));
+        const second = new URLSearchParams(String(fetch.calls[1]![1].body));
+        expect(first.get("subject_token_type")).toBe(
+          "urn:goat:params:oauth:token-type:environment-bootstrap",
+        );
+        expect(second.get("subject_token_type")).toBe(
+          "urn:t3:params:oauth:token-type:environment-bootstrap",
+        );
+        first.set("subject_token_type", second.get("subject_token_type")!);
+        expect(first.toString()).toBe(second.toString());
+        expect(new Headers(fetch.calls[1]![1].headers).get("dpop")).toBe(
+          method === "dpop" ? "proof" : null,
+        );
+      }),
+  );
+
+  it.effect("does not retry a second schema rejection", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        new Response(null, { status: 400 }),
+        new Response(null, { status: 400 }),
+      );
+      const error = yield* exchange().pipe(provideRemoteHttp(fetch.fetchFn), Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "RemoteEnvironmentAuthUndeclaredStatusError",
+        status: 400,
+      });
+      expect(fetch.calls).toHaveLength(2);
+    }),
+  );
+
+  it.effect.each([401, 403, 500])("does not retry HTTP %s", (status) =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(new Response(null, { status }));
+      yield* exchange().pipe(provideRemoteHttp(fetch.fetchFn), Effect.flip);
+      expect(fetch.calls).toHaveLength(1);
+    }),
+  );
+});
+
+describe("descriptor path compatibility", () => {
+  it.effect("falls back on HTTP 404 to an older server's descriptor", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        new Response(null, { status: 404 }),
+        Response.json({
+          environmentId: "old",
+          label: "Old server",
+          serverVersion: "0.0.1",
+          platform: { os: "linux", arch: "x64" },
+          capabilities: {},
+        }),
+      );
+      const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl: "https://remote.example.com",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+      expect(descriptor.environmentId).toBe("old");
+      expect(fetch.calls.map(([url]) => String(url))).toEqual([
+        "https://remote.example.com/.well-known/goat/environment",
+        "https://remote.example.com/.well-known/t3/environment",
+      ]);
+    }),
+  );
+  it.effect.each([404, 403, 500])("bounds retries when endpoints return HTTP %s", (status) =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(new Response(null, { status }), new Response(null, { status }));
+      const error = yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl: "https://remote.example.com",
+      }).pipe(provideRemoteHttp(fetch.fetchFn), Effect.flip);
+      expect(error).toMatchObject({ _tag: "RemoteEnvironmentAuthUndeclaredStatusError", status });
+      expect(fetch.calls).toHaveLength(status === 404 ? 2 : 1);
     }),
   );
 });

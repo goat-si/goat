@@ -1,4 +1,4 @@
-import { LEGACY_ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts/legacyT3Names";
+import { GOAT_ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -15,7 +15,7 @@ import {
 export const ORCHESTRATION_PROTOCOL_VERSION = 1001;
 export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = `${ORCHESTRATION_PROTOCOL_VERSION}` as const;
 export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
-export const ORCHESTRATION_PROTOCOL_HEADER = LEGACY_ORCHESTRATION_PROTOCOL_HEADER;
+export const ORCHESTRATION_PROTOCOL_HEADER = GOAT_ORCHESTRATION_PROTOCOL_HEADER;
 
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",

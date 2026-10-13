@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -17,6 +18,7 @@ import {
   isTailscaleIpv4Address,
   parseTailscaleMagicDnsName,
   parseTailscaleStatus,
+  probeTailscaleHttpsEndpoint,
   readTailscaleStatus,
   TAILSCALE_STATUS_TIMEOUT,
   TailscaleCommandExitError,
@@ -378,4 +380,42 @@ describe("tailscale", () => {
       ]);
     });
   });
+});
+
+describe("Tailscale endpoint path compatibility", () => {
+  it.effect.each([200, 404, 403, 500])("probes GOAT first, HTTP %s", (status) =>
+    Effect.gen(function* () {
+      const paths: string[] = [];
+      const fetchFn: typeof fetch = async (url) => {
+        paths.push(new URL(String(url)).pathname);
+        return new Response(null, { status: paths.length === 1 ? status : 200 });
+      };
+      const result = yield* probeTailscaleHttpsEndpoint({ baseUrl: "https://host.example" }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetchFn),
+      );
+      assert.equal(result, status === 200 || status === 404);
+      assert.deepEqual(
+        paths,
+        status === 404
+          ? ["/.well-known/goat/environment", "/.well-known/t3/environment"]
+          : ["/.well-known/goat/environment"],
+      );
+    }),
+  );
+  it.effect("does not retry a second 404", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const fetchFn: typeof fetch = async () => {
+        calls++;
+        return new Response(null, { status: 404 });
+      };
+      const result = yield* probeTailscaleHttpsEndpoint({ baseUrl: "https://host.example" }).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetchFn),
+      );
+      assert.isFalse(result);
+      assert.equal(calls, 2);
+    }),
+  );
 });

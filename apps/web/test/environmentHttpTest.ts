@@ -81,9 +81,9 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
                 return yield* scenario.descriptor?.() ?? unexpectedEndpoint("metadata.descriptor");
               }),
             )
-            .handle("goatDescriptor", () => unexpectedEndpoint("metadata.goatDescriptor"))
+            .handle("legacyDescriptor", () => unexpectedEndpoint("metadata.legacyDescriptor"))
             .handle("sshActivity", () => unexpectedEndpoint("metadata.sshActivity"))
-            .handle("goatSshActivity", () => unexpectedEndpoint("metadata.goatSshActivity")),
+            .handle("legacySshActivity", () => unexpectedEndpoint("metadata.legacySshActivity")),
         ),
         HttpApiBuilder.group(EnvironmentHttpApi, "auth", (handlers) =>
           handlers

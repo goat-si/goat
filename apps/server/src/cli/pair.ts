@@ -1,4 +1,4 @@
-import { LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { GOAT_ENVIRONMENT_PATH, LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 /**
  * `goat pair` - mint a pairing token for an already-running server and print it
  * as a QR code, without restarting anything.
@@ -56,7 +56,7 @@ import {
 import { authScopesFlag } from "./authScopes.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
 
-const WELL_KNOWN_ENVIRONMENT_PATH = LEGACY_ENVIRONMENT_PATH;
+const WELL_KNOWN_ENVIRONMENT_PATH = GOAT_ENVIRONMENT_PATH;
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
 // Tailscale provisions an HTTPS certificate on the first request to a fresh
 // serve mapping, which can take a few seconds.
@@ -210,6 +210,11 @@ const probeEnvironmentDescriptor = (
     const client = yield* HttpClient.HttpClient;
     const request = HttpClientRequest.get(new URL(WELL_KNOWN_ENVIRONMENT_PATH, baseUrl).toString());
     const response = yield* client.execute(request).pipe(
+      Effect.flatMap((response) =>
+        response.status === 404
+          ? client.get(new URL(LEGACY_ENVIRONMENT_PATH, baseUrl).toString())
+          : Effect.succeed(response),
+      ),
       Effect.timeout(PAIR_PROBE_TIMEOUT),
       // Transport failure or timeout: nothing (reachable) is listening there.
       Effect.mapError(() => ({ _tag: "unreachable" }) as const),

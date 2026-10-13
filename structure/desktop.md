@@ -33,7 +33,7 @@ The bundled server entry is `backendEntryPath` in `apps/desktop/src/app/DesktopE
 the server root joined with the built `bin.mjs`. A packaged build reads that tree from
 `resources/server.asar`. `DesktopBackendManager` in
 `apps/desktop/src/backend/DesktopBackendManager.ts` spawns the server child and probes readiness at
-`/.well-known/t3/environment`. The renderer then uses the same WebSocket RPC as a browser. It does
+`/.well-known/goat/environment`. The renderer then uses the same WebSocket RPC as a browser. It does
 not import the server's orchestration modules.
 
 `apps/desktop/src/preload.ts` exposes `window.desktopBridge`. SSH host discovery for the shell is

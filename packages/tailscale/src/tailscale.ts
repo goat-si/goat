@@ -1,4 +1,4 @@
-import { LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { GOAT_ENVIRONMENT_PATH, LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -370,9 +370,12 @@ export const probeTailscaleHttpsEndpoint = (input: {
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
     const response = yield* Effect.gen(function* () {
-      const url = new URL(LEGACY_ENVIRONMENT_PATH, input.baseUrl);
+      const url = new URL(GOAT_ENVIRONMENT_PATH, input.baseUrl);
       const request = HttpClientRequest.get(url.toString());
-      return yield* client.execute(request);
+      const response = yield* client.execute(request);
+      return response.status === 404
+        ? yield* client.get(new URL(LEGACY_ENVIRONMENT_PATH, input.baseUrl).toString())
+        : response;
     }).pipe(Effect.timeoutOption(input.timeout ?? TAILSCALE_PROBE_TIMEOUT));
 
     return Option.match(response, {

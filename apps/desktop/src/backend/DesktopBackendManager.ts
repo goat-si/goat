@@ -1,4 +1,4 @@
-import { LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 // Per-instance backend factory. Replaces the legacy singleton
 // `DesktopBackendManager` Context.Service: each call to
 // `makeBackendInstance(spec)` constructs an isolated backend lifecycle —
@@ -68,7 +68,7 @@ const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
 const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
 const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(2);
 const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
-const BACKEND_READINESS_PATH = LEGACY_ENVIRONMENT_PATH;
+const BACKEND_READINESS_PATH = GOAT_ENVIRONMENT_PATH;
 const { logWarning: logBackendProcessWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-process");
 

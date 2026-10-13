@@ -1,4 +1,9 @@
-import { LEGACY_ENVIRONMENT_PATH, LEGACY_ACTIVITY_PATH } from "@goat/contracts/legacyT3Names";
+import {
+  GOAT_ENVIRONMENT_PATH,
+  LEGACY_ENVIRONMENT_PATH,
+  GOAT_ACTIVITY_PATH,
+  LEGACY_ACTIVITY_PATH,
+} from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics globalDateInEffect:off
@@ -169,9 +174,14 @@ const readProtocolDescriptor = (port: number) =>
       if (cause !== undefined) reject(cause);
       else resolve(value);
     };
-    const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: LEGACY_ENVIRONMENT_PATH, timeout: 1000 },
-      (response) => {
+    let request: NodeHttp.ClientRequest;
+    const send = (path: string) => {
+      request = NodeHttp.get({ hostname: "127.0.0.1", port, path, timeout: 1000 }, (response) => {
+        if (response.statusCode === 404 && path === GOAT_ENVIRONMENT_PATH) {
+          response.resume();
+          send(LEGACY_ENVIRONMENT_PATH);
+          return;
+        }
         const chunks: Buffer[] = [];
         let bytes = 0;
         response.on("data", (chunk: Buffer) => {
@@ -195,19 +205,20 @@ const readProtocolDescriptor = (port: number) =>
             finish(cause);
           }
         });
-      },
-    );
+      });
+      request.once("timeout", () => {
+        const cause = new Error("SSH descriptor timed out");
+        request.destroy(cause);
+        finish(cause);
+      });
+      request.once("error", finish);
+    };
     const deadline = setTimeout(() => {
       const cause = new Error("SSH descriptor deadline exceeded");
       request.destroy(cause);
       finish(cause);
     }, 1500);
-    request.once("timeout", () => {
-      const cause = new Error("SSH descriptor timed out");
-      request.destroy(cause);
-      finish(cause);
-    });
-    request.once("error", finish);
+    send(GOAT_ENVIRONMENT_PATH);
   });
 
 const protocolVersion = (value: unknown): value is string =>
@@ -426,12 +437,17 @@ export const readSshServerActivity = async (
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      request.destroy();
+      request?.destroy();
       resolve(value);
     };
-    const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: LEGACY_ACTIVITY_PATH },
-      (response) => {
+    let request: NodeHttp.ClientRequest | undefined;
+    const send = (path: string) => {
+      request = NodeHttp.get({ hostname: "127.0.0.1", port, path }, (response) => {
+        if (response.statusCode === 404 && path === GOAT_ACTIVITY_PATH) {
+          response.resume();
+          send(LEGACY_ACTIVITY_PATH);
+          return;
+        }
         const chunks: Buffer[] = [];
         let bytes = 0;
         response.on("data", (chunk: Buffer) => {
@@ -460,10 +476,11 @@ export const readSshServerActivity = async (
             finish("unknown");
           }
         });
-      },
-    );
+      });
+      request.once("error", () => finish("unknown"));
+    };
     const deadline = setTimeout(() => finish("unknown"), 1500);
-    request.once("error", () => finish("unknown"));
+    send(GOAT_ACTIVITY_PATH);
   });
 };
 

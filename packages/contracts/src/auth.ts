@@ -238,7 +238,7 @@ export const AuthAdministrativeScopes = [
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
 export const AuthAccessTokenType = "urn:ietf:params:oauth:token-type:access_token" as const;
-export const AuthEnvironmentBootstrapTokenType = LEGACY_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE;
+export const AuthEnvironmentBootstrapTokenType = GOAT_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE;
 
 /**
  * Server-advertised auth capabilities for a specific execution environment.
@@ -310,7 +310,7 @@ export const AuthTokenExchangeRequest = Schema.Struct({
   subject_token: TrimmedNonEmptyString,
   subject_token_type: Schema.Literals([
     AuthEnvironmentBootstrapTokenType,
-    GOAT_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE,
+    LEGACY_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE,
   ]),
   requested_token_type: Schema.Literal(AuthAccessTokenType),
   scope: Schema.optionalKey(TrimmedNonEmptyString),

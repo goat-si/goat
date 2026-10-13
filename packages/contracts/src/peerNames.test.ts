@@ -37,19 +37,21 @@ const bootstrap = {
   tailscaleServePort: 443,
 };
 describe("desktop bootstrap home aliases", () => {
-  it.each(["t3Home", "goatHome"])("decodes %s and re-encodes the legacy key", (key) => {
+  it.each(["t3Home", "goatHome"])("decodes %s and re-encodes the GOAT key", (key) => {
     const decoded = decodeBootstrap({
       ...bootstrap,
       [key]: "/peer/home",
     });
-    expect(decoded.t3Home).toBe("/peer/home");
+    expect(decoded.goatHome).toBe("/peer/home");
     const encoded = encodeBootstrap(decoded);
-    expect(encoded.t3Home).toBe("/peer/home");
-    expect(encoded).not.toHaveProperty("goatHome");
+    expect(encoded.goatHome).toBe("/peer/home");
+    expect(encoded).not.toHaveProperty("t3Home");
   });
   it("prefers the GOAT value, retains WSL omission, and rejects malformed aliases", () => {
-    expect(decodeBootstrap({ ...bootstrap, t3Home: "/old", goatHome: "/new" }).t3Home).toBe("/new");
-    expect(decodeBootstrap(bootstrap).t3Home).toBeUndefined();
+    expect(decodeBootstrap({ ...bootstrap, t3Home: "/old", goatHome: "/new" }).goatHome).toBe(
+      "/new",
+    );
+    expect(decodeBootstrap(bootstrap).goatHome).toBeUndefined();
     expect(() => decodeBootstrap({ ...bootstrap, goatHome: 42 })).toThrow();
   });
 });
@@ -60,13 +62,13 @@ const decodeHeaders = Schema.decodeUnknownSync(headersSchema);
 const encodeHeaders = Schema.encodeUnknownSync(headersSchema);
 describe("orchestration protocol header aliases", () => {
   it.each(["x-t3-orchestration-protocol", "x-goat-orchestration-protocol"])(
-    "accepts %s and retains legacy encoded headers",
+    "accepts %s and encodes GOAT headers",
     (header) => {
       const decoded = decodeHeaders({
         [header]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
       });
       expect(decoded).toEqual({
-        "x-t3-orchestration-protocol": ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+        "x-goat-orchestration-protocol": ORCHESTRATION_PROTOCOL_VERSION_TEXT,
       });
       expect(encodeHeaders(decoded)).toEqual(decoded);
     },

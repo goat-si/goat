@@ -3,7 +3,7 @@ import {
   GOAT_ACTIVITY_PATH,
   LEGACY_ENVIRONMENT_PATH,
   GOAT_ENVIRONMENT_PATH,
-  GOAT_ORCHESTRATION_PROTOCOL_HEADER,
+  LEGACY_ORCHESTRATION_PROTOCOL_HEADER,
 } from "@goat/contracts/legacyT3Names";
 import * as Option from "effect/Option";
 import { expect, it } from "@effect/vitest";
@@ -170,7 +170,7 @@ describe("browser API CORS", () => {
             "access-control-request-method": "GET",
             "access-control-request-headers": [
               ORCHESTRATION_PROTOCOL_HEADER,
-              GOAT_ORCHESTRATION_PROTOCOL_HEADER,
+              LEGACY_ORCHESTRATION_PROTOCOL_HEADER,
               "authorization",
               "dpop",
             ].join(", "),
@@ -186,7 +186,7 @@ describe("browser API CORS", () => {
           .map((header) => header.trim().toLowerCase()),
       );
       expect(allowedHeaders.has(ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
-      expect(allowedHeaders.has(GOAT_ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
+      expect(allowedHeaders.has(LEGACY_ORCHESTRATION_PROTOCOL_HEADER)).toBe(true);
       expect(allowedHeaders.has("authorization")).toBe(true);
       expect(allowedHeaders.has("dpop")).toBe(true);
     } finally {
