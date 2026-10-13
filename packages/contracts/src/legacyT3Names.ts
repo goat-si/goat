@@ -141,6 +141,10 @@ export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
   "t3-iris": "iris",
 };
 
+/** Literal SSH runner metadata older clients inspect without sourcing the script. */
+export const LEGACY_SSH_ARCHIVE_VERSION_KEY = "T3_ARCHIVE_VERSION";
+export const LEGACY_SSH_NODE_SCRIPT_PATH_KEY = "T3_NODE_SCRIPT_PATH";
+
 /** Peer-visible vocabulary: readers accept both forever; writers use the GOAT spelling. */
 export const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
 export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";

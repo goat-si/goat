@@ -60,7 +60,7 @@ exec /bin/mv "$@"
           const after = yield* f.snapshot;
           assert.notEqual(after.pid, before.pid);
           assert.include(after.identity!, `/versions/${ARCHIVE.archiveVersion}/goat serve`);
-          assert.include(after["run-t3.sh"]!, `T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
+          assert.include(after["run-t3.sh"]!, `GOAT_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
           assert.equal(
             (yield* f.fs.readFileString(`${f.test}/events`)).split('"type":"self-stop"').length - 1,
             1,
@@ -100,12 +100,12 @@ exec /bin/mv "$@"
           if (failure === "duplicate")
             yield* f.fs.writeFileString(
               file,
-              runner + "\nT3_NODE_SCRIPT_PATH='/other/entry.cjs'\n",
+              runner + "\nGOAT_NODE_SCRIPT_PATH='/other/entry.cjs'\n",
             );
           if (failure === "malformed")
             yield* f.fs.writeFileString(
               file,
-              runner.replace("T3_NODE_SCRIPT_PATH='", 'T3_NODE_SCRIPT_PATH="'),
+              runner.replace("GOAT_NODE_SCRIPT_PATH='", 'GOAT_NODE_SCRIPT_PATH="'),
             );
           if (["base dir", "prefix", "suffix"].includes(failure)) {
             const bin = `${f.test}/wrong-ps`;

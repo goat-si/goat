@@ -65,6 +65,30 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
+    it.live.each(["launch", "pairing", "mcp"] as const)(
+      "reuses retained legacy declarations for %s without rewriting the runner",
+      (entry) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: false,
+            kind: "external",
+            oldVersion: "1.2.2",
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          });
+          const file = `${f.state}/run-t3.sh`;
+          const runner = (yield* f.fs.readFileString(file))
+            .replace(/^T3_(?:ARCHIVE_VERSION|NODE_SCRIPT_PATH)=.*\n/gm, "")
+            .replaceAll("GOAT_", "T3_");
+          yield* f.fs.writeFileString(file, runner);
+          const result = yield* f.run(entry);
+          assert.isTrue(Result.isSuccess(result));
+          if (Result.isSuccess(result)) assert.equal(result.success.version, "1.2.2");
+          assert.equal(yield* f.fs.readFileString(file), runner);
+          assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
       "preserves incompatible shared server for $entry",
       ({ entry }) =>
@@ -174,10 +198,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* f.fs.writeFileString(
             `${f.state}/run-t3.sh`,
             failure === "wrong version"
-              ? runner.replace("T3_ARCHIVE_VERSION='1.2.2'", "T3_ARCHIVE_VERSION='1.2.1'")
+              ? runner.replace("GOAT_ARCHIVE_VERSION='1.2.2'", "GOAT_ARCHIVE_VERSION='1.2.1'")
               : failure === "malformed assignment"
-                ? runner.replace("T3_ARCHIVE_VERSION='1.2.2'", "T3_ARCHIVE_VERSION=1.2.2")
-                : runner + "\nT3_ARCHIVE_VERSION='1.2.2'\n",
+                ? runner.replace("GOAT_ARCHIVE_VERSION='1.2.2'", "GOAT_ARCHIVE_VERSION=1.2.2")
+                : runner + "\nGOAT_ARCHIVE_VERSION='1.2.2'\n",
           );
         }
         if (["wrong base dir", "prefix command", "suffix command"].includes(failure)) {

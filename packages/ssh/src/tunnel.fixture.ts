@@ -211,7 +211,7 @@ console.log(JSON.stringify(requests.map(({ input, selection }) => ({ runner: t.b
   assert.equal(all.length, requests.length);
   for (const scripts of all)
     for (const entry of ["launch", "pairing", "mcp", "probe"] as const)
-      assert.notMatch(scripts[entry], /@@T3_[A-Z_]+@@/);
+      assert.notMatch(scripts[entry], /@@(?:GOAT|T3)_[A-Z_]+@@/);
   return all;
 });
 

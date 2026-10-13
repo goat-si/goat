@@ -160,7 +160,7 @@ request.on("error", () => process.exit(1));
       });
       return;
     }
-    response.end(request.url === "/.well-known/t3/activity" ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : request.url === "/.well-known/t3/environment" ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{drainRestart:true},instanceId,...fields}) : "ok");
+    response.end(["/.well-known/goat/activity", "/.well-known/t3/activity"].includes(request.url) ? JSON.stringify({activity:config.activity ?? "idle", serverVersion:version, pid:process.pid}) : ["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(request.url) ? JSON.stringify({environmentId:"fixture",label:"Fixture",platform:{os:"linux",arch:"x64"},capabilities:{drainRestart:true},instanceId,...fields}) : "ok");
   });
   process.on("SIGTERM", () => {
 event("stop");

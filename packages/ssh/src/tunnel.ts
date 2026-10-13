@@ -1,3 +1,7 @@
+import {
+  LEGACY_SSH_ARCHIVE_VERSION_KEY,
+  LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
+} from "@goat/contracts/legacyT3Names";
 import type {
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshRuntimePendingResult,
@@ -531,6 +535,13 @@ function probe() {
 })().catch(() => process.exit(1));
 `;
 
+// Retained runners are data: inspect either declaration spelling without sourcing shell code.
+const REMOTE_RUNNER_HINT_SCRIPT = String.raw`read_runner_hint() {
+  if grep -q "^$2=" "$1"; then hint_key="$2"; else hint_key="$3"; fi
+  sed -n "s/^$hint_key='\(.*\)'$/\1/p" "$1"
+}
+`;
+
 const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
   if [ -d "$1" ]; then
     case ":$PATH:" in
@@ -541,12 +552,12 @@ const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
 }
 
 remote_node_satisfies_engine() {
-  T3_NODE_ENGINE_RANGE=@@T3_NODE_ENGINE_RANGE@@
-  if [ -z "$T3_NODE_ENGINE_RANGE" ]; then
+  GOAT_NODE_ENGINE_RANGE=@@GOAT_NODE_ENGINE_RANGE@@
+  if [ -z "$GOAT_NODE_ENGINE_RANGE" ]; then
     return 0
   fi
-  node - "$T3_NODE_ENGINE_RANGE" <<'NODE'
-@@T3_NODE_ENGINE_CHECK_SCRIPT@@
+  node - "$GOAT_NODE_ENGINE_RANGE" <<'NODE'
+@@GOAT_NODE_ENGINE_CHECK_SCRIPT@@
 NODE
 }
 
@@ -613,9 +624,9 @@ ensure_remote_node_path() {
   fi
 
   if ! command -v node >/dev/null 2>&1 && [ -d "$NVM_DIR/versions/node" ]; then
-    for T3_NODE_BIN in "$NVM_DIR"/versions/node/*/bin; do
-      if [ -x "$T3_NODE_BIN/node" ]; then
-        PATH="$T3_NODE_BIN:$PATH"
+    for GOAT_NODE_BIN in "$NVM_DIR"/versions/node/*/bin; do
+      if [ -x "$GOAT_NODE_BIN/node" ]; then
+        PATH="$GOAT_NODE_BIN:$PATH"
         export PATH
       fi
     done
@@ -627,9 +638,11 @@ ensure_remote_node_path() {
 
 const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
 set -eu
-@@T3_NODE_ENV_SCRIPT@@
-T3_NODE_SCRIPT_PATH=@@T3_NODE_SCRIPT_PATH@@
-if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
+@@GOAT_NODE_ENV_SCRIPT@@
+GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
+# Older clients inspect these literal declarations without evaluating the runner.
+${LEGACY_SSH_NODE_SCRIPT_PATH_KEY}=@@GOAT_NODE_SCRIPT_PATH@@
+if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
   # Dev mode: a source checkout on the remote. This is the only path that
   # needs Node, so Node discovery runs here and nowhere else.
   ensure_remote_node_path || true
@@ -637,23 +650,24 @@ if [ -n "$T3_NODE_SCRIPT_PATH" ]; then
     printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
     exit 1
   fi
-  exec node "$T3_NODE_SCRIPT_PATH" "$@"
+  exec node "$GOAT_NODE_SCRIPT_PATH" "$@"
 fi
-T3_ARCHIVE_VERSION=@@T3_ARCHIVE_VERSION@@
-if [ -z "$T3_ARCHIVE_VERSION" ]; then
+GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
+${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
+if [ -z "$GOAT_ARCHIVE_VERSION" ]; then
   printf 'No GOAT release version was provided for the remote runtime.\\n' >&2
   exit 1
 fi
 # Self-contained release archive: no Node, npm, or compiler on the remote.
 # Unpacked into the pinned-runtime layout so \`goat service install\` reuses it.
-T3_RELEASE_BASE_URL=@@T3_RELEASE_BASE_URL@@
-T3_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$T3_ARCHIVE_VERSION"
-t3_runtime_ready() {
-  [ -x "$T3_RUNTIME_DIR/goat" ] && [ "$(cat "$T3_RUNTIME_DIR/.install-complete" 2>/dev/null)" = "$T3_ARCHIVE_VERSION" ]
+GOAT_RELEASE_BASE_URL=@@GOAT_RELEASE_BASE_URL@@
+GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"
+goat_runtime_ready() {
+  [ -x "$GOAT_RUNTIME_DIR/goat" ] && [ "$(cat "$GOAT_RUNTIME_DIR/.install-complete" 2>/dev/null)" = "$GOAT_ARCHIVE_VERSION" ]
 }
-if ! t3_runtime_ready; then
+if ! goat_runtime_ready; then
   mkdir -p "$HOME/.goat/runtime/goat/versions"
-  T3_LOCK="$HOME/.goat/runtime/goat/versions/.$T3_ARCHIVE_VERSION.install.lock"
+  GOAT_LOCK="$HOME/.goat/runtime/goat/versions/.$GOAT_ARCHIVE_VERSION.install.lock"
   # Publish a nonempty directory with an immutable pid and unique token by
   # same-filesystem rename. mv can nest it in an existing lock: only a token
   # at the lock root proves acquisition; losers clean their candidate and
@@ -664,121 +678,121 @@ if ! t3_runtime_ready; then
   # A reclaim counts only once the lock is gone; a lock that cannot be
   # entered or emptied waits like a live one, so the timeout still applies.
   # Legacy pid-less locks retain their short grace period.
-  T3_LOCK_CANDIDATE=""
-  T3_LOCK_TOKEN=""
-  T3_STAGING=""
-  t3_remove_lock_contents() {
+  GOAT_LOCK_CANDIDATE=""
+  GOAT_LOCK_TOKEN=""
+  GOAT_STAGING=""
+  goat_remove_lock_contents() {
     find . ! -name . -prune -exec rm -rf {} \\; 2>/dev/null || true
-    rmdir "$T3_LOCK" 2>/dev/null || [ ! -e "$T3_LOCK" ]
+    rmdir "$GOAT_LOCK" 2>/dev/null || [ ! -e "$GOAT_LOCK" ]
   }
-  t3_lock_cleanup() {
+  goat_lock_cleanup() {
     (
-      cd "$T3_LOCK" 2>/dev/null || exit 0
-      [ -n "$T3_LOCK_TOKEN" ] && [ -f "./$T3_LOCK_TOKEN" ] || exit 0
-      t3_remove_lock_contents || true
+      cd "$GOAT_LOCK" 2>/dev/null || exit 0
+      [ -n "$GOAT_LOCK_TOKEN" ] && [ -f "./$GOAT_LOCK_TOKEN" ] || exit 0
+      goat_remove_lock_contents || true
     ) || true
-    if [ -n "$T3_LOCK_CANDIDATE" ]; then
-      rm -rf "$T3_LOCK_CANDIDATE" "$T3_LOCK/\${T3_LOCK_CANDIDATE##*/}"
+    if [ -n "$GOAT_LOCK_CANDIDATE" ]; then
+      rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/\${GOAT_LOCK_CANDIDATE##*/}"
     fi
-    if [ -n "$T3_STAGING" ]; then rm -rf "$T3_STAGING"; fi
+    if [ -n "$GOAT_STAGING" ]; then rm -rf "$GOAT_STAGING"; fi
   }
-  trap 't3_lock_cleanup' 0
+  trap 'goat_lock_cleanup' 0
   trap 'exit 1' 1 2 3 15
-  t3_reclaim_lock() (
-    if ! cd "$T3_LOCK" 2>/dev/null; then
-      if [ -e "$T3_LOCK" ]; then exit 3; fi
+  goat_reclaim_lock() (
+    if ! cd "$GOAT_LOCK" 2>/dev/null; then
+      if [ -e "$GOAT_LOCK" ]; then exit 3; fi
       exit 0
     fi
-    T3_LOCK_OWNER="$(cat pid 2>/dev/null || true)"
-    if [ -n "$T3_LOCK_OWNER" ]; then
-      if kill -0 "$T3_LOCK_OWNER" 2>/dev/null; then exit 2; fi
-    elif [ "$T3_LOCK_UNOWNED" -lt 4 ]; then
+    GOAT_LOCK_OWNER="$(cat pid 2>/dev/null || true)"
+    if [ -n "$GOAT_LOCK_OWNER" ]; then
+      if kill -0 "$GOAT_LOCK_OWNER" 2>/dev/null; then exit 2; fi
+    elif [ "$GOAT_LOCK_UNOWNED" -lt 4 ]; then
       exit 1
     fi
-    t3_remove_lock_contents || exit 3
+    goat_remove_lock_contents || exit 3
   )
-  T3_LOCK_WAITED=0
-  T3_LOCK_UNOWNED=0
+  GOAT_LOCK_WAITED=0
+  GOAT_LOCK_UNOWNED=0
   while :; do
-    T3_LOCK_CANDIDATE="$(mktemp -d "$T3_LOCK.candidate-$$-XXXXXX")"
-    T3_LOCK_TOKEN="\${T3_LOCK_CANDIDATE##*/}"
-    if { printf '%s\\n' "$$" > "$T3_LOCK_CANDIDATE/pid" &&
-         : > "$T3_LOCK_CANDIDATE/$T3_LOCK_TOKEN"; } 2>/dev/null; then
-      mv "$T3_LOCK_CANDIDATE" "$T3_LOCK" 2>/dev/null || true
-      if [ -f "$T3_LOCK/$T3_LOCK_TOKEN" ]; then break; fi
+    GOAT_LOCK_CANDIDATE="$(mktemp -d "$GOAT_LOCK.candidate-$$-XXXXXX")"
+    GOAT_LOCK_TOKEN="\${GOAT_LOCK_CANDIDATE##*/}"
+    if { printf '%s\\n' "$$" > "$GOAT_LOCK_CANDIDATE/pid" &&
+         : > "$GOAT_LOCK_CANDIDATE/$GOAT_LOCK_TOKEN"; } 2>/dev/null; then
+      mv "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK" 2>/dev/null || true
+      if [ -f "$GOAT_LOCK/$GOAT_LOCK_TOKEN" ]; then break; fi
     fi
-    rm -rf "$T3_LOCK_CANDIDATE" "$T3_LOCK/$T3_LOCK_TOKEN"
-    T3_LOCK_CANDIDATE=""
-    if [ ! -e "$T3_LOCK" ]; then
+    rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/$GOAT_LOCK_TOKEN"
+    GOAT_LOCK_CANDIDATE=""
+    if [ ! -e "$GOAT_LOCK" ]; then
       # Publication failed with no competing lock; wait so a persistent
       # failure reaches the timeout.
       :
-    elif t3_reclaim_lock; then continue
+    elif goat_reclaim_lock; then continue
     else
-      T3_LOCK_STATUS=$?
-      case "$T3_LOCK_STATUS" in
-        1) T3_LOCK_UNOWNED=$((T3_LOCK_UNOWNED + 1)) ;;
-        2) T3_LOCK_UNOWNED=0 ;;
+      GOAT_LOCK_STATUS=$?
+      case "$GOAT_LOCK_STATUS" in
+        1) GOAT_LOCK_UNOWNED=$((GOAT_LOCK_UNOWNED + 1)) ;;
+        2) GOAT_LOCK_UNOWNED=0 ;;
       esac
     fi
-    if [ "$T3_LOCK_WAITED" -ge @@T3_ARCHIVE_LOCK_WAIT_SECONDS@@ ]; then
-      printf 'Another GOAT %s installation has held %s for too long.\\n' "$T3_ARCHIVE_VERSION" "$T3_LOCK" >&2
+    if [ "$GOAT_LOCK_WAITED" -ge @@GOAT_ARCHIVE_LOCK_WAIT_SECONDS@@ ]; then
+      printf 'Another GOAT %s installation has held %s for too long.\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_LOCK" >&2
       exit 1
     fi
     sleep 1
-    T3_LOCK_WAITED=$((T3_LOCK_WAITED + 1))
+    GOAT_LOCK_WAITED=$((GOAT_LOCK_WAITED + 1))
   done
 fi
-if ! t3_runtime_ready; then
+if ! goat_runtime_ready; then
   case "$(uname -s)" in
-    Darwin) T3_PLATFORM="darwin" ;;
-    Linux) T3_PLATFORM="linux" ;;
+    Darwin) GOAT_PLATFORM="darwin" ;;
+    Linux) GOAT_PLATFORM="linux" ;;
     *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -s)" >&2; exit 1 ;;
   esac
   case "$(uname -m)" in
-    arm64 | aarch64) T3_ARCH="arm64" ;;
-    x86_64 | amd64) T3_ARCH="x64" ;;
+    arm64 | aarch64) GOAT_ARCH="arm64" ;;
+    x86_64 | amd64) GOAT_ARCH="x64" ;;
     *) printf 'Remote host %s has no GOAT release archive.\\n' "$(uname -m)" >&2; exit 1 ;;
   esac
-  T3_ARCHIVE="goat-$T3_ARCHIVE_VERSION-$T3_PLATFORM-$T3_ARCH.tar.gz"
-  T3_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
-  t3_fetch() {
+  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM-$GOAT_ARCH.tar.gz"
+  GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
+  goat_fetch() {
     if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
     elif command -v wget >/dev/null 2>&1; then wget -q --timeout=30 --tries=1 "$1" -O "$2"
-    else printf 'Remote host needs curl or wget to download %s.\\n' "$T3_ARCHIVE" >&2; exit 1
+    else printf 'Remote host needs curl or wget to download %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
     fi
   }
-  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS" "$T3_STAGING/SHA256SUMS" @@T3_ARCHIVE_CHECKSUMS_SECONDS@@
-  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/$T3_ARCHIVE" "$T3_STAGING/$T3_ARCHIVE" @@T3_ARCHIVE_DOWNLOAD_SECONDS@@
-  T3_EXPECTED="$(grep " \\*\\{0,1\\}$T3_ARCHIVE$" "$T3_STAGING/SHA256SUMS" | cut -d' ' -f1)"
+  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS" "$GOAT_STAGING/SHA256SUMS" @@GOAT_ARCHIVE_CHECKSUMS_SECONDS@@
+  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/$GOAT_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE" @@GOAT_ARCHIVE_DOWNLOAD_SECONDS@@
+  GOAT_EXPECTED="$(grep " \\*\\{0,1\\}$GOAT_ARCHIVE$" "$GOAT_STAGING/SHA256SUMS" | cut -d' ' -f1)"
   if command -v sha256sum >/dev/null 2>&1; then
-    T3_ACTUAL="$(sha256sum "$T3_STAGING/$T3_ARCHIVE" | cut -d' ' -f1)"
+    GOAT_ACTUAL="$(sha256sum "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
   else
-    T3_ACTUAL="$(shasum -a 256 "$T3_STAGING/$T3_ARCHIVE" | cut -d' ' -f1)"
+    GOAT_ACTUAL="$(shasum -a 256 "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
   fi
-  if [ -z "$T3_EXPECTED" ] || [ "$T3_ACTUAL" != "$T3_EXPECTED" ]; then
-    printf 'Checksum mismatch for %s.\\n' "$T3_ARCHIVE" >&2; exit 1
+  if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
+    printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  tar -xzf "$T3_STAGING/$T3_ARCHIVE" -C "$T3_STAGING" --strip-components=1
-  rm -f "$T3_STAGING/$T3_ARCHIVE" "$T3_STAGING/SHA256SUMS"
+  tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1
+  rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
-  if ! T3_STAGED_VERSION_OUTPUT="$("$T3_STAGING/goat" --version)"; then
-    printf 'The goat %s executable does not run on this host.\\n' "$T3_ARCHIVE_VERSION" >&2; exit 1
+  if ! GOAT_STAGED_VERSION_OUTPUT="$("$GOAT_STAGING/goat" --version)"; then
+    printf 'The goat %s executable does not run on this host.\\n' "$GOAT_ARCHIVE_VERSION" >&2; exit 1
   fi
-  if [ "$T3_STAGED_VERSION_OUTPUT" != "goat v$T3_ARCHIVE_VERSION" ]; then
-    printf 'Cannot install goat %s: expected goat v%s, but the archive executable reported "%s". The existing runtime directory and completion marker have been left unchanged. Supply the correct requested archive in the local SSH runtime archive directory or release mirror, then retry.\\n' "$T3_ARCHIVE_VERSION" "$T3_ARCHIVE_VERSION" "$T3_STAGED_VERSION_OUTPUT" >&2
+  if [ "$GOAT_STAGED_VERSION_OUTPUT" != "goat v$GOAT_ARCHIVE_VERSION" ]; then
+    printf 'Cannot install goat %s: expected goat v%s, but the archive executable reported "%s". The existing runtime directory and completion marker have been left unchanged. Supply the correct requested archive in the local SSH runtime archive directory or release mirror, then retry.\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_ARCHIVE_VERSION" "$GOAT_STAGED_VERSION_OUTPUT" >&2
     exit 1
   fi
-  printf '%s\\n' "$T3_ARCHIVE_VERSION" > "$T3_STAGING/.install-complete"
-  rm -rf "$T3_RUNTIME_DIR"
-  mv "$T3_STAGING" "$T3_RUNTIME_DIR"
+  printf '%s\\n' "$GOAT_ARCHIVE_VERSION" > "$GOAT_STAGING/.install-complete"
+  rm -rf "$GOAT_RUNTIME_DIR"
+  mv "$GOAT_STAGING" "$GOAT_RUNTIME_DIR"
 fi
-if [ -n "\${T3_LOCK:-}" ]; then
-  t3_lock_cleanup
+if [ -n "\${GOAT_LOCK:-}" ]; then
+  goat_lock_cleanup
   trap - 0 1 2 3 15
 fi
-exec "$T3_RUNTIME_DIR/goat" "$@"
+exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 // One host-wide mutex protects publication and server lifecycle across SSH aliases.
@@ -839,10 +853,10 @@ acquire_replacement_lock() {
 // auth commands keep an existing runner so they match its running server.
 const REMOTE_PROTOCOL_GUARD_SCRIPT = `compatible_fields() {
   # version ssh orchestration; full matching integers OR exact legacy.
-  [ "$2" = "@@T3_SSH_PROTOCOL@@" ] && [ "$3" = "@@T3_ORCHESTRATION_PROTOCOL@@" ] && return 0
+  [ "$2" = "@@GOAT_SSH_PROTOCOL@@" ] && [ "$3" = "@@GOAT_ORCHESTRATION_PROTOCOL@@" ] && return 0
   [ -n "$REQUESTED_VERSION" ] && [ "$1" = "$REQUESTED_VERSION" ] &&
-    { [ "$2" = unknown ] || [ "$2" = "@@T3_SSH_PROTOCOL@@" ]; } &&
-    { [ "$3" = unknown ] || [ "$3" = "@@T3_ORCHESTRATION_PROTOCOL@@" ]; }
+    { [ "$2" = unknown ] || [ "$2" = "@@GOAT_SSH_PROTOCOL@@" ]; } &&
+    { [ "$3" = unknown ] || [ "$3" = "@@GOAT_ORCHESTRATION_PROTOCOL@@" ]; }
 }
 check_candidate_protocol() {
   if [ -n "$SELECTED_VERSION" ] &&
@@ -856,7 +870,7 @@ check_candidate_protocol() {
       printf 'Selected version and binary protocol identity disagree.\\n' >&2; exit 1
     fi
     if ! compatible_fields "$1" "$2" "$3"; then
-      printf 'Candidate signals %s incompatible with SSH=%s orchestration=%s.\\n' "$own" "@@T3_SSH_PROTOCOL@@" "@@T3_ORCHESTRATION_PROTOCOL@@" >&2; exit 1
+      printf 'Candidate signals %s incompatible with SSH=%s orchestration=%s.\\n' "$own" "@@GOAT_SSH_PROTOCOL@@" "@@GOAT_ORCHESTRATION_PROTOCOL@@" >&2; exit 1
     fi
   elif [ -z "$SELECTED_VERSION" ] || [ "$SELECTED_VERSION" != "$REQUESTED_VERSION" ] ||
        [ "$("$CHECK_RUNNER" --version 2>/dev/null || true)" != "goat v$REQUESTED_VERSION" ]; then
@@ -997,25 +1011,26 @@ DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"
 PORT_FILE="$STATE_DIR/port"
 PID_FILE="$STATE_DIR/pid"
 MANAGED_FILE="$STATE_DIR/managed"
-REQUESTED_RUNNER=@@T3_REQUESTED_RUNNER@@
-EXPECTED_ARCHIVE_VERSION=@@T3_EXPECTED_ARCHIVE_VERSION@@
-SELECTED_VERSION=@@T3_SELECTED_VERSION@@
-REQUESTED_VERSION=@@T3_REQUESTED_VERSION@@
-REQUIRE_INSTALLED=@@T3_REQUIRE_INSTALLED@@
-PRESERVE_SELECTED_RUNNER=@@T3_PRESERVE_SELECTED_RUNNER@@
-ALLOW_OWNED_UPGRADE=@@T3_ALLOW_OWNED_UPGRADE@@
-ALLOW_LEGACY_ADOPTION=@@T3_ALLOW_LEGACY_ADOPTION@@
-REFRESH_IF_IDLE=@@T3_REFRESH_IF_IDLE@@
-REFRESH_LIVE_VERSION=@@T3_REFRESH_LIVE_VERSION@@
-EXPECTED_LIVE_RUNNER_SHA256=@@T3_LIVE_RUNNER_SHA256@@
-OWNING_LAUNCH=@@T3_OWNING_LAUNCH@@
-DRAIN_FORCE=@@T3_DRAIN_FORCE@@
-DRAIN_GRACE_SECONDS=@@T3_DRAIN_GRACE_SECONDS@@
+REQUESTED_RUNNER=@@GOAT_REQUESTED_RUNNER@@
+EXPECTED_ARCHIVE_VERSION=@@GOAT_EXPECTED_ARCHIVE_VERSION@@
+SELECTED_VERSION=@@GOAT_SELECTED_VERSION@@
+REQUESTED_VERSION=@@GOAT_REQUESTED_VERSION@@
+REQUIRE_INSTALLED=@@GOAT_REQUIRE_INSTALLED@@
+PRESERVE_SELECTED_RUNNER=@@GOAT_PRESERVE_SELECTED_RUNNER@@
+ALLOW_OWNED_UPGRADE=@@GOAT_ALLOW_OWNED_UPGRADE@@
+ALLOW_LEGACY_ADOPTION=@@GOAT_ALLOW_LEGACY_ADOPTION@@
+REFRESH_IF_IDLE=@@GOAT_REFRESH_IF_IDLE@@
+REFRESH_LIVE_VERSION=@@GOAT_REFRESH_LIVE_VERSION@@
+EXPECTED_LIVE_RUNNER_SHA256=@@GOAT_LIVE_RUNNER_SHA256@@
+OWNING_LAUNCH=@@GOAT_OWNING_LAUNCH@@
+DRAIN_FORCE=@@GOAT_DRAIN_FORCE@@
+DRAIN_GRACE_SECONDS=@@GOAT_DRAIN_GRACE_SECONDS@@
 RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
 LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
 RETAINED_SNAPSHOT_FILE=; LEGACY_PID=; LEGACY_PORT=; LEGACY_IDENTITY=; LEGACY_VERSION=; LEGACY_UID=; LEGACY_START=
-EXPECTED_RETAINED_SHA256=@@T3_RETAINED_RUNNER_SHA256@@
-@@T3_PROTOCOL_TOKENS@@
+EXPECTED_RETAINED_SHA256=@@GOAT_RETAINED_RUNNER_SHA256@@
+@@GOAT_PROTOCOL_TOKENS@@
+${REMOTE_RUNNER_HINT_SCRIPT}
 check_retained_runner() {
   if [ "$RUNNER_PUBLISHED" = 0 ] && [ -n "$EXPECTED_LIVE_RUNNER_SHA256" ] &&
      [ "$(runner_sha256 "$RUNNER_FILE")" != "$EXPECTED_LIVE_RUNNER_SHA256" ]; then
@@ -1029,7 +1044,7 @@ check_retained_runner() {
   fi
 }
 mkdir -p "$STATE_DIR"
-@@T3_REPLACEMENT_LOCK@@
+@@GOAT_REPLACEMENT_LOCK@@
 cleanup_runner_next() {
   if [ "$LEGACY_COMMITTED" = 1 ] && [ "$LEGACY_TERMINATED" = 0 ]; then
     rollback_legacy_switch
@@ -1044,7 +1059,7 @@ trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-@@T3_CAPTURE_RUNNING_RUNNER@@
+@@GOAT_CAPTURE_RUNNING_RUNNER@@
 if [ "$REQUIRE_INSTALLED" = 1 ] && [ -n "$SELECTED_VERSION" ]; then
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
   if [ ! -x "$selected_dir/goat" ] || [ "$(cat "$selected_dir/.install-complete" 2>/dev/null)" != "$SELECTED_VERSION" ]; then
@@ -1055,14 +1070,14 @@ check_retained_runner
 if [ "$PRESERVE_SELECTED_RUNNER" = 1 ]; then
   # Use copied retained bytes and verify the parsed selected version again.
   if [ ! -f "$RUNNER_FILE" ] ||
-     [ "$(sed -n "s/^T3_ARCHIVE_VERSION='\\([^']*\\)'$/\\1/p" "$RUNNER_FILE")" != "$SELECTED_VERSION" ] ||
-     [ -n "$(sed -n "s/^T3_NODE_SCRIPT_PATH='\\(.*\\)'$/\\1/p" "$RUNNER_FILE")" ]; then
+     [ "$(read_runner_hint "$RUNNER_FILE" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" != "$SELECTED_VERSION" ] ||
+     [ -n "$(read_runner_hint "$RUNNER_FILE" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" ]; then
     printf 'Selected retained runner changed; reconnect to prepare again.\\n' >&2; exit 1
   fi
   cp "$RUNNER_FILE" "$RUNNER_NEXT"
 else
   cat >"$RUNNER_NEXT" <<'SH'
-@@T3_RUNNER_SCRIPT@@
+@@GOAT_RUNNER_SCRIPT@@
 SH
 fi
 chmod 700 "$RUNNER_NEXT"
@@ -1089,7 +1104,7 @@ if [ -n "$SELECTED_VERSION" ]; then
   REQUIRE_INSTALLED=1
 fi
 RUNNER_CHANGED=0
-@@T3_PROTOCOL_GUARD@@
+@@GOAT_PROTOCOL_GUARD@@
 check_candidate_protocol
 check_live_protocol
 if ! cmp -s "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_NEXT"; then
@@ -1100,7 +1115,7 @@ publish_selected_runner() {
     printf 'Replacement lock ownership changed; runner was preserved.\\n' >&2; exit 1;
   }
   check_retained_runner
-@@T3_RUNNER_INSTALL@@
+@@GOAT_RUNNER_INSTALL@@
   RUNNER_PUBLISHED=1
 }
 emit_pending() {
@@ -1114,7 +1129,7 @@ emit_pending() {
     retained_own="$("$RETAINED_SNAPSHOT_FILE" __ssh-helper protocol --shell 2>/dev/null || true)"
     set -f; set -- $retained_own
     if valid_own_tokens "$@" && compatible_fields "$1" "$2" "$3" && [ "$1" = "$LIVE_VERSION" ] &&
-       "$RETAINED_SNAPSHOT_FILE" __ssh-helper wait-ready "$LIVE_PORT" "@@T3_REUSE_READY_TIMEOUT_MS@@" "@@T3_READY_PROBE_TIMEOUT_MS@@" >/dev/null 2>&1; then
+       "$RETAINED_SNAPSHOT_FILE" __ssh-helper wait-ready "$LIVE_PORT" "@@GOAT_REUSE_READY_TIMEOUT_MS@@" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" >/dev/null 2>&1; then
       CHECK_RUNNER="$RUNNER_CANDIDATE_FILE.pin"
       pending_pid="$LIVE_PID"; pending_port="$LIVE_PORT"; pending_version="$LIVE_VERSION"
       check_retained_runner
@@ -1150,7 +1165,7 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
   check_candidate_protocol
   check_retained_runner
   check_live_protocol
-@@T3_VERIFY_OWNED_BEFORE_PUBLICATION@@
+@@GOAT_VERIFY_OWNED_BEFORE_PUBLICATION@@
   if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$REPLACEMENT_REASON" != incompatible ]; then
     # An optional refresh waits for idle; launch probes again last, then the server drains.
     activity="$(read_refresh_activity)"
@@ -1190,7 +1205,7 @@ const REMOTE_LEGACY_IDENTITY_SCRIPT = String.raw`capture_running_runner() {
     EXPECTED_LIVE_RUNNER_SHA256="$running_sha"
   fi
 }
-decode_retained_assignment() {
+decode_named_retained_assignment() {
   awk -v key="$1" '
     $0 ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" {
       count++
@@ -1209,6 +1224,13 @@ decode_retained_assignment() {
       }
       print decoded
     }' "$RETAINED_SNAPSHOT_FILE"
+}
+decode_retained_assignment() {
+  if awk -v key="$1" '$0 ~ "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" {found=1} END {exit !found}' "$RETAINED_SNAPSHOT_FILE"; then
+    decode_named_retained_assignment "$1"
+  else
+    decode_named_retained_assignment "$2"
+  fi
 }
 legacy_files_regular() {
   for legacy_file in "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$RUNNER_FILE"; do
@@ -1249,8 +1271,8 @@ verify_legacy_identity() {
   [ "$(read_legacy_value "$MANAGED_FILE")" = managed ] &&
     valid_positive "$legacy_pid" && valid_positive "$legacy_port" && valid_port "$legacy_port" &&
     kill -0 "$legacy_pid" 2>/dev/null || return 1
-  legacy_version="$(decode_retained_assignment T3_ARCHIVE_VERSION)" || return 1
-  legacy_entry="$(decode_retained_assignment T3_NODE_SCRIPT_PATH)" || return 1
+  legacy_version="$(decode_retained_assignment GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" || return 1
+  legacy_entry="$(decode_retained_assignment GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})" || return 1
   [ -z "$legacy_entry" ] || return 1
   case "$legacy_version" in ''|*[!0-9A-Za-z.-]*) return 1 ;; esac
   valid_version "$legacy_version" || return 1
@@ -1347,7 +1369,7 @@ elif [ "$LIVE_OWNED" = 1 ] && ! verify_owned_identity "$LIVE_PID" "$LIVE_PORT"; 
 fi`;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
-@@T3_NODE_ENV_SCRIPT@@
+@@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
 DEFAULT_SERVER_HOME="$HOME/.goat"
@@ -1359,14 +1381,14 @@ LOG_FILE="$STATE_DIR/server.log"
 ownership_unverified() {
   printf 'GOAT ownership could not be verified; process and ownership files were preserved.\\n' >&2; exit 1
 }
-@@T3_OWNED_IDENTITY@@
-@@T3_LEGACY_IDENTITY@@
-@@T3_RUNNER_SETUP@@
+@@GOAT_OWNED_IDENTITY@@
+@@GOAT_LEGACY_IDENTITY@@
+@@GOAT_RUNNER_SETUP@@
 IDENTITY_NEXT="$STATE_DIR/identity.next.$$"
 trap 'runner_exit=$?; cleanup_runner_next; rm -f "$IDENTITY_NEXT"; exit "$runner_exit"' EXIT
-T3_ARCHIVE_MODE=@@T3_ARCHIVE_MODE@@
-T3_NODE_SCRIPT_PATH=@@T3_NODE_SCRIPT_PATH@@
-if [ "$T3_ARCHIVE_MODE" = 0 ]; then
+GOAT_ARCHIVE_MODE=@@GOAT_ARCHIVE_MODE@@
+GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
+if [ "$GOAT_ARCHIVE_MODE" = 0 ]; then
   # Protocol token parsing disabled globbing; version-manager discovery needs it.
   case "$-" in *f*) NODE_RESTORE_NOGLOB=1 ;; *) NODE_RESTORE_NOGLOB=0 ;; esac
   set +f
@@ -1375,21 +1397,21 @@ if [ "$T3_ARCHIVE_MODE" = 0 ]; then
 fi
 recheck_selected_before_use
 pick_port() {
-  if [ "$T3_ARCHIVE_MODE" = "1" ]; then
-    "$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE" "@@T3_DEFAULT_REMOTE_PORT@@" "@@T3_REMOTE_PORT_SCAN_WINDOW@@"
+  if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
+    "$RUNNER_FILE" __ssh-helper pick-port "$PORT_FILE" "@@GOAT_DEFAULT_REMOTE_PORT@@" "@@GOAT_REMOTE_PORT_SCAN_WINDOW@@"
     return
   fi
-  node - "$PORT_FILE" "@@T3_DEFAULT_REMOTE_PORT@@" "@@T3_REMOTE_PORT_SCAN_WINDOW@@" <<'NODE'
-@@T3_PICK_PORT_SCRIPT@@
+  node - "$PORT_FILE" "@@GOAT_DEFAULT_REMOTE_PORT@@" "@@GOAT_REMOTE_PORT_SCAN_WINDOW@@" <<'NODE'
+@@GOAT_PICK_PORT_SCRIPT@@
 NODE
 }
 wait_ready() {
-  if [ "$T3_ARCHIVE_MODE" = "1" ]; then
-    "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@T3_READY_PROBE_TIMEOUT_MS@@"
+  if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
+    "$RUNNER_FILE" __ssh-helper wait-ready "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@"
     return
   fi
-  node - "$REMOTE_PORT" "$1" "@@T3_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
-@@T3_WAIT_READY_SCRIPT@@
+  node - "$REMOTE_PORT" "$1" "@@GOAT_READY_PROBE_TIMEOUT_MS@@" <<'NODE'
+@@GOAT_WAIT_READY_SCRIPT@@
 NODE
 }
 wait_for_pid_exit() {
@@ -1402,7 +1424,7 @@ wait_for_pid_exit() {
 }
 reuse_live_server() {
     REMOTE_PORT="$LIVE_PORT"
-    if ! wait_ready "@@T3_REUSE_READY_TIMEOUT_MS@@"; then
+    if ! wait_ready "@@GOAT_REUSE_READY_TIMEOUT_MS@@"; then
       printf 'Selected live server did not answer; it was left running.\\n' >&2; exit 1
     fi
     recheck_selected_before_use
@@ -1465,16 +1487,16 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   LEGACY_TERMINATED=1
   rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
   publish_selected_runner
-  if [ "$T3_ARCHIVE_MODE" = 1 ]; then
+  if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
     SPAWN_IDENTITY="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
   else
-    SPAWN_IDENTITY="$T3_NODE_SCRIPT_PATH"
+    SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
   SUPERVISE_RESULT="$STATE_DIR/replacement.result.$$"
   rm -f "$SUPERVISE_RESULT"
   # Detached, so a dropped SSH session cannot leave the host without a server.
   trap '' HUP
-  nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@T3_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
+  nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@GOAT_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
   wait "$!" || true
   supervise_status=failed; supervise_pid=0; supervise_version=
   if [ -f "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
@@ -1509,7 +1531,7 @@ fi
 if [ -z "$REMOTE_PORT" ]; then
   REMOTE_PORT="$(pick_port)" || true
   if [ -z "$REMOTE_PORT" ]; then
-    if [ "$T3_ARCHIVE_MODE" = "1" ]; then
+    if [ "$GOAT_ARCHIVE_MODE" = "1" ]; then
       printf 'Failed to find an available port on the remote host.\\n' >&2
     else
       printf 'Failed to find an available port on the remote host. Ensure node is available on PATH.\\n' >&2
@@ -1520,11 +1542,11 @@ if [ -z "$REMOTE_PORT" ]; then
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
   fi
-  if [ "$T3_ARCHIVE_MODE" = 1 ]; then
-    T3_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
-    SPAWN_IDENTITY="$T3_RUNTIME_DIR/goat"
+  if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then
+    GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
+    SPAWN_IDENTITY="$GOAT_RUNTIME_DIR/goat"
   else
-    SPAWN_IDENTITY="$T3_NODE_SCRIPT_PATH"
+    SPAWN_IDENTITY="$GOAT_NODE_SCRIPT_PATH"
   fi
   nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
   REMOTE_PID="$!"
@@ -1533,7 +1555,7 @@ if [ -z "$REMOTE_PORT" ]; then
   printf '%s\\n' "$REMOTE_PID" >"$PID_FILE"
   printf '%s\\n' "$REMOTE_PORT" >"$PORT_FILE"
   printf 'managed\\n' >"$MANAGED_FILE"
-  if ! wait_ready "@@T3_READY_TIMEOUT_MS@@"; then
+  if ! wait_ready "@@GOAT_READY_TIMEOUT_MS@@"; then
     printf 'Remote GOAT server did not become ready on 127.0.0.1:%s.\\n' "$REMOTE_PORT" >&2
     if [ -s "$LOG_FILE" ]; then
       tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
@@ -1553,9 +1575,9 @@ printf '{"status":"ready","remotePort":%s,"serverKind":"%s","selectedVersion":"%
 `;
 
 const REMOTE_PAIRING_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.goat"
-@@T3_RUNNER_SETUP@@
+@@GOAT_RUNNER_SETUP@@
 PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"
 recheck_selected_before_use
 "$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json
@@ -1576,30 +1598,30 @@ rm -f "$RUNNER_NEXT"`;
 // admits from outside a thread. `--runtime-mode-ceiling` is newer than some
 // remotes, so an older CLI is retried without it and reports the default.
 const REMOTE_MCP_SESSION_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 DEFAULT_SERVER_HOME="$HOME/.goat"
-@@T3_RUNNER_SETUP@@
-set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate @@T3_EXTRA_SCOPES@@--ttl @@T3_TTL@@ --label @@T3_LABEL@@ --json
-CEILING=@@T3_CEILING@@
+@@GOAT_RUNNER_SETUP@@
+set -- auth session issue --base-dir "$DEFAULT_SERVER_HOME" --subject mcp-client --scope orchestration:read --scope orchestration:operate @@GOAT_EXTRA_SCOPES@@--ttl @@GOAT_TTL@@ --label @@GOAT_LABEL@@ --json
+CEILING=@@GOAT_CEILING@@
 recheck_selected_before_use
 if [ -n "$CEILING" ] && OUTPUT="$("$RUNNER_FILE" "$@" --runtime-mode-ceiling "$CEILING" 2>/dev/null)"; then
-  printf 'T3_CEILING=applied\\n%s\\n' "$OUTPUT"
+  printf 'GOAT_CEILING=applied\\n%s\\n' "$OUTPUT"
 else
   recheck_selected_before_use
   OUTPUT="$("$RUNNER_FILE" "$@")"
-  printf 'T3_CEILING=default\\n%s\\n' "$OUTPUT"
+  printf 'GOAT_CEILING=default\\n%s\\n' "$OUTPUT"
 fi
 `;
 
 const REMOTE_STOP_SCRIPT = `set -eu
 DEFAULT_SERVER_HOME="$HOME/.goat"
-STATE_DIR="$HOME/.goat/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 PID_FILE="$STATE_DIR/pid"
 PORT_FILE="$STATE_DIR/port"
 MANAGED_FILE="$STATE_DIR/managed"
 mkdir -p "$STATE_DIR"
-@@T3_PROTOCOL_TOKENS@@
-@@T3_REPLACEMENT_LOCK@@
+@@GOAT_PROTOCOL_TOKENS@@
+@@GOAT_REPLACEMENT_LOCK@@
 trap 'release_recovery_lock; release_replacement_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -1612,7 +1634,7 @@ ownership_unverified() {
   printf 'GOAT ownership could not be verified for PID %s; process and ownership files were preserved.\\n' "$REMOTE_PID" >&2
   exit 1
 }
-@@T3_OWNED_IDENTITY@@
+@@GOAT_OWNED_IDENTITY@@
 if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
   valid_positive "$REMOTE_PID" || ownership_unverified
   if kill -0 "$REMOTE_PID" 2>/dev/null; then
@@ -1649,7 +1671,7 @@ printf '{"stopped":true}\\n'
 `;
 
 const REMOTE_LOG_TAIL_SCRIPT = `set -eu
-STATE_DIR="$HOME/.goat/ssh-launch/@@T3_STATE_KEY@@"
+STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
 LOG_FILE="$STATE_DIR/server.log"
 if [ -f "$LOG_FILE" ]; then
   tail -n 80 "$LOG_FILE" 2>/dev/null || true
@@ -1696,13 +1718,13 @@ export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): st
   );
   return stripTrailingNewlines(
     applyScriptPlaceholders(REMOTE_RUNNER_SCRIPT, {
-      T3_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
-      T3_ARCHIVE_VERSION: shellSingleQuote(archiveVersion),
-      T3_RELEASE_BASE_URL: shellSingleQuote(releaseBaseUrl),
-      T3_ARCHIVE_LOCK_WAIT_SECONDS: String(REMOTE_ARCHIVE_LOCK_WAIT_SECONDS),
-      T3_ARCHIVE_DOWNLOAD_SECONDS: String(REMOTE_ARCHIVE_DOWNLOAD_SECONDS),
-      T3_ARCHIVE_CHECKSUMS_SECONDS: String(REMOTE_ARCHIVE_CHECKSUMS_SECONDS),
-      T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
+      GOAT_NODE_SCRIPT_PATH: shellSingleQuote(nodeScriptPath),
+      GOAT_ARCHIVE_VERSION: shellSingleQuote(archiveVersion),
+      GOAT_RELEASE_BASE_URL: shellSingleQuote(releaseBaseUrl),
+      GOAT_ARCHIVE_LOCK_WAIT_SECONDS: String(REMOTE_ARCHIVE_LOCK_WAIT_SECONDS),
+      GOAT_ARCHIVE_DOWNLOAD_SECONDS: String(REMOTE_ARCHIVE_DOWNLOAD_SECONDS),
+      GOAT_ARCHIVE_CHECKSUMS_SECONDS: String(REMOTE_ARCHIVE_CHECKSUMS_SECONDS),
+      GOAT_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
     }),
   );
 }
@@ -1710,8 +1732,8 @@ export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): st
 export function buildRemoteNodeEnvScript(input?: RemoteGoatRunnerOptions): string {
   return stripTrailingNewlines(
     applyScriptPlaceholders(REMOTE_NODE_ENV_SCRIPT, {
-      T3_NODE_ENGINE_RANGE: shellSingleQuote(input?.nodeEngineRange?.trim() || ""),
-      T3_NODE_ENGINE_CHECK_SCRIPT: stripTrailingNewlines(buildRemoteNodeEngineCheckScript()),
+      GOAT_NODE_ENGINE_RANGE: shellSingleQuote(input?.nodeEngineRange?.trim() || ""),
+      GOAT_NODE_ENGINE_CHECK_SCRIPT: stripTrailingNewlines(buildRemoteNodeEngineCheckScript()),
     }),
   );
 }
@@ -1723,9 +1745,9 @@ function buildRemoteRunnerSetupScript(
 ): string {
   const preserve = selection.source === "retained";
   return applyScriptPlaceholders(REMOTE_RUNNER_SETUP_SCRIPT, {
-    T3_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
-    T3_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
-    T3_DRAIN_GRACE_SECONDS: String(
+    GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
+    GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
+    GOAT_DRAIN_GRACE_SECONDS: String(
       Math.min(
         Math.max(
           0,
@@ -1734,45 +1756,45 @@ function buildRemoteRunnerSetupScript(
         RUNTIME_DRAIN_MAX_GRACE_SECONDS,
       ),
     ),
-    T3_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
-    T3_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
-    T3_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
-    T3_REQUESTED_RUNNER: shellSingleQuote(
+    GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
+    GOAT_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
+    GOAT_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
+    GOAT_REQUESTED_RUNNER: shellSingleQuote(
       isNodeScriptRunner(input)
         ? `Node script ${input?.nodeScriptPath?.trim()}`
         : `GOAT ${selection.requestedVersion}`,
     ),
-    T3_EXPECTED_ARCHIVE_VERSION: shellSingleQuote(selection.version ?? ""),
-    T3_SELECTED_VERSION: shellSingleQuote(selection.version ?? ""),
-    T3_REQUESTED_VERSION: shellSingleQuote(selection.requestedVersion ?? ""),
-    T3_REQUIRE_INSTALLED: selection.requireInstalled ? "1" : "0",
-    T3_PRESERVE_SELECTED_RUNNER: preserve ? "1" : "0",
-    T3_ALLOW_OWNED_UPGRADE:
+    GOAT_EXPECTED_ARCHIVE_VERSION: shellSingleQuote(selection.version ?? ""),
+    GOAT_SELECTED_VERSION: shellSingleQuote(selection.version ?? ""),
+    GOAT_REQUESTED_VERSION: shellSingleQuote(selection.requestedVersion ?? ""),
+    GOAT_REQUIRE_INSTALLED: selection.requireInstalled ? "1" : "0",
+    GOAT_PRESERVE_SELECTED_RUNNER: preserve ? "1" : "0",
+    GOAT_ALLOW_OWNED_UPGRADE:
       verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer ? "1" : "0",
-    T3_ALLOW_LEGACY_ADOPTION:
+    GOAT_ALLOW_LEGACY_ADOPTION:
       verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && !isNodeScriptRunner(input)
         ? "1"
         : "0",
-    T3_REFRESH_IF_IDLE:
+    GOAT_REFRESH_IF_IDLE:
       verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && selection.refreshIfIdle
         ? "1"
         : "0",
-    T3_REFRESH_LIVE_VERSION: shellSingleQuote(selection.expectedLiveVersion ?? ""),
-    T3_LIVE_RUNNER_SHA256: shellSingleQuote(selection.expectedLiveRunnerSha256 ?? ""),
-    T3_CAPTURE_RUNNING_RUNNER: verifyOwnedBeforePublication
+    GOAT_REFRESH_LIVE_VERSION: shellSingleQuote(selection.expectedLiveVersion ?? ""),
+    GOAT_LIVE_RUNNER_SHA256: shellSingleQuote(selection.expectedLiveRunnerSha256 ?? ""),
+    GOAT_CAPTURE_RUNNING_RUNNER: verifyOwnedBeforePublication
       ? 'if [ "$ALLOW_LEGACY_ADOPTION" = 1 ] || [ "$REFRESH_IF_IDLE" = 1 ]; then capture_running_runner || ownership_unverified; fi'
       : "",
-    T3_RETAINED_RUNNER_SHA256: shellSingleQuote(selection.retainedRunnerSha256 ?? ""),
-    T3_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
-    T3_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
-    T3_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
-      T3_SSH_PROTOCOL: String(SSH_RUNTIME_PROTOCOL_VERSION),
-      T3_ORCHESTRATION_PROTOCOL: String(ORCHESTRATION_PROTOCOL_VERSION),
+    GOAT_RETAINED_RUNNER_SHA256: shellSingleQuote(selection.retainedRunnerSha256 ?? ""),
+    GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
+    GOAT_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
+    GOAT_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
+      GOAT_SSH_PROTOCOL: String(SSH_RUNTIME_PROTOCOL_VERSION),
+      GOAT_ORCHESTRATION_PROTOCOL: String(ORCHESTRATION_PROTOCOL_VERSION),
     }),
-    T3_VERIFY_OWNED_BEFORE_PUBLICATION: verifyOwnedBeforePublication
+    GOAT_VERIFY_OWNED_BEFORE_PUBLICATION: verifyOwnedBeforePublication
       ? VERIFY_OWNED_BEFORE_PUBLICATION + "\n"
       : "",
-    T3_RUNNER_INSTALL: preserve ? KEEP_EXISTING_RUNNER_INSTALL : REPLACE_RUNNER_INSTALL,
+    GOAT_RUNNER_INSTALL: preserve ? KEEP_EXISTING_RUNNER_INSTALL : REPLACE_RUNNER_INSTALL,
   });
 }
 
@@ -1781,19 +1803,19 @@ export function buildRemoteLaunchScript(
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
-    T3_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
-    T3_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
-    T3_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
-    T3_LEGACY_IDENTITY: REMOTE_LEGACY_IDENTITY_SCRIPT,
-    T3_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
-    T3_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, selection, true),
-    T3_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
-    T3_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
-    T3_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
-    T3_REMOTE_PORT_SCAN_WINDOW: String(REMOTE_PORT_SCAN_WINDOW),
-    T3_READY_TIMEOUT_MS: String(REMOTE_READY_TIMEOUT_MS),
-    T3_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
-    T3_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
+    GOAT_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
+    GOAT_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
+    GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
+    GOAT_LEGACY_IDENTITY: REMOTE_LEGACY_IDENTITY_SCRIPT,
+    GOAT_NODE_ENV_SCRIPT: buildRemoteNodeEnvScript(input),
+    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, selection, true),
+    GOAT_PICK_PORT_SCRIPT: stripTrailingNewlines(REMOTE_PICK_PORT_SCRIPT),
+    GOAT_WAIT_READY_SCRIPT: stripTrailingNewlines(REMOTE_WAIT_READY_SCRIPT),
+    GOAT_DEFAULT_REMOTE_PORT: String(DEFAULT_REMOTE_PORT),
+    GOAT_REMOTE_PORT_SCAN_WINDOW: String(REMOTE_PORT_SCAN_WINDOW),
+    GOAT_READY_TIMEOUT_MS: String(REMOTE_READY_TIMEOUT_MS),
+    GOAT_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
+    GOAT_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
   });
 }
 
@@ -1804,12 +1826,12 @@ export function buildRemoteMcpSessionScript(
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_MCP_SESSION_SCRIPT, {
-    T3_STATE_KEY: stateKey,
-    T3_TTL: shellSingleQuote(options.ttl),
-    T3_LABEL: shellSingleQuote(options.label),
-    T3_CEILING: shellSingleQuote(options.runtimeModeCeiling ?? ""),
-    T3_EXTRA_SCOPES: options.approvals === true ? "--scope orchestration:approve " : "",
-    T3_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
+    GOAT_STATE_KEY: stateKey,
+    GOAT_TTL: shellSingleQuote(options.ttl),
+    GOAT_LABEL: shellSingleQuote(options.label),
+    GOAT_CEILING: shellSingleQuote(options.runtimeModeCeiling ?? ""),
+    GOAT_EXTRA_SCOPES: options.approvals === true ? "--scope orchestration:approve " : "",
+    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,
       mayUpgradeOwnedServer: false,
     }),
@@ -1819,7 +1841,7 @@ export function buildRemoteMcpSessionScript(
 /** Reads the remote session script's output: a ceiling marker line, then the CLI's JSON. */
 export const decodeRemoteMcpSessionOutput = Effect.fn("ssh/tunnel.decodeRemoteMcpSessionOutput")(
   function* (stdout: string) {
-    const marker = /^T3_CEILING=(applied|default)$/mu.exec(stdout);
+    const marker = /^(?:GOAT|T3)_CEILING=(applied|default)$/mu.exec(stdout);
     const session = yield* decodeRemoteJsonOutput(
       marker === null ? stdout : stdout.slice(marker.index + marker[0].length),
       decodeRemoteMcpSessionResult,
@@ -1838,8 +1860,8 @@ export function buildRemotePairingScript(
   selection = requestedRuntime(input),
 ): string {
   return applyScriptPlaceholders(REMOTE_PAIRING_SCRIPT, {
-    T3_STATE_KEY: stateKey,
-    T3_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
+    GOAT_STATE_KEY: stateKey,
+    GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,
       mayUpgradeOwnedServer: false,
     }),
@@ -1861,7 +1883,7 @@ export function buildRemoteGoatUploadInstallerScript(
     });
   }
   const script = buildRemoteGoatRunnerScript(input);
-  const startAnchor = '  t3_fetch "$T3_RELEASE_BASE_URL/v$T3_ARCHIVE_VERSION/SHA256SUMS"';
+  const startAnchor = '  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS"';
   const endAnchor = "  if command -v sha256sum >/dev/null 2>&1; then";
   const start = script.indexOf(startAnchor);
   const end = script.indexOf(endAnchor);
@@ -1876,8 +1898,8 @@ export function buildRemoteGoatUploadInstallerScript(
   // Patch a transient copy so preparation never changes the managed runner.
   return (
     script.slice(0, start) +
-    '  cp "$T3_SSH_UPLOADED_ARCHIVE" "$T3_STAGING/$T3_ARCHIVE"\n' +
-    `  T3_EXPECTED='${sha256.toLowerCase()}'\n` +
+    '  cp "$GOAT_SSH_UPLOADED_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE"\n' +
+    `  GOAT_EXPECTED='${sha256.toLowerCase()}'\n` +
     script.slice(end)
   );
 }
@@ -1891,7 +1913,7 @@ upload_dir="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.upload-XXXXXX")"
 trap 'rm -rf "$upload_dir"' EXIT
 trap 'exit 1' HUP INT TERM
 cat > "$upload_dir/archive.tar.gz"
-export T3_SSH_UPLOADED_ARCHIVE="$upload_dir/archive.tar.gz"
+export GOAT_SSH_UPLOADED_ARCHIVE="$upload_dir/archive.tar.gz"
 sh -c ${shellSingleQuote(installer)} -- --version
 `;
 }
@@ -1938,13 +1960,14 @@ binary_json() {
     printf '{"serverVersion":"%s"}' "$v"
   fi
 }
+${REMOTE_RUNNER_HINT_SCRIPT}
 retained_version=
 retained_sha256=
 if [ -n "$state_key" ] && [ -f "$state/run-t3.sh" ]; then
   retained_sha256="$(runner_sha256 "$state/run-t3.sh")" || exit 1
-  node_path="$(sed -n "s/^T3_NODE_SCRIPT_PATH='\\(.*\\)'$/\\1/p" "$state/run-t3.sh")"
+  node_path="$(read_runner_hint "$state/run-t3.sh" GOAT_NODE_SCRIPT_PATH ${LEGACY_SSH_NODE_SCRIPT_PATH_KEY})"
   if [ -z "$node_path" ]; then
-    retained_version="$(sed -n "s/^T3_ARCHIVE_VERSION='\\([^']*\\)'$/\\1/p" "$state/run-t3.sh")"
+    retained_version="$(read_runner_hint "$state/run-t3.sh" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})"
   fi
 fi
 retained_fields=
@@ -2369,16 +2392,16 @@ export const prepareRemoteRuntime = (
 
 export function buildRemoteStopScript(stateKey: string): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
-    T3_STATE_KEY: stateKey,
-    T3_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
-    T3_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
-    T3_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
+    GOAT_STATE_KEY: stateKey,
+    GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
+    GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
+    GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
   });
 }
 
 function buildRemoteLogTailScript(stateKey: string): string {
   return applyScriptPlaceholders(REMOTE_LOG_TAIL_SCRIPT, {
-    T3_STATE_KEY: stateKey,
+    GOAT_STATE_KEY: stateKey,
   });
 }
 

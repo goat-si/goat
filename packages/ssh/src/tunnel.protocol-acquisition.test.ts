@@ -243,7 +243,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             events.some((event) => event.type === "supervise" && event.status === "replaced"),
           );
           assert.isBelow(stop, start);
-          assert.include(events[start].runner, `T3_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
+          assert.include(events[start].runner, `GOAT_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
           assert.equal(f.counters().uploads, 1);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );

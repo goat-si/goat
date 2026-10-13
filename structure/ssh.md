@@ -43,6 +43,12 @@ session, stop, and log scripts keep their ownership records (`pid`, `port`, `man
 finds a compatible live server attaches to it, so threads started from any client live in that
 server's state and every client sees them.
 
+The runner keeps `run-t3.sh` because independently updated clients and retained supervisors
+use that path for reuse, replacement, and rollback. Its shell variables use `GOAT_*`;
+only literal `T3_ARCHIVE_VERSION` and `T3_NODE_SCRIPT_PATH` declarations remain as metadata
+for older clients that inspect the file without sourcing it. New readers prefer GOAT
+declarations and also accept legacy runners.
+
 The live `~/.goat/userdata/server-runtime.json` record and the server's descriptor decide identity.
 Remembered launch files whose PID has exited are stale and do not block attaching
 (`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
@@ -50,7 +56,7 @@ authority either, because the launch script requires its PID file to name the li
 
 Desktop and agent dispatch both leave the server running when they disconnect
 (`leaveRemoteServerRunning`). The explicit stop script signals a server only after its
-`/.well-known/t3/activity` answers `idle` for that PID. `busy` or no answer leaves it running.
+`/.well-known/goat/activity` (with a 404 fallback to `/.well-known/t3/activity`) answers `idle` for that PID. `busy` or no answer leaves it running.
 No client signals a server to replace it; see [Replacement](#replacement).
 
 Protocol ranges decide compatibility. The descriptor advertises `protocol: {ssh, orchestration}`
