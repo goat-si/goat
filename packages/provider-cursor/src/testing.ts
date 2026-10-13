@@ -13,13 +13,6 @@ export {
 } from "./server/adapter.ts";
 export {
   makeCursorCloudAdapter,
-  capabilities as CursorCloudCapabilities,
   DRIVER as CURSOR_CLOUD_DRIVER_KIND,
 } from "./server/cloud/adapter.ts";
-export {
-  CursorCloudSdk,
-  CursorCloudSdkError,
-  type CloudAgent,
-  type CloudRun,
-  type CloudRunOptions,
-} from "./server/cloud/sdk.ts";
+export { CursorCloudSdk, type CloudAgent, type CloudRun } from "./server/cloud/sdk.ts";
