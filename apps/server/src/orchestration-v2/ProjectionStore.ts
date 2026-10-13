@@ -1780,6 +1780,7 @@ function shellFromState(input: {
     ...(input.state.thread.launchedBy === undefined
       ? {}
       : { launchedBy: input.state.thread.launchedBy }),
+    ...(input.state.thread.sideChatOf == null ? {} : { sideChatOf: input.state.thread.sideChatOf }),
     ...(input.state.thread.linkedPullRequest === undefined
       ? {}
       : { linkedPullRequest: input.state.thread.linkedPullRequest }),

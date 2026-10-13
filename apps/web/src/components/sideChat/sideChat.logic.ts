@@ -1,4 +1,4 @@
-import { isSideChatThread, type OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { ScopedThreadRef } from "@goat/contracts";
 
@@ -35,32 +35,4 @@ export function canOpenSideChat(
   thread: { readonly sideChatOf?: ScopedThreadRef["threadId"] | null | undefined } | null,
 ): boolean {
   return thread !== null && !isSideChatThread(thread);
-}
-
-export type SideChatRow =
-  | { readonly kind: "user"; readonly id: string; readonly text: string }
-  | {
-      readonly kind: "assistant";
-      readonly id: string;
-      readonly text: string;
-      readonly streaming: boolean;
-    };
-
-/**
- * The exchange the side chat itself produced. A forked side chat also projects its parent's
- * history as inherited items; that history stays in the parent's own view.
- */
-export function sideChatRows(
-  items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
-): SideChatRow[] {
-  const rows: SideChatRow[] = [];
-  for (const { item, visibility } of items) {
-    if (visibility !== "local") continue;
-    if (item.type === "user_message" && item.text.trim() !== "") {
-      rows.push({ kind: "user", id: item.id, text: item.text });
-    } else if (item.type === "assistant_message" && (item.text !== "" || item.streaming)) {
-      rows.push({ kind: "assistant", id: item.id, text: item.text, streaming: item.streaming });
-    }
-  }
-  return rows;
 }

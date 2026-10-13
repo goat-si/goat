@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ThreadShell,
   ThreadId,
 } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
@@ -84,7 +85,8 @@ export function deriveThreadRelationshipGraph(input: {
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
         : thread.lineage.parentThreadId;
-    if (parentThreadId === null) continue;
+    // A side chat opens beside its parent, not in the parent's lineage.
+    if (parentThreadId === null || isSideChatThread(thread)) continue;
     addEdge({
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,

@@ -1,14 +1,9 @@
-import { ThreadId, type OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
+import { ThreadId } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture } from "../../test-fixtures";
-import {
-  canOpenSideChat,
-  findSideChatThread,
-  parseSideChatCommand,
-  sideChatRows,
-} from "./sideChat.logic";
+import { canOpenSideChat, findSideChatThread, parseSideChatCommand } from "./sideChat.logic";
 
 describe("parseSideChatCommand", () => {
   it("reads the question after /side", () => {
@@ -59,42 +54,5 @@ describe("findSideChatThread", () => {
     expect(canOpenSideChat(parent)).toBe(true);
     expect(canOpenSideChat(side("nested", "2026-10-13T01:00:00.000Z"))).toBe(false);
     expect(canOpenSideChat(null)).toBe(false);
-  });
-});
-
-describe("sideChatRows", () => {
-  const base = {
-    position: 0,
-    sourceThreadId: ThreadId.make("side"),
-  };
-  // Only the fields sideChatRows reads; the rest of a turn item is irrelevant here.
-  const projected = (
-    visibility: OrchestrationV2ProjectedTurnItem["visibility"],
-    item: { readonly type: string; readonly id: string; readonly [field: string]: unknown },
-  ) =>
-    ({
-      ...base,
-      visibility,
-      sourceItemId: item.id,
-      item,
-    }) as unknown as OrchestrationV2ProjectedTurnItem;
-
-  it("shows only the side chat's own exchange, not the inherited parent history", () => {
-    const rows = sideChatRows([
-      projected("inherited", { type: "user_message", id: "parent-q", text: "build it" }),
-      projected("inherited", {
-        type: "assistant_message",
-        id: "parent-a",
-        text: "done",
-        streaming: false,
-      }),
-      projected("local", { type: "user_message", id: "q", text: "which file?" }),
-      projected("local", { type: "reasoning", id: "r", text: "thinking", streaming: false }),
-      projected("local", { type: "assistant_message", id: "a", text: "", streaming: true }),
-    ]);
-    expect(rows).toEqual([
-      { kind: "user", id: "q", text: "which file?" },
-      { kind: "assistant", id: "a", text: "", streaming: true },
-    ]);
   });
 });
