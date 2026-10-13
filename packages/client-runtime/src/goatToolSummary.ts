@@ -321,6 +321,15 @@ export function summarizeGoatToolCalls(
     case "worktree-status":
       label = phrase("Checked", "check", `worktree status ${times}`);
       break;
+    case "worktree-inventory":
+      label = phrase("Listed", "list", `worktrees ${times}`);
+      break;
+    case "worktree-remove":
+      label = phrase("Removed", "remove", quantity(countEntities(entityIds("path")), "worktree"));
+      break;
+    case "worktree-cleanup":
+      label = phrase("Cleaned up", "clean up", `stale worktrees ${times}`);
+      break;
     case "project-list":
       label = phrase("Listed", "list", `projects ${times}`);
       break;

@@ -61,6 +61,7 @@ import {
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
+import * as WorktreeInventoryService from "./WorktreeInventoryService.ts";
 import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
@@ -925,7 +926,12 @@ export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandl
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
   WorktreeHandlers.layer,
-).pipe(Layer.provide(WorktreeMcpService.layer));
+).pipe(
+  Layer.provide(WorktreeMcpService.layer),
+  Layer.provide(WorktreeInventoryService.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
 
 const layerPreviewControlsRegistration = toolkitRegistration(
   PreviewControlsToolkit,

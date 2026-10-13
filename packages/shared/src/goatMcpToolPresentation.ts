@@ -46,6 +46,9 @@ export type GoatMcpToolSummaryAction =
   | "worktree-handoff"
   | "worktree-list"
   | "worktree-status"
+  | "worktree-inventory"
+  | "worktree-remove"
+  | "worktree-cleanup"
   | "project-list"
   | "project-read"
   | "project-create"
@@ -349,6 +352,12 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "thread-update",
   ),
   goat_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
+  goat_worktree_inventory: tool(["List", "Listing", "Listed", "worktrees"], "worktree-inventory"),
+  goat_worktree_remove: tool(["Remove", "Removing", "Removed", "a worktree"], "worktree-remove"),
+  goat_worktree_cleanup: tool(
+    ["Clean up", "Cleaning up", "Cleaned up", "stale worktrees"],
+    "worktree-cleanup",
+  ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
   goat_environment_read: tool(

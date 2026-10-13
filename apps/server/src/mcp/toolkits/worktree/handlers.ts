@@ -1,16 +1,87 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import {
+  OrchestratorMcpFailure,
+  WorktreeMcpCleanupResult,
+  WorktreeMcpInventoryResult,
+  WorktreeMcpRemoveResult,
+} from "@goat/contracts";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as GitWorkflow from "../../../git/GitWorkflowService.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import { readThread, unavailable } from "../../threadAccess.ts";
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as WorktreeInventoryService from "../../WorktreeInventoryService.ts";
 import * as WorktreeMcpService from "../../WorktreeMcpService.ts";
 import { WorktreeToolkit } from "./tools.ts";
 
+const requireWorktreeCapability = McpInvocationContext.McpInvocationContext.pipe(
+  Effect.flatMap((context) =>
+    context.capabilities.has("worktree")
+      ? Effect.void
+      : Effect.fail(
+          new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "This credential cannot manage worktrees.",
+          }),
+        ),
+  ),
+);
+
+/**
+ * Runs `local` here, or the same tool on `host`, which answers for its own
+ * worktrees. `writes` picks a host session that may change things.
+ */
+const hereOrOnHost = <P extends { readonly host?: string | undefined }, A extends object, E>(
+  tool: string,
+  input: P,
+  writes: boolean,
+  decode: (value: unknown) => Effect.Effect<A, E>,
+  local: (
+    input: Omit<P, "host">,
+  ) => Effect.Effect<A, OrchestratorMcpFailure, WorktreeInventoryService.WorktreeInventoryService>,
+) =>
+  Effect.gen(function* () {
+    yield* requireWorktreeCapability;
+    const { host, ...rest } = input;
+    if (host === undefined) return yield* local(rest);
+    const scope = yield* McpInvocationContext.McpInvocationContext;
+    const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
+    const call = { host, tool, arguments: rest };
+    return yield* writes
+      ? hosts.writeOnHost(scope, call, decode)
+      : hosts.readOnHost(scope, call, decode);
+  });
+
+const decodeInventory = Schema.decodeUnknownEffect(WorktreeMcpInventoryResult);
+const decodeRemove = Schema.decodeUnknownEffect(WorktreeMcpRemoveResult);
+const decodeCleanup = Schema.decodeUnknownEffect(WorktreeMcpCleanupResult);
+const inventoryService = WorktreeInventoryService.WorktreeInventoryService;
+
 const handlers = {
+  goat_worktree_inventory: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined,
+    (input) =>
+      hereOrOnHost("goat_worktree_inventory", input, false, decodeInventory, (local) =>
+        Effect.flatMap(inventoryService, (service) => service.inventory(local)),
+      ),
+  ),
+  goat_worktree_remove: McpToolAccess.writes((input) =>
+    hereOrOnHost("goat_worktree_remove", input, true, decodeRemove, (local) =>
+      Effect.flatMap(inventoryService, (service) => service.remove(local)),
+    ),
+  ),
+  // A dry run changes nothing, so only a real sweep needs a writing caller.
+  goat_worktree_cleanup: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined || input.dryRun === false,
+    (input) =>
+      hereOrOnHost("goat_worktree_cleanup", input, input.dryRun === false, decodeCleanup, (local) =>
+        Effect.flatMap(inventoryService, (service) => service.cleanup(local)),
+      ),
+  ),
   goat_worktree_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const context = yield* McpInvocationContext.McpInvocationContext;
