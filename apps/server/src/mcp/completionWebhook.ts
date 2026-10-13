@@ -242,6 +242,7 @@ export const make = Effect.gen(function* () {
     watch: LaunchWatch,
     report: CompletionWebhookReport,
     body: string,
+    keptSecret: string | undefined,
   ): Effect.Effect<Attempt> =>
     Effect.gen(function* () {
       const settings = (yield* serverSettings.getSettings).completionWebhook;
@@ -254,12 +255,7 @@ export const make = Effect.gen(function* () {
       const secret =
         typeof receiver.secret === "string"
           ? receiver.secret
-          : yield* secretStore
-              .get(receiver.secret.secretName)
-              .pipe(
-                Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
-                Effect.map(Option.getOrNull),
-              );
+          : (keptSecret ?? (yield* readInlineSecret(receiver.secret.secretName)));
       // A signed target whose secret is gone must not start posting unsigned.
       if (secret === null) {
         yield* Effect.logWarning("completion webhook: target secret missing", { id: report.id });
@@ -294,11 +290,24 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const deliver = (watch: LaunchWatch, report: CompletionWebhookReport, at: number) =>
+  const readInlineSecret = (secretName: string) =>
+    secretStore
+      .get(secretName)
+      .pipe(
+        Effect.map(Option.map((bytes) => new TextDecoder().decode(bytes))),
+        Effect.map(Option.getOrNull),
+      );
+
+  const deliver = (
+    watch: LaunchWatch,
+    report: CompletionWebhookReport,
+    at: number,
+    keptSecret: string | undefined,
+  ) =>
     Effect.gen(function* () {
       const body = encodeJson(completionWebhookPayload(watch, report, at));
       for (let tries = 1; tries <= MAX_ATTEMPTS; tries++) {
-        const outcome = yield* attempt(watch, report, body);
+        const outcome = yield* attempt(watch, report, body, keptSecret);
         if (outcome === "delivered" || outcome === "stop") return;
         if (outcome === "skipped") {
           // Never sent, so a later report of the same event may still go out.
@@ -314,8 +323,21 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (!remember(report.id)) return;
       const at = yield* Clock.currentTimeMillis;
+      // An inline target's secret goes with its watch, which may end while this report still
+      // retries; read it now, while the watch is certainly saved. It never rotates.
+      const target = watch.webhookTarget;
+      const keptSecret =
+        target?.type === "inline" && target.secretName !== null
+          ? yield* readInlineSecret(target.secretName).pipe(
+              Effect.map((value) => value ?? undefined),
+              Effect.orElseSucceed(() => undefined),
+            )
+          : undefined;
       // Reports arrive from the launch watch's uninterruptible section; shutdown must still end retries.
-      yield* deliver(watch, report, at).pipe(Effect.interruptible, Effect.forkIn(scope));
+      yield* deliver(watch, report, at, keptSecret).pipe(
+        Effect.interruptible,
+        Effect.forkIn(scope),
+      );
     });
 
   const watchesExternal: CompletionWebhookShape["watchesExternal"] = (route) =>

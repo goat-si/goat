@@ -1232,9 +1232,12 @@ export const make = Effect.gen(function* () {
                   webhookTarget: input.route.webhookTarget,
                   now,
                 })
-              : input.route.webhookTarget === null
-                ? existing
-                : { ...existing, webhookTarget: input.route.webhookTarget };
+              : // The latest launch's choice wins, as it does for register.
+                {
+                  ...existing,
+                  notifyWebhook: input.route.notifyWebhook,
+                  webhookTarget: input.route.webhookTarget,
+                };
           const watch = addPendingRun(base, input.runId, now);
           yield* save((map) => map.set(id, watch));
           yield* ensureFollower(watch);

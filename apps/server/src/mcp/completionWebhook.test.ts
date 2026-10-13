@@ -714,6 +714,34 @@ describe("CompletionWebhook notify targets", () => {
     }),
   );
 
+  it.effect("keeps signing a retry after the watch released its inline secret", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed, [503, 200]);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          const route = yield* webhook.resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { url: "https://inline.example/hook", secretRef: enteredRef },
+            projectId: project,
+          });
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
+            runReport(),
+          );
+          yield* Queue.take(h.received);
+          // The watch ends, and its secret with it, while the report still retries.
+          yield* webhook.release(route.webhookTarget);
+          yield* settle;
+          yield* TestClock.adjust(30_000);
+          const retry = yield* Queue.take(h.received);
+          expect(verifySignature(retry, "inline-secret")).toBe(true);
+        }),
+      );
+      expect(h.log).toHaveLength(2);
+    }),
+  );
+
   it.effect("needs a calling thread's project to use a secretRef", () =>
     Effect.gen(function* () {
       const h = yield* harness(routed);

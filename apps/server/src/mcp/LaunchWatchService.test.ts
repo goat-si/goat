@@ -1581,6 +1581,30 @@ describe("LaunchWatchService launcherless watches", () => {
       return reported;
     });
 
+  it.effect("applies the latest outside launch's webhook choice to a reused watch", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const inline: LaunchWatchWebhookTarget = {
+        type: "inline",
+        url: "https://bot.example/hook",
+        secretName: "completion-webhook-watch-1",
+      };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          const first = yield* service.watchExternal(
+            external({ requested: false, webhookTarget: inline }),
+          );
+          expect(first).toMatchObject({ notifyWebhook: false, webhookTarget: inline });
+          // A later launch of the same thread that asks for the default webhook gets it.
+          const again = yield* service.watchExternal(external({ requested: true }));
+          expect(again).toMatchObject({ notifyWebhook: true, webhookTarget: null });
+          expect(world.releasedTargets).toEqual([inline]);
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("records nothing for an outside launch the completion webhook does not take", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
