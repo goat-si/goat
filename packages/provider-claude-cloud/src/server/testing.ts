@@ -13,6 +13,8 @@ export class FakePty implements PtyAdapter.PtyProcess {
   readonly pid = 90001;
   writes: string[] = [];
   kills = 0;
+  killSignals: Array<string | undefined> = [];
+  exitOnForceKill = false;
   private data = new Set<(data: string) => void>();
   private exits = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
   private exit: PtyAdapter.PtyExitEvent | undefined;
@@ -28,10 +30,11 @@ export class FakePty implements PtyAdapter.PtyProcess {
     this.writes.push(data);
   }
   resize() {}
-  kill() {
+  kill(signal?: string) {
     this.kills += 1;
+    this.killSignals.push(signal);
     Deferred.doneUnsafe(this.killedLatch, Effect.void);
-    if (this.exitOnKill) this.finish(130);
+    if (this.exitOnKill || (signal === "SIGKILL" && this.exitOnForceKill)) this.finish(130);
   }
   onData(callback: (data: string) => void) {
     this.data.add(callback);

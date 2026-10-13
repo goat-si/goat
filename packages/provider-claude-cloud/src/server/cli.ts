@@ -280,26 +280,39 @@ const make = Effect.gen(function* () {
           return { process, offExit, offData };
         }),
         ({ process, offExit, offData }) =>
-          Effect.callback<void>((resume) => {
-            const finished = () => {
-              if (exit) resume(Effect.void);
-            };
-            listeners.add(finished);
-            if (exit) finished();
-            else {
+          Effect.gen(function* () {
+            const waitForExit = Effect.callback<void>((resume) => {
+              const finished = () => {
+                if (exit) resume(Effect.void);
+              };
+              listeners.add(finished);
+              finished();
+              return Effect.sync(() => {
+                listeners.delete(finished);
+              });
+            });
+            if (!exit) {
               try {
                 process.kill();
               } catch {
-                try {
-                  process.kill("SIGKILL");
-                } catch {
-                  /* Real exit remains required before source cleanup. */
-                }
+                /* Escalate after the grace period; retain ownership until actual exit. */
               }
             }
-            return Effect.sync(() => {
-              listeners.delete(finished);
-            });
+            yield* waitForExit.pipe(
+              Effect.timeout("2 seconds"),
+              Effect.catchTags({
+                TimeoutError: () =>
+                  Effect.sync(() => {
+                    if (!exit) {
+                      try {
+                        process.kill("SIGKILL");
+                      } catch {
+                        /* Never release source before the owned process reports exit. */
+                      }
+                    }
+                  }).pipe(Effect.andThen(waitForExit)),
+              }),
+            );
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {

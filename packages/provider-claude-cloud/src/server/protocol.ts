@@ -67,8 +67,12 @@ export function readStartReceipt(raw: string) {
 }
 
 export function trustRequired(raw: string) {
-  return /(?:trust this (?:folder|directory)|trust the files in this folder|workspace trust|Do you trust|Yes, I trust this folder)/i.test(
-    cleanOutput(raw),
+  const prompt = cleanOutput(raw).replace(
+    /^\s*(?:Created cloud session:|View:|Resume with:).*$/gm,
+    "",
+  );
+  return /^\s*(?:[❯>]\s*)?(?:Do you trust[^\r\n]*\?|Yes, I trust this folder|Trust (?:this (?:folder|directory)|the files in this folder)\?)\s*$/im.test(
+    prompt,
   );
 }
 

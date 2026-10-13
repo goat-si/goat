@@ -224,6 +224,52 @@ it.effect.each(["", "session_ABC123", "https://claude.ai/code/session_ABC123"])(
       }),
     ),
 );
+it.effect("accepts a receipt whose title mentions workspace trust", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service.start(LOGIN, "/fixture/repo", "task").pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(RECEIPT.replace("Test task", "Fix workspace trust"));
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.title).toBe("Fix workspace trust");
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      h.fake.finish();
+      yield* handle.exited;
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("escalates an owned PTY that ignores graceful kill before releasing its source", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      h.fake.exitOnKill = false;
+      h.fake.exitOnForceKill = true;
+      const cleaned = yield* Deferred.make<void>();
+      const fiber = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Deferred.succeed(cleaned, undefined));
+          yield* h.service.start(LOGIN, "/fixture/disposable", "task");
+        }),
+      ).pipe(Effect.result, Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Do you trust the files in this folder?\n");
+      yield* h.fake.killed;
+      expect(h.fake.killSignals).toEqual([undefined]);
+      expect(yield* Deferred.isDone(cleaned)).toBe(false);
+      yield* TestClock.adjust("2 seconds");
+      const result = yield* Fiber.join(fiber);
+      expect(result._tag).toBe("Failure");
+      expect(h.fake.killSignals).toEqual([undefined, "SIGKILL"]);
+      expect(yield* Deferred.isDone(cleaned)).toBe(true);
+      expect(h.fake.listeners).toBe(0);
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
+);
+
 it.effect("keeps the owned PTY exit listener and source alive while kill is pending", () =>
   Effect.scoped(
     Effect.gen(function* () {
