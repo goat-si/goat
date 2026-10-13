@@ -1261,6 +1261,8 @@ it.effect(
         );
         assert.equal(assistantItems.length, 1, "Exhausted recovery must persist an assistant item");
         const item = assistantItems[0]!;
+        assert.equal(item.type, "assistant_message");
+        if (item.type !== "assistant_message") throw new Error("Missing recovery assistant result");
         assert.equal(item.id, `turn-item:cloud-result:${saved.run.id}`);
         assert.equal(item.messageId, results[0]!.id);
         assert.equal(item.threadId, threadId);
