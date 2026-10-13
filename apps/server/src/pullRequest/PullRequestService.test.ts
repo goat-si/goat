@@ -452,7 +452,8 @@ function fakeProvider(
         requestReviewers: true,
       }),
     listChangeRequests: () => Effect.succeed({ items: [], truncated: false, continues: true }),
-    getChangeRequest: () => Effect.die("unused"),
+    // An open pull request with nothing holding it, which a merge reads first.
+    getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
     getChangeRequestActivity: () => Effect.die("unused"),
     getDiff: () => Effect.die("unused"),
     runAction: () => Effect.void,
@@ -1571,6 +1572,54 @@ it.effect("refreshes every reader before a queued merge confirmation finishes", 
       assert.isUndefined(observedMerge.pollUnsafe());
     }),
   ),
+);
+
+it.effect("refuses to merge or arm auto-merge on a held pull request", () =>
+  Effect.gen(function* () {
+    const ran: Array<string> = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          capabilities: {
+            ...fakeProvider(SourceControlProviderKind.make("github")).capabilities,
+            actions: ["merge", "enable-auto-merge", "close"],
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["merge", "enable-auto-merge", "close"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: true,
+            }),
+          getChangeRequest: () =>
+            Effect.succeed({
+              ...hostedChangeRequest(
+                "Fixes the sidebar.\n\nHOLD: do not merge until Jun approves screenshots",
+              ),
+            }),
+          runAction: (input) => Effect.sync(() => void ran.push(input.action)),
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    const merge = yield* Effect.flip(service.runAction({ ...reference, action: "merge" }));
+    assert.include(
+      merge.message,
+      "This pull request is on hold: its description has a HOLD line. Clear the hold before merging.",
+    );
+    const armed = yield* Effect.flip(
+      service.runAction({ ...reference, action: "enable-auto-merge" }),
+    );
+    assert.include(armed.message, "on hold");
+    assert.deepStrictEqual(ran, []);
+
+    // Closing is not merging; a hold does not stand in its way.
+    yield* service.runAction({ ...reference, action: "close" });
+    assert.deepStrictEqual(ran, ["close"]);
+  }),
 );
 
 it.effect("refuses an action this viewer may not take, and says what access it takes", () =>

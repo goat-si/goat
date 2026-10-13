@@ -93,6 +93,7 @@ import {
 } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
+import { pullRequestHoldReason } from "./pullRequestHold.ts";
 import * as ViewedFiles from "./pullRequestViewedFiles.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
@@ -2103,6 +2104,32 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
+            // A held pull request is refused before anything reaches the host. Read fresh,
+            // so a hold added moments ago in another client still counts.
+            const holdCheck =
+              input.action === "merge" || input.action === "enable-auto-merge"
+                ? project.api
+                    .getChangeRequest({
+                      cwd: project.project.workspaceRoot,
+                      repository: project.repository,
+                      host: project.host,
+                      number: input.number,
+                    })
+                    .pipe(
+                      Effect.mapError(toPullRequestError("runAction")),
+                      Effect.flatMap((detail) => {
+                        const reason = pullRequestHoldReason(detail);
+                        return reason === null
+                          ? Effect.void
+                          : Effect.fail(
+                              new PullRequestOperationError({
+                                operation: "runAction",
+                                detail: `This pull request is on hold: ${reason}. Clear the hold before merging.`,
+                              }),
+                            );
+                      }),
+                    )
+                : Effect.void;
             const mergeSettings =
               project.api.mergeMessageRewrite !== undefined &&
               input.stackNumber === undefined &&
@@ -2122,7 +2149,8 @@ export const make = Effect.gen(function* () {
                     ),
                   )
                 : Effect.succeed(false);
-            return mergeSettings.pipe(
+            return holdCheck.pipe(
+              Effect.andThen(mergeSettings),
               Effect.flatMap((removeAgentCreditsOnMerge) =>
                 project.api
                   .runAction({
