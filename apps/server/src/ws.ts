@@ -2112,6 +2112,13 @@ const layerWsRpc = (
                         message: "Failed to launch thread",
                         cause,
                       }),
+                    ThreadLaunchWorkspaceMissingError: (cause) =>
+                      new OrchestrationV2ThreadLaunchError({
+                        commandId: input.commandId,
+                        projectId: input.projectId,
+                        message: cause.message,
+                        cause,
+                      }),
                     ServerRuntimeStartupError: (cause) =>
                       new OrchestrationV2ThreadLaunchError({
                         commandId: input.commandId,

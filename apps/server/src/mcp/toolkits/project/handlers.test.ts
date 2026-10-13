@@ -94,9 +94,12 @@ const launchFromThread = (params: {
   readonly clientAccess?: "full-access" | "read-only";
   /** Whether the completion webhook takes an outside client's launch. */
   readonly webhookWatchesExternal?: boolean;
+  /** The launch service refuses instead of launching. */
+  readonly launchFails?: ThreadLaunch.ThreadLaunchWorkspaceMissingError;
 }) =>
   Effect.gen(function* () {
-    const { settings, outsideClient, clientAccess, webhookWatchesExternal, ...rest } = params;
+    const { settings, outsideClient, clientAccess, webhookWatchesExternal, launchFails, ...rest } =
+      params;
     const sourceThreadId = ThreadId.make("source-thread");
     const projectId = ProjectId.make("project");
     const providerInstanceId = ProviderInstanceId.make("codex");
@@ -144,6 +147,7 @@ const launchFromThread = (params: {
       }),
       Layer.mock(ThreadLaunch.ThreadLaunchService)({
         launch: (input) => {
+          if (launchFails !== undefined) return Effect.fail(launchFails);
           launchedSender = input.initialMessage?.senderThreadId;
           launchedBy = input.launchedBy;
           launchedInput = input;
@@ -1283,5 +1287,26 @@ it.effect("releases a notify target whose launch records no watch", () =>
     expect(launched.released).toEqual([
       { notifyWebhook: false, webhookTarget: { type: "named", name: "bot-a" } },
     ]);
+  }),
+);
+it.effect("tells the agent how to restore a missing project folder, and watches nothing", () =>
+  Effect.gen(function* () {
+    const launch = yield* launchFromThread({
+      title: "Into a deleted checkout",
+      message: "Go",
+      launchFails: new ThreadLaunch.ThreadLaunchWorkspaceMissingError({
+        projectId: ProjectId.make("project"),
+        projectTitle: "Client target",
+        kind: "project",
+        path: "/projects/client-target",
+        remoteUrl: "https://github.com/acme/client-target.git",
+      }),
+    });
+    expect(launch.result).toMatchObject({
+      code: "invalid_request",
+      message:
+        'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_project_clone {remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}, or point the project at an existing checkout with goat_project_update {projectId:"project", workspaceRoot}, then launch again.',
+    });
+    expect(launch.registrations).toEqual([]);
   }),
 );

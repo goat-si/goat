@@ -50,6 +50,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -108,6 +109,8 @@ interface HarnessOptions {
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
+  /** Folders that are gone from this machine. Without it, folders are not checked. */
+  readonly missingPaths?: ReadonlySet<string>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -197,6 +200,19 @@ function makeHarness(options: HarnessOptions = {}) {
         namedProjectsRoot: "/projects",
         folderForThread: () => Effect.succeed(Option.none()),
       }),
+    options.missingPaths === undefined
+      ? Layer.empty
+      : Layer.mock(WorkspacePaths.WorkspacePaths)({
+          normalizeWorkspaceRoot: (path) =>
+            options.missingPaths?.has(path)
+              ? Effect.fail(
+                  new WorkspacePaths.WorkspaceRootNotExistsError({
+                    workspaceRoot: path,
+                    normalizedWorkspaceRoot: path,
+                  }),
+                )
+              : Effect.succeed(path),
+        }),
   );
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
@@ -2877,4 +2893,57 @@ it.effect("replays an accepted message.dispatch after the project disables the i
       assert.fail(`expected ThreadManagementProviderInstanceDisabledError, got ${fresh._tag}`);
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
+});
+it.effect("refuses an agent launch into a missing project folder before any thread exists", () => {
+  const harness = makeHarness({ missingPaths: new Set(["/repo"]) });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const input = {
+      ...launchInput({
+        command: "command:missing-root",
+        thread: "thread:missing-root",
+        message: "Go",
+      }),
+      createdBy: "agent" as const,
+      creationSource: "mcp" as const,
+    };
+    const error = yield* Effect.flip(launches.launch(input));
+    assert.strictEqual(error._tag, "ThreadLaunchWorkspaceMissingError");
+    if (error._tag !== "ThreadLaunchWorkspaceMissingError") return;
+    assert.deepInclude(error, { kind: "project", path: "/repo", projectTitle: "Project" });
+    assert.include(error.message, "No thread was created.");
+    assert.isNull(yield* threads.getThreadShell(ThreadId.make("thread:missing-root")));
+    assert.strictEqual(harness.runSetup.mock.calls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses an agent launch into a missing existing worktree", () => {
+  const harness = makeHarness({ missingPaths: new Set(["/repo-worktrees/gone"]) });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const error = yield* Effect.flip(
+      launches.launch({
+        ...launchInput({
+          command: "command:missing-worktree",
+          thread: "thread:missing-worktree",
+          workspace: { type: "existing_worktree", worktreePath: "/repo-worktrees/gone" },
+        }),
+        createdBy: "agent",
+        creationSource: "mcp",
+      }),
+    );
+    assert.deepInclude(error, { kind: "worktree", path: "/repo-worktrees/gone" });
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("still opens a person's client launch so the folder failure shows in the thread", () => {
+  const harness = makeHarness({ missingPaths: new Set(["/repo"]) });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launched = yield* launches.launch(
+      launchInput({ command: "command:client-missing", thread: "thread:client-missing" }),
+    );
+    assert.strictEqual(launched.threadId, ThreadId.make("thread:client-missing"));
+  }).pipe(Effect.provide(harness.layer));
 });

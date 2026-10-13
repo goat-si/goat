@@ -525,7 +525,7 @@ const make = Effect.gen(function* () {
     if (parsed._tag === "NotADirectory") {
       return yield* failure(
         "invalid_request",
-        `${parsed.path || "(empty path)"} is not a directory on ${target.alias}.`,
+        `${parsed.path || "(empty path)"} does not exist or is not a directory on ${target.alias}, so nothing was started there. Pick an existing folder with goat_ssh_browse, or clone the repository on ${target.alias} first.`,
       );
     }
     return {

@@ -56,6 +56,16 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+/** The refusal plus the step that gets the caller a folder to launch into. */
+export function workspaceMissingMessage(error: ThreadLaunch.ThreadLaunchWorkspaceMissingError) {
+  if (error.kind === "worktree")
+    return `${error.message} Pick a current checkout from goat_worktree_list, or launch with workspaceStrategy {type:"worktree"} to create one.`;
+  const relocate = `or point the project at an existing checkout with goat_project_update {projectId:"${error.projectId}", workspaceRoot}`;
+  return error.remoteUrl === null
+    ? `${error.message} Restore the checkout at that path (goat_project_clone clones it when you know its repository), ${relocate}, then launch again.`
+    : `${error.message} Clone it back with goat_project_clone {remoteUrl:"${error.remoteUrl}", destinationPath:"${error.path}"}, ${relocate}, then launch again.`;
+}
+
 const access = Effect.gen(function* () {
   yield* readCaller();
   return yield* Project.ProjectService;
@@ -295,6 +305,12 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
               return new OrchestratorMcpFailure({
                 code: "invalid_request",
                 message: error.message,
+              });
+            }
+            if (error._tag === "ThreadLaunchWorkspaceMissingError") {
+              return new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message: workspaceMissingMessage(error),
               });
             }
             return unavailable();

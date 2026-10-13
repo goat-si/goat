@@ -294,6 +294,10 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
         if (error._tag === "ThreadManagementProviderInstanceDisabledError") {
           return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
         }
+        // Refused before any thread existed.
+        if (error._tag === "ThreadLaunchWorkspaceMissingError") {
+          return AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths);
+        }
         // Project/receipt reads precede message dispatch. The create-thread error
         // also wraps post-message projection reads, so its tag alone is not proof.
         // The initial message's own dispatch can still find the instance newly

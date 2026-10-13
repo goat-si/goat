@@ -15,6 +15,7 @@ import {
   type OrchestrationV2ThreadLauncher,
   type ProviderDriverKind,
   type ProviderInteractionMode,
+  type Project,
   ProjectId,
   type RunId,
   type RuntimeMode,
@@ -44,6 +45,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
@@ -183,14 +185,44 @@ export class ThreadLaunchBranchError extends Schema.TaggedError<ThreadLaunchBran
   }
 }
 
+/**
+ * An agent or server launch named a folder that is gone from this machine, such as a
+ * project whose checkout was deleted or never cloned here. Refused before any thread exists.
+ */
+export class ThreadLaunchWorkspaceMissingError extends Schema.TaggedError<ThreadLaunchWorkspaceMissingError>()(
+  "ThreadLaunchWorkspaceMissingError",
+  {
+    projectId: ProjectId,
+    projectTitle: Schema.String,
+    /** `project` is the project's own folder; `worktree` an existing worktree the launch named. */
+    kind: Schema.Literals(["project", "worktree"]),
+    path: Schema.String,
+    /** The project's remote, when GOAT still knows it, so a caller can clone it back. */
+    remoteUrl: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.kind === "project"
+      ? `Project "${this.projectTitle}" points at ${this.path}, which does not exist on this machine. No thread was created.`
+      : `Worktree ${this.path} of project "${this.projectTitle}" does not exist on this machine. No thread was created.`;
+  }
+}
+
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
   {
+    /**
+     * Launches from an agent or the server (anything but a person in a client) are refused
+     * with ThreadLaunchWorkspaceMissingError when their folder is gone. A person launching
+     * from a client still gets the thread, with the failure shown in it.
+     */
     readonly launch: (
       input: ThreadLaunchInput,
     ) => Effect.Effect<
       ThreadLaunchResult,
-      ThreadLaunchError | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+      | ThreadLaunchError
+      | ThreadLaunchWorkspaceMissingError
+      | ThreadManagement.ThreadManagementProviderInstanceDisabledError
     >;
     /**
      * Fails when a new worktree's base ref cannot give provisioning a commit,
@@ -237,6 +269,8 @@ const make = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+  // Optional so harnesses that never launch into a real folder need not provide it.
+  const workspacePaths = yield* Effect.serviceOption(WorkspacePaths.WorkspacePaths);
   const preparationScope = yield* Scope.make("sequential");
   const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
@@ -792,6 +826,38 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** Fails only when a folder is missing or not a directory; any other stat failure is left to the launch. */
+  const assertWorkspaceExists = Effect.fn("ThreadLaunchService.assertWorkspaceExists")(function* (
+    project: Project,
+    strategy: ThreadLaunchWorkspaceStrategy,
+  ) {
+    if (Option.isNone(workspacePaths)) return;
+    const paths: ReadonlyArray<readonly ["project" | "worktree", string]> = [
+      ["project", project.workspaceRoot],
+      ...(strategy.type === "existing_worktree"
+        ? [["worktree", strategy.worktreePath] as const]
+        : []),
+    ];
+    for (const [kind, path] of paths) {
+      const missing = yield* workspacePaths.value.normalizeWorkspaceRoot(path).pipe(
+        Effect.as(false),
+        Effect.catchTags({
+          WorkspaceRootNotExistsError: () => Effect.succeed(true),
+          WorkspaceRootNotDirectoryError: () => Effect.succeed(true),
+        }),
+        Effect.orElseSucceed(() => false),
+      );
+      if (missing)
+        return yield* new ThreadLaunchWorkspaceMissingError({
+          projectId: project.id,
+          projectTitle: project.title,
+          kind,
+          path,
+          remoteUrl: project.repositoryIdentity?.locator.remoteUrl ?? null,
+        });
+    }
+  });
+
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
     function* (input) {
       yield* ProjectCloneTracker.rejectCommandsDuringClone(cloneTracker, {
@@ -815,6 +881,14 @@ const make = Effect.gen(function* () {
       }
 
       const launchReceipt = yield* readReceipt(input, input.commandId);
+      // Only a first attempt is checked: a replay must keep answering with the thread it made.
+      if (
+        Option.isNone(launchReceipt) &&
+        input.importedNativeThread === undefined &&
+        input.creationSource !== "web" &&
+        input.creationSource !== "mobile"
+      )
+        yield* assertWorkspaceExists(project, input.workspaceStrategy);
       yield* threads.assertProviderInstanceEnabled({
         projectId: input.projectId,
         commandId: input.commandId,
