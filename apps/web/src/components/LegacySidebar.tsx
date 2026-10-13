@@ -3632,9 +3632,13 @@ export default function LegacySidebar() {
     }),
     [platform],
   );
-  const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.newLocal", newThreadShortcutLabelOptions) ??
-    shortcutLabelForCommand(keybindings, "chat.new", newThreadShortcutLabelOptions);
+  // The per-project button creates in its own project; chat.new follows last
+  // work instead, so only chat.newLocal describes this button.
+  const newThreadShortcutLabel = shortcutLabelForCommand(
+    keybindings,
+    "chat.newLocal",
+    newThreadShortcutLabelOptions,
+  );
 
   const navigateToThread = useCallback(
     (threadRef: ScopedThreadRef) => {
