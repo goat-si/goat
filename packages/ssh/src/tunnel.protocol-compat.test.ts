@@ -81,11 +81,38 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             .replace(/^T3_(?:ARCHIVE_VERSION|NODE_SCRIPT_PATH)=.*\n/gm, "")
             .replaceAll("GOAT_", "T3_");
           yield* f.fs.writeFileString(file, runner);
-          const result = yield* f.run(entry);
+          // An owning launch on a stopped host upgrades instead (tunnel.protocol-upgrade.test.ts);
+          // a secondary launch still has to read the retained declarations to reuse them.
+          const result = yield* f.run(entry, entry === "launch");
           assert.isTrue(Result.isSuccess(result));
           if (Result.isSuccess(result)) assert.equal(result.success.version, "1.2.2");
           assert.equal(yield* f.fs.readFileString(file), runner);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
+    it.live(
+      "an owning launch falls back to retained legacy declarations when it cannot upgrade",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: false,
+            kind: "external",
+            oldVersion: "1.2.2",
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          });
+          const file = `${f.state}/run-t3.sh`;
+          const runner = (yield* f.fs.readFileString(file))
+            .replace(/^T3_(?:ARCHIVE_VERSION|NODE_SCRIPT_PATH)=.*\n/gm, "")
+            .replaceAll("GOAT_", "T3_");
+          yield* f.fs.writeFileString(file, runner);
+          // No archive directory and no mirror: the retained release, found only through its
+          // T3_ARCHIVE_VERSION declaration, is the one that starts.
+          const result = yield* f.run("launch", false, { archiveDirectory: "" });
+          assert.isTrue(Result.isSuccess(result));
+          if (Result.isSuccess(result)) assert.equal(result.success.version, "1.2.2");
+          assert.equal(f.counters().uploads, 0);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
