@@ -90,6 +90,7 @@ import {
   formatDesktopSshTarget,
 } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { AdvancedSettingsDisclosure } from "./AdvancedSettingsDisclosure";
 import { HostsSettings } from "./HostsSettings";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
@@ -2033,6 +2034,14 @@ function CloudRemoteEnvironmentRows({
     <EmptyRemoteEnvironments cloudEnabled={false} />
   ) : null;
 }
+
+// Sections folded under "Advanced settings"; a search jump to one opens the group.
+const ADVANCED_CONNECTION_SETTING_IDS = [
+  "hosts",
+  "remote-launches",
+  "load-balancing",
+  "github-routing",
+] as const;
 
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
@@ -4172,18 +4181,20 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
-      {primaryEnvironmentId !== null ? (
-        <HostsSettings
-          environmentId={primaryEnvironmentId}
-          localLabel={primaryEnvironment?.label ?? "This machine"}
-          localKind={
-            primaryServerConfig ? resolveEnvironmentMachineKind(primaryServerConfig) : "desktop"
-          }
-        />
-      ) : null}
-      <RemoteLaunchesSettings />
-      <LoadBalancingSettings environments={loadBalancingEnvironments} />
-      <GitHubRoutingSettings environments={loadBalancingEnvironments} />
+      <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
+        {primaryEnvironmentId !== null ? (
+          <HostsSettings
+            environmentId={primaryEnvironmentId}
+            localLabel={primaryEnvironment?.label ?? "This machine"}
+            localKind={
+              primaryServerConfig ? resolveEnvironmentMachineKind(primaryServerConfig) : "desktop"
+            }
+          />
+        ) : null}
+        <RemoteLaunchesSettings />
+        <LoadBalancingSettings environments={loadBalancingEnvironments} />
+        <GitHubRoutingSettings environments={loadBalancingEnvironments} />
+      </AdvancedSettingsDisclosure>
     </SettingsPageContainer>
   );
 }
