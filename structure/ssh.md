@@ -115,6 +115,39 @@ After a rollback to a compatible version, the client attaches to it.
 
 > Decision record: [ADR-0013](decisions/ADR-0013-drain-replacement.md)
 
+### Upgrades
+
+A client that launches a host owns its runtime and moves it to its own release. The packaged
+desktop and the server's SSH dispatch (`resolveSshCliRunner` in
+`apps/server/src/sshRemote/SshRemoteDispatch.ts`) both set `refreshOwnedRuntimeOnFirstConnection`.
+
+- With no server running, the client installs and starts its release, even when `run-t3.sh` names
+  an older compatible release that is still installed. It keeps the retained release only when that
+  one is newer, or when its own archive cannot be acquired. `ssh.runtime.upgrade.skipped` logs why.
+- With an older compatible server running, the first connection of each manager drains it once it
+  answers `idle` (see [Replacement](#replacement)). While it is busy, the client attaches to it,
+  logs `ssh.runtime.refresh.deferred` with the reason, and retries every 10 minutes.
+
+Only the pairing and MCP-session helpers pass `keepExistingRunner`. It never installs, refreshes,
+or replaces a runtime.
+
+An archive upload pipes the bytes into ssh's stdin. If the remote reader exits early, only that
+upload fails, as an `SshLaunchError` carrying the remote's stderr and exit code. The patched
+`@effect/platform-node-shared` spawner keeps an `error` listener on every child stdin, so a write
+still queued when ssh exits cannot crash the process with `EPIPE`.
+
+### Connect and disconnect order
+
+`SshEnvironmentManager` orders `ensureEnvironment` and `disconnectEnvironment` calls for one
+target by arrival. Both resolve the alias before they take the target lock, so a later call can
+reach the lock first. A disconnect does nothing once a newer call for that target exists, and an
+ensure fails as cancelled once a newer disconnect exists.
+
+The client registry keeps one SSH teardown per route in flight (`forkSshDisconnect` in
+`packages/client-runtime/src/connection/registry.ts`). Switching off again while it is stalled
+marks it to run once more, and that rerun happens only if the route is still off when the first
+one returns.
+
 The desktop app is a second caller of the same package. `apps/desktop/src/ssh/DesktopSshEnvironment.ts`
 discovers hosts and ensures an environment. The server-side caller used by agents is
 `apps/server/src/sshRemote/SshRemoteDispatch.ts`, which imports `@goat/ssh/command`,
