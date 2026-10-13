@@ -115,13 +115,19 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
       const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
       const needsProfile = yield* PreviewBrowserHost.sandboxBlocked;
+      // Only root can move a pre-rename profile; without root it keeps working as is.
+      const replacesLegacyProfile =
+        isRoot &&
+        (yield* fs
+          .exists(PreviewBrowserHost.LEGACY_APPARMOR_PROFILE_PATH)
+          .pipe(Effect.orElseSucceed(() => false)));
       const browser = yield* installedBrowser(yield* setupBaseDir(baseDir));
       const missing = Option.isSome(browser)
         ? yield* PreviewBrowserHost.missingLibraries(browser.value)
         : [];
       const hasApt = yield* fs.exists("/usr/bin/apt-get").pipe(Effect.orElseSucceed(() => false));
 
-      if (!needsProfile && missing.length === 0) {
+      if (!needsProfile && !replacesLegacyProfile && missing.length === 0) {
         return yield* Console.log(
           Option.isSome(browser)
             ? "This host is ready for GOAT's browser."
@@ -143,7 +149,24 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
         return yield* Console.log(`\nThis needs root. Run:\n\n  ${setupCommand}\n`);
       }
 
-      if (needsProfile) {
+      if (replacesLegacyProfile) {
+        // Unload first: two loaded profiles with one attachment conflict.
+        yield* runStep("unload the previous AppArmor profile", "apparmor_parser", [
+          "-R",
+          PreviewBrowserHost.LEGACY_APPARMOR_PROFILE_PATH,
+        ]);
+        yield* fs.remove(PreviewBrowserHost.LEGACY_APPARMOR_PROFILE_PATH).pipe(
+          Effect.mapError(
+            (cause) =>
+              new BrowserSetupStepError({
+                step: `remove ${PreviewBrowserHost.LEGACY_APPARMOR_PROFILE_PATH}`,
+                detail: cause.message,
+              }),
+          ),
+        );
+      }
+
+      if (needsProfile || replacesLegacyProfile) {
         yield* fs
           .writeFileString(
             PreviewBrowserHost.APPARMOR_PROFILE_PATH,

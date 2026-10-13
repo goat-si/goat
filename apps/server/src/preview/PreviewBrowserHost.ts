@@ -8,6 +8,7 @@
  * `GOAT_SERVER_BROWSER_SANDBOX=0` launches without it.
  */
 import * as HostProcess from "@goat/shared/HostProcess";
+import { LEGACY_APPARMOR_PROFILE_NAME } from "@goat/contracts/legacyT3Names";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -26,21 +27,26 @@ export const sandboxDisabled = (env: Readonly<Record<string, string | undefined>
 
 /** Set on Ubuntu 23.10+: unprivileged user namespaces need an AppArmor profile. */
 const USERNS_RESTRICTION = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
-export const APPARMOR_PROFILE_PATH = "/etc/apparmor.d/t3-chrome-headless-shell";
+const APPARMOR_PROFILE_NAME = "goat-chrome-headless-shell";
+export const APPARMOR_PROFILE_PATH = `/etc/apparmor.d/${APPARMOR_PROFILE_NAME}`;
+/** Same attachment as the GOAT profile; `goat browser setup` replaces it when run as root. */
+export const LEGACY_APPARMOR_PROFILE_PATH = `/etc/apparmor.d/${LEGACY_APPARMOR_PROFILE_NAME}`;
 
 /**
  * Lets GOAT's headless browser, in any GOAT home and at any pinned version, create
  * the user namespace Chrome's sandbox runs in. Modelled on the profile Ubuntu
- * ships for Google Chrome; `unconfined` adds nothing beyond `userns`.
+ * ships for Google Chrome; `unconfined` adds nothing beyond `userns`. Local
+ * overrides written for the legacy profile name keep applying.
  */
-export const APPARMOR_PROFILE = `# Written by \`goat browser setup\`: lets T3 Code's headless browser use Chrome's sandbox.
+export const APPARMOR_PROFILE = `# Written by \`goat browser setup\`: lets GOAT's headless browser use Chrome's sandbox.
 abi <abi/4.0>,
 include <tunables/global>
 
-profile t3-chrome-headless-shell /**/tools/chrome-headless-shell/*/*/chrome-headless-shell flags=(unconfined) {
+profile ${APPARMOR_PROFILE_NAME} /**/tools/chrome-headless-shell/*/*/chrome-headless-shell flags=(unconfined) {
   userns,
 
-  include if exists <local/t3-chrome-headless-shell>
+  include if exists <local/${APPARMOR_PROFILE_NAME}>
+  include if exists <local/${LEGACY_APPARMOR_PROFILE_NAME}>
 }
 `;
 
@@ -154,5 +160,9 @@ export const sandboxBlocked = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   if (!restricted) return false;
-  return !(yield* fs.exists(APPARMOR_PROFILE_PATH).pipe(Effect.orElseSucceed(() => false)));
+  const installed = (profilePath: string) =>
+    fs.exists(profilePath).pipe(Effect.orElseSucceed(() => false));
+  return !(
+    (yield* installed(APPARMOR_PROFILE_PATH)) || (yield* installed(LEGACY_APPARMOR_PROFILE_PATH))
+  );
 }).pipe(Effect.withSpan("PreviewBrowserHost.sandboxBlocked"));

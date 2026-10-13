@@ -22,7 +22,7 @@ import * as ProcessRunner from "../processRunner.ts";
  * server's own unit, so the server's CPUWeight and IOWeight compete with the
  * agents directly.
  */
-const AGENT_SLICE = "app-t3code-agents.slice";
+const AGENT_SLICE = "app-goat-agents.slice";
 
 const GiB = 1024 ** 3;
 
@@ -297,7 +297,7 @@ export const make = Effect.gen(function* () {
       if (resolved._tag === "None") return { command, args };
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved.value, args });
-      const unit = `t3code-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
+      const unit = `goat-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
       if (threadId !== undefined) yield* track(scope.systemctl, threadId, unit);
       const systemdScope: AgentSystemdScope = {
         systemdRun: scope.systemdRun,
