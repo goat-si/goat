@@ -21,6 +21,12 @@ Subcommands on the same binary include `serve`, `pair`, `service`, and `update`.
 registered when the build has T3 Connect public configuration. Remote launch scripts call
 `__ssh-helper` (`apps/server/src/cli/sshHelper.ts`). The list is `apps/server/src/binCli.ts`.
 
+`goat service` installs the server as the systemd user unit `goat.service` or the launch agent
+`si.goat.service`, rendered by `apps/server/src/cloud/bootService.ts`. A unit under the pre-rename
+names (`t3code.service`, `com.t3tools.t3code.service`) that serves the same home is moved to the
+new names by a started install or a restart, and put back if the new unit fails to start. A legacy
+unit serving another home belongs to another install and is never touched.
+
 ## Command commit
 
 `ThreadManagementService.dispatch` in `apps/server/src/orchestration-v2/ThreadManagementService.ts`

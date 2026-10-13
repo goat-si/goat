@@ -418,7 +418,13 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   const runner = yield* ProcessRunner.ProcessRunner;
   if (platform === "linux") {
     const cgroup = yield* fs.readFileString(`/proc/${pid}/cgroup`).pipe(Effect.option);
-    return Option.isSome(cgroup) && cgroup.value.includes("/t3code.service");
+    // A service that has not been migrated yet still runs under the legacy unit.
+    return (
+      Option.isSome(cgroup) &&
+      [BootService.BOOT_SERVICE_NAMES, BootService.LEGACY_BOOT_SERVICE_NAMES].some((names) =>
+        cgroup.value.includes(`/${names.unitFile}`),
+      )
+    );
   }
   if (platform === "darwin") {
     // The service server's parent is the launcher process.

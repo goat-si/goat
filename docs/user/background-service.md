@@ -20,6 +20,13 @@ Uninstalling the service leaves your projects, threads, and settings intact.
 Running `goat service install` again repairs a service that `goat service status`
 reports as broken.
 
+Earlier releases installed the service as `t3code.service` on Linux and
+`com.t3tools.t3code.service` on macOS. The next `goat service install`,
+`goat service restart`, or `goat update` that restarts the service moves it to
+`goat.service` or `si.goat.service`; until then `goat service status` reports
+it as needing repair. A legacy service that serves a different data directory,
+such as an upstream T3 Code install, is left alone.
+
 `goat update` downloads the newest release on your channel and switches `goat`
 and the service to it. Restarting interrupts running agent turns, terminals,
 and remote clients, so it asks first; answer no and the service keeps running
@@ -84,14 +91,14 @@ that session open.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `linger-unavailable`                    | Run `loginctl show-user "$(id -un)" --property=Linger` and check that systemd-logind is available.                             |
 | `user-manager-unavailable`              | Run `systemctl --user status` in a login session for the service user; check your distribution's systemd user-session support. |
-| `service-disabled` or `service-stopped` | Read the log and `systemctl --user status t3code.service`, then use the repair command printed by GOAT.                        |
+| `service-disabled` or `service-stopped` | Read the log and `systemctl --user status goat.service`, then use the repair command printed by GOAT.                          |
 | `restart-pending`                       | A newer version is installed but the service still runs the previous one. Run `goat service restart`.                          |
 
 On macOS, check **System Settings → General → Login Items** if the service no
 longer starts at login. If agent work cannot access Desktop, Documents, or
 Downloads, it may need Full Disk Access for the `goat` executable listed in
 `ProgramArguments` in
-`~/Library/LaunchAgents/com.t3tools.t3code.service.plist`.
+`~/Library/LaunchAgents/si.goat.service.plist`.
 
 For failures after signing in to T3 Connect, see
 [connection troubleshooting](./remote-access.md#t3-connect-troubleshooting).

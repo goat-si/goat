@@ -214,6 +214,19 @@ export const LEGACY_WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
 export const LEGACY_WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
 export const LEGACY_WSL_SERVER_TREE_MARKER = "t3code-wsl-server-tree.json";
 
+/**
+ * Boot service identities installed before the GOAT rename. `goat service` migrates a legacy
+ * unit only when it serves the same GOAT home, because upstream T3 Code installs the same names.
+ */
+export const LEGACY_BOOT_SERVICE_UNIT_FILE = "t3code.service";
+export const LEGACY_BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
+
+/**
+ * AppArmor profile written by `browser setup` before the GOAT rename. It still allows the
+ * sandbox until a root setup run replaces it with the GOAT profile.
+ */
+export const LEGACY_APPARMOR_PROFILE_NAME = "t3-chrome-headless-shell";
+
 /** Client storage namespaces used before the GOAT rename. */
 export const legacyStorageKey = (key: string): string | undefined => {
   if (key === "goat:chatgpt-sharing-welcome:v1") return "t3:chatgpt-sharing-welcome:v1";
@@ -243,3 +256,7 @@ export const LEGACY_DESKTOP_PROMPT_STASH_KEY = "t3code:prompt-stash:v2";
 export const LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY = "t3code:composer-drafts:v1";
 export const LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY = "t3.backgroundActivity.clientId";
 export const LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY = "t3code:snap-shot-setup-resume:v1";
+
+/** Native helper names retained for older resource directories and development builds. */
+export const LEGACY_RESOURCE_MONITOR_BINARY_NAME = "t3-resource-monitor";
+export const LEGACY_BROWSER_SECRET_BINARY_NAME = "t3-browser-secret";

@@ -12,7 +12,11 @@ import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
 import { CLI_RELEASE_BASE_URL_ENV } from "@goat/shared/cliRelease";
-import { legacyEnvName } from "@goat/contracts/legacyT3Names";
+import {
+  LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
+  LEGACY_BOOT_SERVICE_UNIT_FILE,
+  legacyEnvName,
+} from "@goat/contracts/legacyT3Names";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -32,12 +36,30 @@ import {
   type ServiceState,
 } from "./serviceProtocol.ts";
 
-const BOOT_SERVICE_NAME = "t3code";
-const BOOT_SERVICE_UNIT_FILE = `${BOOT_SERVICE_NAME}.service`;
-// `.service` suffix keeps the label distinct from the desktop app's bundle id
-// (com.t3tools.t3code), so launchd and TCC records never collide.
-const BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
-const BOOT_SERVICE_PLIST_FILE = `${BOOT_SERVICE_LAUNCHD_LABEL}.plist`;
+/** The names a service manager knows one install by. */
+export interface BootServiceNames {
+  readonly unitFile: string;
+  readonly launchdLabel: string;
+}
+
+export const BOOT_SERVICE_NAMES: BootServiceNames = {
+  unitFile: "goat.service",
+  // Distinct from the desktop app's bundle id (si.goat.desktop), so launchd
+  // and TCC records never collide.
+  launchdLabel: "si.goat.service",
+};
+
+/**
+ * Installed by builds before the GOAT rename, and by upstream T3 Code. Install
+ * and restart move a legacy unit that serves this GOAT home to the current
+ * names; a legacy unit serving another home belongs to someone else.
+ */
+export const LEGACY_BOOT_SERVICE_NAMES: BootServiceNames = {
+  unitFile: LEGACY_BOOT_SERVICE_UNIT_FILE,
+  launchdLabel: LEGACY_BOOT_SERVICE_LAUNCHD_LABEL,
+};
+
+const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
 const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 /**
@@ -99,11 +121,14 @@ export interface BootServicePlan {
 }
 
 /** Pure renderer: service units cannot rely on the user's shell or PATH. */
-export function renderBootServiceUnit(plan: BootServicePlan): string {
+export function renderBootServiceUnit(
+  plan: BootServicePlan,
+  names: BootServiceNames = BOOT_SERVICE_NAMES,
+): string {
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
-    "Description=T3 Code server",
+    "Description=GOAT server",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
     "",
@@ -114,13 +139,13 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
       (name) => `Environment=${name}=${quoteSystemdValue(plan.baseDir)}`,
     ),
     ...bootServiceEnvNames(BOOT_SERVICE_UNIT_ENV).map(
-      (name) => `Environment=${name}=${BOOT_SERVICE_UNIT_FILE}`,
+      (name) => `Environment=${name}=${names.unitFile}`,
     ),
     `ExecStart=${plan.program.map(quoteSystemdValue).join(" ")}`,
     // Let the launcher mark an explicit stop before it signals the server.
     // systemd still SIGKILLs the whole cgroup if graceful shutdown times out.
     "KillMode=mixed",
-    // Agents and terminals run in their own scopes in app-t3code-agents.slice
+    // Agents and terminals run in their own scopes in app-goat-agents.slice
     // (see process/agentScope.ts). Short helper commands still share this
     // cgroup, and with the systemd default of OOMPolicy=stop, the kernel
     // killing one of them stops the whole unit. Keep running and let
@@ -153,8 +178,13 @@ function escapeXmlText(value: string): string {
 /** Pure renderer: launch agents cannot rely on the user's shell or PATH. */
 export function renderBootServicePlist(
   plan: BootServicePlan,
-  options: { readonly homeDir: string; readonly environmentPath: string },
+  options: {
+    readonly homeDir: string;
+    readonly environmentPath: string;
+    readonly names?: BootServiceNames;
+  },
 ): string {
+  const names = options.names ?? BOOT_SERVICE_NAMES;
   // KeepAlive + ThrottleInterval mirror Restart=always + RestartSec=5. launchd
   // has no StartLimitBurst analog; a hard crash loop respawns every 5s forever.
   // ExitTimeOut 90 matches systemd's default TimeoutStopSec. A plain stop
@@ -173,7 +203,7 @@ export function renderBootServicePlist(
     `<plist version="1.0">`,
     `<dict>`,
     `  <key>Label</key>`,
-    `  <string>${BOOT_SERVICE_LAUNCHD_LABEL}</string>`,
+    `  <string>${names.launchdLabel}</string>`,
     `  <key>ProgramArguments</key>`,
     `  <array>`,
     ...plan.program.map((argument) => `    <string>${escapeXmlText(argument)}</string>`),
@@ -188,7 +218,7 @@ export function renderBootServicePlist(
     ]),
     ...bootServiceEnvNames(BOOT_SERVICE_UNIT_ENV).flatMap((name) => [
       `    <key>${name}</key>`,
-      `    <string>${BOOT_SERVICE_PLIST_FILE}</string>`,
+      `    <string>${plistFileOf(names)}</string>`,
     ]),
     `  </dict>`,
     `  <key>WorkingDirectory</key>`,
@@ -211,6 +241,28 @@ export function renderBootServicePlist(
     `</plist>`,
     ``,
   ].join("\n");
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Rewrites an installed legacy unit or plist to the current names and keeps
+ * everything else, including the runtime version it starts. `restart` uses
+ * this because it must not switch versions while it moves the unit.
+ */
+export function migrateLegacyBootServiceUnit(contents: string): string {
+  const legacy = LEGACY_BOOT_SERVICE_NAMES;
+  const current = BOOT_SERVICE_NAMES;
+  return contents
+    .replace(/^Description=T3 Code server$/m, "Description=GOAT server")
+    .replace(
+      new RegExp(`^(Environment=[A-Z0-9_]+=)${escapeRegExp(legacy.unitFile)}$`, "gm"),
+      `$1${current.unitFile}`,
+    )
+    .replace(
+      new RegExp(`<string>${escapeRegExp(legacy.launchdLabel)}(\\.plist)?</string>`, "g"),
+      `<string>${current.launchdLabel}$1</string>`,
+    );
 }
 
 export interface BootServiceStep {
@@ -256,26 +308,32 @@ export interface BootServiceManager {
   readonly finalize: ReadonlyArray<BootServiceStep>;
 }
 
+interface OwnedLegacyUnit {
+  readonly manager: BootServiceManager;
+  readonly contents: string;
+}
+
 function systemdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
+  readonly names: BootServiceNames;
 }): BootServiceManager {
   const unitPath = input.path.join(
     input.homeDir,
     ".config",
     "systemd",
     "user",
-    BOOT_SERVICE_UNIT_FILE,
+    input.names.unitFile,
   );
   return {
     kind: "systemd",
     unitPath,
-    render: renderBootServiceUnit,
+    render: (plan) => renderBootServiceUnit(plan, input.names),
     stop: [
       {
         step: "stopping the installed service",
         command: "systemctl",
-        args: ["--user", "stop", BOOT_SERVICE_UNIT_FILE],
+        args: ["--user", "stop", input.names.unitFile],
         timeout: STOP_STEP_TIMEOUT,
       },
     ],
@@ -288,27 +346,27 @@ function systemdManager(input: {
       {
         step: "enabling the service",
         command: "systemctl",
-        args: ["--user", "enable", BOOT_SERVICE_UNIT_FILE],
+        args: ["--user", "enable", input.names.unitFile],
       },
       // Start last. No administrative state write occurs after this succeeds.
       {
         step: "starting the service",
         command: "systemctl",
-        args: ["--user", "restart", BOOT_SERVICE_UNIT_FILE],
+        args: ["--user", "restart", input.names.unitFile],
       },
     ],
     restart: [
       {
         step: "restarting the service after a failed update",
         command: "systemctl",
-        args: ["--user", "restart", BOOT_SERVICE_UNIT_FILE],
+        args: ["--user", "restart", input.names.unitFile],
       },
     ],
     deactivate: [
       {
         step: "stopping the service",
         command: "systemctl",
-        args: ["--user", "disable", "--now", BOOT_SERVICE_UNIT_FILE],
+        args: ["--user", "disable", "--now", input.names.unitFile],
         timeout: STOP_STEP_TIMEOUT,
       },
     ],
@@ -325,6 +383,7 @@ function systemdManager(input: {
 function launchdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
+  readonly names: BootServiceNames;
   readonly uid: number;
   readonly environmentPath: string;
 }): BootServiceManager {
@@ -332,10 +391,10 @@ function launchdManager(input: {
     input.homeDir,
     "Library",
     "LaunchAgents",
-    BOOT_SERVICE_PLIST_FILE,
+    plistFileOf(input.names),
   );
   const domainTarget = `gui/${input.uid}`;
-  const serviceTarget = `${domainTarget}/${BOOT_SERVICE_LAUNCHD_LABEL}`;
+  const serviceTarget = `${domainTarget}/${input.names.launchdLabel}`;
   // bootout/enable are optional: they fail on not-loaded states that are fine
   // to proceed from. The strict `bootstrap` runs last and is also the start:
   // loading a RunAtLoad/KeepAlive plist starts the job, so a separate
@@ -350,6 +409,7 @@ function launchdManager(input: {
       renderBootServicePlist(plan, {
         homeDir: input.homeDir,
         environmentPath: input.environmentPath,
+        names: input.names,
       }),
     // Without --wait, bootout returns in milliseconds while the job drains
     // for up to ExitTimeOut, and a bootstrap during the drain fails EIO.
@@ -407,6 +467,7 @@ function launchdManager(input: {
 function selectBootServiceManager(input: {
   readonly platform: NodeJS.Platform;
   readonly homeDir: string;
+  readonly names: BootServiceNames;
   readonly uid: number | undefined;
   readonly path: Path.Path;
   readonly environmentPath: string;
@@ -415,7 +476,7 @@ function selectBootServiceManager(input: {
     return undefined;
   }
   if (input.platform === "linux") {
-    return systemdManager({ path: input.path, homeDir: input.homeDir });
+    return systemdManager({ path: input.path, homeDir: input.homeDir, names: input.names });
   }
   if (input.platform === "darwin" && input.uid !== undefined) {
     return launchdManager({
@@ -423,6 +484,7 @@ function selectBootServiceManager(input: {
       homeDir: input.homeDir,
       uid: input.uid,
       environmentPath: input.environmentPath,
+      names: input.names,
     });
   }
   return undefined;
@@ -485,7 +547,7 @@ export function formatBootServiceProblem(problem: BootServiceProblem): string {
     case "service-disabled":
       return "The service is not enabled to start automatically. Run `goat service install` to repair it.";
     case "service-stopped":
-      return "The service is not running. Check the service log and `systemctl --user status t3code.service`, then run `goat service install`.";
+      return "The service is not running. Check the service log and `systemctl --user status goat.service`, then run `goat service install`.";
     case "restart-pending":
       return "A newer version is installed but the service is still running the previous one. Run `goat service restart` to switch.";
   }
@@ -621,6 +683,15 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     uid,
     path,
     environmentPath,
+    names: BOOT_SERVICE_NAMES,
+  });
+  const legacyManager = selectBootServiceManager({
+    platform,
+    homeDir,
+    uid,
+    path,
+    environmentPath,
+    names: LEGACY_BOOT_SERVICE_NAMES,
   });
   const unitPath = detectedManager?.unitPath ?? "";
   const logPath = path.join(input.logsDir, BOOT_SERVICE_LOG_FILE);
@@ -720,6 +791,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   ];
   const readSystemdProblems = Effect.fn("cloud.boot_service.read_systemd_problems")(function* (
     includeService: boolean,
+    serviceUnitFile: string = BOOT_SERVICE_NAMES.unitFile,
   ) {
     const [manager, linger] = yield* Effect.all(
       [probe("systemctl", ["--user", "show-environment"]), probe("loginctl", lingerArgs)],
@@ -734,8 +806,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     if (includeService && succeeded(manager)) {
       const [enabled, active] = yield* Effect.all(
         [
-          probe("systemctl", ["--user", "is-enabled", BOOT_SERVICE_UNIT_FILE]),
-          probe("systemctl", ["--user", "is-active", BOOT_SERVICE_UNIT_FILE]),
+          probe("systemctl", ["--user", "is-enabled", serviceUnitFile]),
+          probe("systemctl", ["--user", "is-active", serviceUnitFile]),
         ],
         { concurrency: "unbounded" },
       );
@@ -767,6 +839,44 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     const remaining = yield* readSystemdProblems(false);
     if (remaining[0]) return yield* new BootServicePrerequisiteError({ problem: remaining[0] });
   });
+
+  /**
+   * A unit installed under the legacy names that serves this GOAT home. One
+   * that serves another home is upstream T3 Code's or another install's, and
+   * is never touched.
+   */
+  const readOwnedLegacyUnit = Effect.gen(function* () {
+    if (legacyManager === undefined) return Option.none<OwnedLegacyUnit>();
+    const contents = yield* fs.readFileString(legacyManager.unitPath).pipe(Effect.option);
+    if (Option.isNone(contents)) return Option.none<OwnedLegacyUnit>();
+    const servedBaseDir = bootServiceBaseDirOf(contents.value);
+    return servedBaseDir !== undefined &&
+      path.resolve(servedBaseDir) === path.resolve(input.baseDir)
+      ? Option.some<OwnedLegacyUnit>({ manager: legacyManager, contents: contents.value })
+      : Option.none<OwnedLegacyUnit>();
+  });
+
+  /** Disables the legacy unit and removes its file. Callers stop it first. */
+  const retireLegacyUnit = (legacy: OwnedLegacyUnit) =>
+    runSteps(legacy.manager.deactivate).pipe(
+      Effect.andThen(
+        fs
+          .remove(legacy.manager.unitPath, { force: true })
+          .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause }))),
+      ),
+    );
+
+  /**
+   * Rollback for a migration that failed: drop the new unit, put the legacy
+   * file back as it was, and start it again. Best effort, like `restart`.
+   */
+  const reinstateLegacyUnit = (manager: BootServiceManager, legacy: OwnedLegacyUnit) =>
+    Effect.gen(function* () {
+      yield* runSteps(manager.deactivate).pipe(Effect.ignore);
+      yield* fs.remove(manager.unitPath, { force: true }).pipe(Effect.ignore);
+      yield* writeDurably(legacy.manager.unitPath, legacy.contents);
+      yield* runSteps(legacy.manager.activate);
+    }).pipe(Effect.ignore);
 
   const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
     readonly allowDowngrade?: boolean;
@@ -835,9 +945,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           : new BootServiceInstallError({ cause: error }),
       ),
     );
-    const installed = yield* fs
+    const currentInstalled = yield* fs
       .exists(unitPath)
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    const legacy = yield* readOwnedLegacyUnit;
+    const installed = currentInstalled || Option.isSome(legacy);
     // With start=false the service keeps running while its files change. The
     // launcher reads the state file once at startup and the unit only matters
     // on the next start, so that is safe as long as the launcher is not in
@@ -846,8 +958,14 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     // written, from the same read the downgrade check uses; the stop that
     // normally serialises against the launcher is skipped on purpose.
     const start = options?.start !== false;
+    // Without a start the legacy service keeps running, so its unit is
+    // updated in place: a second unit under the new name would start a second
+    // server at the next boot. The next restart or started install moves it.
+    const target =
+      !start && !currentInstalled && Option.isSome(legacy) ? legacy.value.manager : manager;
     if (installed && start) {
-      yield* runSteps(manager.stop);
+      if (currentInstalled) yield* runSteps(manager.stop);
+      if (Option.isSome(legacy)) yield* runSteps(legacy.value.manager.stop);
     }
 
     yield* Effect.gen(function* () {
@@ -873,7 +991,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         }
       }
       yield* fs
-        .makeDirectory(path.dirname(unitPath), { recursive: true })
+        .makeDirectory(path.dirname(target.unitPath), { recursive: true })
         .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
       if (!start && installed) {
         // Written first: once the files below name the new version, the
@@ -906,9 +1024,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
           return yield* new BootServiceUpdatePendingError();
         }
       }
-      yield* writeDurably(unitPath, manager.render(plan));
+      yield* writeDurably(target.unitPath, target.render(plan));
 
       if (start) {
+        if (Option.isSome(legacy)) yield* retireLegacyUnit(legacy.value);
         yield* runSteps(manager.activate);
         yield* fs.remove(restartPendingPath, { force: true });
       }
@@ -916,17 +1035,33 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       Effect.mapError((cause) =>
         cause._tag === "PlatformError" ? new BootServiceInstallError({ cause }) : cause,
       ),
-      Effect.tapError(() =>
-        installed && start ? runSteps(manager.restart).pipe(Effect.ignore) : Effect.void,
-      ),
+      Effect.tapError(() => {
+        if (!start) return Effect.void;
+        if (currentInstalled) return runSteps(manager.restart).pipe(Effect.ignore);
+        if (Option.isSome(legacy)) return reinstateLegacyUnit(manager, legacy.value);
+        return Effect.void;
+      }),
     );
     return plan;
   });
 
   const restart: BootService["Service"]["restart"] = Effect.gen(function* () {
     const manager = yield* requireManager;
+    const legacy = yield* readOwnedLegacyUnit;
     const unit = yield* fs.readFileString(unitPath).pipe(Effect.option);
-    if (Option.isNone(unit)) return false;
+    if (Option.isNone(unit)) {
+      if (Option.isNone(legacy)) return false;
+      // Move the legacy unit to the new names without changing the version it starts.
+      yield* runSteps(legacy.value.manager.stop);
+      yield* Effect.gen(function* () {
+        yield* fs.makeDirectory(path.dirname(unitPath), { recursive: true });
+        yield* writeDurably(unitPath, migrateLegacyBootServiceUnit(legacy.value.contents));
+        yield* retireLegacyUnit(legacy.value);
+        yield* runSteps(manager.activate);
+      }).pipe(Effect.tapError(() => reinstateLegacyUnit(manager, legacy.value)));
+      yield* fs.remove(restartPendingPath, { force: true });
+      return true;
+    }
     const installedBaseDir = bootServiceBaseDirOf(unit.value);
     if (
       installedBaseDir === undefined ||
@@ -935,7 +1070,12 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return false;
     }
     yield* runSteps(manager.stop);
-    yield* runSteps(manager.activate).pipe(
+    // A legacy unit left behind next to the current one would start a second server at boot.
+    const retireLeftover = Option.isSome(legacy)
+      ? runSteps(legacy.value.manager.stop).pipe(Effect.andThen(retireLegacyUnit(legacy.value)))
+      : Effect.void;
+    yield* retireLeftover.pipe(
+      Effect.andThen(runSteps(manager.activate)),
       // Same recovery as a failed repair: a service that was running should
       // not be left stopped because daemon-reload or enable failed.
       Effect.tapError(() => runSteps(manager.restart).pipe(Effect.ignore)),
@@ -951,16 +1091,18 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
     const manager = yield* requireManager;
-    if (
-      !(yield* fs
-        .exists(unitPath)
-        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause }))))
-    )
-      return false;
-    yield* runSteps(manager.deactivate);
-    yield* fs
-      .remove(unitPath)
+    const currentInstalled = yield* fs
+      .exists(unitPath)
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    const legacy = yield* readOwnedLegacyUnit;
+    if (!currentInstalled && Option.isNone(legacy)) return false;
+    if (currentInstalled) {
+      yield* runSteps(manager.deactivate);
+      yield* fs
+        .remove(unitPath)
+        .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+    }
+    if (Option.isSome(legacy)) yield* retireLegacyUnit(legacy.value);
     yield* runSteps(manager.finalize);
     return true;
   }).pipe(Effect.withSpan("cloud.boot_service.uninstall"));
@@ -970,7 +1112,29 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return { supported: false, installed: false, current: false, unitPath, logPath };
     }
     if (!(yield* fs.exists(unitPath))) {
-      return { supported: true, installed: false, current: false, unitPath, logPath };
+      const legacy = yield* readOwnedLegacyUnit;
+      if (Option.isNone(legacy)) {
+        return { supported: true, installed: false, current: false, unitPath, logPath };
+      }
+      // Installed under the legacy names: never current, so `goat service install` moves it.
+      const stateText = yield* fs.readFileString(statePath).pipe(Effect.option);
+      const installedVersion = Option.isSome(stateText)
+        ? serviceStateActiveVersion(stateText.value)
+        : undefined;
+      const problems: BootServiceProblem[] =
+        detectedManager.kind === "systemd"
+          ? [...(yield* readSystemdProblems(true, LEGACY_BOOT_SERVICE_NAMES.unitFile))]
+          : [];
+      return {
+        supported: true,
+        installed: true,
+        current: false,
+        ...(installedVersion === undefined ? {} : { installedVersion }),
+        installedBaseDir: input.baseDir,
+        problems,
+        unitPath: legacy.value.manager.unitPath,
+        logPath,
+      };
     }
     const [unit, runtimeEntryExists, runtimeSentinel, stateText] = yield* Effect.all([
       fs.readFileString(unitPath),

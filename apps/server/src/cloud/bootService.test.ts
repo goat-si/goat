@@ -25,7 +25,7 @@ const linuxPlan = {
   program: [linuxRuntime, "__service-launcher"],
   baseDir: "/home/theo/.t3",
   logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
-  unitPath: "/home/theo/.config/systemd/user/t3code.service",
+  unitPath: "/home/theo/.config/systemd/user/goat.service",
 };
 
 it("runs the pinned runtime's own executable as the systemd launcher", () => {
@@ -41,7 +41,7 @@ it("reads the served T3 home back out of a rendered unit or plist", () => {
     program: [`${baseDir}/runtime/goat/versions/1.2.3/goat`, "__service-launcher"],
     baseDir,
     logPath: `${baseDir}/userdata/logs/boot-service.log`,
-    unitPath: "/home/theo/.config/systemd/user/t3code.service",
+    unitPath: "/home/theo/.config/systemd/user/goat.service",
   });
 
   expect(
@@ -92,7 +92,7 @@ const macPlan = {
   program: [macRuntime, "__service-launcher"],
   baseDir: "/Users/theo/.t3",
   logPath: "/Users/theo/.t3/userdata/logs/boot-service.log",
-  unitPath: "/Users/theo/Library/LaunchAgents/com.t3tools.t3code.service.plist",
+  unitPath: "/Users/theo/Library/LaunchAgents/si.goat.service.plist",
 };
 const macInstallerPath =
   "/opt/homebrew/bin:/Users/theo/.npm-global/bin:/Users/theo/.nvm/versions/node/v22.16.0/bin:/usr/bin:/bin";
@@ -183,11 +183,11 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       const failed = command === control.failCommand;
       if (!failed && command === "loginctl enable-linger --no-ask-password 501")
         control.linger = "yes";
-      if (!failed && command === "systemctl --user enable t3code.service") control.enabled = true;
-      if (!failed && command === "systemctl --user restart t3code.service") control.active = true;
+      if (!failed && command === "systemctl --user enable goat.service") control.enabled = true;
+      if (!failed && command === "systemctl --user restart goat.service") control.active = true;
       if (
         control.stateAfterStop !== undefined &&
-        (command === "systemctl --user stop t3code.service" ||
+        (command === "systemctl --user stop goat.service" ||
           command.startsWith("launchctl bootout --wait "))
       ) {
         yield* fs.writeFileString(statePath, control.stateAfterStop).pipe(Effect.orDie);
@@ -260,7 +260,18 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       ),
     );
   const service = yield* makeService();
-  return { service, makeService, fs, statePath, commands, timeouts, control, runtime };
+  return {
+    service,
+    makeService,
+    fs,
+    home,
+    baseDir,
+    statePath,
+    commands,
+    timeouts,
+    control,
+    runtime,
+  };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
@@ -315,7 +326,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         );
         expect(yield* fs.readFileString(statePath)).toBe(before);
         expect(yield* fs.readFileString(plan.unitPath)).toBe(unit);
-        expect(commands).not.toContain("systemctl --user stop t3code.service");
+        expect(commands).not.toContain("systemctl --user stop goat.service");
       }),
   );
 
@@ -389,7 +400,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect((yield* service.status).installed).toBe(false);
       // The stop can block up to systemd's 90s TimeoutStopSec; the runner's
       // 60s default would cancel it mid-shutdown.
-      expect(timeouts.get("systemctl --user disable --now t3code.service")).toEqual(
+      expect(timeouts.get("systemctl --user disable --now goat.service")).toEqual(
         Duration.seconds(120),
       );
     }),
@@ -461,9 +472,9 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           ),
         ).toEqual(
           platform === "linux"
-            ? ["systemctl --user stop t3code.service", "systemctl --user restart t3code.service"]
+            ? ["systemctl --user stop goat.service", "systemctl --user restart goat.service"]
             : [
-                "launchctl bootout --wait gui/501/com.t3tools.t3code.service",
+                "launchctl bootout --wait gui/501/si.goat.service",
                 `launchctl bootstrap gui/501 ${plan.unitPath}`,
               ],
         );
@@ -590,10 +601,10 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
         ),
       ).toEqual([
-        "systemctl --user stop t3code.service",
+        "systemctl --user stop goat.service",
         "systemctl --user daemon-reload",
-        "systemctl --user enable t3code.service",
-        "systemctl --user restart t3code.service",
+        "systemctl --user enable goat.service",
+        "systemctl --user restart goat.service",
       ]);
     }),
   );
@@ -626,9 +637,9 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
         ),
       ).toEqual([
-        "systemctl --user stop t3code.service",
+        "systemctl --user stop goat.service",
         "systemctl --user daemon-reload",
-        "systemctl --user restart t3code.service",
+        "systemctl --user restart goat.service",
       ]);
     }),
   );
@@ -647,9 +658,9 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
         ),
       ).toEqual([
-        "systemctl --user stop t3code.service",
+        "systemctl --user stop goat.service",
         "systemctl --user daemon-reload",
-        "systemctl --user restart t3code.service",
+        "systemctl --user restart goat.service",
       ]);
     }),
   );
@@ -680,10 +691,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
           commands.filter(
             (command) => command.startsWith("systemctl ") && !command.includes("show-environment"),
           ),
-        ).toEqual([
-          "systemctl --user stop t3code.service",
-          "systemctl --user restart t3code.service",
-        ]);
+        ).toEqual(["systemctl --user stop goat.service", "systemctl --user restart goat.service"]);
       }
     }),
   );
@@ -703,9 +711,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       const plan = yield* service.install();
 
       expect(
-        plan.unitPath.endsWith(
-          path.join("Library", "LaunchAgents", "com.t3tools.t3code.service.plist"),
-        ),
+        plan.unitPath.endsWith(path.join("Library", "LaunchAgents", "si.goat.service.plist")),
       ).toBe(true);
       expect(yield* fs.readFileString(plan.unitPath)).toContain(
         `    <key>PATH</key>\n    <string>${macInstallerPath}:/usr/local/bin:/usr/sbin:/sbin</string>`,
@@ -726,7 +732,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(commands.some((command) => command.startsWith("systemctl "))).toBe(false);
       // A bootout can block up to the plist's 90s ExitTimeOut; the runner's
       // 60s default would cancel it and let bootstrap race a loaded job.
-      expect(timeouts.get("launchctl bootout --wait gui/501/com.t3tools.t3code.service")).toEqual(
+      expect(timeouts.get("launchctl bootout --wait gui/501/si.goat.service")).toEqual(
         Duration.seconds(120),
       );
     }),
@@ -743,8 +749,8 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       const error = yield* service.install().pipe(Effect.flip);
       expect(error._tag).toBe("BootServiceCommandError");
       expect(commands.filter((command) => command.startsWith("launchctl "))).toEqual([
-        "launchctl bootout --wait gui/501/com.t3tools.t3code.service",
-        "launchctl enable gui/501/com.t3tools.t3code.service",
+        "launchctl bootout --wait gui/501/si.goat.service",
+        "launchctl enable gui/501/si.goat.service",
         `launchctl bootstrap gui/501 ${plistPath}`,
         `launchctl bootstrap gui/501 ${plistPath}`,
       ]);
@@ -806,7 +812,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     Effect.gen(function* () {
       const { service, control } = yield* makeHarness("darwin");
       yield* service.install();
-      control.failCommand = "launchctl bootout --wait gui/501/com.t3tools.t3code.service";
+      control.failCommand = "launchctl bootout --wait gui/501/si.goat.service";
 
       yield* service.install();
       expect((yield* service.status).current).toBe(true);
@@ -837,10 +843,197 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         );
         expect(serviceStateHasPendingUpdate(yield* fs.readFileString(statePath))).toBe(true);
         expect(commands.filter((command) => command.startsWith("launchctl "))).toEqual([
-          "launchctl bootout --wait gui/501/com.t3tools.t3code.service",
+          "launchctl bootout --wait gui/501/si.goat.service",
           `launchctl bootstrap gui/501 ${plistPath}`,
         ]);
       }
+    }),
+  );
+});
+
+it("moves a legacy unit or plist to the current names without changing what it runs", () => {
+  const legacyUnit = BootService.renderBootServiceUnit(
+    linuxPlan,
+    BootService.LEGACY_BOOT_SERVICE_NAMES,
+  ).replace("Description=GOAT server", "Description=T3 Code server"); // goat-rename: legacy
+  expect(BootService.migrateLegacyBootServiceUnit(legacyUnit)).toBe(
+    BootService.renderBootServiceUnit(linuxPlan),
+  );
+  const legacyPlist = BootService.renderBootServicePlist(macPlan, {
+    ...macRenderOptions,
+    names: BootService.LEGACY_BOOT_SERVICE_NAMES,
+  });
+  expect(BootService.migrateLegacyBootServiceUnit(legacyPlist)).toBe(
+    BootService.renderBootServicePlist(macPlan, macRenderOptions),
+  );
+});
+
+it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
+  const serviceCommands = (commands: ReadonlyArray<string>) =>
+    commands.filter(
+      (command) => command.startsWith("systemctl --user ") && !command.endsWith("show-environment"),
+    );
+  const legacyUnitPath = (home: string, platform: NodeJS.Platform) =>
+    platform === "darwin"
+      ? `${home}/Library/LaunchAgents/${BootService.LEGACY_BOOT_SERVICE_NAMES.launchdLabel}.plist`
+      : `${home}/.config/systemd/user/${BootService.LEGACY_BOOT_SERVICE_NAMES.unitFile}`;
+
+  /** Writes a unit the way a build before the GOAT rename installed it. */
+  const installLegacy = Effect.fn("test.install_legacy_boot_service")(function* (
+    harness: Effect.Success<ReturnType<typeof makeHarness>>,
+    platform: NodeJS.Platform,
+    servedBaseDir = harness.baseDir,
+  ) {
+    const unitPath = legacyUnitPath(harness.home, platform);
+    const plan = {
+      program: [harness.runtime.entryPath, "__service-launcher"],
+      baseDir: servedBaseDir,
+      logPath: `${servedBaseDir}/userdata/logs/boot-service.log`,
+      unitPath,
+    };
+    const contents =
+      platform === "darwin"
+        ? BootService.renderBootServicePlist(plan, {
+            homeDir: harness.home,
+            environmentPath: "/usr/bin",
+            names: BootService.LEGACY_BOOT_SERVICE_NAMES,
+          })
+        : BootService.renderBootServiceUnit(plan, BootService.LEGACY_BOOT_SERVICE_NAMES);
+    yield* harness.fs.makeDirectory(unitPath.slice(0, unitPath.lastIndexOf("/")), {
+      recursive: true,
+    });
+    yield* harness.fs.writeFileString(unitPath, contents);
+    yield* harness.fs.makeDirectory(`${harness.baseDir}/runtime`, { recursive: true });
+    yield* harness.fs.writeFileString(
+      harness.statePath,
+      JSON.stringify({ protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: "1.2.3" }),
+    );
+    return { unitPath, contents };
+  });
+
+  it.effect("install moves an owned systemd unit to goat.service", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const legacy = yield* installLegacy(harness, "linux");
+      expect(yield* harness.service.status).toMatchObject({
+        installed: true,
+        current: false,
+        installedVersion: "1.2.3",
+        unitPath: legacy.unitPath,
+      });
+
+      harness.commands.length = 0;
+      const plan = yield* harness.service.install();
+
+      expect(plan.unitPath.endsWith("/goat.service")).toBe(true);
+      expect(yield* harness.fs.exists(legacy.unitPath)).toBe(false);
+      expect(serviceCommands(harness.commands)).toEqual([
+        "systemctl --user stop t3code.service", // goat-rename: legacy
+        "systemctl --user disable --now t3code.service", // goat-rename: legacy
+        "systemctl --user daemon-reload",
+        "systemctl --user enable goat.service",
+        "systemctl --user restart goat.service",
+      ]);
+      expect(yield* harness.service.status).toMatchObject({ installed: true, current: true });
+    }),
+  );
+
+  it.effect("install moves an owned launch agent to si.goat.service", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness("darwin");
+      const legacy = yield* installLegacy(harness, "darwin");
+
+      harness.commands.length = 0;
+      const plan = yield* harness.service.install();
+
+      expect(yield* harness.fs.exists(legacy.unitPath)).toBe(false);
+      expect(harness.commands.filter((command) => command.startsWith("launchctl "))).toEqual([
+        "launchctl bootout --wait gui/501/com.t3tools.t3code.service", // goat-rename: legacy
+        "launchctl bootout --wait gui/501/com.t3tools.t3code.service", // goat-rename: legacy
+        "launchctl enable gui/501/si.goat.service",
+        `launchctl bootstrap gui/501 ${plan.unitPath}`,
+      ]);
+      expect(yield* harness.service.status).toMatchObject({ installed: true, current: true });
+    }),
+  );
+
+  it.effect("leaves a legacy unit that serves another home alone", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const legacy = yield* installLegacy(harness, "linux", "/home/someone/.t3-upstream");
+      expect((yield* harness.service.status).installed).toBe(false);
+
+      harness.commands.length = 0;
+      yield* harness.service.install();
+      expect(yield* harness.service.restart).toBe(true);
+      expect(yield* harness.service.uninstall).toBe(true);
+
+      expect(yield* harness.fs.readFileString(legacy.unitPath)).toBe(legacy.contents);
+      expect(harness.commands.some((command) => command.includes("t3code"))).toBe(false);
+    }),
+  );
+
+  it.effect("rolls back to the legacy unit when activation fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const legacy = yield* installLegacy(harness, "linux");
+      harness.control.failCommand = "systemctl --user restart goat.service";
+      harness.commands.length = 0;
+
+      const error = yield* harness.service.install().pipe(Effect.flip);
+
+      expect(error._tag).toBe("BootServiceCommandError");
+      expect(yield* harness.fs.readFileString(legacy.unitPath)).toBe(legacy.contents);
+      expect(yield* harness.fs.exists(`${harness.home}/.config/systemd/user/goat.service`)).toBe(
+        false,
+      );
+      expect(harness.commands.slice(-4)).toEqual([
+        "systemctl --user disable --now goat.service",
+        "systemctl --user daemon-reload",
+        "systemctl --user enable t3code.service", // goat-rename: legacy
+        "systemctl --user restart t3code.service", // goat-rename: legacy
+      ]);
+    }),
+  );
+
+  it.effect("install without a start updates the legacy unit in place; restart moves it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const legacy = yield* installLegacy(harness, "linux");
+      const newUnitPath = `${harness.home}/.config/systemd/user/goat.service`;
+
+      harness.commands.length = 0;
+      yield* harness.service.install({ start: false });
+      expect(yield* harness.fs.exists(newUnitPath)).toBe(false);
+      expect(yield* harness.fs.readFileString(legacy.unitPath)).toBe(legacy.contents);
+      expect(harness.commands.some((command) => command.startsWith("systemctl --user stop"))).toBe(
+        false,
+      );
+
+      harness.commands.length = 0;
+      expect(yield* harness.service.restart).toBe(true);
+      expect(yield* harness.fs.exists(legacy.unitPath)).toBe(false);
+      expect(yield* harness.fs.readFileString(newUnitPath)).toBe(
+        BootService.migrateLegacyBootServiceUnit(legacy.contents),
+      );
+      expect(serviceCommands(harness.commands)).toEqual([
+        "systemctl --user stop t3code.service", // goat-rename: legacy
+        "systemctl --user disable --now t3code.service", // goat-rename: legacy
+        "systemctl --user daemon-reload",
+        "systemctl --user enable goat.service",
+        "systemctl --user restart goat.service",
+      ]);
+    }),
+  );
+
+  it.effect("uninstall removes an owned legacy unit", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const legacy = yield* installLegacy(harness, "linux");
+
+      expect(yield* harness.service.uninstall).toBe(true);
+      expect(yield* harness.fs.exists(legacy.unitPath)).toBe(false);
+      expect((yield* harness.service.status).installed).toBe(false);
     }),
   );
 });

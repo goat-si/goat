@@ -265,7 +265,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev",
           baseEnv: {
             GOAT_SERVICE_LAUNCHER_CONTEXT: '{"childVersion":"9.9.9"}',
-            GOAT_BOOT_SERVICE_UNIT: "t3code.service",
+            GOAT_BOOT_SERVICE_UNIT: "goat.service",
           },
           serverOffset: 0,
           webOffset: 0,
