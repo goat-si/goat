@@ -2,9 +2,11 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type EditorId,
   type EnvironmentTheme,
+  type EnvironmentId,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleLegacyThreadMigrationPayload,
+  type ServerLifecycleRuntimeDrainPayload,
   type ServerLifecycleWelcomePayload,
   type ServerProvider,
   type ServerSettings,
@@ -100,6 +102,22 @@ export const primaryServerLegacyThreadMigrationAtom = Atom.make(
 export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,
 ).pipe(Atom.withLabel("web-primary-server-settings"));
+
+const noRuntimeDrainAtom = Atom.make<ServerLifecycleRuntimeDrainPayload | null>(null).pipe(
+  Atom.withLabel("web-runtime-drain:none"),
+);
+const runtimeDrainValueAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get): ServerLifecycleRuntimeDrainPayload | null =>
+    Option.getOrNull(
+      AsyncResult.value(
+        get(serverEnvironment.runtimeDrain({ environmentId, input: { runtimeDrain: true } })),
+      ),
+    ),
+  ).pipe(Atom.withLabel(`web-runtime-drain:${environmentId}`)),
+);
+/** The latest replacement drain notice from an environment's server, if it sent one. */
+export const runtimeDrainAtom = (environmentId: EnvironmentId | null) =>
+  environmentId === null ? noRuntimeDrainAtom : runtimeDrainValueAtom(environmentId);
 
 export const primaryServerProvidersAtom = Atom.make(
   (get): ReadonlyArray<ServerProvider> =>

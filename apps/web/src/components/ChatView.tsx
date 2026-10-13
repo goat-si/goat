@@ -428,6 +428,7 @@ import {
   environmentServerConfigsAtom,
   primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
+  runtimeDrainAtom,
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
@@ -3169,6 +3170,7 @@ export default function ChatView(props: ChatViewProps) {
   const serverUpdateFailureDismissed =
     serverUpdateState === dismissedServerUpdateState ||
     isServerUpdateFailureDismissed(serverUpdateState);
+  const runtimeDrain = useAtomValue(runtimeDrainAtom(serverUpdateEnvironmentId));
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
     const updateRunning = serverUpdateState.status === "running";
@@ -3310,10 +3312,25 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
     if (autoBalanceUpdateBanner) items.push(autoBalanceUpdateBanner);
+    // Another client asked this server to make way for a new version. Ending the drain
+    // (cancelled, or drained and restarting) clears it; the reconnect banner takes over.
+    if (runtimeDrain?.status === "draining" && serverUpdateEnvironmentId) {
+      items.push({
+        id: `runtime-drain:${serverUpdateEnvironmentId}`,
+        variant: "warning",
+        priority: "urgent",
+        icon: <ComposerServerUpdateIcon status="running" />,
+        title: `Restarting ${versionMismatchServerLabel} for GOAT ${runtimeDrain.targetVersion}`,
+        description: runtimeDrain.forced
+          ? "New messages wait until it reconnects. Work still running at the deadline resumes after the restart."
+          : "New messages wait until it reconnects. Running work finishes first; if it runs too long, the restart is called off.",
+      });
+    }
     return items;
   }, [
     automaticEnvironment,
     autoBalanceUpdateBanner,
+    runtimeDrain,
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
     canDisconnectActiveEnvironment,

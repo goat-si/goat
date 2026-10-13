@@ -484,7 +484,7 @@ export function applyServerWelcomeEvent(
   current: EnvironmentServerWelcomeState,
   session: RpcSession,
   event: {
-    readonly type: "welcome" | "ready" | "legacyThreadMigration";
+    readonly type: "welcome" | "ready" | "legacyThreadMigration" | "runtimeDrain";
     readonly payload: unknown;
   },
 ): EnvironmentServerWelcomeState {
@@ -1171,6 +1171,17 @@ export function createServerEnvironmentAtoms<R, E>(
             event.type === "legacyThreadMigration"
               ? Result.succeed(event.payload)
               : Result.failVoid,
+          ),
+        ),
+    }),
+    /** Replacement drains. Subscribe with `{ runtimeDrain: true }`; older servers send none. */
+    runtimeDrain: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:runtime-drain",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(
+          Stream.filterMap((event) =>
+            event.type === "runtimeDrain" ? Result.succeed(event.payload) : Result.failVoid,
           ),
         ),
     }),
