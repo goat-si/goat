@@ -1,7 +1,7 @@
 "use client";
 
 import type { DesktopPreviewPointerEvent } from "@goat/contracts";
-import { MousePointer2 } from "lucide-react";
+import { MousePointerIcon as MousePointer2 } from "~/components/solar";
 import { useEffect, useState } from "react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";

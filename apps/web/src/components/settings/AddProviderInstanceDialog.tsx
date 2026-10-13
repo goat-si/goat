@@ -3,7 +3,7 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon } from "~/components/solar";
 import { useMemo, useState } from "react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {

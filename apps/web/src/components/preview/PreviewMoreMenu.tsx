@@ -1,7 +1,12 @@
 "use client";
 
 import type { DesktopPreviewColorScheme } from "@goat/contracts";
-import { Minus, MoreVertical, Plus as PlusIcon, RotateCcw } from "lucide-react";
+import {
+  MinusIcon as Minus,
+  MoreVerticalIcon as MoreVertical,
+  PlusIcon,
+  RotateCcwIcon as RotateCcw,
+} from "~/components/solar";
 
 import { Button } from "~/components/ui/button";
 import {

@@ -11,7 +11,7 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import { useRef, useState } from "react";
-import { Trash2Icon } from "lucide-react";
+import { TrashIcon as Trash2Icon } from "~/components/solar";
 
 import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentQuery } from "../../state/query";

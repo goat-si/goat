@@ -1,5 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
-import { TriangleAlertIcon } from "lucide-react";
+import { TriangleAlertIcon } from "~/components/solar";
 import { type ComponentProps, useCallback, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { isElectron } from "../../env";

@@ -18,8 +18,8 @@ import {
   PackageIcon,
   SettingsIcon,
   UserRoundIcon,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "~/components/solar";
 import { memo, useLayoutEffect, useRef } from "react";
 
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
@@ -244,7 +244,7 @@ const LISTBOX_LABEL_BY_TRIGGER: Record<ComposerTriggerKind, string> = {
   skill: "Skills",
 };
 
-const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, LucideIcon> = {
+const SKILL_SOURCE_ICON_BY_KIND: Record<ProviderSkillSourceKind, IconComponent> = {
   app: BlocksIcon,
   repo: FolderIcon,
   project: FolderIcon,

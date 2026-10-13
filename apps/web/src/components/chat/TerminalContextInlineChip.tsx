@@ -1,4 +1,4 @@
-import { TerminalIcon } from "lucide-react";
+import { TerminalIcon } from "~/components/solar";
 
 import type { ContextPresentationCapability } from "../contextPresentationRegistry";
 import { ContextChipPopover, ContextChipShell } from "../contextChipParts";

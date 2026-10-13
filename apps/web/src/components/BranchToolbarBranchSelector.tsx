@@ -16,7 +16,7 @@ import {
   type VcsRef,
   type ThreadId,
 } from "@goat/contracts";
-import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
+import { ChevronDownIcon, GitBranchIcon } from "~/components/solar";
 import {
   useCallback,
   useDeferredValue,

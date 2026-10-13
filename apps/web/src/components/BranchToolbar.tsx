@@ -9,11 +9,11 @@ import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environmen
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   ChevronDownIcon,
-  FolderGit2Icon,
+  FolderGitIcon as FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
   ScaleIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import {
   type Ref,
   type MouseEvent as ReactMouseEvent,

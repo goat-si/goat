@@ -1,4 +1,4 @@
-import { CheckIcon } from "lucide-react";
+import { CheckIcon } from "~/components/solar";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { AuthProvidersManageScope, type EnvironmentId, type ServerProvider } from "@goat/contracts";
 import {

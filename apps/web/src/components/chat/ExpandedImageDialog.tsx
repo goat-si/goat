@@ -7,8 +7,8 @@ import {
   type ReactNode,
   type KeyboardEvent,
 } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
-import { Image as ImageGlyph, Text as TextGlyph } from "lucide";
+import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/components/solar";
+import { Image as ImageGlyph, Text as TextGlyph } from "~/components/solar/nodes";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";

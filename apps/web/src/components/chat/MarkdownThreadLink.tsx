@@ -2,7 +2,7 @@ import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environmen
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { formatThreadLink, percentDecodedThreadLinkId } from "@goat/shared/threadLinks";
 import { Link } from "@tanstack/react-router";
-import { MessageSquareTextIcon } from "lucide-react";
+import { MessageSquareTextIcon } from "~/components/solar";
 
 import { useProject, useThreadShell } from "../../state/entities";
 import { ProjectFavicon } from "../ProjectFavicon";

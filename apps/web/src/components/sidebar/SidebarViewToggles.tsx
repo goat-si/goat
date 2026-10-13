@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { BellIcon, SearchIcon } from "lucide-react";
+import { BellIcon, SearchIcon } from "~/components/solar";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import { excludeGlobalAgentThreads } from "../../globalAgentRoute";

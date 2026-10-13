@@ -1,6 +1,6 @@
 import { type ProviderDriverKind, type ProviderInstanceId } from "@goat/contracts";
 import { memo } from "react";
-import { CheckIcon, StarIcon } from "lucide-react";
+import { CheckIcon, StarIcon } from "~/components/solar";
 import {
   getDisplayModelName,
   getProviderRowLabel,

@@ -12,7 +12,7 @@ import {
   turnItemOutputText,
 } from "@goat/client-runtime/work-log/item-detail";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
-import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
+import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "~/components/solar";
 import { memo, Suspense, use, useMemo } from "react";
 
 import { useTheme } from "../../hooks/useTheme";

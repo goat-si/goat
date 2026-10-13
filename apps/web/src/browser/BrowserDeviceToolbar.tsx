@@ -7,7 +7,12 @@ import {
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "@goat/shared/previewViewport";
-import { Link2, Unlink2, X } from "lucide-react";
+import {
+  LinkIcon as Link2,
+  ScreenRotationIcon,
+  UnlinkIcon as Unlink2,
+  XIcon as X,
+} from "~/components/solar";
 import { useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -26,7 +31,6 @@ import { cn } from "~/lib/utils";
 
 import { BROWSER_DEVICE_TOOLBAR_HEIGHT, resizeFreeformViewport } from "./browserViewportLayout";
 import { commitViewportAndAspectRatio } from "./browserDeviceToolbarState";
-import { ScreenRotationIcon } from "./ScreenRotationIcon";
 
 const RESPONSIVE_VALUE = "responsive";
 const SELECT_ITEMS = [
@@ -306,7 +310,7 @@ export function BrowserDeviceToolbar({
         disabled={pending}
         onClick={rotate}
       >
-        <ScreenRotationIcon />
+        <ScreenRotationIcon aria-hidden />
       </Button>
       {/* Sticky backing so scrolled controls do not show through the close action. */}
       <span className="sticky right-0 ml-auto flex bg-background/95">

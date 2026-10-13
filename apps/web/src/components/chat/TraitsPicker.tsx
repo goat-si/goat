@@ -18,7 +18,7 @@ import {
 } from "@goat/shared/model";
 import { memo, useCallback, useRef } from "react";
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
-import { BrainIcon, ChevronRightIcon } from "lucide-react";
+import { BrainIcon, ChevronRightIcon } from "~/components/solar";
 import {
   Menu,
   MenuGroup,

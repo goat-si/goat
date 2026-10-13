@@ -1,4 +1,4 @@
-import { MessagesSquareIcon } from "lucide-react";
+import { MessagesSquareIcon } from "~/components/solar";
 import { createPortal } from "react-dom";
 
 import { useThreadContextDragGhost } from "./threadContextDrag";

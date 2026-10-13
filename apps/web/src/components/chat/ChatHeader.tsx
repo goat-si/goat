@@ -11,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { ChevronDownIcon, GlobeIcon } from "lucide-react";
+import { ChevronDownIcon, GlobeIcon } from "~/components/solar";
 import {
   memo,
   useCallback,

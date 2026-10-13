@@ -1,5 +1,5 @@
 import type { EnvironmentId, ProjectId } from "@goat/contracts";
-import { CircleIcon } from "lucide-react";
+import { CircleIcon } from "~/components/solar";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 

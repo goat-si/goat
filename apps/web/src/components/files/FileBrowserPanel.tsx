@@ -6,7 +6,7 @@ import type {
 import type { EnvironmentId, ProjectEntry } from "@goat/contracts";
 import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@goat/shared/composerTrigger";
-import { ChevronsDownUp, ChevronsUpDown } from "lucide";
+import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";

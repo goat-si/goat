@@ -30,28 +30,24 @@ const RESTRICTED_UI_VARIANT_PATTERNS = [
   },
 ];
 
-/** Lucide's pull-request glyphs, which only `pullRequestIcons.tsx` may name. */
+/** Pull-request glyphs, which only \`pullRequestIcons.tsx\` may name. */
 const RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS = {
-  name: "lucide-react",
+  name: "~/components/solar",
   importNames: [
-    "GitMerge",
     "GitMergeIcon",
-    "GitPullRequest",
-    "GitPullRequestIcon",
-    "GitPullRequestArrow",
     "GitPullRequestArrowIcon",
-    "GitPullRequestClosed",
     "GitPullRequestClosedIcon",
-    "GitPullRequestDraft",
     "GitPullRequestDraftIcon",
-    "GitPullRequestCreate",
-    "GitPullRequestCreateIcon",
-    "GitPullRequestCreateArrow",
-    "GitPullRequestCreateArrowIcon",
   ],
   message:
     "Pick a glyph by meaning from PullRequestGlyph in apps/web/src/components/pullRequest/pullRequestIcons.tsx so every surface draws the same pull request the same way.",
 };
+
+/** Web icons are Solar Linear and come from one module, so every surface draws the same set. */
+const RESTRICTED_ICON_LIBRARY_IMPORTS = ["lucide-react", "lucide"].map((name) => ({
+  name,
+  message: "Import icons from ~/components/solar (Solar Linear) so the app keeps one icon set.",
+}));
 
 export default defineConfig({
   resolve: {
@@ -94,6 +90,7 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      "**/solar.generated.ts",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
@@ -119,6 +116,7 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      "**/solar.generated.ts",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
@@ -234,17 +232,26 @@ export default defineConfig({
           "eslint/no-restricted-imports": [
             "error",
             {
-              paths: [...RESTRICTED_IMPORT_PATHS, RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS],
+              paths: [
+                ...RESTRICTED_IMPORT_PATHS,
+                ...RESTRICTED_ICON_LIBRARY_IMPORTS,
+                RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS,
+              ],
               patterns: RESTRICTED_UI_VARIANT_PATTERNS,
             },
           ],
         },
       },
       {
-        // The one module allowed to name lucide's pull-request glyphs; everything else picks
+        // The one module allowed to name the pull-request glyphs; everything else picks
         // from its vocabulary. The other import restrictions still apply here.
         files: ["apps/web/src/components/pullRequest/pullRequestIcons.tsx"],
-        rules: { "eslint/no-restricted-imports": ["error", { paths: RESTRICTED_IMPORT_PATHS }] },
+        rules: {
+          "eslint/no-restricted-imports": [
+            "error",
+            { paths: [...RESTRICTED_IMPORT_PATHS, ...RESTRICTED_ICON_LIBRARY_IMPORTS] },
+          ],
+        },
       },
       {
         files: ["apps/mobile/src/**"],

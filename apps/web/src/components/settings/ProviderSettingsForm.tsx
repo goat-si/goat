@@ -10,7 +10,7 @@ import {
   type ProviderSettingsFormOption,
   type ProviderSettingsFormSchemaAnnotation,
 } from "@goat/contracts";
-import { PlusIcon, XIcon } from "lucide-react";
+import { PlusIcon, XIcon } from "~/components/solar";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";

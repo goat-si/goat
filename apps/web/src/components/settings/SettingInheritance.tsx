@@ -7,7 +7,7 @@ import {
   type ServerSettings,
   type WorktreeSubmodules,
 } from "@goat/contracts";
-import { CheckIcon, LayersIcon } from "lucide-react";
+import { CheckIcon, LayersIcon } from "~/components/solar";
 import * as Equal from "effect/Equal";
 
 import { cn } from "../../lib/utils";

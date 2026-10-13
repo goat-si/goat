@@ -2,7 +2,7 @@ import { SettingsGroup } from "./SettingsGroup";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { usePrimaryEnvironmentId, usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
-import { InfoIcon, Undo2Icon } from "lucide-react";
+import { InfoIcon, UndoIcon as Undo2Icon } from "~/components/solar";
 import { DEFAULT_SERVER_SETTINGS, type ServerSettings } from "@goat/contracts";
 import * as Equal from "effect/Equal";
 import { useLocation, useNavigate } from "@tanstack/react-router";

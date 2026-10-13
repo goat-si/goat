@@ -1,14 +1,14 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
-  Clock3Icon,
+  ClockIcon as Clock3Icon,
   CopyIcon,
   InboxIcon,
-  MoreHorizontalIcon,
+  EllipsisIcon as MoreHorizontalIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
-  Trash2Icon,
-} from "lucide-react";
+  TrashIcon as Trash2Icon,
+} from "~/components/solar";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EnvironmentId,

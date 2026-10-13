@@ -5,7 +5,7 @@ import {
   htmlRenderFrameHeight,
   type HtmlRenderReference,
 } from "@goat/shared/htmlRender";
-import { Maximize2Icon } from "lucide-react";
+import { MaximizeIcon as Maximize2Icon } from "~/components/solar";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";

@@ -1,7 +1,7 @@
 import { DeviceHostUpdates } from "./DeviceHostUpdates";
 import type { DevicePlatform, DeviceServiceState, EnvironmentId } from "@goat/contracts";
-import { Check } from "lucide-react";
-import { Check as CheckGlyph, CircleAlert } from "lucide";
+import { CheckIcon as Check } from "~/components/solar";
+import { Check as CheckGlyph, CircleAlert } from "~/components/solar/nodes";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { useState } from "react";
 

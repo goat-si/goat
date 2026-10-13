@@ -11,8 +11,8 @@ import type {
   PullRequestThreadCommentsResult,
   PullRequestThreadComment,
 } from "@goat/contracts";
-import { HammerIcon, MessageSquareIcon, Trash2Icon } from "lucide-react";
-import { Circle, CircleCheck } from "lucide";
+import { HammerIcon, MessageSquareIcon, TrashIcon as Trash2Icon } from "~/components/solar";
+import { Circle, CircleCheck } from "~/components/solar/nodes";
 import { useRef, useState } from "react";
 
 import { formatRelativeTimeLabel } from "~/timestampFormat";

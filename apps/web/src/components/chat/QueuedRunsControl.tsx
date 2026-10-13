@@ -9,12 +9,12 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import {
-  Clock3Icon,
+  ClockIcon as Clock3Icon,
   CornerUpRightIcon,
   GripVerticalIcon,
   ListOrderedIcon,
   PencilIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";

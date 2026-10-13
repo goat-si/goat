@@ -3,7 +3,7 @@ import type {
   RuntimeSubagent,
 } from "@goat/client-runtime/state/subagentRuntime";
 import type { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@goat/contracts";
-import { ChevronDownIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
+import { ChevronDownIcon, LoaderCircleIcon, SquareIcon } from "~/components/solar";
 import { useState, type ReactNode } from "react";
 
 import { AgentElapsed } from "./AgentElapsed";

@@ -5,7 +5,7 @@ import type {
   DeviceSummary,
   ScopedThreadRef,
 } from "@goat/contracts";
-import { Smartphone, X } from "lucide-react";
+import { SmartphoneIcon as Smartphone, XIcon as X } from "~/components/solar";
 import { useEffect, useMemo, useState } from "react";
 
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";

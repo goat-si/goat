@@ -1636,7 +1636,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("data-base-ui-tooltip-trigger");
-    expect(markup).toContain("lucide-redo-2");
+    expect(markup).toContain('data-icon="RedoIcon"');
     expect(markup).toContain('data-user-message-intent="steer"');
     expect(markup).toContain("items-center justify-end gap-1");
     expect(markup).toContain("gap-1 text-xs leading-none text-muted-foreground");
@@ -1833,7 +1833,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("lucide-terminal");
+    expect(markup).toContain('data-icon="TerminalIcon"');
     expect(markup).toContain("yoo what&#x27;s");
     expect(markup).not.toContain("terminal_context");
     expect(markup).toContain("Show full message");
@@ -2173,8 +2173,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Ran 2 commands");
-    expect(markup).toContain("lucide-terminal");
-    expect(markup).not.toContain("lucide-x");
+    expect(markup).toContain('data-icon="TerminalIcon"');
+    expect(markup).not.toContain('data-icon="XIcon"');
     expect(markup).not.toContain("text-destructive");
     // The failure stays discoverable for screen readers.
     expect(markup).toContain("tool call failed");
@@ -2666,7 +2666,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("contextWindow.test.ts +47 to +58");
-    expect(markup).toContain("lucide-message-circle");
+    expect(markup).toContain('data-icon="MessageCircleIcon"');
     expect(markup).not.toContain(">Review comment<");
     expect(markup).not.toContain("&lt;review_comment");
     expect(markup).not.toContain("&lt;/review_comment&gt;");
@@ -2785,7 +2785,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("lucide-zap");
+    expect(markup).toContain('data-icon="ZapIcon"');
     expect(markup).toContain('aria-label="Tool call failed"');
     // Ordinary tool failures render muted, not red.
     expect(markup).not.toContain("text-destructive");
@@ -2824,7 +2824,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("lucide-circle-alert");
+    expect(markup).toContain('data-icon="CircleAlertIcon"');
     expect(markup).toContain("text-destructive");
   });
 

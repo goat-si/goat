@@ -4,10 +4,10 @@ import {
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   LayersIcon,
-  Link2Icon,
-  Unlink2Icon,
+  LinkIcon as Link2Icon,
+  UnlinkIcon as Unlink2Icon,
   TriangleAlertIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import type { PullRequestState } from "@goat/contracts";
 
 export const PullRequestGlyph = {

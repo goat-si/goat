@@ -22,7 +22,7 @@ import {
   FolderIcon,
   GitBranchIcon,
   TerminalIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { ThreadHoverCard } from "../ThreadHoverCard";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";

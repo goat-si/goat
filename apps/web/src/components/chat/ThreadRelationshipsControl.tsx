@@ -44,12 +44,12 @@ import {
   CornerLeftUpIcon,
   GitForkIcon,
   LoaderCircleIcon,
-  MoreHorizontalIcon,
+  EllipsisIcon as MoreHorizontalIcon,
   PlusIcon,
   RocketIcon,
   SquareIcon,
   UnplugIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";

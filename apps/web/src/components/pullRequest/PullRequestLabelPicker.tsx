@@ -7,7 +7,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
  * every pull request they merely open.
  */
 import type { EnvironmentId, PullRequestLabelCandidate, PullRequestRef } from "@goat/contracts";
-import { CheckIcon, TagIcon } from "lucide-react";
+import { CheckIcon, TagIcon } from "~/components/solar";
 import { useMemo, useState } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";

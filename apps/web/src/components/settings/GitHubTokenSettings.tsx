@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@goat/contracts";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon } from "~/components/solar";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";

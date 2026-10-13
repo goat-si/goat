@@ -8,7 +8,12 @@ import {
   type EnvironmentId,
   type UsageProviderKind,
 } from "@goat/contracts";
-import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
+import {
+  CircleAlertIcon,
+  ChevronDownIcon,
+  InfoIcon,
+  SlidersHorizontalIcon,
+} from "~/components/solar";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import {
   cursorKeychainAccessEnvironments,

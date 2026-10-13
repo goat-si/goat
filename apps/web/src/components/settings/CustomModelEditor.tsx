@@ -1,6 +1,6 @@
 "use client";
 
-import { PlusIcon, XIcon } from "lucide-react";
+import { PlusIcon, XIcon } from "~/components/solar";
 import { useMemo, useState } from "react";
 import type { ProviderDriverKind, ServerProviderModel } from "@goat/contracts";
 import type { CustomModelDefinition } from "@goat/shared/model";

@@ -1,5 +1,5 @@
 import type { EnvironmentId, PullRequestContextMetadata } from "@goat/contracts";
-import { CircleDashedIcon, FilmIcon, ImageIcon } from "lucide-react";
+import { CircleDashedIcon, FilmIcon, ImageIcon } from "~/components/solar";
 import {
   useState,
   type ComponentProps,

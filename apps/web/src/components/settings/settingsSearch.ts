@@ -581,6 +581,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "icon-credits",
+    title: "Icons",
+    to: "/settings/general",
+    searchTerms: ["solar 480 design attribution credits creative commons"],
+  },
+  {
     id: "privacy-policy",
     title: "Privacy policy",
     to: "/settings/general",

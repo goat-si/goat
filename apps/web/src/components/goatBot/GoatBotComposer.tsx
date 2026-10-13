@@ -1,4 +1,4 @@
-import { ArrowUpIcon } from "lucide-react";
+import { ArrowUpIcon } from "~/components/solar";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 
 import { cn } from "~/lib/utils";

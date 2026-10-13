@@ -1,5 +1,5 @@
 import type { ProjectScript, ResolvedKeybindingsConfig } from "@goat/contracts";
-import { SettingsIcon } from "lucide-react";
+import { SettingsIcon } from "~/components/solar";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { commandForProjectScript } from "../../projectScripts";
 import { ScriptIcon } from "../projectScriptEditor";

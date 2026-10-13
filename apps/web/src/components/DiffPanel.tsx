@@ -17,8 +17,13 @@ import {
   PilcrowIcon,
   Rows3Icon,
   TextWrapIcon,
-} from "lucide-react";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide";
+} from "~/components/solar";
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+} from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";

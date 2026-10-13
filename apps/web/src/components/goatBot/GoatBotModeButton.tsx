@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { GlobeIcon } from "lucide-react";
+import { GlobeIcon } from "~/components/solar";
 
 import { GOAT_BOT_PATH } from "~/globalAgentRoute";
 import { type GlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";

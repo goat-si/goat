@@ -48,7 +48,7 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
   return (
     <div
       className={cn(
-        "flex min-h-6 min-w-0 gap-1.5 text-sm leading-relaxed select-none [&_*]:select-none",
+        "flex min-h-6 min-w-0 gap-1.5 text-work-log select-none [&_*]:select-none",
         // A wrapped label keeps its icon beside the first line.
         wrapLabel ? "items-start" : "items-center",
       )}
@@ -58,7 +58,7 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
       ) : null}
       <div
         className={cn(
-          "min-w-0 flex-1 text-secondary-label",
+          "min-w-0 flex-1 text-secondary-label/85",
           !wrapLabel && "truncate [&_*]:whitespace-nowrap",
         )}
       >

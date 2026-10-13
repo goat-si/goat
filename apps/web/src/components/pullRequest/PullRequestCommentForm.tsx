@@ -4,7 +4,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
  * the one that closes or reopens it. The popover around it belongs to PullRequestComposer.
  */
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@goat/contracts";
-import { SendIcon } from "lucide-react";
+import { SendIcon } from "~/components/solar";
 import { useState, type RefObject } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";

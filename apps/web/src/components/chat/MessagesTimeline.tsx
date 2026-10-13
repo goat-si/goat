@@ -127,6 +127,7 @@ import { ThreadContextChip } from "../ThreadContextChip";
 import {
   BotIcon,
   BrainIcon,
+  BrowserIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -136,25 +137,25 @@ import {
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
-  type LucideIcon,
+  type IconComponent,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
   MinusIcon,
-  Redo2Icon,
-  Minimize2Icon,
+  RedoIcon as Redo2Icon,
+  MinimizeIcon as Minimize2Icon,
   SearchIcon,
   SmartphoneIcon,
-  SquarePenIcon,
+  FileDiffIcon,
   TerminalIcon,
-  Undo2Icon,
+  UndoIcon as Undo2Icon,
   HammerIcon,
   WrenchIcon,
   XIcon,
   ZapIcon,
   RotateCcwIcon,
-} from "lucide-react";
-import { ChevronDown, ChevronRight, Link as LinkIconNode } from "lucide";
+} from "~/components/solar";
+import { ChevronDown, ChevronRight, Link as LinkIconNode } from "~/components/solar/nodes";
 import type {
   ComposerContextId,
   ComposerContextRecord,
@@ -2831,7 +2832,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         aria-expanded={row.expanded}
         data-scroll-anchor-ignore
         onClick={() => ctx.onToggleTurnFold(row.runId)}
-        className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-work-log text-secondary-label/85 tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{row.label}</span>
         <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
@@ -3124,7 +3125,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
   readonly label: string;
   readonly detail: string | null;
   readonly tone: V2EventTone;
-  readonly icon: LucideIcon;
+  readonly icon: IconComponent;
 } {
   switch (item.type) {
     case "error": {
@@ -3844,7 +3845,7 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   );
   return (
     <div className="border-b border-border/60 pb-2 pt-1">
-      <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+      <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-work-log text-secondary-label/85 tabular-nums">
         <span
           ref={shimmer ? observeVisibleAnimation : undefined}
           className="relative shrink-0 overflow-hidden whitespace-nowrap"
@@ -3951,7 +3952,7 @@ function LiveActivityRow({
   return (
     <div
       ref={animated ? observeVisibleAnimation : undefined}
-      className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
+      className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-work-log"
     >
       <LiveActivityContent
         label={label}
@@ -5081,26 +5082,6 @@ type WorkEntryIconName =
   | "x"
   | "zap";
 
-function BrowserAppIcon({ className }: { className: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-      aria-hidden
-    >
-      <path d="M8.5 19H7.2C4.4 19 3 17.5 3 14.6V7.4C3 4.5 4.5 3 7.4 3h8.2C18.5 3 20 4.5 20 7.4v2.4" />
-      <circle cx="7.4" cy="7.2" r="0.75" fill="currentColor" stroke="none" />
-      <path d="M11.2 7.2h4.3" />
-      <path d="m12.4 11.4 7.5 2.6-3.4 1.6-1.5 3.6z" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
 function ToolActivityIconView(props: {
   icon: ToolActivityIcon | undefined;
   fallbackName: WorkEntryIconName;
@@ -5263,7 +5244,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
     case "brain":
       return <BrainIcon className={className} aria-hidden />;
     case "browser":
-      return <BrowserAppIcon className={className} />;
+      return <BrowserIcon className={className} aria-hidden />;
     case "computer":
       return <ComputerUseAppIcon className={className} />;
     case "device":
@@ -5285,7 +5266,7 @@ function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className
     case "message-circle":
       return <MessageCircleIcon className={className} aria-hidden />;
     case "square-pen":
-      return <SquarePenIcon className={className} aria-hidden />;
+      return <FileDiffIcon className={className} aria-hidden />;
     case "terminal":
       return <TerminalIcon className={className} aria-hidden />;
     case "wrench":
@@ -5468,7 +5449,7 @@ function ReasoningTraceContent({ entries }: { entries: ReadonlyArray<TimelineWor
       {entries.map((entry) => (
         <ChatMarkdown
           key={entry.id}
-          className="text-foreground"
+          className="text-work-log text-secondary-label"
           text={entry.detail ?? ""}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
@@ -5713,8 +5694,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     ? "font-medium text-warning"
     : showDestructiveRowStyle
       ? "font-medium text-destructive"
-      : workLogEntryIsToolLike(workEntry)
-        ? "text-secondary-label"
+      : isReasoning || workLogEntryIsToolLike(workEntry)
+        ? "text-secondary-label/85"
         : "text-foreground/80";
   const threadLabel = isReasoning ? null : threadReadLabel(previewText, threadTarget);
   const accessiblePreview = [threadLabel?.text ?? previewText, answerPreview]
@@ -5760,7 +5741,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
       }
       label={
         <div className="min-w-0 flex-1 overflow-hidden">
-          <p className="flex min-w-0 w-full items-baseline gap-1.5 text-sm leading-relaxed">
+          <p className="flex min-w-0 w-full items-baseline gap-1.5 text-work-log">
             <span
               className={cn(answerPreview ? "min-w-0" : "min-w-0 flex-1", "truncate", headingClass)}
             >

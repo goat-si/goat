@@ -9,7 +9,7 @@ import {
   FileIcon,
   MessageCircleQuestionIcon,
   MessageSquareIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useMemo, type ReactNode } from "react";
 
 import { getDiffLineStat } from "~/lib/diffRendering";

@@ -12,8 +12,8 @@ import {
   MinusIcon,
   TerminalIcon,
   XIcon,
-} from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
+} from "~/components/solar";
+import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Button } from "~/components/ui/button";

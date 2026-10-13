@@ -1086,6 +1086,7 @@ import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  ArrowUpIcon,
   FileIcon,
   BotIcon,
   CircleAlertIcon,
@@ -1094,7 +1095,7 @@ import {
   PlusIcon,
   ShieldIcon,
   XIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { proposedPlanTitle } from "@goat/shared/proposedPlanText";
 import { hasProviderSetup } from "./ProviderStatusBanner";
 import {
@@ -7104,15 +7105,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   {showResumeAction ? (
                     <PlayIcon className="size-3 fill-current" aria-hidden="true" />
                   ) : (
-                    <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                      <path
-                        d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <ArrowUpIcon className="size-3.5" aria-hidden="true" />
                   )}
                 </button>
               </div>

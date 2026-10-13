@@ -1,4 +1,4 @@
-import { MessageCircle, Trash2 } from "lucide-react";
+import { MessageCircleIcon as MessageCircle, TrashIcon as Trash2 } from "~/components/solar";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "~/components/ui/button";

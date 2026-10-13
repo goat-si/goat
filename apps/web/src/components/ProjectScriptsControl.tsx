@@ -7,7 +7,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { projectScriptMenuLabel } from "@goat/shared/projectScripts";
-import { ChevronDownIcon, PlusIcon, SettingsIcon, WrenchIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, SettingsIcon, WrenchIcon } from "~/components/solar";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";

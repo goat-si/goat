@@ -3,7 +3,7 @@ import {
   type ProviderSubagentStatus,
 } from "@goat/client-runtime/state/thread-execution";
 import { isOrchestrationV2WorkActive } from "@goat/contracts";
-import { ArrowUpLeftIcon } from "lucide-react";
+import { ArrowUpLeftIcon } from "~/components/solar";
 import { useLayoutEffect, useRef } from "react";
 
 import type { ProviderInstanceEntry } from "../../providerInstances";

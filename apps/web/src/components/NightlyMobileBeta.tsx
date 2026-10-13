@@ -1,7 +1,7 @@
 import { parseSemver } from "@goat/shared/semver";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { SmartphoneIcon } from "lucide-react";
+import { SmartphoneIcon } from "~/components/solar";
 import { useEffect } from "react";
 
 import { APP_VERSION, HOSTED_APP_CHANNEL } from "../branding";

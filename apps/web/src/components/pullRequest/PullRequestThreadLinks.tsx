@@ -1,7 +1,7 @@
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentId, PullRequestRef, ScopedThreadRef, ThreadId } from "@goat/contracts";
-import { CheckIcon, MessageSquareIcon } from "lucide-react";
+import { CheckIcon, MessageSquareIcon } from "~/components/solar";
 import { useState } from "react";
 import { threadPullRequestLinkMode } from "@goat/client-runtime/thread-pull-request-compatibility";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";

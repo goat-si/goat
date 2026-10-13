@@ -5,7 +5,7 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@goat/shared/threadPullRequests";
-import { Minus, Plus } from "lucide";
+import { Minus, Plus } from "~/components/solar/nodes";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
 import { findProjectOnChangeRequestHost, parseChangeRequestUrl } from "~/lib/openPullRequestLink";

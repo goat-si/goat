@@ -4,7 +4,7 @@ import {
   type RuntimeRequestId,
 } from "@goat/contracts";
 import { memo } from "react";
-import { EllipsisIcon, TriangleAlertIcon } from "lucide-react";
+import { EllipsisIcon, TriangleAlertIcon } from "~/components/solar";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";

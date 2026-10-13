@@ -8,6 +8,20 @@
       "noticeFiles": ["apps/web/src/assets/fonts/Pretendard-LICENSE.txt"]
     },
     {
+      "bundles": ["desktop", "web"],
+      "license": "CC-BY-4.0",
+      "name": "Solar Icon Set by 480 Design",
+      "sourceUrl": "https://www.figma.com/community/file/1166831539721848736",
+      "generatedNotices": [
+        {
+          "licenseId": "CC-BY-4.0",
+          "preamble": [
+            "Icons: Solar by 480 Design, CC BY 4.0.\nThe web and desktop clients bundle the Solar Linear glyphs from @iconify-json/solar (https://github.com/iconify/icon-sets). Each glyph is converted to SVG element data; the drawings are unchanged."
+          ]
+        }
+      ]
+    },
+    {
       "bundles": ["assets", "desktop", "web"],
       "license": "CC0-1.0",
       "name": "Notification Sound 1 by deadrobotmusic",

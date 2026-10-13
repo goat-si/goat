@@ -1,6 +1,6 @@
 import { Spinner } from "~/components/ui/spinner";
 import type { ServerUpdateState } from "@goat/client-runtime/state/server";
-import { CircleAlertIcon, DownloadIcon } from "lucide-react";
+import { CircleAlertIcon, DownloadIcon } from "~/components/solar";
 import { useId, useState } from "react";
 
 import { serverUpdateStageLabel } from "../ServerUpdateAction";

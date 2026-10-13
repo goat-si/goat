@@ -1,5 +1,10 @@
-import { MousePointer2Icon, PaintbrushIcon, PlusIcon, XIcon } from "lucide-react";
-import { ChevronDown, ChevronUp } from "lucide";
+import {
+  MousePointerIcon as MousePointer2Icon,
+  PaintbrushIcon,
+  PlusIcon,
+  XIcon,
+} from "~/components/solar";
+import { ChevronDown, ChevronUp } from "~/components/solar/nodes";
 import {
   useCallback,
   useEffect,

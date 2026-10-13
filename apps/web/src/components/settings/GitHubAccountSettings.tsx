@@ -1,5 +1,5 @@
 import type { EnvironmentId, SourceControlProviderAuth } from "@goat/contracts";
-import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { EyeIcon, EyeOffIcon } from "~/components/solar";
 import { useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";

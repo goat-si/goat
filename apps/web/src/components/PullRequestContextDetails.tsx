@@ -1,5 +1,5 @@
 import type { PullRequestContextMetadata } from "@goat/contracts";
-import { ArrowRightIcon } from "lucide-react";
+import { ArrowRightIcon } from "~/components/solar";
 
 import { cn } from "~/lib/utils";
 

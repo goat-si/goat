@@ -1,5 +1,5 @@
 import type { ProviderDriverKind, ServerProvider } from "@goat/contracts";
-import { BotIcon, type LucideIcon } from "lucide-react";
+import { BotIcon, type IconComponent } from "~/components/solar";
 import { cn } from "../../lib/utils";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 
@@ -52,7 +52,7 @@ export function ThreadRelationshipIcon({
   driver?: ProviderDriverKind | undefined;
   provider?: ServerProvider | undefined;
   status: string | null;
-  fallbackIcon?: LucideIcon;
+  fallbackIcon?: IconComponent;
 }) {
   const iconClassName = "size-4 shrink-0 text-muted-foreground";
   return (

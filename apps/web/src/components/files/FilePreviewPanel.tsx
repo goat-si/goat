@@ -37,8 +37,12 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { mediaFileReference } from "@goat/client-runtime/media-reference";
-import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
-import { Code2, Eye, Table2 } from "lucide";
+import {
+  FolderTreeIcon as FolderTree,
+  GlobeIcon as Globe2,
+  TextWrapIcon as WrapTextIcon,
+} from "~/components/solar";
+import { Code as Code2, Eye, Table as Table2 } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 

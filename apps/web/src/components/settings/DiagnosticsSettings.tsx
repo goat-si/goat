@@ -5,8 +5,13 @@ import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { AuthEnvironmentMaintainScope } from "@goat/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { AlertTriangleIcon, CopyIcon, FolderOpenIcon, InfoIcon } from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
+import {
+  TriangleAlertIcon as AlertTriangleIcon,
+  CopyIcon,
+  FolderOpenIcon,
+  InfoIcon,
+} from "~/components/solar";
+import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,

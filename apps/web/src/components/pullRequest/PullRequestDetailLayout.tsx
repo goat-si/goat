@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, FileDiffIcon } from "lucide-react";
+import { ArrowLeftIcon, FileDiffIcon } from "~/components/solar";
 import type { ComponentProps, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

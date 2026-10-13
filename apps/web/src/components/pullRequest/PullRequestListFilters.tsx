@@ -13,13 +13,13 @@ import {
   CircleSlashIcon,
   CircleXIcon,
   EyeOffIcon,
-  FolderGit2Icon,
+  FolderGitIcon as FolderGit2Icon,
   LayersIcon,
   ListFilterIcon,
   SearchIcon,
   TagIcon,
   UserRoundIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { type ElementType, useState } from "react";
 
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";

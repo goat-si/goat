@@ -1,4 +1,4 @@
-import { RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon } from "~/components/solar";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "~/lib/utils";

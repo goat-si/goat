@@ -1,4 +1,4 @@
-import { FolderClosedIcon } from "lucide-react";
+import { FolderClosedIcon } from "~/components/solar";
 import { FileExplorerIcon, FinderIcon } from "../Icons";
 import { resolveOpenInOptions } from "./OpenInPicker";
 import { EnvironmentId } from "@goat/contracts";

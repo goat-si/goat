@@ -6,7 +6,7 @@ import type {
   PullRequestMergeMethod,
 } from "@goat/contracts";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
+import { RefreshCwIcon, TriangleAlertIcon } from "~/components/solar";
 import { useState } from "react";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";

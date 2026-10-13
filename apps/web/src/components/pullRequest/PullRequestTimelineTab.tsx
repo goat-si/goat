@@ -10,10 +10,10 @@ import type {
 import {
   ChevronDownIcon,
   ExternalLinkIcon,
-  FileCode2Icon,
-  GitCommitHorizontalIcon,
+  FileCodeIcon as FileCode2Icon,
+  GitCommitIcon as GitCommitHorizontalIcon,
   MessageSquareIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

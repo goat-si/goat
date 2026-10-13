@@ -13,7 +13,7 @@ import {
   THREAD_DETAILS_PANEL_META_ACTION_CLASS,
   THREAD_DETAILS_PANEL_CHEVRON_CLASS,
 } from "./threadDetailsPanelStyles";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "~/components/solar";
 
 const parts = {
   row: THREAD_DETAILS_PANEL_ROW_CLASS,

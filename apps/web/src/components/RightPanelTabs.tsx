@@ -26,17 +26,17 @@ import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dn
 import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  Smartphone,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  FileDiff,
-  Files,
-  Globe2,
-  Plus,
-  TerminalSquare,
-} from "lucide-react";
-import { Volume2, VolumeOff } from "lucide";
+  SmartphoneIcon as Smartphone,
+  ChevronDownIcon as ChevronDown,
+  ChevronLeftIcon as ChevronLeft,
+  ChevronRightIcon as ChevronRight,
+  FileDiffIcon as FileDiff,
+  FilesIcon as Files,
+  GlobeIcon as Globe2,
+  PlusIcon as Plus,
+  TerminalIcon as TerminalSquare,
+} from "~/components/solar";
+import { Volume as Volume2, VolumeOff } from "~/components/solar/nodes";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,

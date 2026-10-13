@@ -1,5 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon } from "~/components/solar";
 
 import {
   getDesktopUpdateReleaseHistoryUrl,

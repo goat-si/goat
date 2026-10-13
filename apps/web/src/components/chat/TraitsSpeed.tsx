@@ -1,6 +1,6 @@
 import type { ProviderDriverKind, ProviderOptionDescriptor } from "@goat/contracts";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
-import { ZapIcon } from "lucide-react";
+import { ZapIcon } from "~/components/solar";
 import { UltrafastIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";

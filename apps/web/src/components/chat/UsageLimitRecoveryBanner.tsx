@@ -3,7 +3,7 @@ import {
   type OrchestrationV2LimitRecoveryUpdate,
   type RunId,
 } from "@goat/contracts";
-import { GaugeIcon } from "lucide-react";
+import { GaugeIcon } from "~/components/solar";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";

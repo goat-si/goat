@@ -6,9 +6,9 @@ import {
   PenLineIcon,
   PlusIcon,
   SunIcon,
-  Trash2Icon,
+  TrashIcon as Trash2Icon,
   UploadIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useEnvironmentThemeDefinitions } from "../../hooks/useEnvironmentTheme";
 import { readThemeHalvesRaw } from "../../hooks/useTheme";

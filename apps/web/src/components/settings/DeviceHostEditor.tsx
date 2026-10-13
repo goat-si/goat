@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as Option from "effect/Option";
 import type { SshDeviceHostConfig } from "@goat/contracts";
-import { CheckIcon, MonitorIcon, XIcon } from "lucide-react";
+import { CheckIcon, MonitorIcon, XIcon } from "~/components/solar";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";

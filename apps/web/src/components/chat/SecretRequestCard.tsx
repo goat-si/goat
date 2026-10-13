@@ -11,7 +11,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
-import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
+import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "~/components/solar";
 import { useId, useRef, useState, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";

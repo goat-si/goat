@@ -2,7 +2,7 @@ import {
   codexFeedbackNotice,
   type CodexFeedbackSubmission,
 } from "@goat/client-runtime/state/threads";
-import { MessageSquareIcon } from "lucide-react";
+import { MessageSquareIcon } from "~/components/solar";
 
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { Button } from "../ui/button";

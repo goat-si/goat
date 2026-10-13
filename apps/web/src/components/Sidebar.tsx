@@ -81,9 +81,9 @@ import {
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
-  Undo2Icon,
+  UndoIcon as Undo2Icon,
   XIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import {
   Fragment,
   memo,

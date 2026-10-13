@@ -11,7 +11,7 @@ import type {
   ServerProvider,
 } from "@goat/contracts";
 import { lazy, Suspense, useRef, useState } from "react";
-import { CopyIcon } from "lucide-react";
+import { CopyIcon } from "~/components/solar";
 
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { ensureLocalApi } from "../../localApi";

@@ -15,7 +15,7 @@ import type {
 import { codexAuthHandoffUrl } from "@goat/shared/codexAuthHandoff";
 import { providerAuthReturnUrl } from "@goat/shared/providerAuthReturnUrl";
 import { isLoopbackHost } from "@goat/shared/preview";
-import { CheckIcon, ChevronRightIcon, ExternalLinkIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, ExternalLinkIcon } from "~/components/solar";
 import { Children, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { ensureLocalApi } from "../../localApi";

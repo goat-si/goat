@@ -4,7 +4,7 @@ import {
   type AssistantCitation,
   type ScopedThreadRef,
 } from "@goat/contracts";
-import { QuoteIcon } from "lucide-react";
+import { QuoteIcon } from "~/components/solar";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {

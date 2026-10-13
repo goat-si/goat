@@ -7,7 +7,7 @@ import {
   formatContextWindowCost,
   formatContextWindowRemainingPercentage,
 } from "./ContextWindowMeter.logic";
-import { Minimize2Icon } from "lucide-react";
+import { MinimizeIcon as Minimize2Icon } from "~/components/solar";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
 function formatPercentage(value: number | null): string | null {

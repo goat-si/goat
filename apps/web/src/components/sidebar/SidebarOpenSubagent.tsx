@@ -1,7 +1,7 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@goat/contracts";
-import { BotIcon, SquareIcon } from "lucide-react";
+import { BotIcon, SquareIcon } from "~/components/solar";
 import { memo, useCallback } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentScope } from "../../state/session";

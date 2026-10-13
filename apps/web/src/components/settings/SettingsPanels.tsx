@@ -3,7 +3,13 @@ import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
-import { ArchiveIcon, ArchiveX, CheckIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveXIcon as ArchiveX,
+  CheckIcon,
+  ChevronRightIcon,
+  SettingsIcon,
+} from "~/components/solar";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -3405,6 +3411,25 @@ export function GeneralSettingsPanel() {
             {IS_NIGHTLY_BUILD && HAS_MOBILE_BETA_LINK ? <NightlyMobileBetaRow /> : null}
           </>
         )}
+        <SettingsRow
+          {...searchableSetting("icon-credits")}
+          description="Icons: Solar by 480 Design, CC BY 4.0."
+          control={
+            <Button
+              render={
+                <a
+                  href="https://creativecommons.org/licenses/by/4.0/"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                />
+              }
+              size="sm"
+              variant="outline"
+            >
+              View license
+            </Button>
+          }
+        />
         <SettingsRow
           {...searchableSetting("privacy-policy")}
           description="How we handle your data, including the anonymous usage data GOAT collects."

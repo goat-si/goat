@@ -8,7 +8,7 @@ import {
   QrCodeIcon,
   RouteIcon,
   TerminalIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {

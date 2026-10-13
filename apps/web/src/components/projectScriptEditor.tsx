@@ -18,7 +18,7 @@ import {
   ListChecksIcon,
   PlayIcon,
   WrenchIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import React, {
   type FormEvent,
   type KeyboardEvent,

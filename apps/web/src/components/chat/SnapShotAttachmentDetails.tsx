@@ -1,5 +1,5 @@
 import type { SnapShotSource } from "@goat/contracts";
-import { ImageIcon, TextIcon } from "lucide-react";
+import { ImageIcon, TextIcon } from "~/components/solar";
 import { Suspense } from "react";
 
 import { useTheme } from "../../hooks/useTheme";

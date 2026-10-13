@@ -1,5 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon } from "~/components/solar";
 import { type ReactNode, useState } from "react";
 
 import { cn } from "~/lib/utils";

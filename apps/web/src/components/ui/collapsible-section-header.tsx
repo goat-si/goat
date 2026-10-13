@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "~/components/solar";
 import { cn } from "../../lib/utils";
 
 const tones = {

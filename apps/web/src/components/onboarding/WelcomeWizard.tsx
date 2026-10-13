@@ -31,7 +31,7 @@ import {
   LinkIcon,
   MonitorIcon,
   TerminalIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";

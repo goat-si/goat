@@ -1,7 +1,11 @@
 "use client";
 
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@goat/contracts";
-import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
+import {
+  PanelRightIcon,
+  PictureInPictureIcon as PictureInPicture2,
+  XIcon,
+} from "~/components/solar";
 import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,

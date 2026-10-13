@@ -1,5 +1,5 @@
 import type { GoatBotDelivery, GoatBotRow } from "@goat/client-runtime/goatBot";
-import { CircleAlertIcon, MessageCircleQuestionIcon } from "lucide-react";
+import { CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
 import {
   Fragment,
   type UIEvent,

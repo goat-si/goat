@@ -6,8 +6,13 @@ import {
   summarizeTurnDiffStats,
   type TurnDiffTreeNode,
 } from "../../lib/turnDiffTree";
-import { ChevronRightIcon, FileDiffIcon } from "lucide-react";
-import { ChevronsDownUp, ChevronsUpDown, Folder, FolderClosed } from "lucide";
+import { ChevronRightIcon, FileDiffIcon } from "~/components/solar";
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  FolderOpen as Folder,
+  Folder as FolderClosed,
+} from "~/components/solar/nodes";
 import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { PierreEntryIcon } from "./PierreEntryIcon";

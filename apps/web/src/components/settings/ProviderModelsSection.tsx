@@ -1,6 +1,13 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  PencilIcon,
+  PlusIcon,
+  StarIcon,
+  XIcon,
+} from "~/components/solar";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ProviderDriverKind,

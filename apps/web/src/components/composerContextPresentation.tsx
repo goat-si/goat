@@ -3,7 +3,7 @@ import { ReadOnlySourcePreview } from "./files/AttachmentFilePreview";
 import type { PreviewAnnotationPayload, ThreadContextRecord } from "@goat/contracts";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import { videoMimeType } from "@goat/shared/video";
-import { MessageCircleIcon, MousePointerClickIcon } from "lucide-react";
+import { MessageCircleIcon, MousePointerClickIcon } from "~/components/solar";
 import { createContext, type MouseEvent, type ReactElement, type ReactNode, use } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 

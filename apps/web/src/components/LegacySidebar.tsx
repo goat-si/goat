@@ -6,11 +6,11 @@ import {
   ArrowUpDownIcon,
   ChevronRightIcon,
   FolderPlusIcon,
-  Globe2Icon,
+  GlobeIcon as Globe2Icon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import {
   ChangeRequestStatusIcon,
   prStatusIndicator,

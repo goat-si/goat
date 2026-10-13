@@ -1,4 +1,4 @@
-import { MessageSquareDashedIcon, PlusIcon } from "lucide-react";
+import { MessageSquareDashedIcon, PlusIcon } from "~/components/solar";
 import { useCallback } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";

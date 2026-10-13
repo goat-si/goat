@@ -42,10 +42,15 @@ import {
   SparklesIcon,
   TriangleAlertIcon,
   WorkflowIcon,
-  WrapTextIcon,
-  type LucideIcon,
-} from "lucide-react";
-import { Check, Copy, Maximize2, Minimize2 } from "lucide";
+  TextWrapIcon as WrapTextIcon,
+  type IconComponent,
+} from "~/components/solar";
+import {
+  Check,
+  Copy,
+  Maximize as Maximize2,
+  Minimize as Minimize2,
+} from "~/components/solar/nodes";
 import {
   AuthPreviewOperateScope,
   type AssetResource,
@@ -303,7 +308,7 @@ const ARTIFACT_TEMPLATE_ICON_BY_KIND = {
   image: ImageIcon,
   email: MailIcon,
   slack: MessageSquareIcon,
-} satisfies Record<CodexArtifactTemplateKind, LucideIcon>;
+} satisfies Record<CodexArtifactTemplateKind, IconComponent>;
 
 function CodexArtifactTemplateCard(props: {
   readonly template: CodexArtifactTemplate;

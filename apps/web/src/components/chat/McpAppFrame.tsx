@@ -18,7 +18,7 @@ import {
   mcpAppFileName,
   type McpAppReference,
 } from "@goat/shared/mcpApp";
-import { Minimize2Icon } from "lucide-react";
+import { MinimizeIcon as Minimize2Icon } from "~/components/solar";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 

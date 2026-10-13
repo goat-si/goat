@@ -5,7 +5,7 @@ import type {
   PullRequestReactionContent,
   PullRequestRef,
 } from "@goat/contracts";
-import { SmilePlusIcon } from "lucide-react";
+import { SmilePlusIcon } from "~/components/solar";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";

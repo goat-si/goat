@@ -1,5 +1,5 @@
 import type { DevicePlatformAvailability } from "@goat/contracts";
-import { Check, Minus } from "lucide-react";
+import { CheckIcon as Check, MinusIcon as Minus } from "~/components/solar";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 
 export function DeviceHostAvailability({

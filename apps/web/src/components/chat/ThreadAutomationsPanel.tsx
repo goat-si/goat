@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
+import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "~/components/solar";
 import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,

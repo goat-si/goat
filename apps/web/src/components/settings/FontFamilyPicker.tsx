@@ -1,5 +1,5 @@
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon } from "~/components/solar";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isMonospaceFamily, queryInstalledFontFamilies } from "../../appearanceFonts";
 import {

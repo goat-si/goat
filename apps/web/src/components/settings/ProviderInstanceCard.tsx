@@ -3,18 +3,18 @@
 import { Spinner } from "~/components/ui/spinner";
 
 import {
-  AlertTriangleIcon,
+  TriangleAlertIcon as AlertTriangleIcon,
   CheckIcon,
-  ArrowUpCircleIcon,
+  CircleArrowUpIcon as ArrowUpCircleIcon,
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
   LayersIcon,
   PlusIcon,
-  Trash2Icon,
+  TrashIcon as Trash2Icon,
   XIcon,
-} from "lucide-react";
-import { Lock as LockGlyph, LockOpen } from "lucide";
+} from "~/components/solar";
+import { Lock as LockGlyph, LockOpen } from "~/components/solar/nodes";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";

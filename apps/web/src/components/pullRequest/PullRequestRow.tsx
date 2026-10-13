@@ -1,6 +1,6 @@
 import type { PullRequestAction } from "@goat/contracts";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
-import { SearchIcon } from "lucide-react";
+import { SearchIcon } from "~/components/solar";
 import { PullRequestStackPopover } from "./PullRequestStackPopover";
 import {
   PullRequestSpeedActions,

@@ -1,4 +1,4 @@
-import { DownloadIcon, ExternalLinkIcon } from "lucide-react";
+import { DownloadIcon, ExternalLinkIcon } from "~/components/solar";
 
 import { resolveExternalWebLinkHost } from "../chat/externalLinkContextMenu";
 import { Button } from "../ui/button";

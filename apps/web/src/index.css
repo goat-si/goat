@@ -192,6 +192,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --text-4xs--line-height: 1;
   --text-5xs: 0.4375rem;
   --text-5xs--line-height: 1;
+  /* Work-log rows (tool calls, their group summaries, thinking and reasoning): a
+     half step under text-sm so the activity stays quieter than the conversation. */
+  --text-work-log: 0.78125rem;
+  --text-work-log--line-height: 1.625;
   /* Composer footer labels. A container scales them with
      --composer-control-text-scale (the expanded footer uses 0.8). */
   --text-composer-control: calc(var(--text-base) * var(--composer-control-text-scale, 1));

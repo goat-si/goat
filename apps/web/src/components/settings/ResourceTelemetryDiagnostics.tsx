@@ -3,15 +3,15 @@ import { AuthEnvironmentMaintainScope } from "@goat/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   ActivityIcon,
-  AlertTriangleIcon,
+  TriangleAlertIcon as AlertTriangleIcon,
   BatteryIcon,
   CpuIcon,
   DatabaseIcon,
   GaugeIcon,
   HardDriveIcon,
   MemoryStickIcon,
-} from "lucide-react";
-import { ChevronDown, ChevronRight } from "lucide";
+} from "~/components/solar";
+import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import type {
   BackgroundBooleanState,
   EnvironmentId,

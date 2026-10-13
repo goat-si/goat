@@ -1,4 +1,4 @@
-import { CheckIcon } from "lucide-react";
+import { CheckIcon } from "~/components/solar";
 import type { ComponentProps, ReactNode } from "react";
 
 import { cn } from "../../lib/utils";

@@ -11,13 +11,13 @@ import {
   type TerminalSessionState,
 } from "@goat/client-runtime/state/terminal";
 import {
-  Plus,
-  Square,
-  SquareSplitHorizontal,
-  SquareSplitVertical,
-  TerminalSquare,
-  Trash2,
-} from "lucide-react";
+  PlusIcon as Plus,
+  SquareIcon as Square,
+  SquareSplitHorizontalIcon as SquareSplitHorizontal,
+  SquareSplitVerticalIcon as SquareSplitVertical,
+  TerminalIcon as TerminalSquare,
+  TrashIcon as Trash2,
+} from "~/components/solar";
 import {
   AuthPreviewOperateScope,
   AuthOrchestrationOperateScope,

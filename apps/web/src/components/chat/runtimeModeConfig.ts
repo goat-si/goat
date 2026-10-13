@@ -1,15 +1,15 @@
 import type { RuntimeMode } from "@goat/contracts";
 import {
-  type LucideIcon,
+  type IconComponent,
   LockIcon,
   PenLineIcon,
   ShieldAlertIcon,
   SparklesIcon,
-} from "lucide-react";
+} from "~/components/solar";
 
 export const runtimeModeConfig: Record<
   RuntimeMode,
-  { label: string; description: string; icon: LucideIcon }
+  { label: string; description: string; icon: IconComponent }
 > = {
   "approval-required": {
     label: "Supervised",

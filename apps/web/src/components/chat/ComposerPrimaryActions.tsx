@@ -1,6 +1,14 @@
 import { memo, type MouseEventHandler, type PointerEventHandler } from "react";
-import { CheckIcon, ChevronDownIcon, ChevronLeftIcon, Minimize2Icon, PlayIcon } from "lucide-react";
-import { CornerUpRight, ListPlus } from "lucide";
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  MinimizeIcon as Minimize2Icon,
+  PlayIcon,
+  SquareIcon,
+} from "~/components/solar";
+import { CornerUpRight, ListPlus } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
@@ -159,9 +167,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           />
         }
       >
-        <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="8" height="8" rx="1.5" />
-        </svg>
+        <SquareIcon className="size-3 fill-current" aria-hidden="true" />
       </TooltipTrigger>
       <TooltipPopup>Interrupt</TooltipPopup>
     </Tooltip>
@@ -355,15 +361,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       ) : isRunning ? (
         <MorphIcon className="size-3" icon={isQueuing ? ListPlus : CornerUpRight} />
       ) : (
-        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path
-            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <ArrowUpIcon className="size-3.5" aria-hidden="true" />
       )}
     </button>
   );

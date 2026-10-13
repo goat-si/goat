@@ -1,6 +1,6 @@
 import type { GitStatusEntry } from "@pierre/trees";
 import { FileTree, useFileTree, useFileTreeSelector } from "@pierre/trees/react";
-import { ChevronsDownUp, ChevronsUpDown } from "lucide";
+import { ChevronsDownUp, ChevronsUpDown } from "~/components/solar/nodes";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useTheme } from "~/hooks/useTheme";

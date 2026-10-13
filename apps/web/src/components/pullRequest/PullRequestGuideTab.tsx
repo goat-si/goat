@@ -1,5 +1,5 @@
 import type { EnvironmentId, PullRequestRef, PullRequestReviewGuideStop } from "@goat/contracts";
-import { SparklesIcon, TriangleAlertIcon } from "lucide-react";
+import { SparklesIcon, TriangleAlertIcon } from "~/components/solar";
 import { useEffect, useEffectEvent, useMemo } from "react";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";

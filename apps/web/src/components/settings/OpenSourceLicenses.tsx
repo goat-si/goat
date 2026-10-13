@@ -1,4 +1,4 @@
-import { ChevronRightIcon, ExternalLinkIcon, SearchIcon } from "lucide-react";
+import { ChevronRightIcon, ExternalLinkIcon, SearchIcon } from "~/components/solar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {

@@ -16,7 +16,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { CircleArrowUpIcon } from "lucide-react";
+import { CircleArrowUpIcon } from "~/components/solar";
 import { type ComponentProps, useRef, useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";

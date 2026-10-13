@@ -167,7 +167,7 @@ export function ProjectIconPickerDialog({
                       )}
                       onClick={() => setIconName(name)}
                     >
-                      <DynamicIcon name={name} className="size-5" />
+                      <DynamicIcon name={name} className="size-5" strokeWidth={1.5} />
                     </button>
                   ))}
                 </div>

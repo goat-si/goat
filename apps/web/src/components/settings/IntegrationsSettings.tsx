@@ -1,3 +1,4 @@
+import { ScreenRotationIcon } from "~/components/solar";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -42,10 +43,9 @@ import {
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@goat/shared/previewViewport";
-import { MoreVertical, Plus as PlusIcon } from "lucide-react";
+import { MoreVerticalIcon as MoreVertical, PlusIcon } from "~/components/solar";
 import { useCallback, useRef, useState } from "react";
 
-import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { AnimatedHeight } from "~/components/AnimatedHeight";
 import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
@@ -387,7 +387,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
                         updateSettings({ browserDefaultViewport: rotateViewport(sized) })
                       }
                     >
-                      <ScreenRotationIcon />
+                      <ScreenRotationIcon aria-hidden />
                     </Button>
                   }
                 />

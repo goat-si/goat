@@ -10,7 +10,7 @@ import {
   type VcsStatusResult,
 } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
-import { FolderGit2Icon, TerminalIcon } from "lucide-react";
+import { FolderGitIcon as FolderGit2Icon, TerminalIcon } from "~/components/solar";
 import { useCallback, useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";

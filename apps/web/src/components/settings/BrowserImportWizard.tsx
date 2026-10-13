@@ -2,7 +2,7 @@ import { PermissionChecklist, PermissionContinueButton } from "../permissions/Pe
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
 import type { BrowserImportSource } from "@goat/contracts";
 import { BROWSER_IMPORT_FAILURE_COPY } from "@goat/contracts";
-import { ArrowDownIcon, ArrowRightIcon, CheckIcon, HardDriveIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowRightIcon, CheckIcon, HardDriveIcon } from "~/components/solar";
 import { useRef, useState } from "react";
 
 import { cn, randomUUID } from "~/lib/utils";

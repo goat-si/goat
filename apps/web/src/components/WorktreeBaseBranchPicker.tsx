@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@goat/contracts";
-import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
+import { ChevronDownIcon, GitBranchIcon } from "~/components/solar";
 import { useDeferredValue, useMemo, useState } from "react";
 
 import { usePaginatedBranches } from "../state/queries";

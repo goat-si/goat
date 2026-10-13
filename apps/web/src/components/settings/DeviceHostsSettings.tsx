@@ -11,7 +11,7 @@ import { deviceEnvironment, useDeviceState } from "../../state/device";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
-import { MoreVertical, PlusIcon } from "lucide-react";
+import { MoreVerticalIcon as MoreVertical, PlusIcon } from "~/components/solar";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { SettingsRow } from "./settingsLayout";
 

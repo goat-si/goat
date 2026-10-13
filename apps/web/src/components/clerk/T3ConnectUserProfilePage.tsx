@@ -5,7 +5,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId } from "@goat/contracts";
 import type { RelayClientEnvironmentRecord } from "@goat/contracts/relay";
-import { ServerIcon } from "lucide-react";
+import { ServerIcon } from "~/components/solar";
 import { useRef, useState } from "react";
 
 import {

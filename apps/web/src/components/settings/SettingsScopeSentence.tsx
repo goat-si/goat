@@ -1,6 +1,6 @@
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import { useLocation } from "@tanstack/react-router";
-import { ChevronDownIcon, LayersIcon } from "lucide-react";
+import { ChevronDownIcon, LayersIcon } from "~/components/solar";
 import type { ReactNode } from "react";
 
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";

@@ -317,7 +317,7 @@ import { resolveChatShortcutCommand, shortcutLabelForCommand } from "../keybindi
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
-  CheckCircle2Icon,
+  CircleCheckIcon as CheckCircle2Icon,
   MessageCircleIcon,
   PaperclipIcon,
   ChevronDownIcon,
@@ -325,7 +325,7 @@ import {
   GitBranchIcon,
   TargetIcon,
   WifiOffIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { cn, randomUUID } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";

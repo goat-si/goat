@@ -1,4 +1,4 @@
-import { ExternalLinkIcon, PaperclipIcon } from "lucide-react";
+import { ExternalLinkIcon, PaperclipIcon } from "~/components/solar";
 import { markdownImageSourceFragment } from "@goat/client-runtime/markdown-images";
 import { githubMediaFetchUrl } from "@goat/shared/githubMedia";
 import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@goat/contracts";

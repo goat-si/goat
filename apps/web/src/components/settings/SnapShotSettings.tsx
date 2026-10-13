@@ -7,7 +7,7 @@ import {
   type DesktopSnapShotSetupAction,
   type SnapShotShortcut,
 } from "@goat/contracts";
-import { PlayIcon } from "lucide-react";
+import { PlayIcon } from "~/components/solar";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";

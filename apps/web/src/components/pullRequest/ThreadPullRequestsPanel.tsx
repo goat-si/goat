@@ -12,9 +12,9 @@ import {
   EyeIcon,
   EyeOffIcon,
   LinkIcon,
-  MoreHorizontalIcon,
+  EllipsisIcon as MoreHorizontalIcon,
   PlusIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useCallback, useMemo, useState } from "react";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";

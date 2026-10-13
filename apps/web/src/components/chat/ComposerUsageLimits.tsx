@@ -1,6 +1,6 @@
 import type { EnvironmentId, UsageLimitsReport } from "@goat/contracts";
 import { limitsNotice } from "@goat/shared/usageLimits";
-import { GaugeIcon } from "lucide-react";
+import { GaugeIcon } from "~/components/solar";
 
 import { ensureLocalApi } from "../../localApi";
 import { Button } from "../ui/button";

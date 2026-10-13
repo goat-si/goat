@@ -1,6 +1,6 @@
 import type { DeviceHubAccess } from "@goat/client-runtime/state/deviceHubAccess";
 import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@goat/contracts";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDownIcon as ChevronDown, XIcon as X } from "~/components/solar";
 import { useEffect, useState } from "react";
 
 import { Button } from "~/components/ui/button";

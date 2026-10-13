@@ -1,6 +1,6 @@
 import type { ThreadContextRecord } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
-import { MessagesSquareIcon } from "lucide-react";
+import { MessagesSquareIcon } from "~/components/solar";
 
 import { useThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipLabel } from "./ContextChip";

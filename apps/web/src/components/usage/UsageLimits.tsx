@@ -17,7 +17,7 @@ import {
   paceOf,
   remainingPercent,
 } from "@goat/shared/usageLimits";
-import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
+import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "~/components/solar";
 import { Fragment, type ReactNode, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";

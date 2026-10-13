@@ -1,5 +1,5 @@
 import type { ProviderDriverKind } from "@goat/contracts";
-import { FolderGit2Icon, FolderIcon, GitBranchIcon } from "lucide-react";
+import { FolderGitIcon as FolderGit2Icon, FolderIcon, GitBranchIcon } from "~/components/solar";
 import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { cn } from "~/lib/utils";

@@ -12,7 +12,7 @@ import {
   CircleDotIcon,
   CircleIcon,
   MessageCircleQuestionIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useMemo } from "react";
 
 import { usePrimarySettings } from "~/hooks/useSettings";

@@ -3,7 +3,7 @@ import {
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@goat/shared/projectFavicon";
-import { FolderCodeIcon } from "lucide-react";
+import { FolderWithFilesIcon } from "~/components/solar";
 import type { IconName } from "lucide-react/dynamic";
 import type { ComponentType } from "react";
 import { lazy, Suspense, useState } from "react";
@@ -19,7 +19,7 @@ const DynamicIcon = lazy(() =>
 );
 
 function DynamicProjectIconFallback() {
-  return <FolderCodeIcon className="size-full text-inherit" />;
+  return <FolderWithFilesIcon className="size-full text-inherit" />;
 }
 
 // The slice of a project that decides its icon. Every surface must pass the
@@ -56,7 +56,7 @@ export function ProjectFavicon(input: {
     return (
       <ProjectFaviconFallback
         className={input.className}
-        icon={FolderCodeIcon}
+        icon={FolderWithFilesIcon}
         emoji={project.projectIcon.emoji}
       />
     );
@@ -74,13 +74,14 @@ export function ProjectFavicon(input: {
           <DynamicIcon
             name={project.projectIcon.name as IconName}
             className={cn("size-full", colorClassName)}
+            strokeWidth={1.5}
             fallback={DynamicProjectIconFallback}
           />
         </Suspense>
       </span>
     );
   }
-  const FallbackIcon = input.fallbackIcon ?? FolderCodeIcon;
+  const FallbackIcon = input.fallbackIcon ?? FolderWithFilesIcon;
 
   if (!src || isProjectFaviconFallbackUrl(src)) {
     return (

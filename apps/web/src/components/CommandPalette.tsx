@@ -66,7 +66,7 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
-  FolderGit2Icon,
+  FolderGitIcon as FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
   MessageSquareDashedIcon,
@@ -80,7 +80,7 @@ import {
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { requestThreadFindOpen } from "./chat/threadFindActionBus";
 import {
   useCallback,

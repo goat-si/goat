@@ -27,7 +27,7 @@ it("keeps the row label and one chevron when used as a menu trigger", async () =
     });
     const trigger = container.querySelector("button")!;
     expect(trigger.textContent).toBe("Run on this machine");
-    expect(trigger.querySelectorAll(".lucide-chevron-down")).toHaveLength(1);
+    expect(trigger.querySelectorAll('[data-icon="ChevronDownIcon"]')).toHaveLength(1);
     await act(async () => trigger.click());
     expect(document.querySelector('[role="menuitem"]')?.textContent).toBe("New worktree");
   } finally {

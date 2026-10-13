@@ -60,7 +60,6 @@
     "jose": "catalog:",
     "jsonc-parser": "3.3.1",
     "jszip": "3.10.1",
-    "lucide": "^0.564.0",
     "lucide-react": "^0.564.0",
     "mermaid": "^11.17.2",
     "morphicons": "^1.7.1",
@@ -75,6 +74,7 @@
   "devDependencies": {
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@iconify-json/solar": "^1.2.13",
     "@rolldown/plugin-babel": "^0.2.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/router-plugin": "^1.161.0",

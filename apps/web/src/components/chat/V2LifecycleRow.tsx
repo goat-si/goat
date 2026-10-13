@@ -35,7 +35,7 @@ import {
   MessageSquareIcon,
   MinusIcon,
   XIcon,
-} from "lucide-react";
+} from "~/components/solar";
 
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { getProviderInstanceEntry } from "../../providerInstances";

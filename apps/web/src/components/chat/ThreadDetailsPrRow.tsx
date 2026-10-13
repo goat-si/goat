@@ -26,7 +26,7 @@ import {
   FileDiffIcon,
   GitBranchIcon,
   TriangleAlertIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";

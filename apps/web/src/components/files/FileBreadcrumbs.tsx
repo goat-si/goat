@@ -1,7 +1,7 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { Spinner } from "~/components/ui/spinner";
 import type { EnvironmentId } from "@goat/contracts";
-import { ArrowLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ArrowLeftIcon, ChevronRightIcon } from "~/components/solar";
 import { useEffect, useMemo, useState } from "react";
 
 import { PierreEntryIcon } from "~/components/chat/PierreEntryIcon";

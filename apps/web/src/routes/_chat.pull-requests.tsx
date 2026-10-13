@@ -31,13 +31,13 @@ import {
   ListChecksIcon,
   PenLineIcon,
   UsersIcon,
-  Plug2Icon,
-  Maximize2Icon,
-  Minimize2Icon,
+  PlugIcon as Plug2Icon,
+  MaximizeIcon as Maximize2Icon,
+  MinimizeIcon as Minimize2Icon,
   SearchIcon,
   UserLockIcon,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "~/components/solar";
 import {
   useCallback,
   useEffect,
@@ -211,7 +211,7 @@ export interface PullRequestsSearch extends PullRequestListPreferences {
  * A group reads like the sidebar's shelves: its glyph, its name, how many, then a rule out
  * to the edge. The glyph is the one the involvement filter uses for the same idea.
  */
-const GROUP_ICONS: Record<string, LucideIcon> = {
+const GROUP_ICONS: Record<string, IconComponent> = {
   authored: PenLineIcon,
   reviewRequested: EyeIcon,
   others: UsersIcon,

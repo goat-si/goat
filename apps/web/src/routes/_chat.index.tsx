@@ -2,7 +2,7 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import type { EnvironmentId, ThreadId } from "@goat/contracts";
-import { LinkIcon, PlusIcon } from "lucide-react";
+import { LinkIcon, PlusIcon } from "~/components/solar";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isLocalEnvironmentDisabled } from "../localEnvironment";

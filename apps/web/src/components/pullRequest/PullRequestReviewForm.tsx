@@ -6,7 +6,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
  * repeated here. The popover around it belongs to PullRequestComposer.
  */
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@goat/contracts";
-import { CheckIcon, MessageSquareIcon, XCircleIcon } from "lucide-react";
+import { CheckIcon, MessageSquareIcon, CircleXIcon as XCircleIcon } from "~/components/solar";
 import { useState, type ReactNode, type RefObject } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";

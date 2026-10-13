@@ -10,7 +10,7 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
  * summary as a comment or the reverse.
  */
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@goat/contracts";
-import { MessageSquareIcon, Trash2Icon, XIcon } from "lucide-react";
+import { MessageSquareIcon, TrashIcon as Trash2Icon, XIcon } from "~/components/solar";
 import { useRef, useState } from "react";
 
 import { Button } from "../ui/button";

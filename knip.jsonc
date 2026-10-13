@@ -64,12 +64,17 @@
     "apps/web": {
       // Vitest loads this through the per-file @vitest-environment directive.
       "ignoreDependencies": ["jsdom"],
-      // Worktree setup (scripts/setup-worktree.ts) runs this directly.
-      "entry": ["scripts/warm-dep-cache.ts"],
+      // Worktree setup (scripts/setup-worktree.ts) runs warm-dep-cache directly; maintainers run
+      // generate-solar-icons after adding an icon.
+      "entry": ["scripts/warm-dep-cache.ts", "scripts/generate-solar-icons.ts"],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
-      "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
+      "ignoreIssues": {
+        "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"],
+        // Generated from the solar.<name> references in the icon modules, so nothing in it is unused.
+        "src/components/solar/solar.generated.ts": ["exports", "nsExports"],
+      },
     },
     "apps/mobile": {
       // Expo loads plugins and the fingerprint config by string; Metro embeds the browser entry in the native WebView.

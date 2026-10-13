@@ -1,6 +1,6 @@
 import { ProviderInteractionMode, RuntimeMode } from "@goat/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon } from "lucide-react";
+import { EllipsisIcon } from "~/components/solar";
 import {
   Menu,
   MenuPopup,

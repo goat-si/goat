@@ -24,7 +24,7 @@ import {
   connectionRoutes,
   isLearned,
 } from "@goat/client-runtime/connection";
-import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
+import { GripVerticalIcon, PlusIcon, XIcon } from "~/components/solar";
 import { useState } from "react";
 
 import { requestConfirmDialog } from "~/confirmDialog";

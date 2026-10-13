@@ -3,8 +3,14 @@ import type { EnvironmentId } from "@goat/contracts";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import { readFilePreviewResponse } from "@goat/client-runtime/file-preview";
 import { filePreviewKind, FILE_TEXT_PREVIEW_MAX_BYTES } from "@goat/shared/filePreview";
-import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
-import { Check, Code2, Copy, Eye, Table2 } from "lucide";
+import {
+  ChevronRightIcon,
+  DownloadIcon,
+  TrashIcon as Trash2Icon,
+  TextWrapIcon as WrapTextIcon,
+  XIcon,
+} from "~/components/solar";
+import { Check, Code as Code2, Copy, Eye, Table as Table2 } from "~/components/solar/nodes";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";

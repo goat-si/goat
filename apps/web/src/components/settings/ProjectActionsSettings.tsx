@@ -2,7 +2,7 @@ import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { EnvironmentId } from "@goat/contracts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
-import { PlusIcon } from "lucide-react";
+import { PlusIcon } from "~/components/solar";
 import { useState } from "react";
 import { useGoatProjectFileState } from "../../hooks/useGoatProjectFileScripts";
 import { useEnvironments } from "../../state/environments";

@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { DownloadIcon } from "lucide-react";
+import { DownloadIcon } from "~/components/solar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useEnvironments } from "~/state/environments";

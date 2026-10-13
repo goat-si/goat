@@ -1,4 +1,4 @@
-import { BookmarkIcon, FileIcon, FileTextIcon } from "lucide-react";
+import { BookmarkIcon, FileIcon, FileTextIcon } from "~/components/solar";
 import { memo, useEffect, useRef, useState } from "react";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 

@@ -8,7 +8,7 @@ import {
   CircleCheckIcon,
   MessageCircleQuestionIcon,
   ShieldQuestionIcon,
-} from "lucide-react";
+} from "~/components/solar";
 import { useCallback, useEffect, useRef } from "react";
 
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";

@@ -1,5 +1,5 @@
 import type { PullRequestReviewGuideStop } from "@goat/contracts";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon } from "~/components/solar";
 
 import { cn } from "~/lib/utils";
 

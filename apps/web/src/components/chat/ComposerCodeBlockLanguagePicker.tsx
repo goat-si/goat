@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon } from "~/components/solar";
 import { useMemo, useState } from "react";
 
 import {

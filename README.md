@@ -63,3 +63,5 @@ Then install dependencies with `vp i` and start the server and web app with `vp 
 ## License
 
 MIT. GOAT keeps the original T3 Code copyright notice in [LICENSE](./LICENSE).
+
+Icons: [Solar](https://www.figma.com/community/file/1166831539721848736) by 480 Design, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

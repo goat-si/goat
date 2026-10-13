@@ -1,5 +1,5 @@
 import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
-import { ArrowRightIcon } from "lucide-react";
+import { ArrowRightIcon } from "~/components/solar";
 
 import {
   getDesktopUpdateDownloadedVersion,

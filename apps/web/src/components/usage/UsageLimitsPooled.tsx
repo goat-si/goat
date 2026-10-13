@@ -13,7 +13,11 @@ import {
   type LimitPoolWindow,
   remainingPercent,
 } from "@goat/shared/usageLimits";
-import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
+import {
+  TriangleAlertIcon as AlertTriangleIcon,
+  ExternalLinkIcon,
+  TicketIcon,
+} from "~/components/solar";
 import { Fragment, type ReactNode, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
