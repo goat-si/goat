@@ -158,13 +158,22 @@ jobs:
         if: matrix.task == 'test'
         run: node --test .github/scripts/pr-screenshot-gate.test.cjs
 
+      # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
+      # A leftover goat-test-* sandbox means a test worker died before its file finished.
       - name: Check for leaked temp files
         if: always() && env.GOAT_CI_TMPDIR != ''
         run: |
-          status=0
-          node scripts/test-tmp-guard.ts "$GOAT_CI_TMPDIR" || status=$?
+          dir="$GOAT_CI_TMPDIR"
+          leaked=$({ find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-*'; find "$dir" -mindepth 2 -maxdepth 2 -path "$dir/goat-test-*/goat-*"; } | sed "s#^$dir/##" | sort)
           rm -rf "$GOAT_CI_TMPDIR"
-          exit "$status"
+          if [ -z "$leaked" ]; then
+            echo "No goat-* temp entries left in $dir."
+            exit 0
+          fi
+          echo "This job left $(printf '%s\n' "$leaked" | wc -l) goat-* temp entries in $dir:" >&2
+          printf '%s\n' "$leaked" | sed -E 's#^.*/##; s/[A-Za-z0-9]{6}$/*/' | sort | uniq -c | sort -rn >&2
+          printf '  %s\n' $leaked >&2
+          exit 1
 
       - name: Build desktop pipeline
         if: matrix.task == 'build'
