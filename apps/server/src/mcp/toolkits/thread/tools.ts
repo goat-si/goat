@@ -1,8 +1,6 @@
 import {
   ScheduledTaskId,
   ScheduledTask,
-  OrchestrationSearchThreadsInput,
-  OrchestrationSearchThreadsResult,
   OrchestrationV2ThreadForkSourcePoint,
   OrchestrationV2ContextTransfer,
   TrimmedNonEmptyString,
@@ -17,11 +15,12 @@ import {
   OrchestratorMcpPendingRequestReadResult,
   OrchestratorMcpPendingRequestRespondInput,
   OrchestratorMcpPendingRequestRespondResult,
+  OrchestratorMcpThreadSearchInput,
+  OrchestratorMcpThreadSearchResult,
   OrchestrationV2DispatchCommandResult,
   ThreadId,
   RunId,
   NonNegativeInt,
-  ProjectId,
   ThreadResult,
   ThreadResultReport,
 } from "@goat/contracts";
@@ -29,12 +28,12 @@ import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
-import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
 
 const ThreadOrganizeTool = Tool.make("goat_thread_organize", {
   description:
@@ -241,13 +240,10 @@ const ThreadTransfersTool = Tool.make("goat_thread_transfers", {
 const ThreadSearchTool = Tool.make("goat_thread_search", {
   ...commandTool,
   description:
-    "Search active thread titles and content with the app's existing bounded search. Matches are limited to one project (projectId, else the calling thread's project) out of the global top matches, so this may return fewer than limit. A caller outside a GOAT thread that omits projectId searches every project. No pagination or exhaustive-result guarantee.",
-  parameters: Schema.Struct({
-    ...OrchestrationSearchThreadsInput.fields,
-    projectId: Schema.optional(ProjectId),
-  }),
-  success: OrchestrationSearchThreadsResult,
-  dependencies: [...commandTool.dependencies, ThreadSearch.ThreadSearch],
+    "Find threads whose title or finished user/assistant messages contain query (case-insensitive substring). Each match is one thread, newest first, with host, title, project, status, updatedAt and a snippet; source says whether a user message, assistant message, or only the title matched. Searches one project (projectId, else the calling thread's project) unless allProjects; a caller outside a GOAT thread searches every project. Filter by statuses, updatedAfter/updatedBefore, and includeArchived. With host, searches that machine (every project there unless projectId names one of its projects). hosts searches those SSH hosts, and allHosts this environment plus every SSH host it is connected to; matches are merged newest first, and hosts that cannot be searched are listed in unavailableHosts without failing the call and left out of later pages. Page with nextCursor, passing the same arguments. Each environment considers its newest 1000 matching threads; truncated says one had more, so narrow the filters. Read a match with goat_thread_read, passing its host and threadId.",
+  parameters: OrchestratorMcpThreadSearchInput,
+  success: OrchestratorMcpThreadSearchResult,
+  dependencies: [...commandTool.dependencies, ThreadSearchMcpService.ThreadSearchMcpService],
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);

@@ -426,6 +426,8 @@ export interface ThreadManagementServiceShape {
     /** Undefined lists every project. */
     readonly projectId: ProjectId | undefined;
     readonly includeSubagents: boolean;
+    /** Also list archived threads; active only when omitted. */
+    readonly includeArchived?: boolean;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
   readonly sendToThread: (
     input: ThreadManagementSendInput,
@@ -853,7 +855,7 @@ const make = Effect.gen(function* () {
     orchestrator
       .getShellSnapshot({
         ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
-        location: "active",
+        ...(input.includeArchived === true ? {} : { location: "active" as const }),
       })
       .pipe(
         Effect.mapError(
@@ -864,7 +866,7 @@ const make = Effect.gen(function* () {
             }),
         ),
         Effect.map((snapshot) =>
-          snapshot.threads
+          [...snapshot.threads, ...(input.includeArchived === true ? snapshot.archivedThreads : [])]
             .filter(
               (thread) =>
                 // Side chats belong to the user's view of their parent, like subagents.

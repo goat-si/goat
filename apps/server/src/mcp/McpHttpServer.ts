@@ -49,6 +49,7 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
+import * as ThreadSearchMcpService from "./ThreadSearchMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -918,6 +919,7 @@ export const layerOrchestratorToolkit = toolkitRegistration(
 );
 
 export const layerThreadToolkit = toolkitRegistration(ThreadToolkit, ThreadHandlers.layer).pipe(
+  Layer.provide(ThreadSearchMcpService.layer),
   Layer.provide(PendingQuestionsMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),

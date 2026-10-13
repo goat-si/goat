@@ -36,6 +36,7 @@ import {
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
+import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2RuntimeRequest,
@@ -504,6 +505,77 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
+
+export const OrchestratorMcpThreadSearchInput = Schema.Struct({
+  query: OrchestrationSearchThreadsInput.fields.query,
+  limit: OrchestrationSearchThreadsInput.fields.limit,
+  projectId: Schema.optional(
+    ProjectId.annotate({
+      description:
+        "Project to search. Omit for the calling thread's project; a caller outside a GOAT thread, or a call with host, searches every project. Not allowed with hosts or allHosts, since project ids belong to one environment.",
+    }),
+  ),
+  allProjects: Schema.optional(Schema.Boolean).annotate({
+    description: "Search every project instead of one; projectId must be omitted.",
+  }),
+  host: Schema.optional(OrchestratorMcpHost),
+  hosts: Schema.optional(Schema.Array(OrchestratorMcpHost).check(Schema.isMaxLength(16))).annotate({
+    description:
+      "Search these SSH hosts (every project on each) and merge the matches newest first. Hosts that cannot be searched are listed in unavailableHosts instead of failing the call. Combine with allHosts to add hosts it would not include.",
+  }),
+  allHosts: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Search this environment and every SSH host it is connected to (hosts it launched or called threads on since it started), plus any in hosts.",
+  }),
+  statuses: Schema.optional(
+    Schema.Array(OrchestratorMcpThreadStatus).check(Schema.isMaxLength(10)),
+  ),
+  updatedAfter: Schema.optional(
+    IsoDateTime.annotate({ description: "Only threads updated at or after this ISO time." }),
+  ),
+  updatedBefore: Schema.optional(
+    IsoDateTime.annotate({ description: "Only threads updated before this ISO time." }),
+  ),
+  includeArchived: Schema.optional(Schema.Boolean),
+  cursor: Schema.optional(
+    // Fits a fan-out cursor naming 16 hosts with the longest aliases.
+    TrimmedNonEmptyString.check(Schema.isMaxLength(16_384)).annotate({
+      description: "nextCursor from the previous page of the same search.",
+    }),
+  ),
+});
+export type OrchestratorMcpThreadSearchInput = typeof OrchestratorMcpThreadSearchInput.Type;
+
+export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
+  host: OrchestratorMcpResultHost,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  projectTitle: Schema.String,
+  title: Schema.String,
+  status: OrchestratorMcpThreadStatus,
+  updatedAt: IsoDateTime,
+  archived: Schema.Boolean,
+  /** Where the query matched: a finished user or assistant message, else the title. */
+  source: Schema.Literals(["user", "assistant", "title"]),
+  snippet: Schema.String.check(Schema.isMaxLength(240)),
+  /** The matched message's time; null for a title match. */
+  messageCreatedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
+
+export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
+  nextCursor: Schema.NullOr(Schema.String),
+  /** Whether an environment had more matching threads than one search scans. */
+  truncated: Schema.Boolean,
+  /** For hosts and allHosts: hosts that could not be searched, with why. */
+  unavailableHosts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ host: Schema.String, code: Schema.String, message: Schema.String }),
+    ),
+  ),
+});
+export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
   threadId: ThreadId,

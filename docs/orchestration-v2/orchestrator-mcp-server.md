@@ -460,6 +460,26 @@ given, else the calling thread's project. Callers can filter by title, run
 status, and whether app-owned sub-agent threads are included. Results are
 bounded and offset-paginated. Deleted threads are never listed.
 
+### `goat_thread_search`
+
+Finds threads whose title or finished user or assistant messages contain a
+keyword, one match per thread, newest first. It is read-only. With `host`,
+`hosts`, or `allHosts` it reaches other machines and so needs the same caller
+as `goat_thread_list` with a host. Calls without those fields and their
+existing result fields keep working.
+
+Each environment searches only itself: a host is asked for its own
+`goat_thread_search` and pages by offset. A fan-out merges every
+environment's next page and keeps one offset per environment in an opaque
+cursor, so pages stay exact without a shared index. A host that fails is
+reported in `unavailableHosts` and left out of later pages, which keeps
+them newest first and lets the search end. A host running
+an older GOAT refuses the new arguments, and the error says to update it.
+Each environment considers at most its newest 1000 matching threads per call,
+and only a window of each matched message leaves SQLite, which keeps responses
+small on the shared connection. `truncated` reports a cut, so callers narrow
+the filters.
+
 ### `goat_thread_read`
 
 Reads the durable state, recent runs, and visible timeline of any thread in

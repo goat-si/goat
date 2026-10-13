@@ -477,7 +477,7 @@ it.effect("refuses an undeclared argument before the tool runs", () =>
       _tag: "OrchestratorMcpFailure",
       code: "invalid_request",
       message:
-        "goat_thread_search does not take hostId, so nothing ran. It takes query, limit, projectId.",
+        "goat_thread_search does not take hostId, so nothing ran. It takes query, limit, projectId, allProjects, host, hosts, allHosts, statuses, updatedAfter, updatedBefore, includeArchived, cursor.",
     });
     const definition = server.tools.find(({ tool }) => tool.name === "goat_thread_search");
     expect(definition?.tool.inputSchema.additionalProperties).toBe(false);

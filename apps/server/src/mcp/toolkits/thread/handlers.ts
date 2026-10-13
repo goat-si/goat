@@ -12,14 +12,8 @@ import { modelSelectionCommandType } from "@goat/shared/model";
 import * as PendingQuestionsMcpService from "../../PendingQuestionsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import {
-  dispatchFailure,
-  newCommandId,
-  readCaller,
-  readThread,
-  unavailable,
-} from "../../threadAccess.ts";
-import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
+import { dispatchFailure, newCommandId, readThread, unavailable } from "../../threadAccess.ts";
+import * as ThreadSearchMcpService from "../../ThreadSearchMcpService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
@@ -97,22 +91,15 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       };
     }),
   ),
-  goat_thread_search: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const { caller } = yield* readCaller();
-      const { projectId: requested, ...query } = input;
-      // Like the other project tools, an omitted project means the caller's own; a client
-      // outside a thread searches every project.
-      const projectId = requested ?? caller?.projectId;
-      const threadSearch = yield* ThreadSearch.ThreadSearch;
-      const result = yield* threadSearch.search(query).pipe(Effect.mapError(unavailable));
-      return {
-        matches:
-          projectId === undefined
-            ? result.matches
-            : result.matches.filter((match) => match.projectId === projectId),
-      };
-    }),
+  // Reaching another machine uses this machine's SSH keys, as goat_thread_list does.
+  goat_thread_search: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined || input.hosts !== undefined || input.allHosts === true,
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const search = yield* ThreadSearchMcpService.ThreadSearchMcpService;
+        return yield* search.search(scope, input);
+      }),
   ),
   goat_thread_fork: writesThread((input) =>
     Effect.gen(function* () {
