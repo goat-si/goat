@@ -35,6 +35,7 @@ import {
 import {
   hasExplicitComposerModelSelection,
   resolveNewDraftStartFromOrigin,
+  resolveNewThreadEnvModeWithLastWork,
   resolveNewThreadModelSelectionOverride,
 } from "../lib/chatThreadActions";
 import { readGoatProjectFile } from "../lib/goatProjectFileDefaults";
@@ -101,6 +102,7 @@ export function useNewThreadHandler() {
         branch?: string | null;
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
+        lastWorkEnvMode?: DraftThreadEnvMode;
         sshDestination?: DraftSshDestination | null;
         startFromOrigin?: boolean;
         replace?: boolean;
@@ -186,13 +188,14 @@ export function useNewThreadHandler() {
         const projectFile = consultProjectFile
           ? await readGoatProjectFile(project.environmentId, project.workspaceRoot)
           : null;
-        return resolveNewThreadEnvMode({
-          projectSettings: resolveProjectSettings(
-            targetServerSettings,
-            project?.id ?? null,
-            project,
-            projectFile,
-          ),
+        const finalProjectSettings = resolveProjectSettings(
+          targetServerSettings,
+          project?.id ?? null,
+          project,
+          projectFile,
+        );
+        const resolvedMode = resolveNewThreadEnvMode({
+          projectSettings: finalProjectSettings,
           workspaceRoot: project?.workspaceRoot ?? null,
           newProjectsRoot: environmentServerConfigs.get(projectRef.environmentId)?.newProjectsRoot,
           projectHasThreads: readThreadShells().some(
@@ -200,6 +203,11 @@ export function useNewThreadHandler() {
               thread.environmentId === projectRef.environmentId &&
               thread.projectId === projectRef.projectId,
           ),
+        });
+        return resolveNewThreadEnvModeWithLastWork({
+          resolvedSource: finalProjectSettings.sources.defaultThreadEnvMode,
+          resolvedMode,
+          lastWorkEnvMode: options?.lastWorkEnvMode,
         });
       };
       const resolveRequestedWorkspaceContext = async (): Promise<NewThreadWorkspaceOptions> => {
@@ -442,8 +450,9 @@ export function useNewThreadHandler() {
           // the caller passed any. Without explicit options the winner's
           // context stands untouched — the winner's navigation is landing,
           // so this is a concurrent winner, not a new request. Writing
-          // this invocation's defaults here instead would clobber the
-          // winner's explicit picks and could pair its worktreePath with a
+          // this invocation's defaults (including a last-work hint) here
+          // instead would clobber the winner's explicit picks and could pair
+          // its worktreePath with a
           // contradictory envMode.
           setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, racedDraft.draftId, {
             threadId: racedDraft.threadId,

@@ -3,7 +3,7 @@ import { composerDraftHasUserContent, useComposerDraftStore } from "~/composerDr
 import { resolveEnvironmentMachineKind, type ScopedProjectRef } from "@goat/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
 import { isScratchProject } from "@goat/client-runtime/state/projects";
-import { FolderPlusIcon } from "~/components/solar";
+import { ChevronDownIcon, FolderPlusIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -310,7 +310,7 @@ export function DraftHeroHeadline({
             // aria-label here would replace the title with an action phrase
             // mid-sentence and baffle screen-reader users.
             <ComboboxTrigger
-              render={<InlineButton tone="picker" />}
+              render={<InlineButton tone="pickerAccent" />}
               data-draft-project-trigger=""
               className="pointer-events-auto max-w-64 align-baseline"
             />
@@ -323,6 +323,7 @@ export function DraftHeroHeadline({
                 ? "No project"
                 : (activeProjectDisplayName ?? "Choose a project")}
           </span>
+          <ChevronDownIcon aria-hidden="true" className="size-5 shrink-0" />
         </TooltipTrigger>
         {activeProjectDisplayName && !isScratchDraft ? (
           <TooltipPopup side="top">{activeProjectDisplayName}</TooltipPopup>

@@ -1,5 +1,7 @@
 import { scopeProjectRef } from "@goat/client-runtime/environment";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId, ModelSelection, ProjectId, ScopedProjectRef } from "@goat/contracts";
+import type { ProjectSettingSource } from "@goat/shared/projectSettings";
 import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
 
 type ComposerModelSelectionState = Pick<
@@ -19,6 +21,7 @@ interface NewThreadHandler {
       branch?: string | null;
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
+      lastWorkEnvMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
     },
     // The opened draft's identity, which most callers have no use for.
@@ -30,6 +33,72 @@ export interface ChatThreadActionContext {
   readonly activeThread: ThreadContextLike | undefined;
   readonly defaultProjectRef: ScopedProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
+}
+
+type LastWorkThread = Pick<
+  EnvironmentThreadShell,
+  | "environmentId"
+  | "projectId"
+  | "archivedAt"
+  | "latestUserAuthoredMessageAt"
+  | "latestUserMessageAt"
+  | "worktreePath"
+>;
+type LastWorkProject = Pick<EnvironmentProject, "environmentId" | "id">;
+
+export function resolveLastWorkTarget(
+  threads: ReadonlyArray<LastWorkThread>,
+  projects: ReadonlyArray<LastWorkProject>,
+): { projectRef: ScopedProjectRef; envMode: DraftThreadEnvMode } | null {
+  const loadedProjects = new Set(
+    projects.map((project) => `${project.environmentId}:${project.id}`),
+  );
+  let latestThread: LastWorkThread | null = null;
+  let latestAt = -Infinity;
+  for (const thread of threads) {
+    if (
+      thread.archivedAt !== null ||
+      !loadedProjects.has(`${thread.environmentId}:${thread.projectId}`)
+    ) {
+      continue;
+    }
+    const authoredAt = thread.latestUserAuthoredMessageAt ?? null;
+    const timestamp =
+      thread.latestUserAuthoredMessageAt === undefined ? thread.latestUserMessageAt : authoredAt;
+    if (timestamp === null) continue;
+    const at = Date.parse(timestamp);
+    if (at > latestAt) {
+      latestThread = thread;
+      latestAt = at;
+    }
+  }
+  return latestThread === null
+    ? null
+    : {
+        projectRef: scopeProjectRef(latestThread.environmentId, latestThread.projectId),
+        envMode: latestThread.worktreePath != null ? "worktree" : "local",
+      };
+}
+
+export function resolveNewThreadEnvModeWithLastWork(input: {
+  resolvedSource: ProjectSettingSource;
+  resolvedMode: DraftThreadEnvMode;
+  lastWorkEnvMode: DraftThreadEnvMode | undefined;
+}): DraftThreadEnvMode {
+  return input.lastWorkEnvMode !== undefined && input.resolvedSource === "environment"
+    ? input.lastWorkEnvMode
+    : input.resolvedMode;
+}
+
+export async function startNewThreadFromLastWork(input: {
+  threads: ReadonlyArray<LastWorkThread>;
+  projects: ReadonlyArray<LastWorkProject>;
+  handleNewThread: NewThreadHandler;
+}): Promise<boolean> {
+  const target = resolveLastWorkTarget(input.threads, input.projects);
+  if (target === null) return false;
+  await input.handleNewThread(target.projectRef, { lastWorkEnvMode: target.envMode });
+  return true;
 }
 
 export function resolveNewDraftStartFromOrigin(input: {
