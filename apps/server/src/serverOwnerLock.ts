@@ -56,9 +56,14 @@ class ServerOwnerLockError extends Schema.TaggedError<ServerOwnerLockError>()(
 export const serverOwnerTag = (input: {
   readonly launcherContext: ServiceLauncherContext | undefined;
   readonly mode: string;
+  readonly sshReplacementId?: string | undefined;
 }): string => {
   const context = input.launcherContext;
-  if (context === undefined) return `server:${input.mode}`;
+  if (context === undefined) {
+    return input.sshReplacementId === undefined
+      ? `server:${input.mode}`
+      : sshReplacementOwner(input.sshReplacementId);
+  }
   const update = context.update;
   return update?.status === "pending" && update.targetVersion === context.childVersion
     ? `service-trial:${update.id}`
@@ -69,6 +74,14 @@ export const launcherContextFromEnvironment = (
   raw: string | undefined,
 ): ServiceLauncherContext | undefined =>
   raw === undefined ? undefined : decodeServiceLauncherContext(raw);
+
+/**
+ * The SSH replacement supervisor (`__ssh-helper supervise`) passes its replacement id to the
+ * server it starts, so its rollback can tell that server's writes from another owner's.
+ */
+export const SSH_REPLACEMENT_ID_ENV = "GOAT_SSH_REPLACEMENT_ID";
+export const sshSupervisorOwner = (replacementId: string) => `ssh-supervisor:${replacementId}`;
+export const sshReplacementOwner = (replacementId: string) => `ssh-replacement:${replacementId}`;
 
 /**
  * Takes the lock and keeps it until the caller's scope closes. A service-managed server waits
@@ -88,14 +101,19 @@ export const acquireServerOwnerLock = Effect.fn("server.acquireServerOwnerLock")
   let waitedMs = 0;
   let announced = false;
   while (true) {
-    const lock = yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => tryAcquireServerOwnerLock(input.stateDir, input.owner),
-        catch: (cause) => new ServerOwnerLockError({ stateDir: input.stateDir, cause }),
+    // Only a successful attempt registers a release, so a long wait adds no finalizers.
+    const generation = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const lock = yield* Effect.try({
+          try: () => tryAcquireServerOwnerLock(input.stateDir, input.owner),
+          catch: (cause) => new ServerOwnerLockError({ stateDir: input.stateDir, cause }),
+        });
+        if (lock === undefined) return undefined;
+        yield* Effect.addFinalizer(() => Effect.sync(() => lock.release()));
+        return lock.generation;
       }),
-      (held) => Effect.sync(() => held?.release()),
     );
-    if (lock !== undefined) return lock.generation;
+    if (generation !== undefined) return generation;
 
     if (!input.waitForOwner && waitedMs >= grace) {
       const holder = yield* readPersistedServerRuntimeState(input.serverRuntimeStatePath).pipe(

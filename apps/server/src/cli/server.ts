@@ -12,6 +12,7 @@ import {
   acquireServerOwnerLock,
   launcherContextFromEnvironment,
   serverOwnerTag,
+  SSH_REPLACEMENT_ID_ENV,
 } from "../serverOwnerLock.ts";
 import { runServer } from "../server.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
@@ -30,18 +31,23 @@ const runServerCommand = (
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveServerConfig(flags, logLevel, options);
     const environment = yield* HostProcess.Environment;
-    const rawLauncherContext = environment[SERVICE_LAUNCHER_CONTEXT_ENV];
+    // An invalid context fails later in ServiceLauncherClient; it must not make startup wait.
+    const launcherContext = launcherContextFromEnvironment(
+      environment[SERVICE_LAUNCHER_CONTEXT_ENV],
+    );
+    const sshReplacementId = environment[SSH_REPLACEMENT_ID_ENV]?.trim() || undefined;
     return yield* Effect.scoped(
       Effect.gen(function* () {
         // Held until the server exits, before any layer opens the database.
         yield* acquireServerOwnerLock({
           stateDir: config.stateDir,
           owner: serverOwnerTag({
-            launcherContext: launcherContextFromEnvironment(rawLauncherContext),
+            launcherContext,
             mode: config.mode,
+            sshReplacementId,
           }),
           serverRuntimeStatePath: config.serverRuntimeStatePath,
-          waitForOwner: rawLauncherContext !== undefined,
+          waitForOwner: launcherContext !== undefined,
         });
         return yield* runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
       }),
