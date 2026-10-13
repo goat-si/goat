@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Local build orchestration needs Node version and atomic filesystem publication.
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -119,11 +120,21 @@ export async function buildDevRuntimeArchive(input: {
       "--manifest-path",
       "native/resource-monitor/Cargo.toml",
     ]);
-    const monitorName = platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
-    await NodeFSP.copyFile(
-      NodePath.join(buildRoot, "native/resource-monitor/target/release", monitorName),
-      NodePath.join(monitor, monitorName),
-    );
+    const monitorName =
+      platform === "win32" ? "goat-resource-monitor.exe" : "goat-resource-monitor";
+    const monitorDirectory = NodePath.join(buildRoot, "native/resource-monitor/target/release");
+    let monitorSource = NodePath.join(monitorDirectory, monitorName);
+    try {
+      await NodeFSP.access(monitorSource);
+    } catch (error) {
+      if (!NodeUtil.types.isNativeError(error) || !("code" in error) || error.code !== "ENOENT")
+        throw error;
+      monitorSource = NodePath.join(
+        monitorDirectory,
+        `${LEGACY_RESOURCE_MONITOR_BINARY_NAME}${platform === "win32" ? ".exe" : ""}`,
+      );
+    }
+    await NodeFSP.copyFile(monitorSource, NodePath.join(monitor, monitorName));
     await run(vp, [
       "exec",
       "node",

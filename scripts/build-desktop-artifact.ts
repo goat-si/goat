@@ -3,6 +3,7 @@
 
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
@@ -155,7 +156,7 @@ export function resolveResourceMonitorRustTargets(
 }
 
 export function resourceMonitorExecutableName(platform: typeof BuildPlatform.Type): string {
-  return platform === "win" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win" ? "goat-resource-monitor.exe" : "goat-resource-monitor";
 }
 
 const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
@@ -2458,13 +2459,20 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
       );
     }
 
-    const binaryPath = path.join(
+    let binaryPath = path.join(
       input.repoRoot,
       "native/resource-monitor/target",
       rustTarget,
       "release",
       executableName,
     );
+    const legacyBinaryPath = path.join(
+      path.dirname(binaryPath),
+      `${LEGACY_RESOURCE_MONITOR_BINARY_NAME}${input.platform === "win" ? ".exe" : ""}`,
+    );
+    if (!(yield* fs.exists(binaryPath)) && (yield* fs.exists(legacyBinaryPath))) {
+      binaryPath = legacyBinaryPath;
+    }
     if (!(yield* fs.exists(binaryPath))) {
       return yield* new ResourceMonitorBuildOutputMissingError({
         binaryPath,
@@ -2529,7 +2537,7 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
         "--arch",
         input.arch === "arm64" ? "arm64" : "x64",
         "--output",
-        path.join(input.stageResourcesDir, "browser-secret", "t3-browser-secret"),
+        path.join(input.stageResourcesDir, "browser-secret", "goat-browser-secret"),
       ],
       { cwd: input.repoRoot },
     ),
@@ -3026,7 +3034,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // FPM runs outside the staged app directory, so source paths must be absolute.
       // AppStream consumers associate this metadata with our t3code.desktop entry.
       fpm: [
-        `${path.join(repoRoot, "apps/desktop/resources/linux/com.t3tools.t3code.metainfo.xml")}=/usr/share/metainfo/com.t3tools.t3code.metainfo.xml`,
+        `${path.join(repoRoot, "apps/desktop/resources/linux/si.goat.desktop.metainfo.xml")}=/usr/share/metainfo/si.goat.desktop.metainfo.xml`,
         `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/t3code/copyright`,
       ],
       // Electron's runtime libraries. Debian 13 and Ubuntu 24.04 renamed some
@@ -3233,7 +3241,7 @@ export const validateSshRuntimeArchives = Effect.fn("validateSshRuntimeArchives"
       const required = [
         `${stem}/goat`,
         `${stem}/client/index.html`,
-        `${stem}/resource-monitor/${key}/t3-resource-monitor`,
+        `${stem}/resource-monitor/${key}/goat-resource-monitor`,
       ];
       const pty = [
         `${stem}/node_modules/node-pty/build/Release/pty.node`,
@@ -3713,7 +3721,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "resource-monitor-missing",
       packagedAppDir,
-      missingFiles: ["resource-monitor/t3-resource-monitor.exe"],
+      missingFiles: ["resource-monitor/goat-resource-monitor.exe"],
     });
   }
 

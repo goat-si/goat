@@ -16,6 +16,7 @@
  */
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
@@ -45,6 +46,34 @@ import {
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { neutralizeBuildRoot } from "./lib/sea-build-path.ts";
+
+/** Copies cached helper outputs while emitting only the current binary name. */
+export const stageCliResourceMonitor = Effect.fn("stageCliResourceMonitor")(function* (
+  sourceDir: string,
+  destinationDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.copy(sourceDir, destinationDir);
+  for (const entry of yield* fs.readDirectory(destinationDir, { recursive: true })) {
+    const name = path.basename(entry);
+    if (
+      name !== LEGACY_RESOURCE_MONITOR_BINARY_NAME &&
+      name !== `${LEGACY_RESOURCE_MONITOR_BINARY_NAME}.exe`
+    )
+      continue;
+    const legacyPath = path.join(destinationDir, entry);
+    const currentPath = path.join(
+      path.dirname(legacyPath),
+      `goat-resource-monitor${name.endsWith(".exe") ? ".exe" : ""}`,
+    );
+    if (yield* fs.exists(currentPath)) {
+      yield* fs.remove(legacyPath);
+    } else {
+      yield* fs.rename(legacyPath, currentPath);
+    }
+  }
+});
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64"]);
@@ -348,7 +377,7 @@ export const signMacArchiveContents = Effect.fn("signMacArchiveContents")(functi
         entry.endsWith(".node") ||
         entry.endsWith(".dylib") ||
         entry.endsWith("spawn-helper") ||
-        entry.endsWith("t3-resource-monitor"),
+        entry.endsWith("goat-resource-monitor"),
     )
     .map((entry) => path.join(input.contentDir, entry));
 
@@ -610,7 +639,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   // Upstream T3 Code's MIT notice travels with every GOAT archive.
   yield* fs.copyFile(path.join(repoRoot, "LICENSE"), path.join(contentDir, "LICENSE-T3CODE.txt"));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
-  yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
+  yield* stageCliResourceMonitor(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
   yield* stageRuntimeExternals({
     repoRoot,
     stageDir: contentDir,

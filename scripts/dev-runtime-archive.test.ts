@@ -1,3 +1,4 @@
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics nodeBuiltinImport:off - This test executes isolated build-tool stand-ins and inspects the published tar.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -30,16 +31,23 @@ if (args.join(' ') === 'exec node -p process.version') {
 }
 if (process.env.FAIL_STEP && (tool === process.env.FAIL_STEP || args.includes(process.env.FAIL_STEP))) process.exit(43);
 if (tool === 'cargo') {
-  const file=path.join(process.cwd(),'native/resource-monitor/target/release/t3-resource-monitor');
-  fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,'monitor');
+  const dir=path.join(process.cwd(),'native/resource-monitor/target/release');
+  fs.mkdirSync(dir,{recursive:true});
+  fs.writeFileSync(path.join(dir, process.env.LEGACY_MONITOR_NAME), 'legacy monitor');
+  if (process.env.FAIL_STEP !== 'legacy-monitor') fs.writeFileSync(path.join(dir,'goat-resource-monitor'),'new monitor');
 }
 if (args.includes('scripts/build-cli-archive.ts')) {
   const value = flag => args[args.indexOf(flag)+1];
   const platform=value('--platform')==='mac'?'darwin':value('--platform');
   const stem='goat-'+value('--version')+'-'+platform+'-'+value('--arch');
   const output=value('--output-dir'); const content=path.join(output,'fixture',stem);
+  const stagedMonitor=path.join(value('--resource-monitor-dir'),platform+'-'+value('--arch'));
+  const monitorEntries=fs.readdirSync(stagedMonitor);
+  if (JSON.stringify(monitorEntries)!==JSON.stringify(['goat-resource-monitor'])) throw new Error('unexpected monitor filenames');
+  const monitorContents=fs.readFileSync(path.join(stagedMonitor,'goat-resource-monitor'),'utf8');
+  if (monitorContents!==(process.env.FAIL_STEP==='legacy-monitor'?'legacy monitor':'new monitor')) throw new Error('wrong monitor selected');
   const entries=['client/index.html','node_modules/node-pty/build/Release/pty.node',
-    'resource-monitor/'+platform+'-'+value('--arch')+'/t3-resource-monitor'];
+    'resource-monitor/'+platform+'-'+value('--arch')+'/goat-resource-monitor'];
   for (const entry of entries) { const file=path.join(content,entry); fs.mkdirSync(path.dirname(file),{recursive:true}); fs.writeFileSync(file,'fixture'); }
   fs.writeFileSync(path.join(content,'goat'),'#!/bin/sh\nprintf \'goat v'+(process.env.WRONG_EXECUTABLE_VERSION || value('--version'))+'\\n\'\n',{mode:0o755});
   if (process.env.BROKEN_EXECUTABLE) fs.chmodSync(path.join(content, 'goat'), 0o644);
@@ -54,6 +62,7 @@ describe("development runtime archive publication", () => {
   });
   it.live.each([
     "success",
+    "legacy-monitor",
     "build",
     "build-exe",
     "cargo",
@@ -102,7 +111,11 @@ describe("development runtime archive publication", () => {
                 return rename(from, to);
               })
             : undefined;
-        const success = mode === "success" || mode === "env-selector" || mode === "current-node";
+        const success =
+          mode === "success" ||
+          mode === "legacy-monitor" ||
+          mode === "env-selector" ||
+          mode === "current-node";
         const selected = "26.8.2";
         let failure: unknown;
         const versionDescriptor = Object.getOwnPropertyDescriptor(process, "version");
@@ -129,6 +142,7 @@ describe("development runtime archive publication", () => {
               TOOL_LOG: NodePath.join(root, "tools.jsonl"),
               VP_NODE_VERSION: mode === "current-node" ? "" : selected,
               FAIL_STEP: mode,
+              LEGACY_MONITOR_NAME: LEGACY_RESOURCE_MONITOR_BINARY_NAME,
               INVALID_ARCHIVE: mode === "invalid-archive" ? "1" : "",
               WRONG_EXECUTABLE_VERSION: mode === "wrong-executable-version" ? "9.9.9" : "",
               BROKEN_EXECUTABLE: mode === "broken-executable" ? "1" : "",

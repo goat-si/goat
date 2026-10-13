@@ -1,3 +1,4 @@
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
@@ -225,7 +226,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
     );
   }
   yield* fs.writeFileString(
-    path.join(resourcesDir, "resource-monitor/t3-resource-monitor.exe"),
+    path.join(resourcesDir, "resource-monitor/goat-resource-monitor.exe"),
     "monitor",
   );
   const appExecutableName = "t3code.exe";
@@ -288,7 +289,7 @@ const stageWindowsSshRuntimeFixture = Effect.fn("test.stageWindowsSshRuntimeFixt
     const archive = yield* makeLinuxCliArchiveFixture({
       root: path.join(root, key),
       stem,
-      extraMembers: [`${stem}/resource-monitor/${key}/t3-resource-monitor`],
+      extraMembers: [`${stem}/resource-monitor/${key}/goat-resource-monitor`],
     });
     yield* fs.copyFile(archive, path.join(source, stem + ".tar.gz"));
   }
@@ -1199,46 +1200,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("stages a cached resource monitor without invoking Cargo", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const repoRoot = yield* fs.makeTempDirectoryScoped({
-          prefix: "goat-resource-monitor-cache-test-",
-        });
-        const binaryPath = path.join(
-          repoRoot,
-          "native/resource-monitor/target/x86_64-unknown-linux-gnu/release/t3-resource-monitor",
-        );
-        const stageResourcesDir = path.join(repoRoot, "stage");
-        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
-        yield* fs.writeFileString(binaryPath, "cached monitor");
+  it.effect.each(["both", "legacy-only"])(
+    "stages a %s cached resource monitor under the new name without invoking Cargo",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const repoRoot = yield* fs.makeTempDirectoryScoped({
+            prefix: "goat-resource-monitor-cache-test-",
+          });
+          const binaryPath = path.join(
+            repoRoot,
+            "native/resource-monitor/target/x86_64-unknown-linux-gnu/release/goat-resource-monitor",
+          );
+          const stageResourcesDir = path.join(repoRoot, "stage");
+          yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+          yield* fs.writeFileString(
+            path.join(path.dirname(binaryPath), LEGACY_RESOURCE_MONITOR_BINARY_NAME),
+            "legacy monitor",
+          );
+          if (mode === "both") yield* fs.writeFileString(binaryPath, "cached monitor");
 
-        yield* stageResourceMonitor({
-          repoRoot,
-          stageResourcesDir,
-          platform: "linux",
-          arch: "x64",
-          verbose: false,
-        }).pipe(
-          Effect.provide(
-            ConfigProvider.layer(
-              ConfigProvider.fromEnv({
-                env: { GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
-              }),
+          yield* stageResourceMonitor({
+            repoRoot,
+            stageResourcesDir,
+            platform: "linux",
+            arch: "x64",
+            verbose: false,
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: { GOAT_DESKTOP_REUSE_RESOURCE_MONITOR: "true" },
+                }),
+              ),
             ),
-          ),
-        );
+          );
 
-        assert.equal(
-          yield* fs.readFileString(
-            path.join(stageResourcesDir, "resource-monitor/t3-resource-monitor"),
-          ),
-          "cached monitor",
-        );
-      }),
-    ),
+          assert.equal(
+            yield* fs.readFileString(
+              path.join(stageResourcesDir, "resource-monitor/goat-resource-monitor"),
+            ),
+            mode === "both" ? "cached monitor" : "legacy monitor",
+          );
+          assert.deepEqual(
+            yield* fs.readDirectory(path.join(stageResourcesDir, "resource-monitor")),
+            ["goat-resource-monitor"],
+          );
+        }),
+      ),
   );
 
   it.effect("reports every missing Linux desktop build prerequisite with an install command", () =>
@@ -1837,7 +1848,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "--arch",
         "x64",
         "--output",
-        path.join("/stage/resources", "browser-secret", "t3-browser-secret"),
+        path.join("/stage/resources", "browser-secret", "goat-browser-secret"),
       ]);
     }).pipe(
       Effect.provide(
@@ -2010,7 +2021,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         yield* fs.writeFileString(nativePath, "native-binary");
         const resourceMonitorPath = path.join(
           fixture.packagedAppDir,
-          "resources/resource-monitor/t3-resource-monitor.exe",
+          "resources/resource-monitor/goat-resource-monitor.exe",
         );
         yield* fs.remove(resourceMonitorPath);
         yield* fs.makeDirectory(resourceMonitorPath);
@@ -2024,7 +2035,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.instanceOf(resourceMonitorError, WindowsPackagedPayloadValidationError);
         assert.equal(resourceMonitorError.reason, "resource-monitor-missing");
         assert.deepStrictEqual(resourceMonitorError.missingFiles, [
-          "resource-monitor/t3-resource-monitor.exe",
+          "resource-monitor/goat-resource-monitor.exe",
         ]);
       }),
     ),
@@ -2475,8 +2486,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("win", "arm64"), [
       "aarch64-pc-windows-msvc",
     ]);
-    assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
-    assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+    assert.equal(resourceMonitorExecutableName("mac"), "goat-resource-monitor");
+    assert.equal(resourceMonitorExecutableName("win"), "goat-resource-monitor.exe");
   });
 
   it("ships the Linux CLI release archive as the WSL runtime", () => {
@@ -2890,7 +2901,7 @@ it.effect.each([
           mode === "missing-monitor"
             ? []
             : [
-                `${stem}/resource-monitor/${key}/t3-resource-monitor`,
+                `${stem}/resource-monitor/${key}/goat-resource-monitor`,
                 ...(mode === "loose-bin" ? [`${stem}/bin.mjs`] : []),
               ],
         omitMembers:
@@ -3074,7 +3085,7 @@ it.effect.each(["mac", "linux", "win"] as const)(
         const archive = yield* makeLinuxCliArchiveFixture({
           root: path.join(root, key),
           stem,
-          extraMembers: [`${stem}/resource-monitor/${key}/t3-resource-monitor`],
+          extraMembers: [`${stem}/resource-monitor/${key}/goat-resource-monitor`],
         });
         yield* fs.makeDirectory(source, { recursive: true });
         yield* fs.copyFile(archive, path.join(source, stem + ".tar.gz"));
@@ -3175,7 +3186,7 @@ it.effect.each(SSH_RUNTIME_PLATFORM_KEYS)(
         const archive = yield* makeLinuxCliArchiveFixture({
           root: path.join(root, key),
           stem,
-          extraMembers: [`${stem}/resource-monitor/${key}/t3-resource-monitor`],
+          extraMembers: [`${stem}/resource-monitor/${key}/goat-resource-monitor`],
         });
         if (key !== missing) yield* fs.copyFile(archive, path.join(source, stem + ".tar.gz"));
       }

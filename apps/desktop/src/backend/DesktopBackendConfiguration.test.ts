@@ -1,3 +1,4 @@
+import { LEGACY_RESOURCE_MONITOR_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { currentDesktopBootstrapToken } from "@goat/shared/desktopBootstrapToken";
@@ -1558,98 +1559,129 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("prefers the external packaged resource monitor over the copy inside the asar", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "goat-desktop-backend-config-test-",
-      });
-      const resourcesPath = path.join(baseDir, "resources");
-      const dirname = `${resourcesPath}/app.asar/apps/desktop/dist-electron`;
-      const embeddedMonitorPath = `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor/t3-resource-monitor`;
-      const monitorPath = path.join(resourcesPath, "resource-monitor/t3-resource-monitor");
-      yield* fileSystem.makeDirectory(
-        `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor`,
-        { recursive: true },
-      );
-      yield* fileSystem.makeDirectory(`${resourcesPath}/resource-monitor`, {
-        recursive: true,
-      });
-      yield* fileSystem.writeFileString(embeddedMonitorPath, "embedded");
-      yield* fileSystem.writeFileString(monitorPath, "binary");
-      yield* fileSystem.chmod(monitorPath, 0o755);
+  it.effect(
+    "prefers the current external packaged resource monitor and falls back to the legacy name",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-desktop-backend-config-test-",
+        });
+        const resourcesPath = path.join(baseDir, "resources");
+        const dirname = `${resourcesPath}/app.asar/apps/desktop/dist-electron`;
+        const embeddedMonitorPath = `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor/goat-resource-monitor`;
+        const monitorPath = path.join(resourcesPath, "resource-monitor/goat-resource-monitor");
+        yield* fileSystem.makeDirectory(
+          `${resourcesPath}/app.asar/apps/desktop/prod-resources/resource-monitor`,
+          { recursive: true },
+        );
+        yield* fileSystem.makeDirectory(`${resourcesPath}/resource-monitor`, {
+          recursive: true,
+        });
+        yield* fileSystem.writeFileString(embeddedMonitorPath, "embedded");
+        yield* fileSystem.writeFileString(monitorPath, "binary");
+        yield* fileSystem.chmod(monitorPath, 0o755);
 
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.resourceMonitorPath, monitorPath);
-        assert.equal(config.bootstrap.desktopTelemetryFd, 4);
-        assert.equal(config.bootstrap.desktopTelemetryControlFd, 5);
-      }).pipe(
-        Effect.provide(
-          DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(layerServerExposure),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                appPath: `${resourcesPath}/app.asar`,
-                dirname,
-                isPackaged: true,
-                resourcesPath,
-              }),
+        const legacyMonitorPath = path.join(
+          resourcesPath,
+          "resource-monitor",
+          LEGACY_RESOURCE_MONITOR_BINARY_NAME,
+        );
+        yield* fileSystem.writeFileString(legacyMonitorPath, "legacy monitor");
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolvePrimary;
+          assert.equal(config.bootstrap.resourceMonitorPath, monitorPath);
+          yield* fileSystem.remove(monitorPath);
+          const legacyConfig = yield* configuration.resolvePrimary;
+          assert.equal(legacyConfig.bootstrap.resourceMonitorPath, legacyMonitorPath);
+          assert.equal(config.bootstrap.desktopTelemetryFd, 4);
+          assert.equal(config.bootstrap.desktopTelemetryControlFd, 5);
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+              Layer.provideMerge(
+                layerEnvironment(baseDir, {
+                  appPath: `${resourcesPath}/app.asar`,
+                  dirname,
+                  isPackaged: true,
+                  resourcesPath,
+                }),
+              ),
             ),
           ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("prefers the release resource monitor when both development builds exist", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "goat-desktop-backend-config-test-",
-      });
-      const dirname = path.join(baseDir, "apps/desktop/src");
-      const releaseMonitorPath = path.join(
-        baseDir,
-        "native/resource-monitor/target/release/t3-resource-monitor",
-      );
-      const debugMonitorPath = path.join(
-        baseDir,
-        "native/resource-monitor/target/debug/t3-resource-monitor",
-      );
-      yield* fileSystem.makeDirectory(path.dirname(releaseMonitorPath), { recursive: true });
-      yield* fileSystem.makeDirectory(path.dirname(debugMonitorPath), { recursive: true });
-      yield* fileSystem.writeFileString(releaseMonitorPath, "release");
-      yield* fileSystem.writeFileString(debugMonitorPath, "debug");
+  it.effect(
+    "prefers current release and debug resource monitors before legacy development builds",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-desktop-backend-config-test-",
+        });
+        const dirname = path.join(baseDir, "apps/desktop/src");
+        const releaseMonitorPath = path.join(
+          baseDir,
+          "native/resource-monitor/target/release/goat-resource-monitor",
+        );
+        const debugMonitorPath = path.join(
+          baseDir,
+          "native/resource-monitor/target/debug/goat-resource-monitor",
+        );
+        yield* fileSystem.makeDirectory(path.dirname(releaseMonitorPath), { recursive: true });
+        yield* fileSystem.makeDirectory(path.dirname(debugMonitorPath), { recursive: true });
+        yield* fileSystem.writeFileString(releaseMonitorPath, "release");
+        yield* fileSystem.writeFileString(debugMonitorPath, "debug");
 
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.resourceMonitorPath, releaseMonitorPath);
-      }).pipe(
-        Effect.provide(
-          DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(layerServerExposure),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                dirname,
-                devServerUrl: "http://127.0.0.1:5733",
-                isPackaged: false,
-              }),
+        const legacyMonitorPath = path.join(
+          baseDir,
+          "native/resource-monitor/target/release",
+          LEGACY_RESOURCE_MONITOR_BINARY_NAME,
+        );
+        yield* fileSystem.writeFileString(legacyMonitorPath, "legacy monitor");
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolvePrimary;
+          assert.equal(config.bootstrap.resourceMonitorPath, releaseMonitorPath);
+          yield* fileSystem.remove(releaseMonitorPath);
+          assert.equal(
+            (yield* configuration.resolvePrimary).bootstrap.resourceMonitorPath,
+            debugMonitorPath,
+          );
+          yield* fileSystem.remove(debugMonitorPath);
+          assert.equal(
+            (yield* configuration.resolvePrimary).bootstrap.resourceMonitorPath,
+            legacyMonitorPath,
+          );
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+              Layer.provideMerge(
+                layerEnvironment(baseDir, {
+                  dirname,
+                  devServerUrl: "http://127.0.0.1:5733",
+                  isPackaged: false,
+                }),
+              ),
             ),
           ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("resolvePrimaryLabel reports the local environment on non-Windows platforms", () =>

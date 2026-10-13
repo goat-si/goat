@@ -154,7 +154,7 @@ jobs:
           pkg-config --exists libsecret-1
           vp run build:desktop
           node apps/desktop/scripts/verify-preload-bundle.mjs
-          for p in apps/desktop/dist-electron apps/server/dist apps/web/dist native/browser-secret/build/x64/t3-browser-secret; do
+          for p in apps/desktop/dist-electron apps/server/dist apps/web/dist native/browser-secret/build/x64/goat-browser-secret; do
             test -e "$p" || { echo "missing build output: $p" >&2; exit 1; }
           done
 
@@ -170,6 +170,6 @@ jobs:
             apps/desktop/dist-electron
             apps/server/dist
             apps/web/dist
-            native/browser-secret/build/x64/t3-browser-secret
+            native/browser-secret/build/x64/goat-browser-secret
           if-no-files-found: error
           retention-days: 1

@@ -1,4 +1,7 @@
-import { LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY } from "@goat/contracts/legacyT3Names";
+import {
+  LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY,
+  LEGACY_RESOURCE_MONITOR_BINARY_NAME,
+} from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@goat/shared/serverSettings";
@@ -188,7 +191,7 @@ const logBackendObservabilitySettingsReadFailure = (
 };
 
 function resourceMonitorBinaryName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win32" ? "goat-resource-monitor.exe" : "goat-resource-monitor";
 }
 
 const resolveResourceMonitorPath = Effect.fn(
@@ -196,25 +199,30 @@ const resolveResourceMonitorPath = Effect.fn(
 )(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
-  const binaryName = resourceMonitorBinaryName(environment.platform);
-  const candidates = environment.isDevelopment
-    ? [
-        environment.path.join(
-          environment.rootDir,
-          "native/resource-monitor/target/release",
-          binaryName,
-        ),
-        environment.path.join(
-          environment.rootDir,
-          "native/resource-monitor/target/debug",
-          binaryName,
-        ),
-      ]
-    : environment.isPackaged
-      ? [environment.path.join(environment.resourcesPath, "resource-monitor", binaryName)]
-      : environment.resolveResourcePathCandidates(
-          environment.path.join("resource-monitor", binaryName),
-        );
+  const binaryNames = [
+    resourceMonitorBinaryName(environment.platform),
+    `${LEGACY_RESOURCE_MONITOR_BINARY_NAME}${environment.platform === "win32" ? ".exe" : ""}`,
+  ];
+  const candidates = binaryNames.flatMap((binaryName) =>
+    environment.isDevelopment
+      ? [
+          environment.path.join(
+            environment.rootDir,
+            "native/resource-monitor/target/release",
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            "native/resource-monitor/target/debug",
+            binaryName,
+          ),
+        ]
+      : environment.isPackaged
+        ? [environment.path.join(environment.resourcesPath, "resource-monitor", binaryName)]
+        : environment.resolveResourcePathCandidates(
+            environment.path.join("resource-monitor", binaryName),
+          ),
+  );
 
   for (const candidate of candidates) {
     if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {

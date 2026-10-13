@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>com.t3tools.t3code</id>
+  <id>si.goat.desktop</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>T3 Code</name>
+  <name>GOAT</name>
   <summary>Desktop GUI for coding agents</summary>
-  <developer id="com.t3tools">
-    <name>T3 Tools Inc.</name>
+  <developer id="si.goat">
+    <name>GOAT</name>
   </developer>
   <description>
     <p>
-      T3 Code is an open-source desktop app for coding agents. Work with your
+      GOAT is an open-source desktop app for coding agents. Work with your
       existing agent subscriptions, review code changes, and run commands in
       your projects.
     </p>
@@ -18,6 +18,11 @@
       Connect from desktop, web, or mobile to continue working remotely.
     </p>
   </description>
+  <!-- Earlier packages shipped this component as com.t3tools.t3code. -->
+  <replaces>
+    <id>com.t3tools.t3code</id>
+  </replaces>
+  <!-- The desktop entry, icon and binary follow the Electron executable name (#110). -->
   <launchable type="desktop-id">t3code.desktop</launchable>
   <icon type="stock">t3code</icon>
   <provides>
@@ -26,7 +31,7 @@
   <categories>
     <category>Development</category>
   </categories>
-  <url type="homepage">https://t3.codes</url>
-  <url type="bugtracker">https://github.com/pingdotgg/t3code/issues</url>
-  <url type="vcs-browser">https://github.com/pingdotgg/t3code</url>
+  <url type="homepage">https://github.com/goat-si/goat</url>
+  <url type="bugtracker">https://github.com/goat-si/goat/issues</url>
+  <url type="vcs-browser">https://github.com/goat-si/goat</url>
 </component>

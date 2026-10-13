@@ -1,3 +1,4 @@
+import { LEGACY_BROWSER_SECRET_BINARY_NAME } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -17,20 +18,24 @@ export const layer = Layer.effect(
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     if (environment.platform !== "linux") return undefined;
     const fileSystem = yield* FileSystem.FileSystem;
-    const relative = environment.path.join("browser-secret", "t3-browser-secret");
-    const candidates = environment.isPackaged
-      ? [environment.path.join(environment.resourcesPath, relative)]
-      : [
-          environment.path.join(
-            environment.rootDir,
-            "native",
-            "browser-secret",
-            "build",
-            environment.processArch,
-            "t3-browser-secret",
-          ),
-          ...environment.resolveResourcePathCandidates(relative),
-        ];
+    const candidates = ["goat-browser-secret", LEGACY_BROWSER_SECRET_BINARY_NAME].flatMap(
+      (binaryName) => {
+        const relative = environment.path.join("browser-secret", binaryName);
+        return environment.isPackaged
+          ? [environment.path.join(environment.resourcesPath, relative)]
+          : [
+              environment.path.join(
+                environment.rootDir,
+                "native",
+                "browser-secret",
+                "build",
+                environment.processArch,
+                binaryName,
+              ),
+              ...environment.resolveResourcePathCandidates(relative),
+            ];
+      },
+    );
     for (const candidate of candidates) {
       if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false)))
         return candidate;

@@ -302,7 +302,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target "${{ matrix.rust_target }}"
-          name=t3-resource-monitor
+          name=goat-resource-monitor
           if [ "${{ matrix.platform }}" = win ]; then name="$name.exe"; fi
           mkdir -p "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}"
           cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/$name" "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}/$name"

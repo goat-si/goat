@@ -219,7 +219,7 @@ function signingFixture(
         "node_modules/native/addon.node",
         "node_modules/native/library.dylib",
         "node_modules/pty/spawn-helper",
-        "resource-monitor/t3-resource-monitor",
+        "resource-monitor/goat-resource-monitor",
         "client/index.html",
         "LICENSE-T3CODE.txt",
       ]),
