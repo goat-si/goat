@@ -1129,7 +1129,7 @@ else exit 2; fi
       assert.equal(
         spans
           .find((span) => span.name === "ssh.prepareRemoteRuntime")
-          ?.attributes.get("t3.runtime.source"),
+          ?.attributes.get("goat.runtime.source"),
         mode === "ready" ? "retained-runner" : "download",
       );
       assert.equal(yield* fs.exists(archiveDirectory), false);
@@ -1369,13 +1369,13 @@ else {
       const span = spans.find((span) => span.name === "ssh.prepareRemoteRuntime");
       assert.equal(span?.attributes.get("ssh.target"), "devbox");
       assert.equal(
-        span?.attributes.get("t3.runtime.source"),
+        span?.attributes.get("goat.runtime.source"),
         ready ? "ready" : missing ? "download" : "upload",
       );
       if (!ready && !missing) {
-        assert.equal(span?.attributes.get("t3.runtime.upload.installComplete"), true);
-        assert.equal(span?.attributes.get("t3.runtime.upload.sha256"), fixture.sha256);
-        assert.equal(span?.attributes.get("t3.runtime.upload.bytes"), bytes.byteLength);
+        assert.equal(span?.attributes.get("goat.runtime.upload.installComplete"), true);
+        assert.equal(span?.attributes.get("goat.runtime.upload.sha256"), fixture.sha256);
+        assert.equal(span?.attributes.get("goat.runtime.upload.bytes"), bytes.byteLength);
       }
       if (!ready)
         assert.equal(

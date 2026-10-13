@@ -146,7 +146,7 @@ describe("ServerLoggerLive", () => {
       const [request] = requests;
       assert.strictEqual(request?.url, "https://collector.example.com/v1/logs");
       assert.include(request?.body ?? "", "server logger under test");
-      assert.include(request?.body ?? "", "t3code-server");
+      assert.include(request?.body ?? "", "goat-server");
       assert.include(request?.body ?? "", "service.runtime");
     }),
   );
@@ -171,9 +171,9 @@ describe("ServerLoggerLive", () => {
 
       assert.lengthOf(requests, 1);
       const body = requests[0]?.body ?? "";
-      assert.include(body, '"stringValue":"t3code-server"');
+      assert.include(body, '"stringValue":"goat-server"');
       assert.include(body, "deployment.environment.name");
-      assert.include(body, '"key":"service.namespace","value":{"stringValue":"t3code"}');
+      assert.include(body, '"key":"service.namespace","value":{"stringValue":"goat"}');
       assert.notInclude(body, "renamed");
     }),
   );

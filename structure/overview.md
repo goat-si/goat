@@ -39,8 +39,9 @@ Agents also reach the same server over MCP. The HTTP MCP server is named `GOAT` 
 
 GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.
 Upstream names remain in the tree where a rename would break a stored identity: checkpoint refs
-still use the `refs/t3/` prefix, the OTLP service name in `apps/server/src/config.ts` is
-`t3code-server`, and the default local data directory is still `~/.t3`. Where each process writes
+still use the `refs/t3/` prefix, tracing sent to the T3 Connect relay from
+`apps/server/src/cloud/relayTracing.ts` still reports `t3code-server`, and the default local data
+directory is still `~/.t3`. Where each process writes
 is the [state roots](settings-and-storage.md#state-roots) contract.
 
 ## Invariants
