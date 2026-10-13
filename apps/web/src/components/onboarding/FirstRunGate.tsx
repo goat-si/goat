@@ -11,6 +11,7 @@ import {
 } from "../../hooks/useSettings";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { useCompleteOnboarding } from "../../onboarding/firstRun";
+import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
 import {
   isFirstRunWorkspaceProvenanceAuthoritative,
   isFreshFirstRunWorkspace,
@@ -232,6 +233,12 @@ function FirstRunRecovery({
           <RefreshIcon refreshing={retrying} />
           {settingsReadFailed ? "Retry" : "Reload"}
         </Button>
+        {settingsReadFailed ? null : (
+          // An unreadable saved catalog keeps the workspace unconfirmed; say why and offer a way out.
+          <div className="mt-6 w-full text-left">
+            <ConnectionCatalogUnreadableAlert />
+          </div>
+        )}
       </div>
     </main>
   );

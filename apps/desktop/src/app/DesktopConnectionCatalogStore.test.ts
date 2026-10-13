@@ -353,13 +353,13 @@ describe("DesktopConnectionCatalogStore", () => {
       const permissionError = PlatformError.systemError({
         _tag: "PermissionDenied",
         module: "FileSystem",
-        method: "readFileString",
+        method: "readFile",
         pathOrDescriptor: path.join(baseDir, "userdata", "connection-catalog.json"),
       });
       const layerFileSystem = Layer.succeed(
         FileSystem.FileSystem,
         FileSystem.makeNoop({
-          readFileString: () => Effect.fail(permissionError),
+          readFile: () => Effect.fail(permissionError),
         }),
       );
       const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore.pipe(
@@ -626,35 +626,78 @@ describe("DesktopConnectionCatalogStore", () => {
     ),
   );
 
-  it.effect("does not overwrite a save another channel made during recovery", () => {
-    const otherChannelSave = '{"version":1,"encryptedCatalog":"bmV3ZXI="}\n';
+  it.effect("serves the newer catalog another channel saved during recovery", () => {
+    const newerCatalog =
+      '{"schemaVersion":1,"targets":[],"profiles":[],"credentials":[],"remoteDpopTokens":[],"disabledEnvironmentIds":["saved-by-nightly"]}';
+    const newerRaw = `${JSON.stringify({
+      version: 1,
+      encryptedCatalog: Base64.encode(textEncoder.encode(`nightly:${newerCatalog}`)),
+    })}\n`;
+    let saved = false;
     return withSiblingStore(
-      () =>
+      (siblingCalls) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
-          const { catalogPath, raw, stateDir } = yield* writeSiblingCatalog(VALID_CATALOG);
+          const { catalogPath, stateDir } = yield* writeSiblingCatalog(VALID_CATALOG);
 
-          assert.deepStrictEqual(yield* store.get, Option.some(VALID_CATALOG));
-          assert.equal(yield* fileSystem.readFileString(catalogPath), otherChannelSave);
+          assert.deepStrictEqual(yield* store.get, Option.some(newerCatalog));
+          assert.equal(yield* Ref.get(siblingCalls), 2);
           assert.equal(
             yield* fileSystem.readFileString(
               `${stateDir}/connection-catalog.goat-nightly.backup.json`,
             ),
-            raw,
+            newerRaw,
+          );
+          // Re-encrypted from the newer catalog, never the stale one.
+          const rewritten = JSON.parse(yield* fileSystem.readFileString(catalogPath)) as {
+            readonly encryptedCatalog: string;
+          };
+          assert.equal(
+            textDecoder.decode(Base64.decode(rewritten.encryptedCatalog).pipe(Result.getOrThrow)),
+            `encrypted:${newerCatalog}`,
           );
         }),
-      // The other channel saves while this one waits on the key prompt.
+      // The other channel saves once, while this one waits on the key prompt.
       (baseDir) =>
         Effect.gen(function* () {
+          if (saved) return;
+          saved = true;
           const fileSystem = yield* FileSystem.FileSystem;
           yield* fileSystem.writeFileString(
             `${baseDir}/userdata/connection-catalog.json`,
-            otherChannelSave,
+            newerRaw,
           );
         }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
     );
   });
+
+  it.effect("backs up the exact bytes of a catalog that is not valid UTF-8", () =>
+    withSiblingStore(() =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const crypto = yield* Crypto.Crypto;
+        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+        const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+        // A BOM, then bytes that are not UTF-8: a text round trip would change both.
+        const raw = new Uint8Array([0xef, 0xbb, 0xbf, 0x7b, 0xff, 0xfe, 0x7d]);
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fileSystem.writeFile(catalogPath, raw);
+        const digest = yield* crypto.digest("SHA-256", raw);
+        const backupPath = path.join(
+          environment.stateDir,
+          `connection-catalog.unreadable-${Hex.encode(digest).slice(0, 16)}.backup.json`,
+        );
+
+        yield* store.get.pipe(Effect.flip);
+        assert.deepStrictEqual(yield* fileSystem.readFile(backupPath), raw);
+        assert.isTrue(yield* store.set(VALID_CATALOG));
+        assert.deepStrictEqual(yield* fileSystem.readFile(backupPath), raw);
+      }),
+    ),
+  );
 
   it.effect("reports a damaged catalog, keeps it, and copies it", () =>
     withSiblingStore(() =>

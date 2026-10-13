@@ -73,13 +73,13 @@ export function ConnectionCatalogUnreadableAlert() {
   const startFresh = async () => {
     const save = window.desktopBridge?.setConnectionCatalog;
     if (save === undefined || unreadable.backupPath === null) return;
-    const confirmed = await (requestConfirmDialog(
-      [
-        "Start with no saved environments?",
-        `GOAT replaces the unreadable file with an empty list and keeps its copy at ${unreadable.backupPath}.`,
-      ].join("\n"),
-      { variant: "destructive" },
-    ) ?? false);
+    const message = [
+      "Start with no saved environments?",
+      `GOAT replaces the unreadable file with an empty list and keeps its copy at ${unreadable.backupPath}.`,
+    ].join("\n");
+    // The first-run recovery screen shows this before the themed dialog host mounts.
+    const confirmed = await (requestConfirmDialog(message, { variant: "destructive" }) ??
+      Promise.resolve(window.confirm(message)));
     if (!confirmed) return;
     setStartingFresh(true);
     try {

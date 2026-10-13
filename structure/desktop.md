@@ -42,13 +42,14 @@ read another app's key. The renderer replaces a catalog it cannot parse, so the 
 plaintext that decodes as a connection catalog, whichever key opened it.
 
 - **Recovered.** The original file is copied to `connection-catalog.<channel>.backup.json`, then
-  re-encrypted under this app's key, but only if the file has not changed since it was read: the
-  other channel may be running and saving. Otherwise the file keeps the sibling's encryption.
+  re-encrypted under this app's key. The other channel may be running and saving, so when the file
+  changed while it was being recovered, the store reads it again and the newer catalog wins.
 - **Unreadable.** A file no key opens (`locked`) or that is not a valid catalog (`damaged`)
-  stays in place, and a byte-for-byte copy goes to
+  stays in place, and a copy of its exact bytes goes to
   `connection-catalog.unreadable-<hash>.backup.json`, never replacing a different file. Reads
   fail. A `locked` file is not retried against sibling keys until the app restarts, so a refused
-  prompt does not repeat. Settings → Connections and a launch toast explain where both files are
+  prompt does not repeat. Settings → Connections, a launch toast, and the first-run recovery
+  screen explain where both files are
   (`apps/web/src/components/desktop/ConnectionCatalogUnreadableNotice.tsx`). Start fresh saves an
   empty catalog, since a missing file would re-import the legacy saved environments.
 - **Writes.** `set` and `clear` read the file on disk first. One this app cannot open is copied
