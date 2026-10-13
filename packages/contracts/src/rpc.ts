@@ -1855,7 +1855,10 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
 });
 
 const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    /** Opt in to `runtimeDrain` events. Older clients omit it and never receive them. */
+    runtimeDrain: Schema.optionalKey(Schema.Boolean),
+  }),
   success: ServerLifecycleStreamEvent,
   error: EnvironmentAuthorizationError,
   stream: true,

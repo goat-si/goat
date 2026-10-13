@@ -226,6 +226,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   serverBrowser: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `POST /.well-known/goat/runtime/drain`: it can stop admitting turns, drain,
+      and exit on its own for a replacement. Servers without it are attach-only. */
+  drainRestart: Schema.optionalKey(Schema.Boolean),
   /** Server runs the channel ledger and the GOAT bot gateway (`channel.*` RPCs). Absent on
       older servers, so clients keep the bot inert instead of sending to a legacy agent. */
   channelLedger: Schema.optionalKey(Schema.Boolean),
@@ -239,6 +242,19 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
+export const ProtocolRange = Schema.Struct({
+  min: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  max: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+});
+export type ProtocolRange = typeof ProtocolRange.Type;
+
+/** Protocol versions a build speaks. Clients attach when both ranges overlap theirs. */
+export const RuntimeProtocolRanges = Schema.Struct({
+  ssh: ProtocolRange,
+  orchestration: ProtocolRange,
+});
+export type RuntimeProtocolRanges = typeof RuntimeProtocolRanges.Type;
+
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
@@ -248,6 +264,10 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Int),
   /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
+  /** Supported protocol ranges. Absent on servers that only advertise the integers above. */
+  protocol: Schema.optionalKey(RuntimeProtocolRanges),
+  /** New for every server start. A replacement request names it so it never hits a successor. */
+  instanceId: Schema.optionalKey(TrimmedNonEmptyString),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

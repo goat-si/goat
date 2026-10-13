@@ -945,10 +945,34 @@ export const ServerLifecycleStreamLegacyThreadMigrationEvent = Schema.Struct({
 export type ServerLifecycleStreamLegacyThreadMigrationEvent =
   typeof ServerLifecycleStreamLegacyThreadMigrationEvent.Type;
 
+/**
+ * A replacement drain on this server. `draining`: new turns are refused until `deadline` while
+ * running work finishes. `cancelled`: turns are admitted again. `drained`: the server is exiting
+ * for `targetVersion`; reconnect. Sent only to subscribers that pass `runtimeDrain: true`, so
+ * clients that predate this event never have to decode it.
+ */
+export const ServerLifecycleRuntimeDrainPayload = Schema.Struct({
+  status: Schema.Literals(["draining", "cancelled", "drained"]),
+  targetVersion: TrimmedNonEmptyString,
+  deadline: IsoDateTime,
+  forced: Schema.Boolean,
+});
+export type ServerLifecycleRuntimeDrainPayload = typeof ServerLifecycleRuntimeDrainPayload.Type;
+
+export const ServerLifecycleStreamRuntimeDrainEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("runtimeDrain"),
+  payload: ServerLifecycleRuntimeDrainPayload,
+});
+export type ServerLifecycleStreamRuntimeDrainEvent =
+  typeof ServerLifecycleStreamRuntimeDrainEvent.Type;
+
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
   ServerLifecycleStreamLegacyThreadMigrationEvent,
+  ServerLifecycleStreamRuntimeDrainEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 

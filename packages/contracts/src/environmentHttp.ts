@@ -485,6 +485,41 @@ export const SshServerActivity = Schema.Struct({
   pid: Schema.Int,
 });
 
+export const GOAT_RUNTIME_DRAIN_PATH = "/.well-known/goat/runtime/drain";
+/** Header carrying the host-user secret from `<userdata>/runtime-control.token`. */
+export const GOAT_RUNTIME_CONTROL_HEADER = "x-goat-runtime-control";
+export const RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS = 60;
+export const RUNTIME_DRAIN_MAX_GRACE_SECONDS = 300;
+
+/**
+ * Asks the server to stop admitting new turns and wait for running work, so a successor can
+ * replace it. Without `force` an expired grace window cancels the drain and the server keeps
+ * serving. `force` is the user's confirmation; a second request with `force` confirms a drain
+ * that is already waiting.
+ */
+export const RuntimeDrainRequest = Schema.Struct({
+  expectedInstanceId: TrimmedNonEmptyString,
+  targetVersion: TrimmedNonEmptyString,
+  graceSeconds: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: RUNTIME_DRAIN_MAX_GRACE_SECONDS })),
+  ),
+  force: Schema.optionalKey(Schema.Boolean),
+});
+export type RuntimeDrainRequest = typeof RuntimeDrainRequest.Type;
+
+/**
+ * `drained`: no work is running and the server exits on its own right after answering; restart
+ * recovery persists any interrupted work for the successor. `cancelled`: the grace window expired
+ * unconfirmed and the server admits turns again. `instance-changed`: the request named another
+ * server start; re-probe.
+ */
+export const RuntimeDrainResult = Schema.Struct({
+  status: Schema.Literals(["drained", "cancelled", "instance-changed"]),
+  instanceId: TrimmedNonEmptyString,
+  forced: Schema.Boolean,
+});
+export type RuntimeDrainResult = typeof RuntimeDrainResult.Type;
+
 class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata")
   .add(
     HttpApiEndpoint.get("descriptor", LEGACY_ENVIRONMENT_PATH, {
