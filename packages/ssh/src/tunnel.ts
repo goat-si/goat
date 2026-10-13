@@ -3022,6 +3022,30 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   });
   const targetLocks = yield* KeyedLock.make<string>();
   const authSecrets = new Map<string, string>();
+  // Ensure and disconnect requests for one target are ordered by arrival. Both
+  // resolve the alias before taking the target lock, so a reconnect sent after a
+  // disconnect can reach the lock first. Tickets let each request see whether a
+  // newer one has replaced its intent: a disconnect yields to any newer request,
+  // and an ensure yields to a newer disconnect.
+  let requestSequence = 0;
+  const latestRequest = new Map<string, number>();
+  const latestDisconnect = new Map<string, number>();
+  interface RequestTicket {
+    readonly key: string;
+    readonly sequence: number;
+  }
+  const takeRequestTicket = (target: DesktopSshEnvironmentTarget, kind: "ensure" | "disconnect") =>
+    Effect.sync((): RequestTicket => {
+      const key = targetConnectionKey(target);
+      const sequence = ++requestSequence;
+      latestRequest.set(key, sequence);
+      if (kind === "disconnect") latestDisconnect.set(key, sequence);
+      return { key, sequence };
+    });
+  const disconnectSuperseded = (ticket: RequestTicket) =>
+    latestRequest.get(ticket.key) !== ticket.sequence;
+  const ensureSuperseded = (ticket: RequestTicket) =>
+    (latestDisconnect.get(ticket.key) ?? 0) > ticket.sequence;
 
   // Keep one lock per target so reconnect cannot reuse a server while stop is pending.
   const withTargetLock = Effect.fn("ssh/tunnel.withTargetLock")(function* <A, E, R>(
@@ -3552,6 +3576,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext
   > {
+    const ticket = yield* takeRequestTicket(target, "ensure");
     yield* startRetry;
     yield* Effect.logInfo("ssh.environment.ensure.start", {
       ...sshTargetLogFields(target),
@@ -3579,6 +3604,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* withTargetLock(
       key,
       Effect.gen(function* () {
+        if (ensureSuperseded(ticket)) {
+          yield* Effect.logInfo("ssh.environment.ensure.superseded", {
+            ...sshTargetLogFields(resolvedTarget),
+            key,
+          });
+          return yield* new SshLaunchError({
+            message: "SSH connection was cancelled.",
+            stdout: "",
+          });
+        }
         const decisionKey = `${key}:${runner?.archiveVersion ?? runner?.nodeScriptPath ?? ""}`;
         const connectionRunner =
           runner === undefined
@@ -3655,6 +3690,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const disconnectEnvironment = Effect.fn("ssh/tunnel.disconnectEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
   ): Effect.fn.Return<void, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+    const ticket = yield* takeRequestTicket(target, "disconnect");
     yield* Effect.logInfo("ssh.environment.disconnect.start", sshTargetLogFields(target));
     // Stored resolution also covers a launch in flight and aliases removed from ssh config.
     const requestKey = targetConnectionKey(target);
@@ -3668,6 +3704,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...(target.port !== null ? { port: target.port } : {}),
     };
     const key = targetConnectionKey(resolvedTarget);
+    if (disconnectSuperseded(ticket)) {
+      yield* Effect.logInfo("ssh.environment.disconnect.superseded", {
+        ...sshTargetLogFields(resolvedTarget),
+        key,
+      });
+      return;
+    }
     const hadPending = pendingReplacements.has(key);
     generations.set(key, (generations.get(key) ?? 0) + 1);
     pendingReplacements.delete(key);
@@ -3676,6 +3719,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     yield* withTargetLock(
       key,
       Effect.gen(function* () {
+        // A newer request took over while this one waited for the lock.
+        if (disconnectSuperseded(ticket)) {
+          // The newer ensure owns whatever a cancelled launch left running.
+          cancelledLaunches.delete(key);
+          yield* Effect.logInfo("ssh.environment.disconnect.superseded", {
+            ...sshTargetLogFields(resolvedTarget),
+            key,
+          });
+          return;
+        }
         const entry = tunnels.get(key) ?? null;
         yield* Effect.logDebug("ssh.environment.disconnect.targetResolved", {
           ...sshTargetLogFields(resolvedTarget),

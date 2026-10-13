@@ -880,16 +880,56 @@ export const make = Effect.gen(function* () {
    * Awaiting it would hold this environment's lease lock and the shared catalog
    * command queue, freezing every environment switch until the window reloads.
    * `startImmediately` sends the request before the caller returns, so a quick
-   * off-then-on still reaches the desktop in order.
+   * off-then-on still reaches the desktop in order; the desktop drops a
+   * disconnect that a newer reconnect overtook.
+   *
+   * One teardown per route runs at a time. Another off while it is stalled
+   * only marks it to run again, and the rerun happens only if the route is
+   * still off when the first one returns. A stuck host therefore holds one
+   * fiber and one desktop request however often the switch flips.
    */
+  const sshTeardowns = new Map<string, { again: boolean }>();
+  const sshRouteWanted = (environmentId: EnvironmentId, routeId: string) =>
+    SubscriptionRef.get(entries).pipe(
+      Effect.map((current) => {
+        const entry = current.get(environmentId);
+        return (
+          entry !== undefined &&
+          entry.enabled &&
+          connectionRoutes(entry).some((route) => connectionRouteId(route.target) === routeId)
+        );
+      }),
+    );
   const forkSshDisconnect = (environmentId: EnvironmentId, route: ConnectionRoute) => {
     const profile = Option.getOrNull(route.profile);
-    return profile !== null && isSshConnectionProfile(profile)
-      ? disconnectSsh(environmentId, profile).pipe(
-          Effect.forkIn(registryScope, { startImmediately: true }),
-          Effect.asVoid,
-        )
-      : Effect.void;
+    if (profile === null || !isSshConnectionProfile(profile)) return Effect.void;
+    const routeId = connectionRouteId(route.target);
+    const key = `${environmentId}\u0000${routeId}`;
+    return Effect.suspend(() => {
+      const inFlight = sshTeardowns.get(key);
+      if (inFlight !== undefined) {
+        inFlight.again = true;
+        return Effect.void;
+      }
+      const teardown = { again: false };
+      sshTeardowns.set(key, teardown);
+      const run: Effect.Effect<void> = disconnectSsh(environmentId, profile).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (!teardown.again) return Effect.void;
+            teardown.again = false;
+            return sshRouteWanted(environmentId, routeId).pipe(
+              Effect.flatMap((wanted) => (wanted ? Effect.void : run)),
+            );
+          }),
+        ),
+      );
+      return run.pipe(
+        Effect.ensuring(Effect.sync(() => sshTeardowns.delete(key))),
+        Effect.forkIn(registryScope, { startImmediately: true }),
+        Effect.asVoid,
+      );
+    });
   };
   const forkSshTeardown = (entry: ConnectionCatalogEntry) =>
     Effect.forEach(
