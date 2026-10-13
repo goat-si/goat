@@ -30,7 +30,7 @@ import {
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
   RuntimeDrainResult,
 } from "@goat/contracts";
-import { compareSemverVersions } from "@goat/shared/semver";
+import { compareRuntimeBuilds } from "@goat/shared/semver";
 import {
   compareRuntimeProtocols,
   ownRuntimeProtocolRanges,
@@ -43,6 +43,7 @@ import {
   sshSupervisorOwner,
 } from "../serverOwnerLock.ts";
 import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
+import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
 import packageJson from "../../package.json" with { type: "json" };
 
 /**
@@ -497,20 +498,47 @@ const activity = Command.make("activity", {
   ),
 );
 
-/** Compare validated SemVer tokens for the pinned SSH replacement candidate. */
+/**
+ * Orders the live build against the requested one for the pinned SSH replacement candidate.
+ * Prints `older`, `newer`, `equal`, or `unknown` when nothing proves an order
+ * (see `compareRuntimeBuilds`).
+ */
 const compareVersion = Command.make("compare-version", {
   live: Argument.String("live-version"),
   requested: Argument.String("requested-version"),
+  liveCommitTime: Flag.Int("live-commit-time").pipe(Flag.optional),
+  requestedCommitTime: Flag.Int("requested-commit-time").pipe(Flag.optional),
 }).pipe(
-  Command.withHandler(({ live, requested }) =>
+  Command.withHandler(({ live, requested, liveCommitTime, requestedCommitTime }) =>
     Effect.sync(() => {
       if (!protocolVersion(live) || !protocolVersion(requested)) {
         process.stderr.write("Invalid SSH version comparison tokens.\n");
         process.exitCode = 1;
         return;
       }
-      const comparison = compareSemverVersions(live, requested);
-      process.stdout.write((comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal") + "\n");
+      const comparison = compareRuntimeBuilds(
+        { version: live, commitTime: Option.getOrUndefined(liveCommitTime) },
+        { version: requested, commitTime: Option.getOrUndefined(requestedCommitTime) },
+      );
+      process.stdout.write(
+        (comparison === undefined
+          ? "unknown"
+          : comparison < 0
+            ? "older"
+            : comparison > 0
+              ? "newer"
+              : "equal") + "\n",
+      );
+    }),
+  ),
+);
+
+/** Prints this build's commit time in Unix seconds; exits 1 for an unstamped build. */
+const commitTime = Command.make("commit-time").pipe(
+  Command.withHandler(() =>
+    Effect.sync(() => {
+      if (BUILD_COMMIT_TIME === undefined) process.exitCode = 1;
+      else process.stdout.write(`${BUILD_COMMIT_TIME}\n`);
     }),
   ),
 );
@@ -877,6 +905,7 @@ export const sshHelperCommand = Command.make("__ssh-helper").pipe(
     protocol,
     activity,
     compareVersion,
+    commitTime,
     compat,
     drain,
     supervise,

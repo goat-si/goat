@@ -32,7 +32,7 @@ import {
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import { extractJsonObject, fromLenientJson } from "@goat/shared/schemaJson";
-import { compareSemverVersions, satisfiesSemverRange } from "@goat/shared/semver";
+import { compareRuntimeBuilds, satisfiesSemverRange } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -107,6 +107,11 @@ export interface RemoteGoatRunnerOptions {
    * neither Node nor npm.
    */
   readonly archiveVersion?: string | null;
+  /**
+   * Commit time (Unix seconds) of the build `archiveVersion` names. It orders that build against
+   * the host's when their versions cannot be ordered, such as two `0.1.0-dev.<sha>` builds.
+   */
+  readonly archiveCommitTime?: number;
   readonly releaseBaseUrl?: string | null;
   /** Writable user cache; only this directory may receive gh downloads. */
   readonly archiveDirectory?: string | null;
@@ -208,6 +213,11 @@ valid_live_tokens() {
     unknown) [ "$2 $3 $4" = 'unknown unknown unknown' ] ;;
     *) return 1 ;;
   esac
+}
+# Commit time of the build behind executable $1; fails for unstamped or older builds.
+build_commit_time() {
+  t="$("$1" __ssh-helper commit-time 2>/dev/null || true)"
+  valid_positive "$t" && printf '%s' "$t"
 }
 runner_sha256() {
   if command -v shasum >/dev/null 2>&1; then digest="$(shasum -a 256 "$1")" || return 1
@@ -924,13 +934,25 @@ check_live_protocol() {
       # older compatible helpers need not implement the new replacement comparator.
       comparison=selected
     else
-      comparison="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper compare-version "$LIVE_VERSION" "$REQUESTED_VERSION" 2>/dev/null || true)"
+      # Commit times order builds whose versions cannot (dev shas, dev against nightly).
+      set --
+      if live_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat")" &&
+         requested_commit="$(build_commit_time "$RUNNER_CANDIDATE_FILE.pin")"; then
+        set -- --live-commit-time "$live_commit" --requested-commit-time "$requested_commit"
+      fi
+      comparison="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper compare-version "$@" "$LIVE_VERSION" "$REQUESTED_VERSION" 2>/dev/null || true)"
     fi
     case "$comparison" in
       selected) ;;
       newer)
         if [ "$LIVE_COMPATIBLE" != 1 ]; then
           printf 'Remote runtime is newer than this app; update the app.\n' >&2; exit 1
+        fi
+        NEEDS_OWNED_UPGRADE=0 ;;
+      unknown)
+        # No proven order: never replace, so a possibly newer server is never downgraded.
+        if [ "$LIVE_COMPATIBLE" != 1 ]; then
+          printf 'Remote runtime GOAT %s cannot be ordered against this app (GOAT %s); it was left running. Stop it on the remote host when its work is done, then reconnect.\n' "$LIVE_VERSION" "$REQUESTED_VERSION" >&2; exit 1
         fi
         NEEDS_OWNED_UPGRADE=0 ;;
       older)
@@ -1981,6 +2003,9 @@ if ready_version "$retained_version"; then
       printf 'Retained GOAT runner changed during probe; reconnect.\\n' >&2; exit 1;
     }
     retained_fields="$(printf ',"retained":"ready","retainedVersion":"%s","retainedSignals":%s,"retainedRunnerSha256":"%s"' "$retained_version" "$retained_signals" "$retained_sha256")"
+    if retained_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$retained_version/goat")"; then
+      retained_fields="$retained_fields,\\"retainedCommitTime\\":$retained_commit"
+    fi
   fi
 fi
 # Persisted version is a path hint only. The live descriptor proves identity.
@@ -2010,6 +2035,9 @@ for candidate in "$live_hint" "$retained_version" "$V"; do
         live_fields="$live_fields$(printf ',"liveVersion":"%s","liveSignals":%s' "$live_version" "$live_signals")"
         if [ -n "$live_binary" ]; then
           live_fields="$live_fields$(printf ',"liveBinarySignals":%s' "$live_binary")"
+          if live_commit="$(build_commit_time "$HOME/.goat/runtime/goat/versions/$live_version/goat")"; then
+            live_fields="$live_fields,\\"liveCommitTime\\":$live_commit"
+          fi
         fi
       fi
       # Only a server that drains for its own replacement may be replaced; others are attach-only.
@@ -2041,31 +2069,20 @@ const decodeRemoteRuntimeProbe = Schema.decodeEffect(
       retainedRunnerSha256: Schema.optionalKey(
         Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
       ),
+      /** Commit times of the installed retained and live builds; absent for unstamped builds. */
+      retainedCommitTime: Schema.optionalKey(Schema.Int),
       liveStatus: Schema.optionalKey(Schema.Literals(["none", "live", "unknown"])),
       liveOwned: Schema.optionalKey(Schema.Boolean),
       identityAbsent: Schema.optionalKey(Schema.Boolean),
       liveVersion: Schema.optionalKey(Schema.String),
       liveSignals: Schema.optionalKey(RuntimeSignals),
       liveBinarySignals: Schema.optionalKey(RuntimeSignals),
+      liveCommitTime: Schema.optionalKey(Schema.Int),
       /** The live server drains for a replacement. Without it the client only attaches. */
       liveDrain: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 );
-
-/**
- * SemVer orders prerelease trains of one core version alphabetically, so
- * `0.1.0-nightly.*` sorts above `0.1.0-dev.*` even when the dev build is newer.
- * Such a pair has no meaningful order, so a compatible runtime from the other
- * train is attached as-is instead of being refreshed.
- */
-const releasesOrderable = (left: string, right: string) => {
-  const parse = (version: string) => /^([^-+]+)(?:-([0-9A-Za-z-]+))?/.exec(version);
-  const a = parse(left);
-  const b = parse(right);
-  if (a === null || b === null || a[1] !== b[1]) return true;
-  return a[2] === undefined || b[2] === undefined || a[2] === b[2];
-};
 
 /**
  * SSH failures (an unreachable host, a timeout, rejected authentication) keep their own error
@@ -2129,6 +2146,23 @@ export const prepareRemoteRuntime = (
     const probe = yield* decodeRemoteJsonOutput(result.stdout, decodeRemoteRuntimeProbe).pipe(
       Effect.mapError(runtimePreparationError),
     );
+    // Every replace, refresh, and upgrade below needs a proven order; `undefined` means none,
+    // and then the host keeps what it runs or has installed (see `compareRuntimeBuilds`).
+    const requestedBuild = { version, commitTime: runner?.archiveCommitTime };
+    const liveOrder =
+      probe.liveVersion === undefined
+        ? undefined
+        : compareRuntimeBuilds(
+            { version: probe.liveVersion, commitTime: probe.liveCommitTime },
+            requestedBuild,
+          );
+    const retainedOrder =
+      probe.retainedVersion === undefined
+        ? undefined
+        : compareRuntimeBuilds(
+            { version: probe.retainedVersion, commitTime: probe.retainedCommitTime },
+            requestedBuild,
+          );
     const liveCompatible =
       probe.liveVersion !== undefined &&
       probe.liveSignals !== undefined &&
@@ -2141,11 +2175,25 @@ export const prepareRemoteRuntime = (
       owningLaunch &&
       probe.liveVersion !== undefined &&
       !liveCompatible &&
-      compareSemverVersions(probe.liveVersion, version) > 0
+      liveOrder !== undefined &&
+      liveOrder > 0
     ) {
       return yield* new SshLaunchError({
         reason: "runtime-newer",
         message: "Remote runtime is newer than this app; update the app.",
+        stdout: "",
+      });
+    }
+    if (
+      owningLaunch &&
+      exact.mayUpgradeOwnedServer &&
+      probe.liveStatus === "live" &&
+      probe.liveVersion !== undefined &&
+      !liveCompatible &&
+      liveOrder === undefined
+    ) {
+      return yield* new SshLaunchError({
+        message: `Remote runtime GOAT ${probe.liveVersion} cannot be ordered against this app (GOAT ${version}); it was left running. Stop it on the remote host when its work is done, then reconnect.`,
         stdout: "",
       });
     }
@@ -2158,29 +2206,27 @@ export const prepareRemoteRuntime = (
       probe.retainedSignals.serverVersion === probe.retainedVersion &&
       matchesSignals(probe.retainedSignals, version);
     // No server runs, so no thread can be interrupted: an owning client installs
-    // its own release instead of restarting an older retained one. It keeps the
-    // retained runtime only when that one is newer, or when the requested
-    // archive cannot be acquired (handled below, with the reason logged).
+    // its own release instead of restarting an older retained one. A retained
+    // build without a commit time predates stamping, so a stamped client counts it
+    // older; only here, where nothing runs, so one manual stop moves such a host on.
+    // It keeps the retained runtime when that one is newer or of unknown order, or
+    // when the requested archive cannot be acquired (handled below, with the reason logged).
+    const retainedPredatesStamps =
+      retainedOrder === undefined &&
+      probe.retainedCommitTime === undefined &&
+      runner?.archiveCommitTime !== undefined;
     const upgradeRetained =
       owningLaunch &&
       exact.mayUpgradeOwnedServer &&
       retainedCompatible &&
       probe.retainedVersion !== undefined &&
-      probe.retainedVersion !== version &&
-      !(
-        releasesOrderable(probe.retainedVersion, version) &&
-        compareSemverVersions(probe.retainedVersion, version) > 0
-      );
+      ((retainedOrder !== undefined && retainedOrder < 0) || retainedPredatesStamps);
     const adoptLegacy =
       owningLaunch &&
       exact.mayUpgradeOwnedServer &&
       probe.liveDrain === true &&
       probe.identityAbsent === true &&
-      !(
-        liveCompatible &&
-        probe.liveVersion !== undefined &&
-        compareSemverVersions(probe.liveVersion, version) > 0
-      ) &&
+      !(liveCompatible && (liveOrder === undefined || liveOrder > 0)) &&
       (probe.liveStatus === "unknown" || (probe.liveStatus === "live" && probe.liveOwned === true));
     const refreshIfIdle =
       owningLaunch &&
@@ -2190,9 +2236,25 @@ export const prepareRemoteRuntime = (
       liveCompatible &&
       probe.liveOwned === true &&
       probe.identityAbsent !== true &&
-      probe.liveVersion !== undefined &&
-      releasesOrderable(probe.liveVersion, version) &&
-      compareSemverVersions(probe.liveVersion, version) < 0;
+      liveOrder !== undefined &&
+      liveOrder < 0;
+    const unorderedVersion =
+      liveCompatible && liveOrder === undefined
+        ? probe.liveVersion
+        : probe.liveStatus === "none" &&
+            retainedCompatible &&
+            !upgradeRetained &&
+            retainedOrder === undefined
+          ? probe.retainedVersion
+          : undefined;
+    if (owningLaunch && exact.mayUpgradeOwnedServer && unorderedVersion !== undefined) {
+      yield* Effect.logInfo("ssh.runtime.upgrade.skipped", {
+        ...sshTargetLogFields(target),
+        installedVersion: unorderedVersion,
+        requestedVersion: version,
+        reason: `GOAT ${unorderedVersion} and ${version} have no provable build order (a build without a commit time, or versions that only differ by sha or train), so the installed ${unorderedVersion} is kept.`,
+      });
+    }
     if (adoptLegacy || refreshIfIdle) {
       exact = {
         ...exact,

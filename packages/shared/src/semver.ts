@@ -150,6 +150,43 @@ export function compareSemverVersions(left: string, right: string): number {
   return 0;
 }
 
+/** A GOAT runtime build: its exact version and, when the build recorded it, its commit time. */
+export interface RuntimeBuild {
+  readonly version: string;
+  /** Unix seconds of the commit the build was made from. */
+  readonly commitTime?: number | undefined;
+}
+
+const isNumberedTrain = (prerelease: ReadonlyArray<string>) =>
+  prerelease.length > 1 && prerelease.slice(1).every((part) => SEMVER_NUMBER_SEGMENT.test(part));
+
+/**
+ * Orders two runtime builds, or returns `undefined` when nothing proves an order.
+ *
+ * A different core version orders by SemVer. Numbered builds of one train
+ * (`0.1.0-nightly.20261012.2`) order by SemVer too. Every other pair of one
+ * core, such as `0.1.0-dev.<sha>` builds or a dev build against a nightly,
+ * orders only by commit time, because SemVer would compare the sha or train
+ * name alphabetically. Without both commit times such a pair has no order.
+ */
+export function compareRuntimeBuilds(left: RuntimeBuild, right: RuntimeBuild): number | undefined {
+  if (left.version === right.version) return 0;
+  const a = parseSemver(left.version);
+  const b = parseSemver(right.version);
+  if (a === null || b === null) return undefined;
+  const core = a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+  if (core !== 0) return core;
+  if (a.prerelease.length === 0 && b.prerelease.length === 0) return 0;
+  if (
+    isNumberedTrain(a.prerelease) &&
+    isNumberedTrain(b.prerelease) &&
+    a.prerelease[0] === b.prerelease[0]
+  )
+    return compareSemverVersions(left.version, right.version);
+  if (left.commitTime === undefined || right.commitTime === undefined) return undefined;
+  return left.commitTime - right.commitTime;
+}
+
 /**
  * Small semver range checker for CLI/runtime gates.
  *

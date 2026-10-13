@@ -40,6 +40,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
 import { resolveAttachmentPath, resolveAttachmentPathById } from "../attachmentStore.ts";
 import { ATTACHMENT_UPLOAD_ROUTE_PREFIX } from "../assets/AttachmentUpload.ts";
 import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
@@ -1375,6 +1376,7 @@ export const resolveSshCliRunner = (baseDir: string) =>
     );
     return {
       archiveVersion: packageJson.version,
+      ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
       archiveDirectory,
       ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
       ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),

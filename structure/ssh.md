@@ -134,6 +134,19 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
   answers `idle` (see [Replacement](#replacement)). While it is busy, the client attaches to it,
   logs `ssh.runtime.refresh.deferred` with the reason, and retries every 10 minutes.
 
+"Older" and "newer" come from `compareRuntimeBuilds` in `packages/shared/src/semver.ts`, used by
+both the client and the remote `__ssh-helper compare-version`. A different core version, or two
+numbered builds of one train (`0.1.0-nightly.20261012.2`), order by SemVer. Any other pair of one
+core, such as two `0.1.0-dev.<sha>` builds or a dev build against a nightly, orders by the commit
+time each server build embeds (`apps/server/vite.config.ts` reads it from git, or from
+`GOAT_BUILD_COMMIT_TIME`). The probe reads the installed builds' times with
+`__ssh-helper commit-time`, and the client sends its own as `archiveCommitTime`. When either time
+is missing, the pair has no order: a running server is kept (`ssh.runtime.upgrade.skipped` logs
+why), and an incompatible one is refused and left running. The one exception is a stopped host: a
+retained build with no commit time predates stamping, so a stamped client installs its own release
+over it. Stopping a server from before commit stamps once therefore moves its host to the client's
+build.
+
 Only the pairing and MCP-session helpers pass `keepExistingRunner`. It never installs, refreshes,
 or replaces a runtime.
 

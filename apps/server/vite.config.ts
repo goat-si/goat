@@ -1,6 +1,8 @@
 import "vite-plus/test/config";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
+// @effect-diagnostics nodeBuiltinImport:off - The build reads its commit time from git.
+import * as NodeChildProcess from "node:child_process";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
@@ -27,6 +29,23 @@ const repoEnv = loadRepoEnv();
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
+
+// Commit time orders builds whose versions cannot, such as `0.1.0-dev.<sha>`
+// (see `compareRuntimeBuilds`). A build outside a git checkout can pass it in
+// GOAT_BUILD_COMMIT_TIME; without either the build is unstamped.
+const buildCommitTime = (() => {
+  const explicit = process.env.GOAT_BUILD_COMMIT_TIME?.trim();
+  if (explicit) return explicit;
+  try {
+    return NodeChildProcess.execFileSync("git", ["log", "-1", "--format=%ct", "HEAD"], {
+      cwd: import.meta.dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+})();
 
 // `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
 // step refuses multi-chunk output and counts the sourcemap as a chunk, and the
@@ -114,6 +133,7 @@ export default mergeConfig(
       },
       define: {
         __GOAT_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
         __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

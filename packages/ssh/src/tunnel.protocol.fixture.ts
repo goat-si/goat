@@ -38,6 +38,8 @@ export const protocolExecutable = (
     nodeReadiness?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
+    /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
+    commitTime?: number;
   },
   state: string,
 ) => {
@@ -79,8 +81,17 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
   } else console.log(JSON.stringify(value));
 } else if (args[0] === "__ssh-helper" && args[1] === "compare-version") {
   if (${JSON.stringify(signals.missingComparison ?? false)}) process.exit(2);
-  const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareSemverVersions(args[2], args[3]);
-  console.log(comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
+  const rest = args.slice(2);
+  const commitFlag = name => { const at = rest.indexOf(name); return at < 0 ? undefined : Number(rest[at+1]); };
+  const [liveVersion, requestedVersion] = rest.filter((value, at) => !value.startsWith("--") && !(rest[at-1] ?? "").startsWith("--"));
+  const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareRuntimeBuilds(
+    { version: liveVersion, commitTime: commitFlag("--live-commit-time") },
+    { version: requestedVersion, commitTime: commitFlag("--requested-commit-time") });
+  console.log(comparison === undefined ? "unknown" : comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
+} else if (args[0] === "__ssh-helper" && args[1] === "commit-time") {
+  const commitTime = ${JSON.stringify(signals.commitTime ?? null)};
+  if (commitTime === null) process.exit(1);
+  console.log(commitTime);
 } else if (args[0] === "__ssh-helper" && args[1] === "activity") {
   const value = await (await import(${JSON.stringify(helperUrl)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1]));
   event("activity", { value }); console.log(value);
@@ -207,7 +218,9 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   nodeMode?: boolean;
   /** The live server drains for a replacement (servers before #119 do not). */
   drain?: boolean;
-  candidateSignals?: { ssh: number; orchestration: number; drain?: boolean };
+  /** Commit time of the installed old build; unstamped when absent. */
+  commitTime?: number;
+  candidateSignals?: { ssh: number; orchestration: number; drain?: boolean; commitTime?: number };
 }) {
   const fs = yield* FileSystem.FileSystem;
   const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

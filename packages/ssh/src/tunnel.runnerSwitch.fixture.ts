@@ -80,8 +80,13 @@ const flag = name => {const at = args.indexOf(name); return at < 0 ? undefined :
 const value = args.includes("--runtime-file") ? await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readLiveSshRuntimeProtocol(flag("--runtime-file"), flag("--port-file"), flag("--pid-file")) : {serverVersion:version,sshRuntimeProtocolVersion: version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
 console.log((value.status ? value.status+" " : "") + [value.serverVersion ?? "unknown",value.sshRuntimeProtocolVersion ?? "unknown",value.orchestrationProtocolVersion ?? "unknown",value.pid ?? 0,value.port ?? 0].join(" "));
   } else if (args[1] === "compare-version") {
-const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareSemverVersions(args[2], args[3]);
-console.log(comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
+const rest = args.slice(2);
+const commitFlag = name => { const at = rest.indexOf(name); return at < 0 ? undefined : Number(rest[at+1]); };
+const [liveVersion, requestedVersion] = rest.filter((value, at) => !value.startsWith("--") && !(rest[at-1] ?? "").startsWith("--"));
+const comparison = (await import(${JSON.stringify(new URL("../../shared/src/semver.ts", import.meta.url).href)})).compareRuntimeBuilds(
+  { version: liveVersion, commitTime: commitFlag("--live-commit-time") },
+  { version: requestedVersion, commitTime: commitFlag("--requested-commit-time") });
+console.log(comparison === undefined ? "unknown" : comparison < 0 ? "older" : comparison > 0 ? "newer" : "equal");
   } else if (args[1] === "activity") {
 console.log(await (await import(${JSON.stringify(new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url).href)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1])));
   } else if (args[1] === "compat") {
