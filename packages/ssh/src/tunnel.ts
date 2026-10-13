@@ -7,8 +7,14 @@ import type {
 import {
   SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
+  RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
+  RUNTIME_DRAIN_MAX_GRACE_SECONDS,
 } from "@goat/contracts";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import {
+  compareRuntimeProtocols,
+  ownRuntimeProtocolRanges,
+  SSH_RUNTIME_PROTOCOL_VERSION,
+} from "@goat/shared/sshRuntimeProtocol";
 import {
   describeReadinessCause,
   waitForHttpReady as waitForHttpReadyShared,
@@ -115,6 +121,13 @@ export interface RemoteGoatRunnerOptions {
   readonly keepExistingRunner?: boolean | null;
   /** Packaged desktop startup may refresh an older owned runtime once, when idle. */
   readonly refreshOwnedRuntimeOnFirstConnection?: boolean;
+  /**
+   * The user confirmed replacing the live runtime even if its work outlasts the drain window.
+   * Without it an expired window cancels the replacement and the server keeps running.
+   */
+  readonly confirmReplacement?: boolean;
+  /** Drain window for a replacement, in seconds (default 60, at most 300). */
+  readonly replacementGraceSeconds?: number;
 }
 
 export interface PreparedRemoteRuntime {
@@ -145,15 +158,24 @@ const RuntimeSignals = Schema.Struct({
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
   invalid: Schema.optionalKey(Schema.Boolean),
 });
-const matchesSignals = (signals: typeof RuntimeSignals.Type, requested: string) =>
-  !signals.invalid &&
-  ((signals.sshRuntimeProtocolVersion === SSH_RUNTIME_PROTOCOL_VERSION &&
-    signals.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION) ||
-    (signals.serverVersion === requested &&
+const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
+/**
+ * Protocol ranges decide compatibility. Only a server too old to advertise both integers
+ * (`unknown`) falls back to the exact release, since an identical build speaks identical protocols.
+ */
+const matchesSignals = (signals: typeof RuntimeSignals.Type, requested: string) => {
+  if (signals.invalid) return false;
+  const verdict = compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, signals);
+  return (
+    verdict === "compatible" ||
+    (verdict === "unknown" &&
+      signals.serverVersion === requested &&
       (signals.sshRuntimeProtocolVersion === undefined ||
         signals.sshRuntimeProtocolVersion === SSH_RUNTIME_PROTOCOL_VERSION) &&
       (signals.orchestrationProtocolVersion === undefined ||
-        signals.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION)));
+        signals.orchestrationProtocolVersion === ORCHESTRATION_PROTOCOL_VERSION))
+  );
+};
 
 const REMOTE_PROTOCOL_TOKEN_SCRIPT = `valid_version() {
   printf '%s\\n' "$1" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$'
@@ -843,6 +865,7 @@ check_candidate_protocol() {
 check_live_protocol() {
   LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
   LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
+  LIVE_DRAIN=0; LIVE_INSTANCE_ID=
   if live="$("$CHECK_RUNNER" __ssh-helper protocol --runtime-file "$DEFAULT_RUNTIME_FILE" --port-file "$PORT_FILE" --pid-file "$PID_FILE" --shell 2>/dev/null)"; then
     set -f; set -- $live
     if ! valid_live_tokens "$@"; then printf 'Malformed live protocol output.\n' >&2; exit 1; fi
@@ -851,7 +874,7 @@ check_live_protocol() {
        [ "$(cat "$MANAGED_FILE" 2>/dev/null || true)" = managed ] &&
        [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$LIVE_PID" ] &&
        [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$LIVE_PORT" ]; then LIVE_OWNED=1; fi
-    if [ "$LIVE_STATUS" = live ] && compatible_fields "$2" "$3" "$4"; then LIVE_COMPATIBLE=1; fi
+    if [ "$LIVE_STATUS" = live ]; then read_live_compat "$2" "$3" "$4"; fi
   else
     if [ -e "$DEFAULT_RUNTIME_FILE" ] || [ -e "$PORT_FILE" ] || [ -e "$PID_FILE" ]; then LIVE_STATUS=unknown; fi
   fi
@@ -914,6 +937,30 @@ check_live_protocol() {
   if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$ALLOW_OWNED_UPGRADE" != 1 ]; then
     printf 'Secondary preparation cannot replace a live runtime.\n' >&2; exit 1
   fi
+  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$LIVE_DRAIN" != 1 ]; then
+    # A server that cannot drain for its replacement is attach-only: never replaced or signalled.
+    printf 'Live GOAT PID=%s port=%s cannot drain for a replacement and this app cannot attach to it; it was left running. Stop it on the remote host when its work is done, then reconnect.\n' "$LIVE_PID" "$LIVE_PORT" >&2; exit 1
+  fi
+}
+read_live_compat() {
+  # The pinned helper applies the one protocol-range comparator. A helper that
+  # predates it, or a server without integers, falls back to exact fields.
+  compat_version="$1"; compat_ssh="$2"; compat_orchestration="$3"
+  if compat_tokens="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper compat --port "$LIVE_PORT" 2>/dev/null)"; then
+    set -f; set -- $compat_tokens
+    if [ "$#" = 3 ]; then
+      case "$1" in
+        compatible) LIVE_COMPATIBLE=1 ;;
+        unknown) if compatible_fields "$compat_version" "$compat_ssh" "$compat_orchestration"; then LIVE_COMPATIBLE=1; fi ;;
+      esac
+      case "$3" in
+        -|''|*[!A-Za-z0-9-]*) ;;
+        *) if [ "$2" = 1 ]; then LIVE_DRAIN=1; LIVE_INSTANCE_ID="$3"; fi ;;
+      esac
+      return 0
+    fi
+  fi
+  if compatible_fields "$compat_version" "$compat_ssh" "$compat_orchestration"; then LIVE_COMPATIBLE=1; fi
 }
 recheck_selected_before_use() {
   check_retained_runner
@@ -961,6 +1008,8 @@ REFRESH_IF_IDLE=@@T3_REFRESH_IF_IDLE@@
 REFRESH_LIVE_VERSION=@@T3_REFRESH_LIVE_VERSION@@
 EXPECTED_LIVE_RUNNER_SHA256=@@T3_LIVE_RUNNER_SHA256@@
 OWNING_LAUNCH=@@T3_OWNING_LAUNCH@@
+DRAIN_FORCE=@@T3_DRAIN_FORCE@@
+DRAIN_GRACE_SECONDS=@@T3_DRAIN_GRACE_SECONDS@@
 RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
 LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
 RETAINED_SNAPSHOT_FILE=; LEGACY_PID=; LEGACY_PORT=; LEGACY_IDENTITY=; LEGACY_VERSION=; LEGACY_UID=; LEGACY_START=
@@ -1029,6 +1078,7 @@ fi
 if [ -n "$EXPECTED_ARCHIVE_VERSION" ] && [ "$RUNNER_VERSION_OUTPUT" != "goat v$EXPECTED_ARCHIVE_VERSION" ]; then
   printf 'Expected goat v%s, observed %s; existing runner and server were preserved.\\n' "$EXPECTED_ARCHIVE_VERSION" "$RUNNER_VERSION_OUTPUT" >&2; exit 1
 fi
+TARGET_VERSION="\${RUNNER_VERSION_OUTPUT#goat v}"
 if [ -n "$SELECTED_VERSION" ]; then
   # Cold mirrors installed this exact archive during validation; pin future use too.
   selected_dir="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION"
@@ -1100,8 +1150,8 @@ if [ "$OWNING_LAUNCH" = 1 ]; then
   check_retained_runner
   check_live_protocol
 @@T3_VERIFY_OWNED_BEFORE_PUBLICATION@@
-  if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
-    # A preliminary idle response never authorizes signalling; launch probes again last.
+  if [ "$NEEDS_OWNED_UPGRADE" = 1 ] && [ "$REPLACEMENT_REASON" != incompatible ]; then
+    # An optional refresh waits for idle; launch probes again last, then the server drains.
     activity="$(read_refresh_activity)"
     [ "$activity" = idle ] || emit_pending "$activity"
   fi
@@ -1374,6 +1424,7 @@ REMOTE_PORT=""
 REMOTE_MANAGED=""
 if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   UPGRADE_PID="$LIVE_PID"; UPGRADE_PORT="$LIVE_PORT"; UPGRADE_VERSION="$LIVE_VERSION"
+  UPGRADE_INSTANCE="$LIVE_INSTANCE_ID"
   # Validate bytes and authority before the final PID-validated idle probe.
   check_candidate_protocol
   check_retained_runner
@@ -1382,9 +1433,11 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   else verify_owned_identity "$LIVE_PID" "$LIVE_PORT" || ownership_unverified; fi
   UPGRADE_START="$(process_start "$UPGRADE_PID")" || ownership_unverified
   [ -n "$UPGRADE_START" ] || ownership_unverified
-  activity="$(read_refresh_activity)"
-  [ "$activity" = idle ] || emit_pending "$activity"
-  # Only short identity checks intervene between activity and signalling.
+  if [ "$REPLACEMENT_REASON" != incompatible ]; then
+    # An optional refresh drains only an idle server, so its retries never hold up new turns.
+    activity="$(read_refresh_activity)"
+    [ "$activity" = idle ] || emit_pending "$activity"
+  fi
   if [ "$LEGACY_PENDING" = 1 ] && [ "$LEGACY_COMMITTED" = 0 ]; then
     commit_legacy_identity || ownership_unverified
   fi
@@ -1394,15 +1447,51 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   fi
   [ "$(process_start "$UPGRADE_PID")" = "$UPGRADE_START" ] || ownership_unverified
   [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || ownership_unverified
-  kill "$UPGRADE_PID" 2>/dev/null || true
-  wait_for_pid_exit "$UPGRADE_PID"
-  if kill -0 "$UPGRADE_PID" 2>/dev/null; then
-    printf 'Owned server did not stop; runner and ownership files were preserved.\n' >&2; exit 1
-  fi
+  PREVIOUS_IDENTITY="$(cat "$STATE_DIR/identity")" || ownership_unverified
+  PREVIOUS_RUNNER="$STATE_DIR/run-t3.previous"
+  if [ -f "$RETAINED_SNAPSHOT_FILE" ]; then cp -p "$RETAINED_SNAPSHOT_FILE" "$PREVIOUS_RUNNER"
+  else cp -p "$RUNNER_FILE" "$PREVIOUS_RUNNER"; fi
+  # The server, not this script, stops itself: it refuses new turns, lets running work
+  # finish within the grace window, and exits. Unconfirmed, an expired window cancels.
+  drain_force=
+  [ "$DRAIN_FORCE" != 1 ] || drain_force=--force
+  drain_result="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
+  case "$drain_result" in
+    drained) ;;
+    cancelled) rm -f "$PREVIOUS_RUNNER"; emit_pending busy ;;
+    *) rm -f "$PREVIOUS_RUNNER"; emit_pending unknown ;;
+  esac
   LEGACY_TERMINATED=1
   rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
   publish_selected_runner
-  REFRESH_DECISION=replaced
+  if [ "$T3_ARCHIVE_MODE" = 1 ]; then
+    SPAWN_IDENTITY="$HOME/.goat/runtime/goat/versions/$SELECTED_VERSION/goat"
+  else
+    SPAWN_IDENTITY="$T3_NODE_SCRIPT_PATH"
+  fi
+  SUPERVISE_RESULT="$STATE_DIR/replacement.result.$$"
+  rm -f "$SUPERVISE_RESULT"
+  # Detached, so a dropped SSH session cannot leave the host without a server.
+  trap '' HUP
+  nohup "$RUNNER_FILE" __ssh-helper supervise --old-pid "$UPGRADE_PID" --old-instance-id "$UPGRADE_INSTANCE" --port "$UPGRADE_PORT" --base-dir "$DEFAULT_SERVER_HOME" --state-dir "$STATE_DIR" --runner "$RUNNER_FILE" --previous-runner "$PREVIOUS_RUNNER" --target-version "$TARGET_VERSION" --previous-version "$UPGRADE_VERSION" --identity "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $UPGRADE_PORT --base-dir $DEFAULT_SERVER_HOME" --previous-identity "$PREVIOUS_IDENTITY" --ready-timeout-ms "@@T3_READY_TIMEOUT_MS@@" --log "$LOG_FILE" --result "$SUPERVISE_RESULT" >/dev/null 2>>"$LOG_FILE" </dev/null &
+  wait "$!" || true
+  supervise_status=failed; supervise_pid=0; supervise_version=
+  if [ -f "$SUPERVISE_RESULT" ]; then read -r supervise_status supervise_pid supervise_version <"$SUPERVISE_RESULT" || true; fi
+  rm -f "$SUPERVISE_RESULT"
+  case "$supervise_status" in
+    replaced)
+      REMOTE_PID="$supervise_pid"; REMOTE_PORT="$UPGRADE_PORT"; REMOTE_MANAGED=managed
+      REFRESH_DECISION=replaced ;;
+    rolled-back)
+      if [ "$LIVE_COMPATIBLE" != 1 ]; then
+        printf 'GOAT %s did not start on the remote host; GOAT %s was restored and is running, but this app cannot attach to it. See %s.\n' "$TARGET_VERSION" "$supervise_version" "$LOG_FILE" >&2; exit 1
+      fi
+      printf 'GOAT %s did not start on the remote host; GOAT %s was restored.\n' "$TARGET_VERSION" "$supervise_version" >&2
+      REMOTE_PID="$supervise_pid"; REMOTE_PORT="$UPGRADE_PORT"; REMOTE_MANAGED=managed
+      SELECTED_VERSION="$supervise_version" ;;
+    *)
+      printf 'Remote runtime replacement failed; see %s.\n' "$LOG_FILE" >&2; exit 1 ;;
+  esac
 elif [ "$LIVE_STATUS" = live ]; then
   if [ "$LIVE_COMPATIBLE" != 1 ]; then
     printf 'Live GOAT compatibility changed; reconnect.\n' >&2; exit 1
@@ -1634,6 +1723,16 @@ function buildRemoteRunnerSetupScript(
   const preserve = selection.source === "retained";
   return applyScriptPlaceholders(REMOTE_RUNNER_SETUP_SCRIPT, {
     T3_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
+    T3_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
+    T3_DRAIN_GRACE_SECONDS: String(
+      Math.min(
+        Math.max(
+          0,
+          Math.trunc(input?.replacementGraceSeconds ?? RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS),
+        ),
+        RUNTIME_DRAIN_MAX_GRACE_SECONDS,
+      ),
+    ),
     T3_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
     T3_REUSE_READY_TIMEOUT_MS: String(REMOTE_REUSE_READY_TIMEOUT_MS),
     T3_READY_PROBE_TIMEOUT_MS: String(SSH_READY_PROBE_TIMEOUT_MS),
@@ -1889,6 +1988,11 @@ for candidate in "$live_hint" "$retained_version" "$V"; do
           live_fields="$live_fields$(printf ',"liveBinarySignals":%s' "$live_binary")"
         fi
       fi
+      # Only a server that drains for its own replacement may be replaced; others are attach-only.
+      if valid_port "$6" && live_compat="$("$exe" __ssh-helper compat --port "$6" 2>/dev/null)"; then
+        set -f; set -- $live_compat
+        if [ "$#" = 3 ] && [ "$2" = 1 ]; then live_fields="$live_fields,\\"liveDrain\\":true"; fi
+      fi
     fi
     break
   fi
@@ -1919,6 +2023,8 @@ const decodeRemoteRuntimeProbe = Schema.decodeEffect(
       liveVersion: Schema.optionalKey(Schema.String),
       liveSignals: Schema.optionalKey(RuntimeSignals),
       liveBinarySignals: Schema.optionalKey(RuntimeSignals),
+      /** The live server drains for a replacement. Without it the client only attaches. */
+      liveDrain: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 );
@@ -2008,6 +2114,7 @@ export const prepareRemoteRuntime = (
     const adoptLegacy =
       owningLaunch &&
       exact.mayUpgradeOwnedServer &&
+      probe.liveDrain === true &&
       probe.identityAbsent === true &&
       !(
         liveCompatible &&
@@ -2019,6 +2126,7 @@ export const prepareRemoteRuntime = (
       owningLaunch &&
       exact.mayUpgradeOwnedServer &&
       runner?.refreshOwnedRuntimeOnFirstConnection === true &&
+      probe.liveDrain === true &&
       liveCompatible &&
       probe.liveOwned === true &&
       probe.identityAbsent !== true &&

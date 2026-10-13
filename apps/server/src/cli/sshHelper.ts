@@ -2,19 +2,34 @@ import { LEGACY_ENVIRONMENT_PATH, LEGACY_ACTIVITY_PATH } from "@goat/contracts/l
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics globalDateInEffect:off
+// @effect-diagnostics globalDate:off
 // The helpers mirror the inline Node snippets the SSH launch script used to
 // run, byte for byte in behaviour, so they stay on plain Node APIs.
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
+import * as NodeChildProcess from "node:child_process";
+import * as NodePath from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/cli";
-import { ExecutionEnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import {
+  ExecutionEnvironmentDescriptor,
+  GOAT_RUNTIME_CONTROL_HEADER,
+  GOAT_RUNTIME_DRAIN_PATH,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
+  RUNTIME_DRAIN_MAX_GRACE_SECONDS,
+  RuntimeDrainResult,
+} from "@goat/contracts";
 import { compareSemverVersions } from "@goat/shared/semver";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import {
+  compareRuntimeProtocols,
+  ownRuntimeProtocolRanges,
+  SSH_RUNTIME_PROTOCOL_VERSION,
+} from "@goat/shared/sshRuntimeProtocol";
 import { PersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -476,7 +491,334 @@ const compareVersion = Command.make("compare-version", {
   ),
 );
 
+const instanceToken = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9-]{1,64}$/.test(value);
+
+/**
+ * What the launch script needs to decide between attach, replace and refuse for the server on
+ * `port`: the protocol-range verdict from the one comparator, whether it can drain for a
+ * replacement, and the start it would drain. Servers without `drainRestart` or an
+ * `instanceId` are attach-only.
+ */
+export const readSshRuntimeCompatibility = async (port: number) => {
+  const descriptor = decodeEnvironmentDescriptor(await readProtocolDescriptor(port));
+  const verdict = compareRuntimeProtocols(
+    ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
+    descriptor,
+  );
+  const instanceId = instanceToken(descriptor.instanceId) ? descriptor.instanceId : undefined;
+  return {
+    verdict,
+    drainRestart: descriptor.capabilities.drainRestart === true && instanceId !== undefined,
+    instanceId,
+    serverVersion: descriptor.serverVersion,
+  } as const;
+};
+
+/** Prints `<verdict> <drain 0|1> <instanceId|->`; exits 1 when no descriptor answers. */
+const compat = Command.make("compat", {
+  port: Flag.Int("port"),
+}).pipe(
+  Command.withHandler(({ port }) =>
+    Effect.promise(async () => {
+      try {
+        const value = await readSshRuntimeCompatibility(port);
+        process.stdout.write(
+          `${value.verdict} ${value.drainRestart ? 1 : 0} ${value.instanceId ?? "-"}\n`,
+        );
+      } catch {
+        process.stdout.write("unknown 0 -\n");
+        process.exitCode = 1;
+      }
+    }),
+  ),
+);
+
+/**
+ * Asks the server on `port` to drain for `targetVersion`. Answers `drained` (it exits on its
+ * own), `cancelled` (the grace window expired unconfirmed and it serves again),
+ * `instance-changed`, or `unknown` when it gave no valid answer.
+ */
+export const requestSshRuntimeDrain = (input: {
+  readonly port: number;
+  readonly instanceId: string;
+  readonly targetVersion: string;
+  readonly graceSeconds: number;
+  readonly force: boolean;
+  readonly tokenFile: string;
+}): Promise<"drained" | "cancelled" | "instance-changed" | "unknown"> =>
+  new Promise((resolve) => {
+    let token: string;
+    try {
+      token = NodeFS.readFileSync(input.tokenFile, "utf8").trim();
+    } catch {
+      resolve("unknown");
+      return;
+    }
+    if (token === "" || !instanceToken(input.instanceId)) {
+      resolve("unknown");
+      return;
+    }
+    const graceSeconds = Math.min(Math.max(0, input.graceSeconds), RUNTIME_DRAIN_MAX_GRACE_SECONDS);
+    const body = JSON.stringify({
+      expectedInstanceId: input.instanceId,
+      targetVersion: input.targetVersion,
+      graceSeconds,
+      ...(input.force ? { force: true } : {}),
+    });
+    let settled = false;
+    const finish = (value: "drained" | "cancelled" | "instance-changed" | "unknown") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      request.destroy();
+      resolve(value);
+    };
+    const request = NodeHttp.request(
+      {
+        hostname: "127.0.0.1",
+        port: input.port,
+        path: GOAT_RUNTIME_DRAIN_PATH,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+          [GOAT_RUNTIME_CONTROL_HEADER]: token,
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        response.on("data", (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > 4096) finish("unknown");
+          else chunks.push(chunk);
+        });
+        response.once("error", () => finish("unknown"));
+        response.once("end", () => {
+          try {
+            if (response.statusCode !== 200) throw new Error("drain refused");
+            const result = Schema.decodeUnknownSync(RuntimeDrainResult)(
+              JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            );
+            // A drain is only proven for the start the caller named.
+            if (result.status !== "instance-changed" && result.instanceId !== input.instanceId)
+              finish("unknown");
+            else finish(result.status);
+          } catch {
+            finish("unknown");
+          }
+        });
+      },
+    );
+    // The server answers when the window closes; allow it the full window plus slack.
+    const deadline = setTimeout(() => finish("unknown"), (graceSeconds + 30) * 1000);
+    request.once("error", () => finish("unknown"));
+    request.end(body);
+  });
+
+const drain = Command.make("drain", {
+  port: Flag.Int("port"),
+  instanceId: Flag.String("instance-id"),
+  targetVersion: Flag.String("target-version"),
+  graceSeconds: Flag.Int("grace-seconds").pipe(
+    Flag.withDefault(RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS),
+  ),
+  force: Flag.Boolean("force").pipe(Flag.withDefault(false)),
+  tokenFile: Flag.String("token-file"),
+}).pipe(
+  Command.withHandler((input) =>
+    Effect.promise(async () => {
+      process.stdout.write((await requestSshRuntimeDrain(input)) + "\n");
+    }),
+  ),
+);
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForExit = async (pid: number, timeoutMs: number) => {
+  const deadline = Date.now() + timeoutMs;
+  while (processExists(pid)) {
+    if (Date.now() >= deadline) return false;
+    await delay(100);
+  }
+  return true;
+};
+
+const DATABASE_SUFFIXES = ["", "-wal", "-shm"] as const;
+
+const copyDatabase = (fromDir: string, toDir: string) => {
+  NodeFS.mkdirSync(toDir, { recursive: true, mode: 0o700 });
+  for (const suffix of DATABASE_SUFFIXES) {
+    const source = NodePath.join(fromDir, `statev2.sqlite${suffix}`);
+    const target = NodePath.join(toDir, `statev2.sqlite${suffix}`);
+    if (NodeFS.existsSync(source)) NodeFS.copyFileSync(source, target);
+    else NodeFS.rmSync(target, { force: true });
+  }
+};
+
+const writeAtomically = (file: string, contents: string, mode = 0o600) => {
+  const next = `${file}.next.${process.pid}`;
+  NodeFS.writeFileSync(next, contents, { mode });
+  NodeFS.renameSync(next, file);
+};
+
+export interface SshRuntimeSupervisorInput {
+  /** The drained server. The supervisor never signals it; it waits for it to exit. */
+  readonly oldPid: number;
+  readonly oldInstanceId: string;
+  readonly port: number;
+  readonly baseDir: string;
+  readonly stateDir: string;
+  /** Published runner for `targetVersion`, and a private copy of the one it replaced. */
+  readonly runnerFile: string;
+  readonly previousRunnerFile: string;
+  readonly targetVersion: string;
+  readonly previousVersion: string;
+  /** Launch identities recorded for the ownership checks, as the launch script writes them. */
+  readonly identity: string;
+  readonly previousIdentity: string;
+  readonly exitTimeoutMs: number;
+  readonly readyTimeoutMs: number;
+  readonly logFile: string;
+}
+
+export type SshRuntimeSupervisorResult =
+  | { readonly status: "replaced" | "rolled-back"; readonly pid: number; readonly version: string }
+  | { readonly status: "old-alive" | "failed"; readonly reason: string };
+
+/**
+ * Swaps the drained server for `targetVersion` on the same port. It runs detached from the SSH
+ * session, so a dropped client cannot leave the host without a server. The new server must pass
+ * the handshake: its descriptor names `targetVersion`, a new instance, and protocol ranges this
+ * build attaches to. Otherwise the supervisor stops only the child it started, restores the
+ * database and runner it backed up, and starts the previous version again.
+ */
+export const superviseSshRuntimeReplacement = async (
+  input: SshRuntimeSupervisorInput,
+): Promise<SshRuntimeSupervisorResult> => {
+  if (!(await waitForExit(input.oldPid, input.exitTimeoutMs)))
+    return { status: "old-alive", reason: "The drained server did not exit; it was left running." };
+  const userdata = NodePath.join(input.baseDir, "userdata");
+  const backup = NodePath.join(input.stateDir, "replacement-backup");
+  copyDatabase(userdata, backup);
+
+  const start = async (runner: string, version: string, identity: string) => {
+    const log = NodeFS.openSync(input.logFile, "a");
+    const child = NodeChildProcess.spawn(
+      runner,
+      ["serve", "--host", "127.0.0.1", "--port", String(input.port), "--base-dir", input.baseDir],
+      {
+        detached: true,
+        stdio: ["ignore", log, log],
+        env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+      },
+    );
+    NodeFS.closeSync(log);
+    child.unref();
+    const pid = child.pid;
+    if (pid === undefined) return undefined;
+    const deadline = Date.now() + input.readyTimeoutMs;
+    while (Date.now() < deadline && processExists(pid)) {
+      try {
+        const value = await readSshRuntimeCompatibility(input.port);
+        if (
+          value.serverVersion === version &&
+          value.verdict === "compatible" &&
+          value.instanceId !== undefined &&
+          value.instanceId !== input.oldInstanceId
+        ) {
+          for (const [name, contents] of [
+            ["identity", `${identity}\n`],
+            ["pid", `${pid}\n`],
+            ["port", `${input.port}\n`],
+            ["managed", "managed\n"],
+          ] as const)
+            writeAtomically(NodePath.join(input.stateDir, name), contents);
+          return pid;
+        }
+      } catch {
+        // Not answering yet.
+      }
+      await delay(100);
+    }
+    // Only the child this supervisor started is ever signalled.
+    if (processExists(pid)) {
+      process.kill(pid, "SIGTERM");
+      if (!(await waitForExit(pid, 5000))) process.kill(pid, "SIGKILL");
+      await waitForExit(pid, 5000);
+    }
+    return undefined;
+  };
+
+  const started = await start(input.runnerFile, input.targetVersion, input.identity);
+  if (started !== undefined) {
+    NodeFS.rmSync(backup, { recursive: true, force: true });
+    NodeFS.rmSync(input.previousRunnerFile, { force: true });
+    return { status: "replaced", pid: started, version: input.targetVersion };
+  }
+  copyDatabase(backup, userdata);
+  NodeFS.copyFileSync(input.previousRunnerFile, `${input.runnerFile}.restore`);
+  NodeFS.chmodSync(`${input.runnerFile}.restore`, 0o700);
+  NodeFS.renameSync(`${input.runnerFile}.restore`, input.runnerFile);
+  const restored = await start(input.runnerFile, input.previousVersion, input.previousIdentity);
+  if (restored === undefined)
+    return {
+      status: "failed",
+      reason: `GOAT ${input.targetVersion} and the previous ${input.previousVersion} both failed to start.`,
+    };
+  NodeFS.rmSync(backup, { recursive: true, force: true });
+  NodeFS.rmSync(input.previousRunnerFile, { force: true });
+  return { status: "rolled-back", pid: restored, version: input.previousVersion };
+};
+
+const supervise = Command.make("supervise", {
+  oldPid: Flag.Int("old-pid"),
+  oldInstanceId: Flag.String("old-instance-id"),
+  port: Flag.Int("port"),
+  baseDir: Flag.String("base-dir"),
+  stateDir: Flag.String("state-dir"),
+  runnerFile: Flag.String("runner"),
+  previousRunnerFile: Flag.String("previous-runner"),
+  targetVersion: Flag.String("target-version"),
+  previousVersion: Flag.String("previous-version"),
+  identity: Flag.String("identity"),
+  previousIdentity: Flag.String("previous-identity"),
+  exitTimeoutMs: Flag.Int("exit-timeout-ms").pipe(Flag.withDefault(60_000)),
+  readyTimeoutMs: Flag.Int("ready-timeout-ms").pipe(Flag.withDefault(60_000)),
+  logFile: Flag.String("log"),
+  resultFile: Flag.String("result"),
+}).pipe(
+  Command.withHandler(({ resultFile, ...input }) =>
+    Effect.promise(async () => {
+      let result: SshRuntimeSupervisorResult;
+      try {
+        result = await superviseSshRuntimeReplacement(input);
+      } catch (cause) {
+        result = {
+          status: "failed",
+          reason: cause instanceof Error ? cause.message : "Replacement supervisor failed.",
+        };
+      }
+      const line = `${result.status} ${"pid" in result ? result.pid : 0} ${"version" in result ? result.version : "-"}\n`;
+      writeAtomically(resultFile, line);
+      if ("reason" in result) process.stderr.write(result.reason + "\n");
+      process.stdout.write(line);
+    }),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
-  Command.withSubcommands([pickPort, waitReady, runtimePort, protocol, activity, compareVersion]),
+  Command.withSubcommands([
+    pickPort,
+    waitReady,
+    runtimePort,
+    protocol,
+    activity,
+    compareVersion,
+    compat,
+    drain,
+    supervise,
+  ]),
 );

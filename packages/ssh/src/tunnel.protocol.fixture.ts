@@ -36,6 +36,8 @@ export const protocolExecutable = (
     liveTokens?: string;
     descriptor404?: boolean;
     nodeReadiness?: boolean;
+    /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
+    drain?: boolean;
   },
   state: string,
 ) => {
@@ -56,6 +58,9 @@ const state = ${JSON.stringify(state)};
 const test = path.join(home, ".test");
 const runtimeFile = path.join(home, ".goat/userdata/server-runtime.json");
 const args = process.argv.slice(2);
+const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i+1]; };
+const drainCapable = ${JSON.stringify(signals.drain ?? false)};
+const tokenFile = path.join(home, ".goat/userdata/runtime-control.token");
 function event(type, extra = {}) { fs.appendFileSync(path.join(test, "events"), JSON.stringify({type, version, ...extra}) + "\\n"); }
 if (args[0] === "--version") {
   event("version", { published: fs.existsSync(path.join(state, "run-t3.sh")) ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "" });
@@ -63,7 +68,6 @@ if (args[0] === "--version") {
 } else if (args[0] === "__ssh-helper" && args[1] === "protocol") {
   if (${JSON.stringify(signals.missingCommand ?? false)}) process.exit(2);
   const at = args.indexOf("--runtime-file");
-  const flag = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i+1]; };
   const value = at < 0 ? fields : await (await import(${JSON.stringify(helperUrl)})).readLiveSshRuntimeProtocol(args[at+1], flag("--port-file"), flag("--pid-file"));
   event("protocol", { live: at >= 0, status: value.status });
   if (args.includes("--shell")) {
@@ -80,6 +84,27 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
 } else if (args[0] === "__ssh-helper" && args[1] === "activity") {
   const value = await (await import(${JSON.stringify(helperUrl)})).readSshServerActivity(Number(args[args.indexOf("--port")+1]), Number(args[args.indexOf("--pid")+1]));
   event("activity", { value }); console.log(value);
+} else if (args[0] === "__ssh-helper" && args[1] === "compat") {
+  try {
+    const value = await (await import(${JSON.stringify(helperUrl)})).readSshRuntimeCompatibility(Number(flag("--port")));
+    console.log(value.verdict + " " + (value.drainRestart ? 1 : 0) + " " + (value.instanceId ?? "-"));
+  } catch { console.log("unknown 0 -"); process.exitCode = 1; }
+} else if (args[0] === "__ssh-helper" && args[1] === "drain") {
+  const value = await (await import(${JSON.stringify(helperUrl)})).requestSshRuntimeDrain({
+    port: Number(flag("--port")), instanceId: flag("--instance-id"), targetVersion: flag("--target-version"),
+    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file") });
+  event("drain-request", { value, force: args.includes("--force"), grace: Number(flag("--grace-seconds")) }); console.log(value);
+} else if (args[0] === "__ssh-helper" && args[1] === "supervise") {
+  // Supervised children prove readiness through their descriptor, not the readiness FIFO.
+  process.env.FIXTURE_SUPERVISED = "1";
+  const result = await (await import(${JSON.stringify(helperUrl)})).superviseSshRuntimeReplacement({
+    oldPid: Number(flag("--old-pid")), oldInstanceId: flag("--old-instance-id"), port: Number(flag("--port")),
+    baseDir: flag("--base-dir"), stateDir: flag("--state-dir"), runnerFile: flag("--runner"),
+    previousRunnerFile: flag("--previous-runner"), targetVersion: flag("--target-version"),
+    previousVersion: flag("--previous-version"), identity: flag("--identity"), previousIdentity: flag("--previous-identity"),
+    exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
+  event("supervise", { status: result.status });
+  fs.writeFileSync(flag("--result"), result.status + " " + (result.pid ?? 0) + " " + (result.version ?? "-") + "\\n");
 } else if (args[0] === "__ssh-helper" && args[1] === "pick-port") {
   const socket = net.createServer(); socket.listen(0, "127.0.0.1", () => {
 const port = socket.address().port; socket.close(() => console.log(port));
@@ -102,10 +127,31 @@ res.resume(); res.on("end", () => process.exit(res.statusCode === 200 ? 0 : 1));
   if (args.includes("--runtime-mode-ceiling") && fs.existsSync(path.join(test, "reject-ceiling"))) process.exit(2);
   console.log(JSON.stringify(args[1] === "pairing" ? {credential: version} : {token: version, expiresAt: null}));
 } else if (args[0] === "serve") {
+  if (fs.existsSync(path.join(test, "fail-start-" + version))) { event("failed-start"); process.exit(3); }
   const at = args.indexOf("--port"); const requested = at < 0 ? 0 : Number(args[at+1]);
-  const descriptor = {environmentId: "fixture", label: "Fixture", platform: {os: "linux", arch: "x64"}, capabilities: {}, ...fields};
+  const instanceId = drainCapable ? require("node:crypto").randomUUID() : undefined;
+  const descriptor = {environmentId: "fixture", label: "Fixture", platform: {os: "linux", arch: "x64"},
+    capabilities: drainCapable ? {drainRestart: true} : {}, ...fields, ...(instanceId ? {instanceId} : {})};
+  const stopSelf = () => {
+    if (fs.existsSync(runtimeFile) && JSON.parse(fs.readFileSync(runtimeFile, "utf8")).pid === process.pid) fs.unlinkSync(runtimeFile);
+    server.close(() => process.exit(0)); server.closeAllConnections();
+  };
   const server = http.createServer((req, res) => {
 res.setHeader("content-type", "application/json");
+if (req.method === "POST" && req.url === "/.well-known/goat/runtime/drain" && drainCapable) {
+  let body = ""; req.on("data", c => { body += c; }); req.on("end", () => {
+    const request = JSON.parse(body);
+    const token = fs.readFileSync(tokenFile, "utf8").trim();
+    if (req.headers["x-goat-runtime-control"] !== token) { res.statusCode = 403; res.end("{}"); return; }
+    if (request.expectedInstanceId !== instanceId) { res.end(JSON.stringify({status: "instance-changed", instanceId, forced: false})); return; }
+    const file = path.join(test, "drain");
+    const mode = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "drained";
+    const status = mode === "cancelled" && request.force !== true ? "cancelled" : "drained";
+    event("drain", { status, targetVersion: request.targetVersion, force: request.force === true, grace: request.graceSeconds });
+    res.end(JSON.stringify({status, instanceId, forced: status === "drained" && mode === "cancelled"}), () => { if (status === "drained") { event("self-stop"); stopSelf(); } });
+  });
+  return;
+}
 if (req.url === "/.well-known/t3/environment" && (${JSON.stringify(signals.descriptor404 ?? false)} || fs.existsSync(path.join(test, "descriptor404")))) {
   res.statusCode = 404; res.end("{}"); return;
 }
@@ -130,14 +176,16 @@ server.close(() => process.exit(0));
   });
   server.listen(requested, "127.0.0.1", () => {
 const record = {version: 1, pid: process.pid, port: server.address().port,
-  origin: "http://127.0.0.1:" + server.address().port, startedAt: new Date().toISOString(), ...fields};
+  origin: "http://127.0.0.1:" + server.address().port, startedAt: new Date().toISOString(), ...fields, ...(instanceId ? {instanceId} : {})};
 fs.mkdirSync(path.dirname(runtimeFile), {recursive: true}); fs.writeFileSync(runtimeFile, JSON.stringify(record));
+if (drainCapable) fs.writeFileSync(tokenFile, "fixture-token-" + process.pid + "\\n", {mode: 0o600});
 fs.appendFileSync(path.join(test, "pids"), process.pid + "\\n");
 event("start", { runner: fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") });
 if (args.includes("--test-seed") || process.env.T3_TEST_SEED === "1") {
   fs.writeFileSync(path.join(test, "accepted-ready-" + process.pid), "ready");
   console.log(JSON.stringify(record));
 }
+else if (process.env.FIXTURE_SUPERVISED === "1") fs.writeFileSync(path.join(test, "accepted-ready-" + process.pid), "ready");
 else if (!${JSON.stringify(signals.nodeReadiness ?? false)}) { const fd = fs.openSync(path.join(test, "ready.fifo"), "w"); fs.writeSync(fd, "ready\\n"); fs.closeSync(fd); }
   });
 } else process.exit(97);
@@ -157,7 +205,9 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   liveTokens?: string;
   descriptor404?: boolean;
   nodeMode?: boolean;
-  candidateSignals?: { ssh: number; orchestration: number };
+  /** The live server drains for a replacement (servers before #119 do not). */
+  drain?: boolean;
+  candidateSignals?: { ssh: number; orchestration: number; drain?: boolean };
 }) {
   const fs = yield* FileSystem.FileSystem;
   const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -289,6 +339,7 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       input.candidateSignals ?? {
         ssh: SSH_RUNTIME_PROTOCOL_VERSION,
         orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        drain: true,
       },
       state,
     ),
