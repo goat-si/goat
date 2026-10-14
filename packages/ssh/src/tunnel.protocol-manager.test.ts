@@ -23,8 +23,6 @@ import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
-  // Live fixtures spawn real shells for every ensure; on loaded CI runners a case passes 60 s.
-  { timeout: 120_000 },
   () => {
     it.live.each(["busy", "unknown", "idle", "failure"] as const)(
       "manager consumes settled startup decisions and retries pending ones: %s",

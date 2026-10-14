@@ -27,8 +27,6 @@ import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixtu
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
-  // Live fixtures spawn real shells for every ensure; on loaded CI runners a case passes 60 s.
-  { timeout: 120_000 },
   () => {
     it.live(
       "cached manager auth pins its compatible release across resolver changes and rechecks both MCP attempts",
