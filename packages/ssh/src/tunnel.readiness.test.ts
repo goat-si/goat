@@ -4,6 +4,7 @@ import * as NetService from "@goat/shared/Net";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { TestClock } from "effect/testing";
@@ -38,6 +39,18 @@ const refusingClient = HttpClient.make((request) =>
     }),
   ),
 );
+
+// ensureEnvironment writes an askpass helper before it spawns SSH. The fake spawner never
+// runs it, and real disk I/O would let `advance` step the TestClock past the launch while
+// the write is still in flight. On a loaded CI runner the fiber then sleeps on a clock
+// nobody advances again, and the test hangs until the 60 s timeout.
+const askpassFileSystem = FileSystem.makeNoop({
+  makeTempDirectoryScoped: () => Effect.succeed("/goat-ssh-runtime-test"),
+  makeDirectory: () => Effect.void,
+  exists: () => Effect.succeed(false),
+  writeFileString: () => Effect.void,
+  chmod: () => Effect.void,
+});
 
 // Steps the test clock so work scheduled after each wake-up sees ordered time.
 const advance = (total: Duration.Duration) =>
@@ -151,6 +164,7 @@ describe("SSH forward readiness", () => {
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        Layer.succeed(FileSystem.FileSystem, askpassFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, slowClient(1_300)),
         Layer.succeed(NetService.NetService, testNetService),

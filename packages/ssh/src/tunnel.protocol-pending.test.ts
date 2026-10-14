@@ -56,8 +56,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
           assert.notEqual((yield* f.snapshot).pid, before.pid);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      // Two full launches with a drained replacement; on loaded CI runners this passes 60 s.
-      120_000,
     );
 
     it.live.each(["legacy", "incompatible"] as const)(
