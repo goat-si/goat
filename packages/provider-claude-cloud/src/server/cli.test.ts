@@ -12,6 +12,10 @@ import {
   SYNTHETIC_FOLDER_TRUST_REFUSALS,
 } from "./testing.ts";
 
+// Minimal option line from the plain native node-pty capture; no cwd/account data or trust input.
+const NATIVE_FOLDER_TRUST_OPTION =
+  "\u001b[4GYes,\u001b[9GI\u001b[11Gtrust\u001b[17Gthis\u001b[22Gfolder\r\r\n";
+
 it.effect(
   "readiness does not create work or open a PTY and reuses the sibling executable/environment",
   () =>
@@ -165,7 +169,11 @@ it.effect("a normal zero-signal exit does not override an output failure after a
 );
 
 // Refusal variants are representative synthetic fixtures; the folder prompt was observed natively.
-it.effect.each([FOLDER_TRUST_PROMPT, ...SYNTHETIC_FOLDER_TRUST_REFUSALS])(
+it.effect.each([
+  FOLDER_TRUST_PROMPT,
+  NATIVE_FOLDER_TRUST_OPTION,
+  ...SYNTHETIC_FOLDER_TRUST_REFUSALS,
+])(
   "rejects split ANSI folder trust with the exact project cwd and one spawn/zero input (%#)",
   (output) =>
     Effect.gen(function* () {
@@ -345,6 +353,7 @@ it.effect.each([
   "Fix workspace trust",
   "Do you trust this algorithm?",
   FOLDER_TRUST_PROMPT.trim(),
+  NATIVE_FOLDER_TRUST_OPTION.trimEnd(),
   ...SYNTHETIC_FOLDER_TRUST_REFUSALS.map((output) => output.trim()),
 ])("accepts a receipt whose title mentions trust (%#)", (title) =>
   Effect.scoped(
@@ -354,7 +363,9 @@ it.effect.each([
       yield* h.fake.ready;
       h.fake.emit(RECEIPT.replace("Test task", title));
       const handle = yield* Fiber.join(fiber);
-      expect(handle.receipt.title).toBe(title);
+      expect(handle.receipt.title).toBe(
+        title === NATIVE_FOLDER_TRUST_OPTION.trimEnd() ? "Yes,Itrustthisfolder" : title,
+      );
       expect(handle.receipt.taskId).toBe("session_ABC123");
       h.fake.finish();
       yield* handle.exited;
@@ -363,7 +374,11 @@ it.effect.each([
   ),
 );
 
-it.effect.each([FOLDER_TRUST_PROMPT, ...SYNTHETIC_FOLDER_TRUST_REFUSALS])(
+it.effect.each([
+  FOLDER_TRUST_PROMPT,
+  NATIVE_FOLDER_TRUST_OPTION,
+  ...SYNTHETIC_FOLDER_TRUST_REFUSALS,
+])(
   "returns identity before a later split ANSI folder refusal reports uncertainty (%#)",
   (output) =>
     Effect.scoped(
@@ -393,6 +408,8 @@ it.effect.each([
   "Do you trust this algorithm?\n",
   "Task: This directory is not trusted.\n",
   "Discuss whether this folder is trusted.\n",
+  NATIVE_FOLDER_TRUST_OPTION.replace("folder", "algorithm"),
+  `Task: ${NATIVE_FOLDER_TRUST_OPTION}`,
 ])("generic trust task output does not block a later receipt (%#)", (output) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -614,6 +631,7 @@ it.effect.each([
   RECEIPT + "x".repeat(65537),
   RECEIPT + "Error: fixture network interrupted\n",
   RECEIPT + "Do you trust the files in this folder?\n",
+  RECEIPT + NATIVE_FOLDER_TRUST_OPTION,
   ...SYNTHETIC_FOLDER_TRUST_REFUSALS.map((output) => RECEIPT + output),
   RECEIPT + "View: https://claude.ai/code/session_OTHER\n",
 ])("returns the first accepted identity before same-chunk failure (%#)", (output) =>
@@ -631,6 +649,25 @@ it.effect.each([
       expect((yield* handle.exited.pipe(Effect.flip)).outcome).toBe("uncertain");
       expect(h.fake.writes).toEqual([]);
       h.fake.finish(1);
+    }),
+  ),
+);
+it.effect("keeps an earlier diagnostic ahead of a later native cursor-spaced trust option", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project folder", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Error: fixture transport interrupted\n");
+      h.fake.emit(NATIVE_FOLDER_TRUST_OPTION);
+      h.fake.finish(0, 0);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toBe("fixture transport interrupted");
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
     }),
   ),
 );

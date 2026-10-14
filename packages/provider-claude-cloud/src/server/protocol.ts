@@ -67,7 +67,9 @@ export function readStartReceipt(raw: string) {
 }
 
 export function trustRequired(raw: string) {
-  const prompt = cleanOutput(raw).replace(
+  // Native trust options use absolute cursor columns as word spacing; preserve those boundaries.
+  // eslint-disable-next-line no-control-regex -- Match the native PTY's ESC cursor-column sequence.
+  const prompt = cleanOutput(raw.replace(/\u001b\[\d+G/g, " ")).replace(
     /^\s*(?:Created cloud session:|View:|Resume with:).*$/gm,
     "",
   );
