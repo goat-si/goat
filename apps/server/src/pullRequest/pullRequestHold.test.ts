@@ -40,6 +40,10 @@ describe("pullRequestHoldReason", () => {
     "<!--\nmultiline\n-->\nHOLD: after a comment",
     "> ```\n> example\n\nHOLD: stop",
     "- ```\n  example\nHOLD: after the list item",
+    "- ```\n  > ```\n  ```\nHOLD: stop",
+    "- ```\n    > ```\n  ```\nHOLD: stop",
+    "- ~~~\n  > ~~~\n  ~~~\nHOLD: stop",
+    "- item\n\n  ```\n  example\n\nHOLD: stop",
   ])("holds a description line %j", (body) => {
     expect(pullRequestHoldReason({ ...open, body })).toBe("its description has a HOLD line");
   });
@@ -55,6 +59,8 @@ describe("pullRequestHoldReason", () => {
     "- ```\n  HOLD: example\n  ```",
     "1. ```\n   HOLD: example\n   ```\n2. next",
     "> ```\n> HOLD: quoted example\n> ```",
+    "- item\n\n  ```\n  HOLD: example\n  ```",
+    "Example:\n\n    HOLD: in an indented code block",
   ])("does not read %j as a hold", (body) => {
     expect(
       pullRequestHoldReason({ ...open, body, labels: [{ name: "holdout-tests" }] }),

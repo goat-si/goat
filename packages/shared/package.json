@@ -475,6 +475,10 @@
       "types": "./src/threadFindText.ts",
       "import": "./src/threadFindText.ts"
     },
+    "./markdownTextLines": {
+      "types": "./src/markdownTextLines.ts",
+      "import": "./src/markdownTextLines.ts"
+    },
     "./threadSearch": {
       "types": "./src/threadSearch.ts",
       "import": "./src/threadSearch.ts"
