@@ -146,6 +146,7 @@
         "apps/server/src/provider/Drivers/ClaudeDriver.ts",
         "apps/server/src/provider/Drivers/AntigravityDriver.ts",
         "packages/provider-cursor/src/server/driver.ts",
+        "packages/provider-cursor/src/server/cloud/driver.ts",
         "packages/provider-grok/src/server/driver.ts",
         "packages/provider-opencode/src/server/driver.ts",
         "packages/provider-pi/src/server/driver.ts",

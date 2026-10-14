@@ -7,7 +7,7 @@
 import { ProviderDriverKind } from "@goat/contracts";
 import { defineProviderClient } from "@goat/provider-core/client";
 
-import { CursorSettings } from "./settings.ts";
+import { CursorSettings, CursorCloudSettings } from "./settings.ts";
 
 export const cursorClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("cursor"),
@@ -31,4 +31,14 @@ export const cursorClient = defineProviderClient({
       },
     ],
   },
+});
+
+export const cursorCloudClient = defineProviderClient({
+  driverKind: ProviderDriverKind.make("cursorCloud"),
+  label: "Cursor Cloud",
+  settingsSchema: CursorCloudSettings,
+  executionLocation: "cloud",
+  hasDefaultInstance: false,
+  badgeLabel: "Cloud",
+  icon: cursorClient.icon,
 });

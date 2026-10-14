@@ -98,6 +98,38 @@ describe("provider compatibility", () => {
     );
   });
 
+  it("keeps authenticated Cursor Cloud ready with unknown compatibility and no CLI recommendation", () => {
+    const cursorCloud = ProviderDriverKind.make("cursorCloud");
+    const bundled = ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility;
+    const advisory = resolveProviderCompatibility(bundled, cursorCloud, null, V2_RELEASE);
+    assert.deepStrictEqual(advisory, {
+      status: "unknown",
+      message: null,
+      recommendedVersion: null,
+      recommendedRange: null,
+    });
+    assert.isUndefined(resolveProviderCompatibility(bundled, cursorCloud, null, "0.0.45"));
+
+    // Cloud readiness comes from SDK access, not a CLI or service version.
+    const snapshot: ServerProvider = {
+      ...provider,
+      driver: cursorCloud,
+      instanceId: ProviderInstanceId.make("cursor-cloud-work"),
+      executionLocation: "cloud",
+      version: null,
+      status: "ready",
+      message: undefined,
+      auth: { status: "authenticated", canLogout: false },
+    };
+    const ready = applyProviderCompatibility(snapshot, [], bundled);
+    assert.deepStrictEqual(ready.compatibilityAdvisory, advisory);
+    assert.strictEqual(ready.status, "ready");
+    assert.deepStrictEqual(ready.auth, snapshot.auth);
+    assert.strictEqual(ready.version, null);
+    assert.isUndefined(ready.versionAdvisory);
+    assert.isUndefined(ready.message);
+  });
+
   it("keeps releases before V2 on the OpenCode 1 policy they shipped with", () => {
     // Every installed build fetches main's manifest, and 0.0.45 and older run the
     // V1 orchestrator, which cannot drive OpenCode 2.

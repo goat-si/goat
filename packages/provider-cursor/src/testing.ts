@@ -11,3 +11,8 @@ export {
   cursorSdkModelSelection,
   makeCursorAgentOptions,
 } from "./server/adapter.ts";
+export {
+  makeCursorCloudAdapter,
+  DRIVER as CURSOR_CLOUD_DRIVER_KIND,
+} from "./server/cloud/adapter.ts";
+export { CursorCloudSdk, type CloudAgent, type CloudRun } from "./server/cloud/sdk.ts";

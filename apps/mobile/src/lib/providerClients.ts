@@ -1,7 +1,7 @@
 import { isProviderDriverKind } from "@goat/contracts";
 import { acpRegistryClient } from "@goat/provider-acp-registry/client";
 import { makeProviderClientRegistry } from "@goat/provider-core/client";
-import { cursorClient } from "@goat/provider-cursor/client";
+import { cursorClient, cursorCloudClient } from "@goat/provider-cursor/client";
 import { devinCloudClient } from "@goat/provider-devin-cloud/client";
 import { grokClient } from "@goat/provider-grok/client";
 import { museClient } from "@goat/provider-muse/client";
@@ -11,6 +11,7 @@ import { piClient } from "@goat/provider-pi/client";
 /** The provider client definitions this mobile build ships. */
 const providerClients = makeProviderClientRegistry([
   cursorClient,
+  cursorCloudClient,
   grokClient,
   museClient,
   openCodeClient,

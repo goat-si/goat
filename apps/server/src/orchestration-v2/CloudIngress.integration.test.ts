@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   CommandId,
   EventId,
@@ -20,11 +21,19 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import {
+  CursorCloudSdk,
+  CURSOR_CLOUD_DRIVER_KIND,
+  makeCursorCloudAdapter,
+  type CloudAgent,
+  type CloudRun,
+} from "@goat/provider-cursor/testing";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -32,6 +41,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { McpServer, McpSchema } from "effect/ai";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -65,6 +75,7 @@ import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as Registry from "./ProviderAdapterRegistry.ts";
+import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { makeFakeCloudAdapter } from "./testkit/FakeCloudAdapter.ts";
 
@@ -472,6 +483,1161 @@ it.effect("reattaches a fully running SQLite cloud crash snapshot once without r
       assert.equal(Option.getOrThrow(yield* outbox.get(reattach.id)).status, "succeeded");
     }).pipe(Effect.provide(recovery));
   }).pipe(Effect.scoped),
+);
+
+const cursorSource = {
+  repository: "https://github.com/fixture/repo",
+  branch: "published",
+  sha: "a".repeat(40),
+};
+// The existing enabled slot avoids making these persistence tests depend on catalog registration.
+const cursorInstanceId = ProviderInstanceId.make("codex");
+const cursorAgentId = "bc-ingress-fixture";
+type CursorRunResult = Awaited<ReturnType<CloudRun["wait"]>>;
+type CursorStreamEvent =
+  ReturnType<CloudRun["stream"]> extends AsyncGenerator<infer Event, void> ? Event : never;
+
+const makeCursorIngress = Effect.fnUntraced(function* (
+  name: string,
+  options: {
+    blockCreate?: boolean;
+    blockSend?: boolean;
+    blockResume?: boolean;
+    replayTerminal?: boolean;
+  } = {},
+) {
+  const creating = yield* Deferred.make<void>();
+  const createGate = Promise.withResolvers<void>();
+  const sending = yield* Deferred.make<void>();
+  const sendGate = Promise.withResolvers<void>();
+  const resuming = yield* Deferred.make<void>();
+  const resumeGate = Promise.withResolvers<void>();
+  const cancelled = yield* Deferred.make<void>();
+  const sourceReads = yield* Ref.make(0);
+  const adapterAssistantFinals = yield* Ref.make(0);
+  const capturedTerminal =
+    yield* Deferred.make<
+      Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }>
+    >();
+  const replayEvents = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+  yield* Effect.addFinalizer(() => Queue.shutdown(replayEvents));
+  const runs = yield* Effect.forEach([1, 2], (ordinal) =>
+    Effect.gen(function* () {
+      const streaming = yield* Deferred.make<void>();
+      const finishStream = Promise.withResolvers<void>();
+      const firstLookup = yield* Deferred.make<void>();
+      const secondLookup = yield* Deferred.make<void>();
+      const thirdLookup = yield* Deferred.make<void>();
+      let lookupCount = 0;
+      let result: CursorRunResult = {
+        id: `cursor-run-${ordinal}`,
+        status: "finished",
+        result: `Completed task ${ordinal}.`,
+        git: {
+          branches: [
+            {
+              repoUrl: "github.com/fixture/unrelated",
+              branch: "wrong",
+              prUrl: "https://github.com/fixture/unrelated/pull/9",
+            },
+            {
+              repoUrl: "github.com/fixture/repo.git",
+              branch: `cursor/result-${ordinal}`,
+              prUrl: `https://github.com/fixture/repo/pull/${ordinal}`,
+            },
+          ],
+        },
+      };
+      let status: CloudRun["status"] = "running";
+      const stream = vi.fn(() => {
+        const iterator: AsyncGenerator<CursorStreamEvent, void> = {
+          next: async () => {
+            Deferred.doneUnsafe(streaming, Effect.void);
+            await finishStream.promise;
+            return { done: true, value: undefined };
+          },
+          return: async () => {
+            finishStream.resolve();
+            return { done: true, value: undefined };
+          },
+          throw: async (error) => {
+            throw error;
+          },
+          [Symbol.asyncIterator]: () => iterator,
+          [Symbol.asyncDispose]: async () => {
+            await iterator.return();
+          },
+        };
+        return iterator;
+      });
+      const native: CloudRun = {
+        id: result.id,
+        agentId: cursorAgentId,
+        createdAt: 1791849600000,
+        get status() {
+          return status;
+        },
+        stream,
+        wait: async () => result,
+      };
+      return {
+        native,
+        stream,
+        streaming,
+        firstLookup,
+        secondLookup,
+        thirdLookup,
+        lookup: async () => {
+          lookupCount++;
+          Deferred.doneUnsafe(lookupCount === 1 ? firstLookup : secondLookup, Effect.void);
+          if (lookupCount >= 3) Deferred.doneUnsafe(thirdLookup, Effect.void);
+          return native;
+        },
+        finish: (outcome: CursorRunResult["status"] = "finished") =>
+          Effect.sync(() => {
+            result = { ...result, status: outcome };
+            status = outcome;
+            finishStream.resolve();
+          }),
+      };
+    }),
+  );
+  const close = vi.fn();
+  let sendCount = 0;
+  const send = vi.fn<CloudAgent["send"]>(async () => {
+    const run = runs[sendCount++]!.native;
+    Deferred.doneUnsafe(sending, Effect.void);
+    if (options.blockSend) await sendGate.promise;
+    return run;
+  });
+  const agent = { agentId: cursorAgentId, send, close };
+  const create = vi.fn<CursorCloudSdk["Service"]["create"]>(async () => {
+    Deferred.doneUnsafe(creating, Effect.void);
+    if (options.blockCreate) await createGate.promise;
+    return agent;
+  });
+  const resume = vi.fn<CursorCloudSdk["Service"]["resume"]>(async () => {
+    Deferred.doneUnsafe(resuming, Effect.void);
+    if (options.blockResume) await resumeGate.promise;
+    return agent;
+  });
+  const getRun = vi.fn<CursorCloudSdk["Service"]["getRun"]>(async (id) => {
+    const run = runs.find((candidate) => candidate.native.id === id);
+    if (!run) throw new Error("Unexpected fixture run");
+    return run.lookup();
+  });
+  const cancelRun = vi.fn<CursorCloudSdk["Service"]["cancelRun"]>(async () => {
+    Deferred.doneUnsafe(cancelled, Effect.void);
+  });
+  const sdk = CursorCloudSdk.of({
+    create,
+    resume,
+    getRun,
+    cancelRun,
+    readLogin: Effect.succeed(undefined),
+    checkAccess: () => Effect.void,
+    readModels: () => Effect.succeed([]),
+  });
+  const adapter = yield* makeCursorCloudAdapter(
+    cursorInstanceId,
+    Effect.succeed("fixture-key"),
+  ).pipe(Effect.provideService(CursorCloudSdk, sdk), Effect.provide(IdAllocator.layer));
+  // Observe real adapter delivery: shared finalization owns the ordinary result item.
+  const observedAdapter = {
+    ...adapter,
+    openSession: (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
+      adapter.openSession(input).pipe(
+        Effect.map((runtime) => ({
+          ...runtime,
+          events: runtime.events.pipe(
+            Stream.tap((event) =>
+              (event.type === "message.updated" &&
+                event.message.role === "assistant" &&
+                !event.message.streaming) ||
+              (event.type === "turn_item.updated" &&
+                event.turnItem.type === "assistant_message" &&
+                !event.turnItem.streaming)
+                ? Ref.update(adapterAssistantFinals, (count) => count + 1)
+                : Effect.void,
+            ),
+          ),
+        })),
+      ),
+  };
+  // Replay a captured event at the existing adapter stream boundary; all runtime methods stay real.
+  const registeredAdapter = options.replayTerminal
+    ? {
+        ...observedAdapter,
+        openSession: (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) =>
+          observedAdapter.openSession(input).pipe(
+            Effect.map((runtime) => ({
+              ...runtime,
+              events: Stream.merge(
+                runtime.events.pipe(
+                  Stream.tap((event) =>
+                    event.type === "turn.terminal"
+                      ? Deferred.succeed(capturedTerminal, event)
+                      : Effect.void,
+                  ),
+                ),
+                Stream.fromQueue(replayEvents),
+              ),
+            })),
+          ),
+      }
+    : observedAdapter;
+  const database = SqlitePersistence.layerMemory;
+  const runtime = layerWithRegistry({ name }, Registry.layerFromAdapters([registeredAdapter]), {
+    databaseLayer: database,
+    runEffectWorker: false,
+    projects: Layer.mock(Projects.ProjectService)({
+      getById: (id) =>
+        Effect.succeedSome({
+          id,
+          workspaceRoot: process.cwd(),
+          defaultModelSelection: { instanceId: cursorInstanceId, model: "auto" },
+        } as Project),
+    }),
+    cloudSources: Layer.succeed(CloudSource.CloudTaskSourceService, {
+      resolve: (input) =>
+        Ref.updateAndGet(sourceReads, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 1
+              ? Effect.succeed({
+                  source: cursorSource,
+                  launchSource: { cwd: input.cwd, restriction: "published-ref" as const },
+                  localChangesExcluded: true,
+                })
+              : Effect.die("Local branch was deleted; follow-up must reuse the saved source"),
+          ),
+        ),
+    }),
+  });
+  const recovery = Recovery.layer.pipe(
+    Layer.provide(runtime),
+    Layer.provide(IdAllocator.layer),
+    Layer.provide(ServerSettings.layerTest()),
+  );
+  return {
+    layer: Layer.mergeAll(runtime, recovery, database, IdAllocator.layer),
+    creating,
+    allowCreate: Effect.sync(() => createGate.resolve()),
+    sending,
+    allowSend: Effect.sync(() => sendGate.resolve()),
+    resuming,
+    allowResume: Effect.sync(() => resumeGate.resolve()),
+    cancelled,
+    runs,
+    sourceReads,
+    adapterAssistantFinals,
+    create,
+    resume,
+    send,
+    getRun,
+    cancelRun,
+    close,
+    capturedTerminal,
+    replayTerminal: (event: ProviderAdapter.ProviderAdapterV2Event) =>
+      Queue.offer(replayEvents, event).pipe(Effect.asVoid),
+  };
+});
+
+const createCursorThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make(`command:create:${threadId}`),
+    threadId,
+    projectId: ProjectId.make("project:cursor-ingress"),
+    title: "Cursor Cloud integration",
+    modelSelection: { instanceId: cursorInstanceId, model: "auto" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: "deleted-local-branch",
+    worktreePath: null,
+    createdBy: "user",
+    creationSource: "web",
+  });
+});
+
+const dispatchCursorMessage = Effect.fnUntraced(function* (
+  threadId: ThreadId,
+  ordinal: number,
+  dispatchMode: Extract<OrchestrationV2Command, { type: "message.dispatch" }>["dispatchMode"],
+) {
+  return yield* (yield* Orchestrator.OrchestratorV2).dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`command:cursor:${threadId}:${ordinal}`),
+    threadId,
+    messageId: MessageId.make(`message:cursor:${threadId}:${ordinal}`),
+    text: `Task ${ordinal}`,
+    attachments: [],
+    dispatchMode,
+    createdBy: "user",
+    creationSource: "web",
+  });
+});
+
+const awaitCursorRun = Effect.fnUntraced(function* (
+  threadId: ThreadId,
+  runId: RunId,
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted",
+) {
+  return yield* (yield* Orchestrator.OrchestratorV2)
+    .streamStoredEventsFrom({ threadId, eventType: "run.updated" })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "run.updated" &&
+          stored.event.payload.id === runId &&
+          stored.event.payload.status === status,
+      ),
+      Stream.take(1),
+      Stream.runDrain,
+    );
+});
+
+const awaitCursorTurn = Effect.fnUntraced(function* (
+  threadId: ThreadId,
+  attemptId: RunAttemptId,
+  afterSequence?: number,
+) {
+  yield* (yield* Orchestrator.OrchestratorV2)
+    .streamStoredEventsFrom({
+      threadId,
+      eventType: "provider-turn.updated",
+      ...(afterSequence === undefined ? {} : { afterSequence }),
+    })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "provider-turn.updated" &&
+          stored.event.payload.runAttemptId === attemptId &&
+          stored.event.payload.status === "running",
+      ),
+      Stream.take(1),
+      Stream.runDrain,
+    );
+});
+
+function assertCursorResult(
+  projection: OrchestrationV2ThreadProjection,
+  runId: RunId,
+  ordinal: number,
+  status = "completed",
+) {
+  const run = projection.runs.find((candidate) => candidate.id === runId)!;
+  assert.equal(run.status, status);
+  assert.equal(
+    projection.attempts.find((attempt) => attempt.id === run.activeAttemptId)?.status,
+    status,
+  );
+  assert.equal(projection.nodes.find((node) => node.id === run.rootNodeId)?.status, status);
+  const results = projection.messages.filter(
+    (message) => message.runId === runId && message.role === "assistant",
+  );
+  assert.equal(results.length, 1);
+  assert.equal(results[0]!.id, `message:cloud-result:${runId}`);
+  assert.include(results[0]!.text, `Completed task ${ordinal}.`);
+  assert.include(results[0]!.text, `https://github.com/fixture/repo/pull/${ordinal}`);
+  assert.include(results[0]!.text, `cursor/result-${ordinal}`);
+  assert.notInclude(results[0]!.text, "unrelated");
+  assert.isFalse(results[0]!.streaming);
+  // The real SQLite read must also contain the item consumed by client timelines.
+  const assistantItems = projection.turnItems
+    .filter((item) => item.type === "assistant_message")
+    .filter((item) => item.runId === runId);
+  assert.equal(assistantItems.length, 1, "one persisted assistant result item per run");
+  const item = assistantItems[0]!;
+  assert.equal(item.id, `turn-item:cloud-result:${runId}`);
+  assert.equal(item.messageId, results[0]!.id);
+  assert.equal(item.threadId, projection.thread.id);
+  assert.equal(item.nodeId, run.rootNodeId);
+  assert.equal(item.text, results[0]!.text);
+  assert.include(item.text, `Completed task ${ordinal}.`);
+  assert.include(item.text, `https://github.com/fixture/repo/pull/${ordinal}`);
+  assert.include(item.text, `cursor/result-${ordinal}`);
+  assert.notInclude(item.text, "unrelated");
+  assert.isFalse(item.streaming);
+  assert.isNotNull(item.completedAt);
+  if (status === "completed") assert.equal(item.status, "completed");
+  const visibleResults = projection.visibleTurnItems.filter(
+    (row) => row.item.type === "assistant_message" && row.item.runId === runId,
+  );
+  assert.equal(visibleResults.length, 1, "one ordinary assistant result in the client timeline");
+  assert.equal(visibleResults[0]!.sourceItemId, item.id);
+  assert.equal(visibleResults[0]!.sourceThreadId, projection.thread.id);
+  assert.deepEqual(visibleResults[0]!.item, item);
+  assert.equal(projection.checkpointScopes.length, 0);
+  return { message: results[0]!, item, visible: visibleResults[0]! };
+}
+
+const seedCursorAccepted = Effect.fnUntraced(function* (
+  threadId: ThreadId,
+  ordinal: number,
+  taskStatus: NonNullable<
+    OrchestrationV2ThreadProjection["providerThreads"][number]["cloudTask"]
+  >["status"] = "running",
+) {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const manager = yield* ProviderSessions.ProviderSessionManagerV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const ids = yield* IdAllocator.IdAllocatorV2;
+  const before = yield* orchestrator.getThreadProjection(threadId);
+  const run = before.runs.find((candidate) => candidate.ordinal === ordinal)!;
+  const attempt = before.attempts.find((candidate) => candidate.id === run.activeAttemptId)!;
+  const root = before.nodes.find((candidate) => candidate.id === run.rootNodeId)!;
+  const providerThread = before.providerThreads[0]!;
+  const providerSessionId =
+    providerThread.providerSessionId ??
+    (yield* ids.allocate.providerSession({ threadId, providerInstanceId: cursorInstanceId }));
+  const runtime = yield* manager.open({
+    threadId,
+    providerSessionId,
+    modelSelection: { instanceId: cursorInstanceId, model: "auto" },
+    runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+  });
+  const now = yield* DateTime.now;
+  // Distinct from both the SDK createdAt and the restart clock.
+  const startedAt = DateTime.makeUnsafe("2026-10-10T00:00:00.000Z");
+  const task = {
+    taskId: `cursor-run-${ordinal}`,
+    acceptedAppRunId:
+      taskStatus === "submitting" ? RunId.make("run:cursor-previous-prompt") : run.id,
+    status: taskStatus,
+    tracking: "live" as const,
+    source: cursorSource,
+    localChangesExcluded: true,
+    url: `https://cursor.com/agents/${cursorAgentId}`,
+    updatedAt: DateTime.formatIso(now),
+    ...(["succeeded", "failed", "cancelled"].includes(taskStatus)
+      ? {
+          summary: `Completed task ${ordinal}.`,
+          branch: `cursor/result-${ordinal}`,
+          prUrl: `https://github.com/fixture/repo/pull/${ordinal}`,
+        }
+      : {}),
+  };
+  yield* sink.write({
+    events: [
+      {
+        id: yield* ids.allocate.event({ threadId }),
+        type: "provider-session.updated",
+        threadId,
+        occurredAt: now,
+        payload: runtime.providerSession,
+      },
+      {
+        id: yield* ids.allocate.event({ threadId }),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...providerThread,
+          providerSessionId,
+          driver: CURSOR_CLOUD_DRIVER_KIND,
+          status: "active",
+          cloudTask: task,
+          nativeThreadRef: {
+            driver: CURSOR_CLOUD_DRIVER_KIND,
+            nativeId: cursorAgentId,
+            strength: "strong",
+          },
+          lastRunOrdinal: run.ordinal,
+        },
+      },
+      {
+        id: yield* ids.allocate.event({ threadId }),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...run, status: "running", startedAt },
+      },
+      {
+        id: yield* ids.allocate.event({ threadId }),
+        type: "run-attempt.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...attempt, status: "running", startedAt, nativeThreadId: cursorAgentId },
+      },
+      {
+        id: yield* ids.allocate.event({ threadId }),
+        type: "node.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...root, status: "running", startedAt },
+      },
+    ],
+  });
+  // Drop manager-owned observation while retaining the real SQLite snapshot.
+  yield* manager.shutdown;
+  return { run, attempt, root, task, startedAt, providerThread, providerSessionId };
+});
+
+it.effect.each([false, true])(
+  "Cursor Cloud manager-owned restore survives idle timeout and releases on shutdown=%s",
+  (shutdown) =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress(`cursor-restored-lifecycle-${shutdown}`);
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const manager = yield* ProviderSessions.ProviderSessionManagerV2;
+        const threadId = ThreadId.make(`thread:cursor-restored-lifecycle-${shutdown}`);
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, {
+          type: "defer_start",
+          workspaceStrategy: { type: "root" },
+        });
+        const saved = yield* seedCursorAccepted(threadId, 1);
+        yield* (yield* Recovery.ProviderRuntimeRecoveryService).recover;
+        yield* worker.drain();
+        yield* awaitCursorTurn(threadId, saved.attempt.id);
+        yield* Deferred.await(h.runs[0]!.secondLookup);
+        const attached = yield* orchestrator.getThreadProjection(threadId);
+        const sessionId = attached.providerThreads[0]!.providerSessionId!;
+        const loaded = Option.getOrThrow(yield* manager.get(sessionId));
+        // layerWithRegistry uses the real manager's configured default of 30 minutes.
+        yield* TestClock.adjust("31 minutes");
+        assert.strictEqual(Option.getOrThrow(yield* manager.get(sessionId)), loaded);
+        yield* Deferred.await(h.runs[0]!.thirdLookup);
+        const running = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(running.runs[0]?.status, "running");
+        assert.equal(running.providerThreads[0]?.cloudTask?.status, "running");
+        assert.equal(h.close.mock.calls.length, 0);
+        for (const [id, options] of h.getRun.mock.calls) {
+          assert.equal(id, "cursor-run-1");
+          assert.equal(options.agentId, cursorAgentId);
+          assert.equal(options.runtime, "cloud");
+        }
+        if (shutdown) {
+          yield* manager.shutdown;
+          assert.isTrue(Option.isNone(yield* manager.get(sessionId)));
+          const detached = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            detached.providerThreads[0]?.cloudTask,
+            running.providerThreads[0]?.cloudTask,
+          );
+          assert.deepEqual(detached.runs[0], running.runs[0]);
+          assert.deepEqual(detached.attempts[0], running.attempts[0]);
+          assert.deepEqual(
+            detached.nodes.find((node) => node.id === saved.root.id),
+            running.nodes.find((node) => node.id === saved.root.id),
+          );
+          const lookups = h.getRun.mock.calls.length;
+          yield* TestClock.adjust("15 seconds");
+          assert.equal(h.getRun.mock.calls.length, lookups);
+          assert.equal(
+            detached.messages.filter((message) => message.role === "assistant").length,
+            0,
+          );
+        } else {
+          const beforeTerminal = yield* orchestrator.getThreadEventSequence(threadId);
+          yield* h.runs[0]!.finish();
+          yield* TestClock.adjust("15 seconds");
+          yield* awaitCursorRun(threadId, saved.run.id, "completed");
+          yield* worker.drain();
+          assertCursorResult(yield* orchestrator.getThreadProjection(threadId), saved.run.id, 1);
+          const released = yield* orchestrator
+            .streamStoredEventsFrom({
+              threadId,
+              afterSequence: beforeTerminal,
+              eventType: "provider-session.updated",
+            })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "provider-session.updated" &&
+                  stored.event.payload.id === sessionId &&
+                  stored.event.payload.status === "stopped",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkChild,
+            );
+          yield* TestClock.adjust("31 minutes");
+          yield* Fiber.join(released);
+          assert.isTrue(Option.isNone(yield* manager.get(sessionId)));
+        }
+        assert.equal(h.create.mock.calls.length, 0);
+        assert.equal(h.resume.mock.calls.length, 0);
+        assert.equal(h.send.mock.calls.length, 0);
+        assert.equal(h.cancelRun.mock.calls.length, 0);
+        assert.equal(h.runs[0]!.stream.mock.calls.length, 0);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "Cursor Cloud duplicate adapter terminal delivery leaves one result and settled rows unchanged",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress("cursor-duplicate-terminal", { replayTerminal: true });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const manager = yield* ProviderSessions.ProviderSessionManagerV2;
+        const threadId = ThreadId.make("thread:cursor-duplicate-terminal");
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, { type: "start_immediately" });
+        yield* worker.drain();
+        yield* Deferred.await(h.runs[0]!.streaming);
+        const accepted = yield* orchestrator.getThreadProjection(threadId);
+        const run = accepted.runs[0]!;
+        yield* awaitCursorTurn(threadId, run.activeAttemptId!);
+        const runtime = Option.getOrThrow(
+          yield* manager.get(accepted.providerThreads[0]!.providerSessionId!),
+        );
+        const subscription = yield* runtime.subscribeEvents!;
+        const deliveries = yield* subscription.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* h.runs[0]!.finish();
+        const terminal = yield* Deferred.await(h.capturedTerminal);
+        yield* awaitCursorRun(threadId, run.id, "completed");
+        yield* worker.drain();
+        const beforeDuplicate = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(beforeDuplicate, run.id, 1);
+        const beforeSequence = yield* orchestrator.getThreadEventSequence(threadId);
+        // A refinalization would now produce different completedAt/updatedAt timestamps.
+        yield* TestClock.adjust("1 second");
+        yield* h.replayTerminal(terminal);
+        assert.deepEqual(yield* Fiber.join(deliveries), [terminal, terminal]);
+        yield* subscription.close;
+        yield* worker.drain();
+        const afterDuplicate = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(afterDuplicate, run.id, 1);
+        assert.deepEqual(afterDuplicate.runs, beforeDuplicate.runs);
+        assert.deepEqual(afterDuplicate.attempts, beforeDuplicate.attempts);
+        assert.deepEqual(afterDuplicate.nodes, beforeDuplicate.nodes);
+        assert.deepEqual(afterDuplicate.messages, beforeDuplicate.messages);
+        assert.deepEqual(afterDuplicate.turnItems, beforeDuplicate.turnItems);
+        assert.deepEqual(afterDuplicate.visibleTurnItems, beforeDuplicate.visibleTurnItems);
+        assert.equal(yield* orchestrator.getThreadEventSequence(threadId), beforeSequence);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        assert.equal(h.create.mock.calls.length, 1);
+        assert.equal(h.send.mock.calls.length, 1);
+        assert.equal(h.cancelRun.mock.calls.length, 0);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(["succeeded", "failed", "cancelled"] as const)(
+  "Cursor Cloud recovery settles saved %s metadata exactly once without a submission or cancellation",
+  (taskStatus) =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress(`cursor-terminal-recovery-${taskStatus}`);
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const recovery = yield* Recovery.ProviderRuntimeRecoveryService;
+        const threadId = ThreadId.make(`thread:cursor-terminal-recovery-${taskStatus}`);
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, {
+          type: "defer_start",
+          workspaceStrategy: { type: "root" },
+        });
+        const saved = yield* seedCursorAccepted(threadId, 1, taskStatus);
+        yield* h.runs[0]!.finish(
+          taskStatus === "succeeded" ? "finished" : taskStatus === "failed" ? "error" : "cancelled",
+        );
+        yield* recovery.recover;
+        yield* worker.drain();
+        const status =
+          taskStatus === "succeeded"
+            ? "completed"
+            : taskStatus === "failed"
+              ? "failed"
+              : "cancelled";
+        yield* awaitCursorRun(threadId, saved.run.id, status);
+        yield* worker.drain();
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(settled, saved.run.id, 1, status);
+        const turn = settled.providerTurns.find(
+          (candidate) => candidate.runAttemptId === saved.attempt.id,
+        )!;
+        assert.equal(turn.ordinal, 1);
+        assert.equal(DateTime.formatIso(turn.startedAt!), DateTime.formatIso(saved.startedAt));
+        assert.equal(turn.nativeTurnRef?.nativeId, "cursor-run-1");
+        assert.equal(
+          turn.id,
+          (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+            driver: CURSOR_CLOUD_DRIVER_KIND,
+            nativeTurnId: `${cursorInstanceId}:cursor-run-1`,
+          }),
+        );
+        const lookups = h.getRun.mock.calls.length;
+        assert.isAtLeast(lookups, 1);
+        for (const [id, options] of h.getRun.mock.calls) {
+          assert.equal(id, "cursor-run-1");
+          assert.equal(options.agentId, cursorAgentId);
+          assert.equal(options.runtime, "cloud");
+        }
+        yield* recovery.recover;
+        yield* worker.drain();
+        assertCursorResult(
+          yield* orchestrator.getThreadProjection(threadId),
+          saved.run.id,
+          1,
+          status,
+        );
+        assert.equal(h.getRun.mock.calls.length, lookups);
+        assert.equal(h.create.mock.calls.length, 0);
+        assert.equal(h.resume.mock.calls.length, 0);
+        assert.equal(h.send.mock.calls.length, 0);
+        assert.equal(h.cancelRun.mock.calls.length, 0);
+        assert.equal(h.runs[0]!.stream.mock.calls.length, 0);
+        assert.equal(yield* Ref.get(h.sourceReads), 0);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "Cursor Cloud recovery marks a submitting crash unknown without reading the prior task or resending",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress("cursor-submitting-recovery");
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const recovery = yield* Recovery.ProviderRuntimeRecoveryService;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = ThreadId.make("thread:cursor-submitting-recovery");
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, {
+          type: "defer_start",
+          workspaceStrategy: { type: "root" },
+        });
+        const saved = yield* seedCursorAccepted(threadId, 1, "submitting");
+        yield* recovery.recover;
+        yield* worker.drain();
+        const firstFailure = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(firstFailure.providerThreads[0]?.cloudTask?.status, "unknown");
+        assert.equal(
+          firstFailure.turnItems.filter(
+            (item) => item.runId === saved.run.id && item.type === "assistant_message",
+          ).length,
+          0,
+          "Recoverable observation failures must not add a final assistant result",
+        );
+        assert.equal(h.getRun.mock.calls.length, 0);
+        // The default worker makes five attempts. Drive the four remaining durable deadlines,
+        // never the vendor poll clock: this prompt has no accepted remote run to observe.
+        for (const retry of [1, 2, 3, 4]) {
+          const due = Option.getOrThrow(yield* worker.nextClaimableAt);
+          const now = yield* DateTime.now;
+          yield* TestClock.adjust(
+            Math.max(0, DateTime.toEpochMillis(due) - DateTime.toEpochMillis(now)),
+          );
+          yield* worker.drain();
+          assert.equal(
+            h.getRun.mock.calls.length,
+            0,
+            `Retry ${retry} must not observe the previous prompt's run`,
+          );
+          assert.equal(h.create.mock.calls.length, 0);
+          assert.equal(h.send.mock.calls.length, 0);
+        }
+        yield* awaitCursorRun(threadId, saved.run.id, "failed");
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(after.providerThreads[0]?.cloudTask?.status, "unknown");
+        assert.equal(after.providerThreads[0]?.cloudTask?.taskId, saved.task.taskId);
+        assert.equal(
+          after.providerThreads[0]?.cloudTask?.acceptedAppRunId,
+          saved.task.acceptedAppRunId,
+        );
+        assert.deepEqual(after.providerThreads[0]?.cloudTask?.source, cursorSource);
+        assert.equal(after.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
+        assert.equal(after.attempts[0]?.status, "failed");
+        assert.equal(after.nodes.find((node) => node.id === saved.root.id)?.status, "failed");
+        const results = after.messages.filter((message) => message.role === "assistant");
+        assert.equal(results.length, 1);
+        assert.equal(results[0]?.id, `message:cloud-result:${saved.run.id}`);
+        assert.include(results[0]!.text, saved.task.url);
+        const assistantItems = after.turnItems.filter(
+          (item) => item.runId === saved.run.id && item.type === "assistant_message",
+        );
+        assert.equal(assistantItems.length, 1, "Exhausted recovery must persist an assistant item");
+        const item = assistantItems[0]!;
+        assert.equal(item.type, "assistant_message");
+        if (item.type !== "assistant_message") throw new Error("Missing recovery assistant result");
+        assert.equal(item.id, `turn-item:cloud-result:${saved.run.id}`);
+        assert.equal(item.messageId, results[0]!.id);
+        assert.equal(item.threadId, threadId);
+        assert.equal(item.nodeId, saved.root.id);
+        assert.equal(item.text, results[0]!.text);
+        assert.include(item.text, "remote work may continue");
+        assert.include(item.text, saved.task.url);
+        assert.equal(item.status, "completed");
+        assert.isFalse(item.streaming);
+        assert.isNotNull(item.completedAt);
+        const visible = after.visibleTurnItems.filter(
+          (row) => row.item.runId === saved.run.id && row.item.type === "assistant_message",
+        );
+        assert.equal(visible.length, 1, "Exhausted recovery must appear in ordinary history");
+        assert.equal(visible[0]!.sourceItemId, item.id);
+        assert.equal(visible[0]!.sourceThreadId, threadId);
+        assert.deepEqual(visible[0]!.item, item);
+        yield* recovery.recover;
+        yield* worker.drain();
+        const repeated = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(repeated.messages, after.messages);
+        assert.deepEqual(repeated.turnItems, after.turnItems);
+        assert.deepEqual(repeated.visibleTurnItems, after.visibleTurnItems);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        assert.equal(h.getRun.mock.calls.length, 0);
+        assert.equal(h.create.mock.calls.length, 0);
+        assert.equal(h.resume.mock.calls.length, 0);
+        assert.equal(h.send.mock.calls.length, 0);
+        assert.equal(h.cancelRun.mock.calls.length, 0);
+        assert.equal(h.runs[0]!.stream.mock.calls.length, 0);
+        assert.equal(after.checkpointScopes.length, 0);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  { scenario: "initial-missing-turn", ordinal: 1, recorded: false, outcome: "cancelled" },
+  { scenario: "follow-up-missing-turn", ordinal: 2, recorded: false, outcome: "finished" },
+  { scenario: "existing-attempt", ordinal: 1, recorded: true, outcome: "finished" },
+] as const)(
+  "Cursor Cloud $scenario restores the turn before Stop and trusts authoritative $outcome",
+  ({ scenario, ordinal, recorded, outcome }) =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress(`cursor-restored-stop-${scenario}`);
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const recovery = yield* Recovery.ProviderRuntimeRecoveryService;
+        const threadId = ThreadId.make(`thread:cursor-restored-stop-${scenario}`);
+        yield* createCursorThread(threadId);
+        if (ordinal === 2 || recorded) {
+          yield* dispatchCursorMessage(threadId, 1, { type: "start_immediately" });
+          yield* worker.drain();
+          yield* Deferred.await(h.runs[0]!.streaming);
+          const first = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+          yield* awaitCursorTurn(threadId, first.activeAttemptId!);
+          if (ordinal === 2) {
+            yield* h.runs[0]!.finish();
+            yield* awaitCursorRun(threadId, first.id, "completed");
+            yield* worker.drain();
+          }
+        }
+        if (!recorded)
+          yield* dispatchCursorMessage(threadId, ordinal, {
+            type: "defer_start",
+            workspaceStrategy: { type: "root" },
+          });
+        const saved = yield* seedCursorAccepted(threadId, ordinal);
+        const creates = h.create.mock.calls.length;
+        const sends = h.send.mock.calls.length;
+        const streams = h.runs[ordinal - 1]!.stream.mock.calls.length;
+        const beforeRecovery = yield* orchestrator.getThreadEventSequence(threadId);
+        yield* recovery.recover;
+        yield* worker.drain();
+        yield* awaitCursorTurn(threadId, saved.attempt.id, beforeRecovery);
+        yield* Deferred.await(h.runs[ordinal - 1]!.secondLookup);
+        const attached = yield* orchestrator.getThreadProjection(threadId);
+        const turn = attached.providerTurns.find(
+          (candidate) => candidate.runAttemptId === saved.attempt.id,
+        )!;
+        assert.equal(turn.ordinal, ordinal);
+        assert.isAbove(turn.ordinal, 0);
+        assert.equal(DateTime.formatIso(turn.startedAt!), DateTime.formatIso(saved.startedAt));
+        assert.equal(turn.nativeTurnRef?.nativeId, `cursor-run-${ordinal}`);
+        assert.equal(
+          attached.providerTurns.filter((candidate) => candidate.runAttemptId === saved.attempt.id)
+            .length,
+          1,
+        );
+        if (ordinal === 2)
+          assert.deepEqual(
+            attached.providerTurns.map((candidate) => candidate.ordinal).sort(),
+            [1, 2],
+          );
+        assert.equal(h.create.mock.calls.length, creates);
+        assert.equal(h.send.mock.calls.length, sends);
+        assert.equal(h.runs[ordinal - 1]!.stream.mock.calls.length, streams);
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(`command:stop:${threadId}`),
+          threadId,
+          runId: saved.run.id,
+          holdQueue: true,
+        });
+        const stopping = yield* worker.drain().pipe(Effect.forkChild);
+        yield* Deferred.await(h.cancelled);
+        assert.equal(h.cancelRun.mock.calls.length, 1);
+        assert.equal(h.cancelRun.mock.calls[0]![0], `cursor-run-${ordinal}`);
+        assert.equal(h.cancelRun.mock.calls[0]![1].agentId, cursorAgentId);
+        assert.equal(h.cancelRun.mock.calls[0]![1].runtime, "cloud");
+        const requested = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          requested.runs.find((candidate) => candidate.id === saved.run.id)?.status,
+          "running",
+        );
+        assert.equal(requested.providerThreads[0]?.cloudTask?.status, "running");
+        assert.equal(
+          requested.messages.filter(
+            (message) => message.id === `message:cloud-result:${saved.run.id}`,
+          ).length,
+          0,
+        );
+        yield* h.runs[ordinal - 1]!.finish(outcome);
+        yield* TestClock.adjust("15 seconds");
+        const status = outcome === "cancelled" ? "interrupted" : "completed";
+        yield* awaitCursorRun(threadId, saved.run.id, status);
+        yield* Fiber.join(stopping);
+        yield* worker.drain();
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(settled, saved.run.id, ordinal, status);
+        assert.equal(
+          settled.providerThreads[0]?.cloudTask?.status,
+          outcome === "cancelled" ? "cancelled" : "succeeded",
+        );
+        assert.equal(
+          settled.providerTurns.find((candidate) => candidate.runAttemptId === saved.attempt.id)
+            ?.status,
+          status,
+        );
+        assert.equal(h.create.mock.calls.length, creates);
+        assert.equal(h.send.mock.calls.length, sends);
+        assert.equal(h.runs[ordinal - 1]!.stream.mock.calls.length, streams);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "Cursor Cloud commits source before create, agent before send and acceptance before stream",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress("cursor-durable-order", {
+        blockCreate: true,
+        blockSend: true,
+      });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = ThreadId.make("thread:cursor-durable-order");
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, { type: "start_immediately" });
+        const draining = yield* worker.drain().pipe(Effect.forkChild);
+        yield* Deferred.await(h.creating);
+        const creating = yield* orchestrator.getThreadProjection(threadId);
+        const run = creating.runs[0]!;
+        assert.equal(run.status, "running");
+        assert.equal(creating.providerThreads[0]?.cloudTask?.status, "submitting");
+        assert.equal(creating.providerThreads[0]?.cloudTask?.taskId, run.id);
+        assert.isUndefined(creating.providerThreads[0]?.cloudTask?.acceptedAppRunId);
+        assert.deepEqual(creating.providerThreads[0]?.cloudTask?.source, cursorSource);
+        assert.isTrue(creating.providerThreads[0]?.cloudTask?.localChangesExcluded);
+        assert.isNull(creating.providerThreads[0]!.nativeThreadRef);
+        assert.equal(h.send.mock.calls.length, 0);
+        assert.deepEqual(h.create.mock.calls[0]![0].cloud, {
+          repos: [{ url: cursorSource.repository, startingRef: cursorSource.sha }],
+          workOnCurrentBranch: false,
+          autoCreatePR: true,
+        });
+        yield* h.allowCreate;
+        yield* Deferred.await(h.sending);
+        const sending = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(sending.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
+        assert.equal(sending.providerThreads[0]?.cloudTask?.status, "submitting");
+        assert.isUndefined(sending.providerThreads[0]?.cloudTask?.acceptedAppRunId);
+        assert.equal(
+          sending.providerThreads[0]?.cloudTask?.url,
+          `https://cursor.com/agents/${cursorAgentId}`,
+        );
+        assert.equal(h.runs[0]!.stream.mock.calls.length, 0);
+        yield* h.allowSend;
+        yield* Deferred.await(h.runs[0]!.streaming);
+        const accepted = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(accepted.providerThreads[0]?.cloudTask?.taskId, "cursor-run-1");
+        assert.equal(accepted.providerThreads[0]?.cloudTask?.status, "running");
+        assert.equal(accepted.providerThreads[0]?.cloudTask?.acceptedAppRunId, run.id);
+        assert.deepEqual(accepted.providerThreads[0]?.cloudTask?.source, cursorSource);
+        yield* Fiber.join(draining);
+        yield* h.runs[0]!.finish();
+        yield* awaitCursorRun(threadId, run.id, "completed");
+        yield* worker.drain();
+        const completed = yield* orchestrator.getThreadProjection(threadId);
+        assertCursorResult(completed, run.id, 1);
+        assert.equal(completed.providerThreads[0]?.cloudTask?.summary, "Completed task 1.");
+        assert.equal(completed.providerThreads[0]?.cloudTask?.branch, "cursor/result-1");
+        assert.equal(
+          completed.providerThreads[0]?.cloudTask?.prUrl,
+          "https://github.com/fixture/repo/pull/1",
+        );
+        // An extra drain must not repeat finalization or create another provider result.
+        yield* worker.drain();
+        assertCursorResult(yield* orchestrator.getThreadProjection(threadId), run.id, 1);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        assert.equal(h.create.mock.calls.length, 1);
+        assert.equal(h.send.mock.calls.length, 1);
+        assert.equal(h.cancelRun.mock.calls.length, 0);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
+);
+
+it.effect("Cursor Cloud never creates or sends when the durable submitting transaction fails", () =>
+  Effect.gen(function* () {
+    const h = yield* makeCursorIngress("cursor-intent-write-failure");
+    yield* Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread:cursor-intent-write-failure");
+      yield* createCursorThread(threadId);
+      yield* dispatchCursorMessage(threadId, 1, {
+        type: "defer_start",
+        workspaceStrategy: { type: "root" },
+      });
+      const prepared = yield* orchestrator.getThreadProjection(threadId);
+      const run = prepared.runs[0]!;
+      assert.equal(run.status, "preparing");
+      yield* orchestrator.dispatch({
+        type: "prepared-run.release",
+        commandId: CommandId.make("command:cursor-release-write-failure"),
+        threadId,
+        runId: run.id,
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(before.runs[0]?.status, "starting");
+      // Abort the real projection transaction, rather than mocking the persistence hook.
+      yield* sql`
+        CREATE TEMP TRIGGER reject_cursor_submitting
+        BEFORE INSERT ON orchestration_v2_projection_provider_threads
+        WHEN json_extract(NEW.payload_json, '$.cloudTask.status') = 'submitting'
+        BEGIN SELECT RAISE(ABORT, 'fixture rejected submitting intent'); END
+      `;
+      const result = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+        .start({ threadId, runId: run.id })
+        .pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.equal(yield* Ref.get(h.sourceReads), 1);
+      assert.equal(h.create.mock.calls.length, 0);
+      assert.equal(h.resume.mock.calls.length, 0);
+      assert.equal(h.send.mock.calls.length, 0);
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.isUndefined(after.providerThreads[0]?.cloudTask);
+      assert.equal(after.runs[0]?.status, before.runs[0]?.status);
+      assert.equal(after.attempts[0]?.status, before.attempts[0]?.status);
+      assert.equal(
+        after.nodes.find((node) => node.id === run.rootNodeId)?.status,
+        before.nodes.find((node) => node.id === run.rootNodeId)?.status,
+      );
+    }).pipe(Effect.provide(h.layer));
+  }).pipe(Effect.scoped),
+);
+
+it.effect.each(["direct", "queued"] as const)(
+  "Cursor Cloud %s follow-up reuses the agent and original SHA without local source resolution",
+  (mode) =>
+    Effect.gen(function* () {
+      const h = yield* makeCursorIngress(`cursor-follow-up-${mode}`, { blockResume: true });
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = ThreadId.make(`thread:cursor-follow-up-${mode}`);
+        yield* createCursorThread(threadId);
+        yield* dispatchCursorMessage(threadId, 1, { type: "start_immediately" });
+        yield* worker.drain();
+        yield* Deferred.await(h.runs[0]!.streaming);
+        const first = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+        if (mode === "queued") {
+          yield* dispatchCursorMessage(threadId, 2, { type: "queue_after_active" });
+          yield* worker.drain();
+          const queued = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(queued.runs.find((run) => run.ordinal === 2)?.status, "queued");
+          assert.equal(h.resume.mock.calls.length, 0);
+          assert.equal(h.send.mock.calls.length, 1);
+        }
+        yield* h.runs[0]!.finish();
+        yield* awaitCursorRun(threadId, first.id, "completed");
+        const firstCompleted = yield* orchestrator.getThreadProjection(threadId);
+        const firstResult = assertCursorResult(firstCompleted, first.id, 1);
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        if (mode === "direct")
+          yield* dispatchCursorMessage(threadId, 2, { type: "start_immediately" });
+        const resuming = yield* worker.drain().pipe(Effect.forkChild);
+        yield* Deferred.await(h.resuming);
+        const submitting = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(assertCursorResult(submitting, first.id, 1), firstResult);
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.status, "submitting");
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.taskId, "cursor-run-1");
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.acceptedAppRunId, first.id);
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.summary, "Completed task 1.");
+        assert.equal(
+          submitting.providerThreads[0]?.cloudTask?.prUrl,
+          "https://github.com/fixture/repo/pull/1",
+        );
+        assert.equal(submitting.providerThreads[0]?.cloudTask?.branch, "cursor/result-1");
+        assert.deepEqual(submitting.providerThreads[0]?.cloudTask?.source, cursorSource);
+        assert.equal(submitting.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
+        assert.equal(
+          submitting.providerThreads[0]?.cloudTask?.url,
+          `https://cursor.com/agents/${cursorAgentId}`,
+        );
+        assert.equal(h.send.mock.calls.length, 1);
+        yield* h.allowResume;
+        yield* Fiber.join(resuming);
+        yield* Deferred.await(h.runs[1]!.streaming);
+        const followUp = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.ordinal === 2,
+        )!;
+        yield* awaitCursorTurn(threadId, followUp.activeAttemptId!);
+        const second = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(assertCursorResult(second, first.id, 1), firstResult);
+        assert.equal(h.create.mock.calls.length, 1);
+        assert.equal(h.resume.mock.calls.length, 1);
+        assert.equal(h.resume.mock.calls[0]![0], cursorAgentId);
+        assert.equal(h.send.mock.calls.length, 2);
+        assert.equal(yield* Ref.get(h.sourceReads), 1);
+        assert.deepEqual(second.providerThreads[0]?.cloudTask?.source, cursorSource);
+        assert.equal(second.providerThreads[0]?.nativeThreadRef?.nativeId, cursorAgentId);
+        assert.equal(second.providerThreads[0]?.cloudTask?.taskId, "cursor-run-2");
+        assert.equal(second.providerThreads[0]?.cloudTask?.acceptedAppRunId, followUp.id);
+        assert.isUndefined(second.providerThreads[0]?.cloudTask?.summary);
+        assert.equal(
+          second.providerThreads[0]?.cloudTask?.prUrl,
+          "https://github.com/fixture/repo/pull/1",
+        );
+        assert.equal(
+          second.providerTurns.find((turn) => turn.runAttemptId === first.activeAttemptId)?.ordinal,
+          1,
+        );
+        assert.equal(
+          second.providerTurns.find((turn) => turn.runAttemptId === followUp.activeAttemptId)
+            ?.ordinal,
+          2,
+        );
+        yield* h.runs[1]!.finish();
+        yield* awaitCursorRun(threadId, followUp.id, "completed");
+        yield* worker.drain();
+        const completed = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(assertCursorResult(completed, first.id, 1), firstResult);
+        assertCursorResult(completed, followUp.id, 2);
+        assert.equal(
+          completed.messages.filter((message) => message.role === "assistant").length,
+          2,
+        );
+        assert.equal(
+          completed.turnItems.filter((item) => item.type === "assistant_message").length,
+          2,
+        );
+        assert.equal(
+          completed.visibleTurnItems.filter((row) => row.item.type === "assistant_message").length,
+          2,
+        );
+        assert.equal(yield* Ref.get(h.adapterAssistantFinals), 0);
+        yield* worker.drain();
+        const redrained = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(redrained.messages, completed.messages);
+        assert.deepEqual(redrained.turnItems, completed.turnItems);
+        assert.deepEqual(redrained.visibleTurnItems, completed.visibleTurnItems);
+      }).pipe(Effect.provide(h.layer));
+    }).pipe(Effect.scoped),
 );
 
 it.effect(
