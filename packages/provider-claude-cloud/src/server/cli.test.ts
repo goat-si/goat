@@ -378,30 +378,28 @@ it.effect.each([
   FOLDER_TRUST_PROMPT,
   NATIVE_FOLDER_TRUST_OPTION,
   ...SYNTHETIC_FOLDER_TRUST_REFUSALS,
-])(
-  "returns identity before a later split ANSI folder refusal reports uncertainty (%#)",
-  (output) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const h = yield* makeCliHarness();
-        const fiber = yield* h.service
-          .start(LOGIN, "/fixture/project folder", "task")
-          .pipe(Effect.forkChild);
-        yield* h.fake.ready;
-        h.fake.emit(RECEIPT);
-        const handle = yield* Fiber.join(fiber);
-        expect(handle.receipt.taskId).toBe("session_ABC123");
-        for (const character of `\u001b[33m${output}\u001b[0m`) h.fake.emit(character);
-        const error = yield* handle.exited.pipe(Effect.flip);
-        expect(error.outcome).toBe("uncertain");
-        expect(error.detail).toBe(
-          "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project folder, accept the trust prompt, then try again.",
-        );
-        expect(h.starts).toHaveLength(1);
-        expect(h.fake.writes).toEqual([]);
-        h.fake.finish(1);
-      }),
-    ),
+])("returns identity before a later split ANSI folder refusal reports uncertainty (%#)", (output) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project folder", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      for (const character of `\u001b[33m${output}\u001b[0m`) h.fake.emit(character);
+      const error = yield* handle.exited.pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toBe(
+        "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project folder, accept the trust prompt, then try again.",
+      );
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
+      h.fake.finish(1);
+    }),
+  ),
 );
 
 it.effect.each([
