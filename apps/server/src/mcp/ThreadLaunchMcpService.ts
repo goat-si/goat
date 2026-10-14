@@ -268,10 +268,13 @@ const make = Effect.gen(function* () {
             : { text: input.message ?? "", block: null };
         // A webhook choice is checked, and an inline secret kept, before any thread exists.
         const launchWatches = yield* LaunchWatchService.LaunchWatchService;
-        const route =
+        // Set in the same uninterruptible step that saves the watch, which then holds the route.
+        // Until then any exit, interruption included, frees the secret the route kept.
+        let routeKept = false;
+        return yield* Effect.acquireUseRelease(
           input.notifyTarget === undefined
-            ? { notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null }
-            : yield* launchWatches
+            ? Effect.succeed({ notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null })
+            : launchWatches
                 .resolveRoute({
                   notifyWebhook: input.notifyWebhook,
                   notifyOnCompletion: input.notifyOnCompletion,
@@ -286,165 +289,184 @@ const make = Effect.gen(function* () {
                         message: error.message,
                       }),
                   ),
-                );
-        const releaseRoute =
-          route.webhookTarget === null ? Effect.void : launchWatches.releaseRoute(route);
-        const launch = ThreadMessageIntake.launchThread({
-          commandId,
-          threadId,
-          projectId,
-          title: input.title,
-          modelSelection,
-          runtimeMode,
-          interactionMode,
-          workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
-          ...(!startsRun
-            ? {}
-            : {
-                initialMessage: {
-                  messageId,
-                  ...(caller === undefined ? {} : { senderThreadId: caller.id }),
-                  text: standing.text,
-                  attachments,
-                },
-              }),
-          createdBy: "agent",
-          creationSource: "mcp",
-          // The calling thread is the launcher. A launch forwarded over SSH has no
-          // calling thread here and names its launcher on the other machine instead.
-          ...(caller !== undefined
-            ? {
-                launchedBy: {
-                  kind: "launch" as const,
-                  threadId: caller.id,
-                  environmentId: null,
-                  environmentLabel: null,
-                  threadTitle: caller.title,
-                  via: "thread_launch" as const,
-                },
-              }
-            : input.launchedBy === undefined
-              ? {}
-              : {
-                  launchedBy: {
-                    ...input.launchedBy,
-                    kind: "launch" as const,
-                    via:
-                      input.launchedBy.via === "delegate_task"
-                        ? ("delegate_task" as const)
-                        : ("ssh_thread_launch" as const),
-                  },
+                ),
+          (route) =>
+            Effect.gen(function* () {
+              const launch = ThreadMessageIntake.launchThread({
+                commandId,
+                threadId,
+                projectId,
+                title: input.title,
+                modelSelection,
+                runtimeMode,
+                interactionMode,
+                workspaceStrategy: input.workspaceStrategy ?? { type: "root" },
+                ...(!startsRun
+                  ? {}
+                  : {
+                      initialMessage: {
+                        messageId,
+                        ...(caller === undefined ? {} : { senderThreadId: caller.id }),
+                        text: standing.text,
+                        attachments,
+                      },
+                    }),
+                createdBy: "agent",
+                creationSource: "mcp",
+                // The calling thread is the launcher. A launch forwarded over SSH has no
+                // calling thread here and names its launcher on the other machine instead.
+                ...(caller !== undefined
+                  ? {
+                      launchedBy: {
+                        kind: "launch" as const,
+                        threadId: caller.id,
+                        environmentId: null,
+                        environmentLabel: null,
+                        threadTitle: caller.title,
+                        via: "thread_launch" as const,
+                      },
+                    }
+                  : input.launchedBy === undefined
+                    ? {}
+                    : {
+                        launchedBy: {
+                          ...input.launchedBy,
+                          kind: "launch" as const,
+                          via:
+                            input.launchedBy.via === "delegate_task"
+                              ? ("delegate_task" as const)
+                              : ("ssh_thread_launch" as const),
+                        },
+                      }),
+              }).pipe(
+                Effect.mapError((error) => {
+                  if (error._tag === "AttachmentClaimError") {
+                    return new OrchestratorMcpFailure({
+                      code: "orchestration_error",
+                      message: error.message,
+                    });
+                  }
+                  if (error._tag === "ThreadManagementProviderInstanceDisabledError") {
+                    return new OrchestratorMcpFailure({
+                      code: "invalid_request",
+                      message: error.message,
+                    });
+                  }
+                  if (error._tag === "ThreadLaunchWorkspaceMissingError") {
+                    return new OrchestratorMcpFailure({
+                      code: "invalid_request",
+                      message: workspaceMissingMessage(error),
+                    });
+                  }
+                  return unavailable();
                 }),
-        }).pipe(
-          Effect.mapError((error) => {
-            if (error._tag === "AttachmentClaimError") {
-              return new OrchestratorMcpFailure({
-                code: "orchestration_error",
-                message: error.message,
-              });
-            }
-            if (error._tag === "ThreadManagementProviderInstanceDisabledError") {
-              return new OrchestratorMcpFailure({
-                code: "invalid_request",
-                message: error.message,
-              });
-            }
-            if (error._tag === "ThreadLaunchWorkspaceMissingError") {
-              return new OrchestratorMcpFailure({
-                code: "invalid_request",
-                message: workspaceMissingMessage(error),
-              });
-            }
-            return unavailable();
-          }),
-        );
-        const result = yield* (
-          report === undefined
-            ? launch
-            : Effect.gen(function* () {
-                const reports = yield* RemoteReportService.RemoteReportService;
-                // The binding commits before the agent can run. Only a launch that
-                // never created its thread loses it again; an accepted or uncertain
-                // launch keeps it, so the work it started can still report.
-                return yield* Effect.uninterruptibleMask((restore) =>
-                  reports.bind(threadId, report).pipe(
-                    Effect.mapError(unavailable),
-                    Effect.andThen(
-                      restore(launch).pipe(
-                        Effect.onError(() =>
-                          context.threads.getThreadShell(threadId).pipe(
-                            Effect.flatMap((shell) =>
-                              shell === null ? reports.unbind(threadId) : Effect.void,
+              );
+              const result = yield* report === undefined
+                ? launch
+                : Effect.gen(function* () {
+                    const reports = yield* RemoteReportService.RemoteReportService;
+                    // The binding commits before the agent can run. Only a launch that
+                    // never created its thread loses it again; an accepted or uncertain
+                    // launch keeps it, so the work it started can still report.
+                    return yield* Effect.uninterruptibleMask((restore) =>
+                      reports.bind(threadId, report).pipe(
+                        Effect.mapError(unavailable),
+                        Effect.andThen(
+                          restore(launch).pipe(
+                            Effect.onError(() =>
+                              context.threads.getThreadShell(threadId).pipe(
+                                Effect.flatMap((shell) =>
+                                  shell === null ? reports.unbind(threadId) : Effect.void,
+                                ),
+                                Effect.ignore,
+                              ),
                             ),
-                            Effect.ignore,
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                );
-              })
-        ).pipe(Effect.onError(() => releaseRoute));
-        const thread = result.projection.thread;
-        const run = result.projection.runs.find((run) => run.userMessageId === messageId);
-        // A launch another machine's GOAT forwards is watched by that machine.
-        const external =
-          caller === undefined &&
-          input.launchedBy === undefined &&
-          report === undefined &&
-          run !== undefined;
-        const watching =
-          input.notifyOnCompletion !== false && (caller !== undefined || external)
-            ? yield* (
-                caller !== undefined
-                  ? launchWatches
-                      .register({
-                        launcherThreadId: caller.id,
-                        host: null,
-                        threadId: thread.id,
-                        projectId: thread.projectId,
-                        title: thread.title,
-                        runId: run?.id ?? null,
-                        notifyWebhook: route.notifyWebhook,
-                        webhookTarget: route.webhookTarget,
-                      })
-                      .pipe(Effect.as(true))
-                  : run === undefined
-                    ? Effect.succeed(false)
-                    : // An outside client's launch is watched only for the completion webhook.
-                      launchWatches
-                        .watchExternal({
-                          owner: context.scope.requestNamespace,
-                          host: null,
+                    );
+                  });
+              const thread = result.projection.thread;
+              const run = result.projection.runs.find((run) => run.userMessageId === messageId);
+              // A launch another machine's GOAT forwards is watched by that machine.
+              const external =
+                caller === undefined &&
+                input.launchedBy === undefined &&
+                report === undefined &&
+                run !== undefined;
+              const watching =
+                input.notifyOnCompletion !== false && (caller !== undefined || external)
+                  ? yield* (
+                      caller !== undefined
+                        ? launchWatches
+                            .register({
+                              launcherThreadId: caller.id,
+                              host: null,
+                              threadId: thread.id,
+                              projectId: thread.projectId,
+                              title: thread.title,
+                              runId: run?.id ?? null,
+                              notifyWebhook: route.notifyWebhook,
+                              webhookTarget: route.webhookTarget,
+                            })
+                            .pipe(
+                              Effect.tap(() =>
+                                Effect.sync(() => {
+                                  routeKept = true;
+                                }),
+                              ),
+                              Effect.as(true),
+                              Effect.uninterruptible,
+                            )
+                        : run === undefined
+                          ? Effect.succeed(false)
+                          : // An outside client's launch is watched only for the completion webhook.
+                            launchWatches
+                              .watchExternal({
+                                owner: context.scope.requestNamespace,
+                                host: null,
+                                threadId: thread.id,
+                                projectId: thread.projectId,
+                                title: thread.title,
+                                runId: run.id,
+                                ceiling: context.limits.runtimeMode,
+                                route,
+                              })
+                              .pipe(
+                                Effect.map((watch) => {
+                                  routeKept = watch !== null;
+                                  return routeKept;
+                                }),
+                                Effect.uninterruptible,
+                              )
+                    ).pipe(
+                      // The thread exists either way; a watch that failed to save is reported, not fatal.
+                      Effect.catch((error) =>
+                        Effect.logWarning("launch watch not recorded", {
                           threadId: thread.id,
-                          projectId: thread.projectId,
-                          title: thread.title,
-                          runId: run.id,
-                          ceiling: context.limits.runtimeMode,
-                          route,
-                        })
-                        .pipe(Effect.map((watch) => watch !== null))
-              ).pipe(
-                // The thread exists either way; a watch that failed to save is reported, not fatal.
-                Effect.catch((error) =>
-                  Effect.logWarning("launch watch not recorded", {
-                    threadId: thread.id,
-                    cause: error,
-                  }).pipe(Effect.as(false)),
-                ),
-              )
-            : false;
-        if (!watching) yield* releaseRoute;
-        return {
-          threadId: thread.id,
-          projectId: thread.projectId,
-          modelSelection: thread.modelSelection,
-          runId: run?.id ?? null,
-          status: run?.status ?? null,
-          watching,
-          standingInstructionsVersion: standing.block?.version ?? null,
-          ...(report === undefined ? {} : { report: { correlationId: report.correlationId } }),
-        };
+                          cause: error,
+                        }).pipe(Effect.as(false)),
+                      ),
+                    )
+                  : false;
+              return {
+                threadId: thread.id,
+                projectId: thread.projectId,
+                modelSelection: thread.modelSelection,
+                runId: run?.id ?? null,
+                status: run?.status ?? null,
+                watching,
+                standingInstructionsVersion: standing.block?.version ?? null,
+                ...(report === undefined
+                  ? {}
+                  : { report: { correlationId: report.correlationId } }),
+              };
+            }),
+          (route) =>
+            routeKept || route.webhookTarget === null
+              ? Effect.void
+              : launchWatches.releaseRoute(route),
+        );
       }).pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(ThreadManagement.ThreadManagementService, threads),

@@ -20,6 +20,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
@@ -36,6 +37,7 @@ import { SshToolkit } from "./tools.ts";
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
+type Route = Parameters<LaunchWatchService.LaunchWatchServiceShape["releaseRoute"]>[0];
 
 type LaunchOptions = {
   readonly notifyOnCompletion?: boolean;
@@ -49,6 +51,10 @@ type LaunchOptions = {
   /** Whether the completion webhook takes an outside client's launch. */
   readonly webhookWatchesExternal?: boolean;
   readonly workspace?: SshRemoteDispatch.SshLaunchInput["workspace"];
+  /** Routes the launch to this named webhook target. */
+  readonly notifyTarget?: { readonly name: string };
+  /** The launch is interrupted while its watch is being saved, after the remote thread exists. */
+  readonly registerInterrupted?: boolean;
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -70,6 +76,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
     } as OrchestrationV2ThreadShell;
     const registrations: Array<Registration> = [];
     const externalWatches: Array<ExternalWatch> = [];
+    const released: Array<Route> = [];
     const launchInputs: Array<SshRemoteDispatch.SshLaunchInput> = [];
     const deliveries: Array<string> = [];
     const remoteResult: SshRemoteDispatch.SshLaunchResult = {
@@ -134,6 +141,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         register: (input) =>
           Effect.gen(function* () {
+            if (options.registerInterrupted === true) return yield* Effect.interrupt;
             registrations.push(input);
             if (options.registerError !== undefined) return yield* options.registerError;
             return newLaunchWatch({
@@ -159,6 +167,12 @@ const launchRaw = (options: LaunchOptions = {}) =>
                 })
               : null;
           }),
+        resolveRoute: (input) =>
+          Effect.succeed({
+            notifyWebhook: false,
+            webhookTarget: { type: "named" as const, name: input.notifyTarget?.name ?? "" },
+          }),
+        releaseRoute: (route) => Effect.sync(() => void released.push(route)),
       }),
     );
     const toolkit = yield* SshToolkit.pipe(
@@ -177,12 +191,15 @@ const launchRaw = (options: LaunchOptions = {}) =>
           : { notifyOnCompletion: options.notifyOnCompletion }),
         ...(options.notifyWebhook === undefined ? {} : { notifyWebhook: options.notifyWebhook }),
         ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
+        ...(options.notifyTarget === undefined ? {} : { notifyTarget: options.notifyTarget }),
       })
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies), Effect.exit);
     return {
-      response: responses.at(-1)?.result,
+      response: Exit.isSuccess(responses) ? responses.value.at(-1)?.result : undefined,
+      interrupted: Exit.hasInterrupts(responses),
       registrations,
       externalWatches,
+      released,
       launchInputs,
       deliveries,
       callerThreadId,
@@ -356,6 +373,31 @@ it.effect("launches without registering a watch when completion notifications ar
       watching: false,
       notes: [...launched.remoteResult.notes, expect.stringContaining("Run ends are not followed")],
     });
+  }),
+);
+
+it.effect("keeps a notify target with the watch that saved it", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({ notifyTarget: { name: "bot-a" } });
+    expect(launched.registrations).toEqual([
+      expect.objectContaining({ webhookTarget: { type: "named", name: "bot-a" } }),
+    ]);
+    expect(launched.released).toEqual([]);
+  }),
+);
+
+it.effect("releases a notify target when the launch is interrupted before its watch is saved", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchRaw({
+      notifyTarget: { name: "bot-a" },
+      registerInterrupted: true,
+    });
+    expect(launched.interrupted).toBe(true);
+    // The remote thread exists, but no watch holds the route, so what it kept is freed.
+    expect(launched.launchInputs).toHaveLength(1);
+    expect(launched.released).toEqual([
+      { notifyWebhook: false, webhookTarget: { type: "named", name: "bot-a" } },
+    ]);
   }),
 );
 

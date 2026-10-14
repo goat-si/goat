@@ -12,6 +12,7 @@ import {
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
@@ -80,13 +81,16 @@ const launchWatches = (
   externalWatches: Array<ExternalWatch> = [],
   webhookWatchesExternal = false,
   released: Array<Route> = [],
+  registerInterrupted = false,
 ) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
     register: (input) =>
-      Effect.sync(() => {
-        registrations.push(input);
-        return {} as never;
-      }),
+      registerInterrupted
+        ? Effect.interrupt
+        : Effect.sync(() => {
+            registrations.push(input);
+            return {} as never;
+          }),
     watchExternal: (input) =>
       Effect.sync(() => {
         externalWatches.push(input);
@@ -123,10 +127,19 @@ const launchFromThread = (params: {
   readonly webhookWatchesExternal?: boolean;
   /** The launch service refuses instead of launching. */
   readonly launchFails?: ThreadLaunch.ThreadLaunchWorkspaceMissingError;
+  /** The launch is interrupted while its watch is being saved, after the thread exists. */
+  readonly registerInterrupted?: boolean;
 }) =>
   Effect.gen(function* () {
-    const { settings, outsideClient, clientAccess, webhookWatchesExternal, launchFails, ...rest } =
-      params;
+    const {
+      settings,
+      outsideClient,
+      clientAccess,
+      webhookWatchesExternal,
+      launchFails,
+      registerInterrupted,
+      ...rest
+    } = params;
     const sourceThreadId = ThreadId.make("source-thread");
     const projectId = ProjectId.make("project");
     const providerInstanceId = ProviderInstanceId.make("codex");
@@ -154,7 +167,13 @@ const launchFromThread = (params: {
     const layerDependencies = Layer.mergeAll(
       ServerSettings.layerTest(settings),
       NodeCrypto.layer,
-      launchWatches(registrations, externalWatches, webhookWatchesExternal === true, released),
+      launchWatches(
+        registrations,
+        externalWatches,
+        webhookWatchesExternal === true,
+        released,
+        registerInterrupted === true,
+      ),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
@@ -228,11 +247,17 @@ const launchFromThread = (params: {
       expect(refused.at(-1)?.result).toMatchObject({ code: "invalid_request" });
       expect(launchedInput).toBeUndefined();
     }
-    const result = yield* toolkit
+    const exit = yield* toolkit
       .handle("goat_thread_launch", input)
-      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(withLaunchService(layerDependencies)));
+      .pipe(
+        Stream.unwrap,
+        Stream.runCollect,
+        Effect.provide(withLaunchService(layerDependencies)),
+        Effect.exit,
+      );
     return {
-      result: result.at(-1)?.result,
+      result: Exit.isSuccess(exit) ? exit.value.at(-1)?.result : undefined,
+      interrupted: Exit.hasInterrupts(exit),
       launchedSender,
       launchedBy,
       launchedInput,
@@ -1340,6 +1365,24 @@ it.effect("releases a notify target whose launch records no watch", () =>
       webhookWatchesExternal: true,
     });
     expect(launched.result).toMatchObject({ watching: false });
+    expect(launched.released).toEqual([
+      { notifyWebhook: false, webhookTarget: { type: "named", name: "bot-a" } },
+    ]);
+  }),
+);
+
+it.effect("releases a notify target when the launch is interrupted before its watch is saved", () =>
+  Effect.gen(function* () {
+    const launched = yield* launchFromThread({
+      title: "Audit",
+      message: "Go",
+      notifyTarget: { name: "bot-a" },
+      registerInterrupted: true,
+    });
+    expect(launched.interrupted).toBe(true);
+    // The thread exists, but no watch holds the route, so what it kept is freed.
+    expect(launched.launchedInput).toBeDefined();
+    expect(launched.registrations).toEqual([]);
     expect(launched.released).toEqual([
       { notifyWebhook: false, webhookTarget: { type: "named", name: "bot-a" } },
     ]);
