@@ -38,6 +38,8 @@ describe("pullRequestHoldReason", () => {
     "```sh\nnpm test\n```\n\nHOLD: after the fence",
     "<!-- template -->\nHOLD: after a comment",
     "<!--\nmultiline\n-->\nHOLD: after a comment",
+    "> ```\n> example\n\nHOLD: stop",
+    "- ```\n  example\nHOLD: after the list item",
   ])("holds a description line %j", (body) => {
     expect(pullRequestHoldReason({ ...open, body })).toBe("its description has a HOLD line");
   });
@@ -50,6 +52,9 @@ describe("pullRequestHoldReason", () => {
     "~~~~\n```\nHOLD: still fenced\n~~~~",
     "<!--\nHOLD: hidden in a template comment\n-->",
     "<!-- HOLD -->",
+    "- ```\n  HOLD: example\n  ```",
+    "1. ```\n   HOLD: example\n   ```\n2. next",
+    "> ```\n> HOLD: quoted example\n> ```",
   ])("does not read %j as a hold", (body) => {
     expect(
       pullRequestHoldReason({ ...open, body, labels: [{ name: "holdout-tests" }] }),
