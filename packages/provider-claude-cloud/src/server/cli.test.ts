@@ -89,9 +89,9 @@ it.effect("requires --cloud support on the exact sibling executable", () =>
   ),
 );
 
-it.effect(
-  "returns the accepted ID before exit, preserves prompt argv and never writes trust input",
-  () =>
+it.effect.each([{ signal: null }, { signal: 0 }] as const)(
+  "returns identity before a normal native exit, preserving argv and zero trust input (%s)",
+  ({ signal }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const h = yield* makeCliHarness();
@@ -110,10 +110,58 @@ it.effect(
           env: LOGIN.environment,
         });
         expect(h.fake.writes).toEqual([]);
-        h.fake.finish();
+        h.fake.finish(0, signal);
         yield* handle.exited;
       }),
     ),
+);
+
+it.effect.each([
+  { code: 1, signal: 0 },
+  { code: 0, signal: 15 },
+  { code: 0, signal: 9 },
+] as const)(
+  "keeps accepted identity but rejects a failed or signalled sender exit (%s)",
+  ({ code, signal }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const fiber = yield* h.service
+          .start(LOGIN, "/fixture/project", "task")
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(RECEIPT);
+        const handle = yield* Fiber.join(fiber);
+        h.fake.finish(code, signal);
+        const failure = yield* handle.exited.pipe(Effect.flip);
+        expect(handle.receipt.taskId).toBe("session_ABC123");
+        expect(failure.outcome).toBe("uncertain");
+        expect(h.starts).toHaveLength(1);
+        expect(h.fake.writes).toEqual([]);
+      }),
+    ),
+);
+
+it.effect("a normal zero-signal exit does not override an output failure after admission", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      h.fake.emit("Error: fixture transport interrupted\n");
+      h.fake.finish(0, 0);
+      const failure = yield* handle.exited.pipe(Effect.flip);
+      expect(failure.outcome).toBe("uncertain");
+      expect(failure.detail).toBe("fixture transport interrupted");
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
 );
 
 // Refusal variants are representative synthetic fixtures; the folder prompt was observed natively.

@@ -351,7 +351,8 @@ const make = Effect.gen(function* () {
         exited: wait(() => {
           if (failure) return Effect.fail(failure);
           if (exit)
-            return exit.exitCode === 0 && exit.signal === null
+            // node-pty reports signal 0 for a normal Unix exit; other adapters omit it.
+            return exit.exitCode === 0 && (exit.signal === null || exit.signal === 0)
               ? Effect.void
               : Effect.fail(unknownSubmission());
           return undefined;
