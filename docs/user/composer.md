@@ -74,11 +74,11 @@ keyboard. The button only offers Steer when the running agent supports it.
 
 ## Cloud tasks
 
-When a configured provider runs in the cloud, its task uses the published remote
-branch. Local edits and commits that have not been pushed are not included; push
-first if you want the task to use them. A branch that has never been published
-cannot start a cloud task. Some providers also require a clean checkout of that
-pushed revision; resolve the displayed source restriction before sending.
+Most cloud providers use the published remote branch and exclude local edits and
+unpushed commits; push first if you want those tasks to use them. Some also require
+a clean checkout of that pushed revision. Claude Cloud starts from the project
+folder and its current branch instead, and local changes may be included without
+publishing the branch. Check the provider's source notice before sending.
 
 Open the task or its returned pull request from the conversation. Cloud changes
 stay in the remote repository, so this thread has no local checkpoint or worktree

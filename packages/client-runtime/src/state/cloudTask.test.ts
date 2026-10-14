@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderInstanceId,
+  ProviderDriverKind,
   RunId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2CloudTask,
@@ -48,12 +49,20 @@ describe("cloud task client state", () => {
     expect(deriveCloudTaskState(null)).toEqual({
       cloudTask: null,
       executionLocation: "local",
+      launchSourceNotice: null,
       composerBlockReason: null,
       showLocalWorkspace: true,
     });
-    expect(deriveCloudTaskState(null, { instanceId, executionLocation: "cloud" })).toEqual({
+    expect(
+      deriveCloudTaskState(null, {
+        instanceId,
+        driver: ProviderDriverKind.make("fakeCloud"),
+        executionLocation: "cloud",
+      }),
+    ).toEqual({
       cloudTask: null,
       executionLocation: "cloud",
+      launchSourceNotice: null,
       composerBlockReason: null,
       showLocalWorkspace: false,
     });
@@ -117,12 +126,78 @@ describe("cloud task client state", () => {
     const localId = ProviderInstanceId.make("codex");
     const state = deriveCloudTaskState(current, {
       instanceId: localId,
+      driver: ProviderDriverKind.make("codex"),
       executionLocation: "local",
     });
     expect(state.composerBlockReason).toBeNull();
     expect(state.cloudTask).toEqual(task);
     expect(state.showLocalWorkspace).toBe(false);
   });
+  it("warns before a Claude Cloud draft has a projection or task", () => {
+    const notice =
+      "Claude Cloud starts tasks from the project folder. Local changes may be included.";
+    expect(
+      deriveCloudTaskState(null, {
+        instanceId,
+        driver: ProviderDriverKind.make("claudeCloud"),
+        executionLocation: "cloud",
+      }).launchSourceNotice,
+    ).toBe(notice);
+    const current = projection(false);
+    const projectFolder = {
+      ...current,
+      providerSessions: current.providerSessions.map((session) => ({
+        ...session,
+        capabilities: {
+          ...session.capabilities,
+          sessions: {
+            ...session.capabilities.sessions,
+            sourceRestriction: "project-folder" as const,
+          },
+        },
+      })),
+    };
+    expect(deriveCloudTaskState(projectFolder).launchSourceNotice).toBe(notice);
+    for (const driver of ["codex", "claudeAgent", "cursorCloud"]) {
+      expect(
+        deriveCloudTaskState(projectFolder, {
+          instanceId,
+          driver: ProviderDriverKind.make(driver),
+          executionLocation: driver === "cursorCloud" ? "cloud" : "local",
+        }).launchSourceNotice,
+      ).toBeNull();
+    }
+    expect(
+      deriveCloudTaskState(projectFolder, {
+        instanceId: ProviderInstanceId.make("other-local"),
+        driver: ProviderDriverKind.make("codex"),
+        executionLocation: "local",
+      }).launchSourceNotice,
+    ).toBeNull();
+  });
+  it.each([true, false, undefined])(
+    "keeps the selected launch policy independent of inclusion %s",
+    (included) => {
+      const current = projection();
+      const withFlag = {
+        ...current,
+        providerThreads: current.providerThreads.map((thread) => ({
+          ...thread,
+          cloudTask: {
+            ...task,
+            ...(included === undefined ? {} : { localChangesIncluded: included }),
+          },
+        })),
+      };
+      expect(
+        deriveCloudTaskState(withFlag, {
+          instanceId,
+          driver: ProviderDriverKind.make("claudeCloud"),
+          executionLocation: "cloud",
+        }).launchSourceNotice,
+      ).toBe("Claude Cloud starts tasks from the project folder. Local changes may be included.");
+    },
+  );
   it("keeps a confirmed preflight failure retryable and labels correlated PR artifacts", () => {
     const current = projection(false);
     const rejected = {

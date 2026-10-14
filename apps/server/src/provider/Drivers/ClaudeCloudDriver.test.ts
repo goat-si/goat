@@ -136,6 +136,7 @@ it.effect(
         expect(snapshot.driver).toBe("claudeCloud");
         expect(snapshot.executionLocation).toBe("cloud");
         expect(snapshot.status).toBe("ready");
+        expect(snapshot.message).toContain("Local changes may be included.");
         expect(snapshot.version).toBe("2.1.296");
         expect(
           applyProviderCompatibility(snapshot, [], BUNDLED_MODEL_MANIFEST.compatibility)

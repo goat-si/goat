@@ -54,7 +54,7 @@ const makeTurn = Effect.fnUntraced(function* (
     runtimeMode: policy.runtimeMode,
     interactionMode: policy.interactionMode,
     branch: "main",
-    worktreePath: null,
+    worktreePath: "/fixture/thread-worktree",
     activeProviderThreadId: providerThread.id,
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: THREAD },
     forkedFrom: null,
@@ -85,29 +85,27 @@ const makeTurn = Effect.fnUntraced(function* (
     modelSelection: selection,
     runtimePolicy: policy,
     cloudSource: source,
-    cloudLaunchSource: { cwd: "/fixture/repo", restriction: "published-ref" },
+    cloudLaunchSource: { cwd: "/fixture/project", restriction: "project-folder" },
   } satisfies Adapter.ProviderAdapterV2TurnInput;
 });
 
 const makeHarness = Effect.fnUntraced(function* () {
   let starts = 0;
   let sends = 0;
-  let prepares = 0;
   let reads = 0;
   let startError: ClaudeCloudError | undefined;
   let observedSummary = "Changed behavior.";
   let sendError: ClaudeCloudError | undefined;
   let controlError: ClaudeCloudError | undefined;
-  let prepareError: ClaudeCloudError | undefined;
   let observationError: ClaudeCloudError | undefined;
   let resolvedLogin = LOGIN;
+  const startCwds: string[] = [];
   const controlCommands: Array<{ kind: string; cwd: string; id?: string }> = [];
   let failCommitAt = -1;
   let commitCalls = 0;
   const ledger: NonNullable<OrchestrationV2ProviderThread["cloudTask"]>[] = [];
   const accepted = yield* Deferred.make<void>();
   const exit = yield* Deferred.make<void, ClaudeCloudError>();
-  const cleaned = yield* Deferred.make<void>();
   const read = yield* Deferred.make<void>();
   const deliver = yield* Deferred.make<void>();
   const sendReached = yield* Deferred.make<void>();
@@ -125,7 +123,8 @@ const makeHarness = Effect.fnUntraced(function* () {
       }),
     start: (_login, cwd) =>
       Effect.gen(function* () {
-        expect(cwd).toBe("/fixture/disposable");
+        startCwds.push(cwd);
+        expect(ledger.at(-1)?.status).toBe("submitting");
         starts += 1;
         if (startError) return yield* startError;
         return {
@@ -157,13 +156,6 @@ const makeHarness = Effect.fnUntraced(function* () {
     resolveControlCwd: Effect.suspend(() =>
       controlError ? Effect.fail(controlError) : Effect.succeed("/fixture/goat/control"),
     ),
-    prepareStart: () =>
-      Effect.gen(function* () {
-        prepares += 1;
-        if (prepareError) return yield* prepareError;
-        yield* Effect.addFinalizer(() => Deferred.succeed(cleaned, undefined));
-        return "/fixture/disposable";
-      }),
     runStartedAt: () => Effect.succeed(startedAt),
     observe: (input) =>
       Effect.gen(function* () {
@@ -250,13 +242,12 @@ const makeHarness = Effect.fnUntraced(function* () {
     events,
     accepted,
     exit,
-    cleaned,
     read,
     deliver,
     sendReached,
     sendRelease,
     terminal,
-    counts: () => ({ starts, sends, prepares, reads }),
+    counts: () => ({ starts, sends, reads }),
     noMatch: () => {
       found = false;
     },
@@ -267,6 +258,7 @@ const makeHarness = Effect.fnUntraced(function* () {
       pauseSend = true;
     },
     controlCommands,
+    startCwds,
     controlError: (error: ClaudeCloudError) => {
       controlError = error;
     },
@@ -275,9 +267,6 @@ const makeHarness = Effect.fnUntraced(function* () {
     },
     startError: (error: ClaudeCloudError) => {
       startError = error;
-    },
-    prepareError: (error: ClaudeCloudError) => {
-      prepareError = error;
     },
     observationError: (error: ClaudeCloudError) => {
       observationError = error;
@@ -301,10 +290,8 @@ it.effect(
         yield* Deferred.await(h.accepted);
         expect(h.ledger.at(-1)?.tracking).toBe("polled");
         expect(h.events.some((event) => event.type === "turn.terminal")).toBe(false);
-        expect(yield* Deferred.isDone(h.cleaned)).toBe(false);
         yield* Deferred.succeed(h.exit, undefined);
         yield* Deferred.await(h.read);
-        expect(yield* Deferred.isDone(h.cleaned)).toBe(true);
         expect(h.events.some((event) => event.type === "turn.terminal")).toBe(false);
         yield* Deferred.succeed(h.deliver, undefined);
         yield* Deferred.await(h.terminal);
@@ -321,12 +308,12 @@ it.effect(
           [],
         );
         yield* h.runtime.startTurn(h.input);
-        expect(h.counts()).toEqual({ starts: 1, sends: 0, prepares: 1, reads: 1 });
+        expect(h.counts()).toEqual({ starts: 1, sends: 0, reads: 1 });
       }),
     ),
 );
 it.effect(
-  "restart observes the saved ID without command/source preparation and keeps the original deadline",
+  "restart observes the saved ID without another launch and keeps the original deadline",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -339,7 +326,7 @@ it.effect(
         yield* Deferred.await(h.terminal);
         expect(h.ledger.at(-1)?.status).toBe("unknown");
         expect(h.ledger.at(-1)?.url).toBe(h.saved.cloudTask.url);
-        expect(h.counts().starts + h.counts().sends + h.counts().prepares).toBe(0);
+        expect(h.counts().starts + h.counts().sends).toBe(0);
       }),
     ),
 );
@@ -357,7 +344,7 @@ it.effect.each(["submitting", "unknown", "failed"] as const)(
         yield* Deferred.await(h.terminal);
         yield* h.runtime.resumeTurn!(attach);
         expect(h.events.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
-        expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
         expect(h.ledger.at(-1)?.status).toBe("unknown");
       }),
     ),
@@ -381,7 +368,7 @@ it.effect(
         yield* Deferred.await(h.terminal);
         expect(h.events.filter((event) => event.type === "message.updated")).toEqual([]);
         expect(h.events.find((event) => event.type === "turn.terminal")?.status).toBe("completed");
-        expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
       }),
     ),
 );
@@ -425,7 +412,7 @@ it.effect(
         expect(updated?.providerThread.nativeThreadRef).toEqual(accepted.nativeThreadRef);
         expect(h.ledger.at(-1)?.summary).toContain("not completed work");
         expect(h.events.filter((event) => event.type === "message.updated")).toEqual([]);
-        expect(h.counts()).toEqual({ starts: 0, sends: 1, prepares: 0, reads: 0 });
+        expect(h.counts()).toEqual({ starts: 0, sends: 1, reads: 0 });
       }),
     ),
 );
@@ -512,7 +499,7 @@ it.effect("unsupported cancel leaves remote identity intact and invokes zero com
         })
         .pipe(Effect.flip);
       expect(error.message).toContain("no supported CLI cancellation");
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
     }),
   ),
 );
@@ -535,7 +522,7 @@ it.effect(
 );
 
 it.effect(
-  "control directory rejection preserves the accepted session without source preparation or sends",
+  "control directory rejection preserves the accepted session without another launch or send",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -550,7 +537,7 @@ it.effect(
         });
         yield* Deferred.await(h.terminal);
         expect(h.controlCommands).toEqual([]);
-        expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
         expect(h.ledger.at(-1)?.status).toBe("running");
         expect(h.ledger.at(-1)?.taskId).toBe(h.saved.nativeThreadRef.nativeId);
         expect(h.ledger.at(-1)?.source).toEqual(source);
@@ -570,7 +557,7 @@ it.effect("publishes the explicit source restriction and no local runtime capabi
     Effect.gen(function* () {
       const h = yield* makeHarness();
       expect(h.runtime.providerSession.capabilities.sessions.sourceRestriction).toBe(
-        "published-ref",
+        "project-folder",
       );
       expect(h.runtime.providerSession.capabilities.turns.terminalStatusQuality).toBe("none");
       expect(h.runtime.providerSession.capabilities.tools.supportsMcpTools).toBe(false);
@@ -590,7 +577,7 @@ it.effect.each(["submitting", "unknown", "failed"] as const)(
           providerThread: { ...prior, cloudTask: { ...prior.cloudTask, status: "submitting" } },
         });
         yield* Deferred.await(h.terminal);
-        expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
         expect(h.controlCommands).toEqual([]);
         expect(h.ledger.at(-1)?.status).toBe("unknown");
       }),
@@ -624,7 +611,7 @@ it.effect.each([
       yield* h.runtime.startTurn({ ...h.input, ...patch, providerThread: h.saved });
       yield* Deferred.await(h.terminal);
       expect(h.controlCommands).toEqual([]);
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
       expect(h.ledger.at(-1)?.summary).toContain("Follow-up rejected");
     }),
   ),
@@ -649,14 +636,15 @@ it.effect("trust refusal has no accepted create and preserves an actionable erro
       h.startError(
         new ClaudeCloudError({
           outcome: "rejected",
-          detail: "The checkout trust workflow needs an environment owner.",
+          detail:
+            "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project, accept the trust prompt, then try again.",
         }),
       );
       yield* h.runtime.startTurn(h.input);
       yield* Deferred.await(h.terminal);
       expect(h.counts().starts).toBe(1);
       expect(h.ledger.at(-1)?.status).toBe("failed");
-      expect(h.ledger.at(-1)?.summary).toContain("environment owner");
+      expect(h.ledger.at(-1)?.summary).toContain("Open it once with `claude` in /fixture/project");
       expect(h.ledger.at(-1)?.taskId).toBe(h.input.runId);
     }),
   ),
@@ -678,7 +666,6 @@ it.effect(
         expect(h.ledger.at(-1)?.status).toBe("unknown");
         expect(h.ledger.at(-1)?.summary).toBe("Sender exit uncertain");
         expect(h.counts().reads).toBe(0);
-        expect(yield* Deferred.isDone(h.cleaned)).toBe(true);
       }),
     ),
 );
@@ -716,7 +703,7 @@ it.effect("recovered rejection settles only its saved receipt and emits one term
       yield* Deferred.await(h.terminal);
       yield* h.runtime.resumeTurn!(attach);
       expect(h.ledger.at(-1)?.summary).toContain("Follow-up rejected: Session archived");
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
       expect(h.events.filter((event) => event.type === "turn.terminal")).toHaveLength(1);
     }),
   ),
@@ -731,7 +718,7 @@ it.effect("saved malformed identity cannot perform observation or follow-up", ()
       });
       yield* Deferred.await(h.terminal);
       expect(h.ledger.at(-1)?.status).toBe("unknown");
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
     }),
   ),
 );
@@ -758,14 +745,14 @@ it.effect(
       }),
     ),
 );
-it.effect("initial intent failure invokes no source preparation or sender", () =>
+it.effect("initial intent failure invokes no sender", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeHarness();
       h.failCommit(1);
       yield* h.runtime.startTurn(h.input);
       yield* Deferred.await(h.terminal);
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
       expect(h.ledger.at(-1)?.status).toBe("unknown");
     }),
   ),
@@ -810,20 +797,171 @@ it.effect("rejects attachments before readiness or submission", () =>
       });
       yield* Deferred.await(h.terminal);
       expect(h.controlCommands).toEqual([]);
-      expect(h.counts()).toEqual({ starts: 0, sends: 0, prepares: 0, reads: 0 });
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
     }),
   ),
 );
-it.effect("preparation failure never creates remote work", () =>
+
+it.effect.each(
+  [true, false, undefined].flatMap((included) =>
+    ["result", "rejected", "uncertain"].map((outcome) => ({ included, outcome })),
+  ),
+)(
+  "launches the project folder without a pushed SHA and preserves source evidence (%s)",
+  ({ included, outcome }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const input = {
+          ...h.input,
+          cloudSource: { repository: source.repository, branch: "unpublished-local" },
+          providerThread: {
+            ...h.input.providerThread,
+            cloudTask: {
+              ...h.saved.cloudTask,
+              taskId: h.input.runId,
+              status: "submitting" as const,
+              localChangesExcluded: true,
+              ...(included === undefined ? {} : { localChangesIncluded: included }),
+            },
+          },
+        };
+        if (outcome !== "result")
+          h.startError(
+            new ClaudeCloudError({
+              outcome: outcome === "rejected" ? "rejected" : "uncertain",
+              detail: "Fixture sender refusal or uncertain admission",
+            }),
+          );
+        yield* h.runtime.startTurn(input);
+        if (outcome === "result") {
+          yield* Deferred.await(h.accepted);
+          yield* Deferred.succeed(h.exit, undefined);
+          yield* Deferred.await(h.read);
+          yield* Deferred.succeed(h.deliver, undefined);
+        }
+        yield* Deferred.await(h.terminal);
+        expect(h.startCwds).toEqual(["/fixture/project"]);
+        expect(h.controlCommands[0]?.cwd).toBe("/fixture/goat/control");
+        expect(h.input.runtimePolicy.cwd).toBe("/fixture/repo");
+        expect(h.input.appThread.worktreePath).toBe("/fixture/thread-worktree");
+        expect(h.ledger[0]?.status).toBe("submitting");
+        expect(h.ledger.at(-1)?.status).toBe(
+          outcome === "result" ? "succeeded" : outcome === "rejected" ? "failed" : "unknown",
+        );
+        for (const task of h.ledger) {
+          expect(task.localChangesIncluded).toBe(included);
+          expect(Object.hasOwn(task, "localChangesIncluded")).toBe(included !== undefined);
+          expect(task.localChangesExcluded).toBe(false);
+          expect(task.source).toEqual(input.cloudSource);
+        }
+      }),
+    ),
+);
+
+it.effect.each([
+  { label: "missing launch source", launch: undefined, source },
+  {
+    label: "wrong restriction",
+    launch: { cwd: "/fixture/project", restriction: "published-ref" as const },
+    source,
+  },
+  { label: "empty cwd", launch: { cwd: " ", restriction: "project-folder" as const }, source },
+  {
+    label: "missing GitHub source",
+    launch: { cwd: "/fixture/project", restriction: "project-folder" as const },
+    source: undefined,
+  },
+  {
+    label: "non-GitHub source",
+    launch: { cwd: "/fixture/project", restriction: "project-folder" as const },
+    source: { ...source, repository: "https://gitlab.com/fixture/repo" },
+  },
+  {
+    label: "empty branch",
+    launch: { cwd: "/fixture/project", restriction: "project-folder" as const },
+    source: { ...source, branch: " " },
+  },
+])("rejects an ineligible project launch before creating remote work (%s)", (fixture) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeHarness();
-      h.prepareError(new ClaudeCloudError({ outcome: "rejected", detail: "Source SHA moved" }));
-      yield* h.runtime.startTurn(h.input);
+      const { cloudLaunchSource: _launch, cloudSource: _source, ...input } = h.input;
+      yield* h.runtime.startTurn({
+        ...input,
+        ...(fixture.launch === undefined ? {} : { cloudLaunchSource: fixture.launch }),
+        ...(fixture.source === undefined ? {} : { cloudSource: fixture.source }),
+      });
       yield* Deferred.await(h.terminal);
-      expect(h.counts().starts).toBe(0);
-      expect(h.counts().sends).toBe(0);
-      expect(h.ledger.at(-1)?.status).toBe("failed");
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+      expect(h.events.find((event) => event.type === "turn.terminal")?.failure?.message).toContain(
+        "GitHub project folder",
+      );
     }),
   ),
+);
+
+it.effect.each([true, false, undefined])(
+  "follow-up keeps legacy source flags without a project launch source (%s)",
+  (included) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const prior = {
+          ...h.saved,
+          cloudTask: {
+            ...h.saved.cloudTask,
+            localChangesExcluded: true,
+            ...(included === undefined ? {} : { localChangesIncluded: included }),
+          },
+        };
+        const { cloudLaunchSource: _launch, ...input } = h.input;
+        yield* h.runtime.startTurn({
+          ...input,
+          providerThread: prior,
+          runtimePolicy: { ...policy, cwd: "/missing/deleted-project" },
+          cloudSource: { ...source, repository: "https://github.com/fixture/other" },
+        });
+        yield* Deferred.await(h.terminal);
+        expect(h.counts()).toEqual({ starts: 0, sends: 1, reads: 0 });
+        for (const task of h.ledger) {
+          expect(task.source).toEqual(source);
+          expect(task.localChangesExcluded).toBe(true);
+          expect(task.localChangesIncluded).toBe(included);
+          expect(Object.hasOwn(task, "localChangesIncluded")).toBe(included !== undefined);
+        }
+        expect(h.controlCommands.map((command) => command.cwd)).toEqual([
+          "/fixture/goat/control",
+          "/fixture/goat/control",
+        ]);
+      }),
+    ),
+);
+
+it.effect.each([true, false, undefined])(
+  "recovery preserves legacy upload evidence without creating or sending (%s)",
+  (included) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        yield* h.runtime.resumeTurn!({
+          ...h.attach,
+          cloudTask: {
+            ...h.saved.cloudTask,
+            localChangesExcluded: true,
+            ...(included === undefined ? {} : { localChangesIncluded: included }),
+          },
+        });
+        yield* Deferred.await(h.read);
+        yield* Deferred.succeed(h.deliver, undefined);
+        yield* Deferred.await(h.terminal);
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 1 });
+        for (const task of h.ledger) {
+          expect(task.localChangesIncluded).toBe(included);
+          expect(Object.hasOwn(task, "localChangesIncluded")).toBe(included !== undefined);
+          expect(task.localChangesExcluded).toBe(true);
+          expect(task.source).toEqual(source);
+        }
+      }),
+    ),
 );

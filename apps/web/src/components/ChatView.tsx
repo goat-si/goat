@@ -12217,6 +12217,11 @@ export default function ChatView(props: ChatViewProps) {
                           ) : null}
                           {!composerMounted ? null : (
                             <>
+                              {cloudState.launchSourceNotice ? (
+                                <p role="status" className="px-4 text-sm">
+                                  {cloudState.launchSourceNotice}
+                                </p>
+                              ) : null}
                               {cloudState.cloudTask ? (
                                 <CloudTaskStatus task={cloudState.cloudTask} />
                               ) : null}

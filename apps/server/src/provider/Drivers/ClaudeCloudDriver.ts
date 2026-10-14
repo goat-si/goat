@@ -32,10 +32,8 @@ import {
   resolveClaudeSdkExecutablePath,
   isWindowsClaudeLauncherShimPath,
 } from "./ClaudeExecutable.ts";
-import * as ProcessRunner from "../../processRunner.ts";
 import * as PullRequests from "../../pullRequest/PullRequestService.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
-import * as SourceCheckout from "./ClaudeCloudSourceCheckout.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
 const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
@@ -204,7 +202,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
           auth: { status: "authenticated" as const, type: "claude.ai" },
           checkedAt: DateTime.formatIso(yield* DateTime.now),
           message:
-            "Waits for a session-linked GitHub PR for up to two hours; PR presence does not confirm passing checks.",
+            "Claude Cloud starts tasks from the project folder. Local changes may be included. Waits for a session-linked GitHub PR for up to two hours; PR presence does not confirm passing checks.",
         };
       }).pipe(Effect.catch((cause) => Effect.succeed(base("error", cause.detail))));
       const snapshot = yield* makeManagedServerProvider({
@@ -226,22 +224,10 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             }),
         ),
       );
-      const prepareStart: Parameters<typeof makeClaudeCloudAdapter>[0]["prepareStart"] = (
-        input,
-      ) => {
-        const source = input.cloudSource;
-        const projectCwd = input.runtimePolicy.cwd;
-        if (!source || !projectCwd) return fail("Claude Cloud needs a pushed project source.");
-        return SourceCheckout.prepare({ source, projectCwd }).pipe(
-          Effect.provide(ProcessRunner.layer),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        );
-      };
       const orchestrationAdapter = yield* makeClaudeCloudAdapter({
         instanceId,
         resolveLogin,
         resolveControlCwd,
-        prepareStart,
         observe: (input) =>
           pullRequests.findCloudSessionPullRequest(input).pipe(
             Effect.mapError(

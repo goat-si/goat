@@ -1431,6 +1431,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     </View>
                   ) : (
                     <>
+                      {props.cloudState.launchSourceNotice ? (
+                        <Text accessibilityLiveRegion="polite">
+                          {props.cloudState.launchSourceNotice}
+                        </Text>
+                      ) : null}
                       {props.cloudState.cloudTask ? (
                         <CloudTaskStatus task={props.cloudState.cloudTask} />
                       ) : null}

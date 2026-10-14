@@ -11,7 +11,7 @@ type Projection = Pick<
 
 export function deriveCloudTaskState(
   projection: Projection | null | undefined,
-  selectedProvider?: Pick<ServerProvider, "instanceId" | "executionLocation"> | null,
+  selectedProvider?: Pick<ServerProvider, "instanceId" | "executionLocation" | "driver"> | null,
 ) {
   const instanceId = selectedProvider?.instanceId ?? projection?.thread.providerInstanceId;
   const targetThread = projection?.providerThreads.findLast(
@@ -46,6 +46,13 @@ export function deriveCloudTaskState(
           ["queued", "preparing", "starting", "running", "waiting"].includes(run.status)),
     ) === true;
   const followUp = targetSession?.capabilities.sessions.followUp;
+  const launchSourceNotice = (
+    selectedProvider
+      ? selectedProvider.driver === "claudeCloud"
+      : targetSession?.capabilities.sessions.sourceRestriction === "project-folder"
+  )
+    ? "Claude Cloud starts tasks from the project folder. Local changes may be included."
+    : null;
   const composerBlockReason =
     targetThread?.cloudTask?.status === "unknown"
       ? (targetThread.cloudTask.error ??
@@ -56,6 +63,7 @@ export function deriveCloudTaskState(
   return {
     cloudTask,
     executionLocation,
+    launchSourceNotice,
     composerBlockReason,
     showLocalWorkspace: executionLocation !== "cloud",
   };

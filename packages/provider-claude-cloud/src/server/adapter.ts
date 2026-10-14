@@ -48,7 +48,7 @@ const CANCEL_REASON =
 export const CLAUDE_CLOUD_CAPABILITIES: OrchestrationV2ProviderCapabilities = {
   sessions: {
     executionLocation: "cloud",
-    sourceRestriction: "published-ref",
+    sourceRestriction: "project-folder",
     followUp: { supported: true },
     supportsMultipleProviderThreadsPerSession: false,
     supportsModelSwitchInSession: false,
@@ -148,7 +148,6 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
   readonly instanceId: ProviderInstanceId;
   readonly resolveLogin: Effect.Effect<ClaudeCloudLogin, ClaudeCloudError>;
   readonly resolveControlCwd: Effect.Effect<string, ClaudeCloudError>;
-  readonly prepareStart: (input: Turn) => Effect.Effect<string, ClaudeCloudError, Scope.Scope>;
   readonly runStartedAt: (input: Turn | Attach) => Effect.Effect<DateTime.Utc, ClaudeCloudError>;
   readonly observe: (input: {
     readonly projectId: ProjectId;
@@ -612,15 +611,19 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 detail: "Previous submission is ambiguous; no task was started.",
                 outcome: "uncertain",
               });
+            const launchSource = i.cloudLaunchSource;
             if (
               !i.cloudSource ||
-              !i.cloudSource.sha ||
-              !/^[a-f0-9]{40}$/i.test(i.cloudSource.sha) ||
-              !i.cloudLaunchSource ||
-              i.cloudLaunchSource.restriction !== "published-ref"
+              !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(
+                i.cloudSource.repository,
+              ) ||
+              !i.cloudSource.branch.trim() ||
+              !launchSource ||
+              launchSource.restriction !== "project-folder" ||
+              !launchSource.cwd.trim()
             )
               return yield* new ClaudeCloudError({
-                detail: "Claude Cloud needs a verified published GitHub ref and exact pushed SHA.",
+                detail: "Claude Cloud needs a GitHub project folder and its current branch.",
                 outcome: "rejected",
               });
             // Read the durable deadline before any create; a missing deadline must not orphan a session.
@@ -641,15 +644,17 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 status: "submitting",
                 tracking: "polled",
                 source: i.cloudSource,
-                localChangesExcluded: thread.cloudTask?.localChangesExcluded ?? false,
+                localChangesExcluded: false,
+                ...(thread.cloudTask?.localChangesIncluded === undefined
+                  ? {}
+                  : { localChangesIncluded: thread.cloudTask.localChangesIncluded }),
                 updatedAt: DateTime.formatIso(yield* DateTime.now),
               },
             };
             yield* commit(i, thread);
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const cleanCwd = yield* options.prepareStart(i);
-                const handle = yield* cli.start(current, cleanCwd, i.message.text);
+                const handle = yield* cli.start(current, launchSource.cwd, i.message.text);
                 const now = yield* DateTime.now;
                 thread = {
                   ...thread,

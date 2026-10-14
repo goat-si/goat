@@ -10,10 +10,14 @@ Add **Claude Cloud** in **Settings > Providers** and select the ID of a local Cl
 instance signed in with a claude.ai account. The cloud provider uses that instance's
 login and executable. API keys and router connections are not supported.
 
-Start from a branch already pushed to GitHub. Local changes are not included.
-GOAT prepares a clean copy of the published branch outside your project and sends
-the task to Claude Cloud. If Claude requires folder trust for that copy, launch is
-refused; GOAT does not accept trust prompts or change your trust settings.
+Claude Cloud starts from your project folder and its current GitHub branch.
+Local changes and commits that have not been pushed may be included. You do not
+need to publish the branch before starting.
+
+If Claude Code has not trusted the project folder, open it once with `claude` on
+the environment's machine, using the same account and config as your selected
+Claude instance, and accept the trust prompt. Then try the cloud task again.
+GOAT does not accept trust prompts or change your trust settings.
 
 The thread keeps the session link and looks for a GitHub pull request linked to
 that session for up to two hours. **Result PR found** means a PR was located; it
