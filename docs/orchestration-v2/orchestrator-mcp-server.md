@@ -417,6 +417,10 @@ dispatched. Pass `notifyTarget` to `goat_thread_launch` or
 - `{ url, secretRef? }` routes to an inline receiver. `secretRef` comes from
   `request_secret` in the calling thread; the launch consumes it and keeps the
   value in the secret store until the watch ends.
+  Any agent that may launch can pick this URL, so it must resolve to public
+  addresses only: loopback, private, link-local, CGNAT, and metadata addresses
+  are refused, the check repeats before every post, and redirects are not
+  followed. A receiver on this machine or its network needs a named target.
 
 A launch with a target posts only there; the default `url` never sees it. An
 unknown name, a non-http(s) url, a used or foreign `secretRef`, or webhooks

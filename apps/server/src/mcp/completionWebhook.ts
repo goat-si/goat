@@ -1,5 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac.
 import * as NodeCrypto from "node:crypto";
+import * as NodeDnsPromises from "node:dns/promises";
+import * as NodeNet from "node:net";
 
 import {
   type CompletionWebhookSettings,
@@ -17,7 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -180,6 +182,85 @@ const isHttpUrl = (url: string) => {
   }
 };
 
+export class HostLookupError extends Data.TaggedError("HostLookupError")<{
+  readonly cause: unknown;
+}> {}
+
+type ResolveHost = (host: string) => Effect.Effect<ReadonlyArray<string>, HostLookupError>;
+
+/** Resolves a host to every address a connection could use. Tests swap it for a fake. */
+export const InlineHostResolver = Context.Reference<ResolveHost>(
+  "goat/mcp/completionWebhook/InlineHostResolver",
+  {
+    defaultValue: () => (host) =>
+      Effect.tryPromise({
+        try: () => NodeDnsPromises.lookup(host, { all: true, verbatim: true }),
+        catch: (cause) => new HostLookupError({ cause }),
+      }).pipe(Effect.map((rows) => rows.map((row) => row.address))),
+  },
+);
+
+/**
+ * Addresses an inline URL may not reach: this machine, its networks (including CGNAT, which
+ * Tailscale uses), link-local and cloud metadata, multicast and reserved ranges. A receiver on
+ * one of them needs a named target in settings, which only the server's owner can add.
+ */
+const internalAddresses = (() => {
+  const list = new NodeNet.BlockList();
+  for (const [network, prefix] of [
+    ["0.0.0.0", 8],
+    ["10.0.0.0", 8],
+    ["100.64.0.0", 10],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["172.16.0.0", 12],
+    ["192.0.0.0", 24],
+    ["192.168.0.0", 16],
+    ["198.18.0.0", 15],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ] as const) {
+    list.addSubnet(network, prefix, "ipv4");
+  }
+  for (const [network, prefix] of [
+    ["::", 96],
+    ["64:ff9b::", 96],
+    ["fc00::", 7],
+    ["fe80::", 10],
+    ["ff00::", 8],
+  ] as const) {
+    list.addSubnet(network, prefix, "ipv6");
+  }
+  return list;
+})();
+
+const isInternalAddress = (address: string) => {
+  const family = NodeNet.isIP(address);
+  // Anything that is not a plain address cannot be checked, so it is not trusted.
+  if (family === 0) return true;
+  return internalAddresses.check(address, family === 4 ? "ipv4" : "ipv6");
+};
+
+/**
+ * Whether an inline URL reaches only public addresses. It is checked when the launch is
+ * accepted and again before every post, since DNS can change in between. The HTTP client
+ * resolves the host again when it connects, so a host that rebinds within that moment is
+ * not caught; redirects are not followed for inline targets.
+ */
+type InlineReach = "public" | "internal" | "unresolved";
+
+const inlineReach = (resolve: ResolveHost, url: string): Effect.Effect<InlineReach> => {
+  const host = new URL(url).hostname.replace(/^\[(.*)\]$/, "$1");
+  const addresses =
+    NodeNet.isIP(host) === 0 ? resolve(host) : Effect.succeed<ReadonlyArray<string>>([host]);
+  return addresses.pipe(
+    Effect.map((all) =>
+      all.length === 0 ? "unresolved" : all.some(isInternalAddress) ? "internal" : "public",
+    ),
+    Effect.orElseSucceed(() => "unresolved" as const),
+  );
+};
+
 /** Network failures, timeouts and these statuses are retried; any other non-2xx is final. */
 const retryableStatus = (status: number) => status === 408 || status === 429 || status >= 500;
 
@@ -225,6 +306,7 @@ export const make = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const secretRequests = yield* SecretRequests.SecretRequests;
+  const resolveHost = yield* InlineHostResolver;
   const scope = yield* Effect.scope;
   /** Report ids delivered or in flight, oldest first. */
   const seen = new Set<string>();
@@ -252,6 +334,17 @@ export const make = Effect.gen(function* () {
         yield* Effect.logWarning("completion webhook: url is not http(s)", { id: report.id });
         return "skipped" satisfies Attempt;
       }
+      const inline = watch.webhookTarget?.type === "inline";
+      if (inline) {
+        const reach = yield* inlineReach(resolveHost, receiver.url);
+        if (reach === "unresolved") return "retry" satisfies Attempt;
+        if (reach === "internal") {
+          yield* Effect.logWarning("completion webhook: inline url reaches an internal address", {
+            id: report.id,
+          });
+          return "stop" satisfies Attempt;
+        }
+      }
       const secret =
         typeof receiver.secret === "string"
           ? receiver.secret
@@ -261,7 +354,7 @@ export const make = Effect.gen(function* () {
         yield* Effect.logWarning("completion webhook: target secret missing", { id: report.id });
         return "stop" satisfies Attempt;
       }
-      const response = yield* http.execute(
+      const post = http.execute(
         HttpClientRequest.post(receiver.url).pipe(
           HttpClientRequest.setHeaders({
             "x-goat-event": report.event,
@@ -273,6 +366,10 @@ export const make = Effect.gen(function* () {
           HttpClientRequest.bodyText(body, "application/json"),
         ),
       );
+      // A redirect would take an inline post to an address that was never checked.
+      const response = yield* inline
+        ? post.pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }))
+        : post;
       if (response.status >= 200 && response.status < 300) return "delivered" satisfies Attempt;
       yield* Effect.logWarning("completion webhook: refused", {
         id: report.id,
@@ -418,6 +515,15 @@ export const make = Effect.gen(function* () {
       }
       const url = target.url ?? "";
       if (!isHttpUrl(url)) return yield* refuse("notifyTarget.url must be an http(s) URL.");
+      const reach = yield* inlineReach(resolveHost, url);
+      if (reach === "unresolved") {
+        return yield* refuse("notifyTarget.url: the host could not be resolved.");
+      }
+      if (reach === "internal") {
+        return yield* refuse(
+          "notifyTarget.url reaches a loopback, private, or link-local address. Ask the server's owner to add it as a named target (completionWebhook.targets) and pass notifyTarget.name.",
+        );
+      }
       if (target.secretRef === undefined) {
         return {
           notifyWebhook: false,

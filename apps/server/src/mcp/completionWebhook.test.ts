@@ -88,6 +88,8 @@ const harness = (
     const reads = { count: 0 };
     /** The server secret store, by name. */
     const secrets = new Map<string, Uint8Array>();
+    /** DNS for inline targets: `.example` hosts are public unless listed here. */
+    const dns = new Map<string, ReadonlyArray<string>>([["localhost", ["127.0.0.1", "::1"]]]);
     const client = HttpClient.make((request) =>
       Effect.suspend(() => {
         const entry = {
@@ -126,6 +128,14 @@ const harness = (
       Layer.provideMerge(countingSettings),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
       Layer.provide(
+        Layer.succeed(CompletionWebhook.InlineHostResolver, (host: string) => {
+          const addresses = dns.get(host) ?? (host.endsWith(".example") ? ["93.184.215.14"] : []);
+          return addresses.length === 0
+            ? Effect.fail(new CompletionWebhook.HostLookupError({ cause: "ENOTFOUND" }))
+            : Effect.succeed(addresses);
+        }),
+      ),
+      Layer.provide(
         Layer.mock(ServerSecretStore.ServerSecretStore)({
           get: (name) => Effect.sync(() => Option.fromUndefinedOr(secrets.get(name))),
           set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
@@ -141,7 +151,7 @@ const harness = (
         }),
       ),
     );
-    return { received, log, reads, secrets, layer };
+    return { received, log, reads, secrets, dns, layer };
   });
 
 const withWebhook = <A, E, LE>(
@@ -767,6 +777,103 @@ describe("CompletionWebhook notify targets", () => {
         webhook.watchesExternal({ notifyWebhook: false, webhookTarget: named("bot-a") }),
       );
       expect(watched).toBe(true);
+    }),
+  );
+
+  it.effect("refuses an inline url that reaches this machine, its networks, or metadata", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      h.dns.set("intranet.example", ["93.184.215.14", "10.1.2.3"]);
+      const refusals = yield* withWebhook(h.layer, (webhook) =>
+        Effect.forEach(
+          [
+            "http://127.0.0.1:3790/hook",
+            "http://2130706433/hook",
+            "http://[::1]/hook",
+            "http://[::ffff:127.0.0.1]/hook",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[fe80::1]/hook",
+            "http://192.168.1.10/hook",
+            "http://100.100.100.100/hook",
+            "http://0.0.0.0/hook",
+            "http://localhost:3790/hook",
+            "https://intranet.example/hook",
+            "https://missing.invalid/hook",
+          ],
+          (url) =>
+            webhook
+              .resolveRoute({
+                notifyWebhook: undefined,
+                notifyOnCompletion: undefined,
+                notifyTarget: { url, secretRef: enteredRef },
+                projectId: project,
+              })
+              .pipe(
+                Effect.flip,
+                Effect.map((error) => error.message),
+              ),
+        ),
+      );
+      expect(refusals.slice(0, -1).every((message) => message.includes("named target"))).toBe(true);
+      expect(refusals.at(-1)).toContain("could not be resolved");
+      // The secret was never consumed for a refused url.
+      expect(h.secrets.size).toBe(0);
+    }),
+  );
+
+  it.effect("stops posting to an inline host that later resolves to an internal address", () =>
+    Effect.gen(function* () {
+      const h = yield* harness(routed);
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          const route = yield* webhook.resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { url: "https://rebind.example/hook" },
+            projectId: null,
+          });
+          h.dns.set("rebind.example", ["169.254.169.254"]);
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
+            runReport(),
+          );
+          yield* settle;
+          yield* TestClock.adjust(60_000);
+          yield* settle;
+        }),
+      );
+      expect(h.log).toHaveLength(0);
+    }),
+  );
+
+  it.effect("still posts to loopback receivers the server's settings name", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        ...routed,
+        url: "http://127.0.0.1:3790/hooks/goat",
+        targets: { local: { url: "http://127.0.0.1:3790/hooks/local", secret: "s" } },
+      });
+      yield* withWebhook(h.layer, (webhook) =>
+        Effect.gen(function* () {
+          const route = yield* webhook.resolveRoute({
+            notifyWebhook: undefined,
+            notifyOnCompletion: undefined,
+            notifyTarget: { name: "local" },
+            projectId: null,
+          });
+          yield* webhook.notify(
+            watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
+            runReport("named"),
+          );
+          yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport("default"));
+          yield* Queue.take(h.received);
+          yield* Queue.take(h.received);
+        }),
+      );
+      expect(h.log.map((request) => request.url).sort()).toEqual([
+        "http://127.0.0.1:3790/hooks/goat",
+        "http://127.0.0.1:3790/hooks/local",
+      ]);
     }),
   );
 });
