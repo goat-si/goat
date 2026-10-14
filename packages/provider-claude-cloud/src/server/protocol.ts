@@ -71,9 +71,12 @@ export function trustRequired(raw: string) {
     /^\s*(?:Created cloud session:|View:|Resume with:).*$/gm,
     "",
   );
-  return /^\s*(?:[❯>]\s*)?(?:Do you trust[^\r\n]*\?|Yes, I trust this folder|Trust (?:this (?:folder|directory)|the files in this folder)\?)\s*$/im.test(
-    prompt,
-  );
+  const folderPrompt =
+    /^\s*(?:[❯>]\s*)?(?:Do you trust (?:the files in this folder|this (?:folder|directory))\?|(?:1\.\s*)?Yes, I trust this folder|Trust (?:this (?:folder|directory)|the files in this folder)\?)[ \t]*$/im;
+  // Refusals need a terminated line; a chunk may end before a generic diagnostic's qualifier.
+  const folderRefusal =
+    /^\s*(?:Error:\s*)?(?:This (?:folder|directory) is not trusted|Workspace trust is required for this (?:folder|directory)|Claude Code cannot run in an untrusted (?:folder|directory))[.!]?[ \t]*\n/im;
+  return folderPrompt.test(prompt) || folderRefusal.test(prompt);
 }
 
 export function redact(detail: string, environment: NodeJS.ProcessEnv) {

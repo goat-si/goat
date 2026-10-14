@@ -232,8 +232,7 @@ const make = Effect.gen(function* () {
         if (raw.length > LIMIT || raw.includes("\uFFFD")) failure = unknownSubmission();
         if (trustRequired(bounded) && !failure)
           failure = new ClaudeCloudError({
-            detail:
-              "Claude requires trust for the disposable source checkout. Ask the environment owner to configure an approved source-checkout trust workflow, then retry. GOAT never accepts trust automatically.",
+            detail: `Claude Code hasn't trusted this folder yet. Open it once with \`claude\` in ${cwd}, accept the trust prompt, then try again.`,
             outcome: receipt ? "uncertain" : "rejected",
           });
         const diagnostic = /^\s*Error:\s*(.+)\n/m.exec(normalized)?.[1];
@@ -246,7 +245,7 @@ const make = Effect.gen(function* () {
         notify();
       };
       // The exit listener belongs to the process resource. Keep it until release sees real exit,
-      // including interruption/timeout; the caller's older source finalizer then runs safely.
+      // including interruption/timeout, before releasing its listeners and the caller's scope.
       yield* Effect.acquireRelease(
         Effect.gen(function* () {
           const process = yield* pty
@@ -308,7 +307,7 @@ const make = Effect.gen(function* () {
                       try {
                         process.kill("SIGKILL");
                       } catch {
-                        /* Never release source before the owned process reports exit. */
+                        /* Retain ownership until this process reports actual exit. */
                       }
                     }
                   }).pipe(Effect.andThen(waitForExit)),

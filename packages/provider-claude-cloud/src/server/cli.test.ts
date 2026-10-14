@@ -3,7 +3,14 @@ import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { defaultReply, makeCliHarness, LOGIN, RECEIPT } from "./testing.ts";
+import {
+  defaultReply,
+  makeCliHarness,
+  LOGIN,
+  RECEIPT,
+  FOLDER_TRUST_PROMPT,
+  SYNTHETIC_FOLDER_TRUST_REFUSALS,
+} from "./testing.ts";
 
 it.effect(
   "readiness does not create work or open a PTY and reuses the sibling executable/environment",
@@ -109,26 +116,66 @@ it.effect(
     ),
 );
 
-it.effect(
-  "rejects trust without answering it and releases only its owned process/subscriptions",
-  () =>
+// Refusal variants are representative synthetic fixtures; the folder prompt was observed natively.
+it.effect.each([FOLDER_TRUST_PROMPT, ...SYNTHETIC_FOLDER_TRUST_REFUSALS])(
+  "rejects split ANSI folder trust with the exact project cwd and one spawn/zero input (%#)",
+  (output) =>
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
+      const environmentBefore = { ...LOGIN.environment };
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* h.service
-            .start(LOGIN, "/fixture/repo", "task")
+            .start(LOGIN, "/fixture/project folder", "task")
             .pipe(Effect.forkChild);
           yield* h.fake.ready;
-          h.fake.emit("Do you trust the files in this folder?\n");
+          for (const character of `\u001b[33m${output}\u001b[0m`) h.fake.emit(character);
           const error = yield* Fiber.join(fiber).pipe(Effect.flip);
-          expect(error.detail).toContain("GOAT never accepts trust");
+          expect(error.outcome).toBe("rejected");
+          expect(error.detail).toBe(
+            "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project folder, accept the trust prompt, then try again.",
+          );
+          expect(h.starts).toEqual([
+            {
+              shell: LOGIN.binary,
+              args: ["--cloud=task"],
+              cwd: "/fixture/project folder",
+              cols: 120,
+              rows: 30,
+              env: LOGIN.environment,
+            },
+          ]);
+          expect(LOGIN.environment).toEqual(environmentBefore);
+          expect(h.commands).toEqual([]);
           expect(h.fake.writes).toEqual([]);
         }),
       );
+      expect(h.starts).toHaveLength(1);
       expect(h.fake.kills).toBe(1);
       expect(h.fake.listeners).toBe(0);
     }),
+);
+
+it.effect("recognizes an unterminated specific folder refusal when the PTY reports exit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      // Synthetic refusal; onExit terminates the final PTY line before inspection.
+      h.fake.emit("Error: This folder is not trusted.");
+      h.fake.finish(1);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("rejected");
+      expect(error.detail).toBe(
+        "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project, accept the trust prompt, then try again.",
+      );
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
 );
 
 it.effect("exit zero without identity stays uncertain; no automatic second spawn", () =>
@@ -202,7 +249,7 @@ it.effect.each([
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       const fiber = yield* h.service
-        .start(LOGIN, "/fixture/disposable", prompt)
+        .start(LOGIN, "/fixture/project", prompt)
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
       h.fake.emit(RECEIPT);
@@ -246,15 +293,20 @@ it.effect.each(["", "session_ABC123", "https://claude.ai/code/session_ABC123"])(
       }),
     ),
 );
-it.effect("accepts a receipt whose title mentions workspace trust", () =>
+it.effect.each([
+  "Fix workspace trust",
+  "Do you trust this algorithm?",
+  FOLDER_TRUST_PROMPT.trim(),
+  ...SYNTHETIC_FOLDER_TRUST_REFUSALS.map((output) => output.trim()),
+])("accepts a receipt whose title mentions trust (%#)", (title) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       const fiber = yield* h.service.start(LOGIN, "/fixture/repo", "task").pipe(Effect.forkChild);
       yield* h.fake.ready;
-      h.fake.emit(RECEIPT.replace("Test task", "Fix workspace trust"));
+      h.fake.emit(RECEIPT.replace("Test task", title));
       const handle = yield* Fiber.join(fiber);
-      expect(handle.receipt.title).toBe("Fix workspace trust");
+      expect(handle.receipt.title).toBe(title);
       expect(handle.receipt.taskId).toBe("session_ABC123");
       h.fake.finish();
       yield* handle.exited;
@@ -263,59 +315,140 @@ it.effect("accepts a receipt whose title mentions workspace trust", () =>
   ),
 );
 
-it.effect("escalates an owned PTY that ignores graceful kill before releasing its source", () =>
+it.effect.each([FOLDER_TRUST_PROMPT, ...SYNTHETIC_FOLDER_TRUST_REFUSALS])(
+  "returns identity before a later split ANSI folder refusal reports uncertainty (%#)",
+  (output) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const fiber = yield* h.service
+          .start(LOGIN, "/fixture/project folder", "task")
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(RECEIPT);
+        const handle = yield* Fiber.join(fiber);
+        expect(handle.receipt.taskId).toBe("session_ABC123");
+        for (const character of `\u001b[33m${output}\u001b[0m`) h.fake.emit(character);
+        const error = yield* handle.exited.pipe(Effect.flip);
+        expect(error.outcome).toBe("uncertain");
+        expect(error.detail).toBe(
+          "Claude Code hasn't trusted this folder yet. Open it once with `claude` in /fixture/project folder, accept the trust prompt, then try again.",
+        );
+        expect(h.starts).toHaveLength(1);
+        expect(h.fake.writes).toEqual([]);
+        h.fake.finish(1);
+      }),
+    ),
+);
+
+it.effect.each([
+  "Do you trust this algorithm?\n",
+  "Task: This directory is not trusted.\n",
+  "Discuss whether this folder is trusted.\n",
+])("generic trust task output does not block a later receipt (%#)", (output) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(output);
+      h.fake.emit(RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      expect(handle.receipt.taskId).toBe("session_ABC123");
+      h.fake.finish();
+      yield* handle.exited;
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("escalates an owned PTY that ignores graceful kill before releasing its scope", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       h.fake.exitOnKill = false;
       h.fake.exitOnForceKill = true;
-      const cleaned = yield* Deferred.make<void>();
+      const scopeReleased = yield* Deferred.make<void>();
       const fiber = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Effect.addFinalizer(() => Deferred.succeed(cleaned, undefined));
-          yield* h.service.start(LOGIN, "/fixture/disposable", "task");
+          yield* Effect.addFinalizer(() => Deferred.succeed(scopeReleased, undefined));
+          yield* h.service.start(LOGIN, "/fixture/project", "task");
         }),
       ).pipe(Effect.result, Effect.forkChild);
       yield* h.fake.ready;
       h.fake.emit("Do you trust the files in this folder?\n");
       yield* h.fake.killed;
       expect(h.fake.killSignals).toEqual([undefined]);
-      expect(yield* Deferred.isDone(cleaned)).toBe(false);
+      expect(yield* Deferred.isDone(scopeReleased)).toBe(false);
       yield* TestClock.adjust("2 seconds");
       const result = yield* Fiber.join(fiber);
       expect(result._tag).toBe("Failure");
       expect(h.fake.killSignals).toEqual([undefined, "SIGKILL"]);
-      expect(yield* Deferred.isDone(cleaned)).toBe(true);
+      expect(yield* Deferred.isDone(scopeReleased)).toBe(true);
       expect(h.fake.listeners).toBe(0);
       expect(h.fake.writes).toEqual([]);
     }),
   ),
 );
 
-it.effect("keeps the owned PTY exit listener and source alive while kill is pending", () =>
+it.effect("keeps the owned PTY exit listener and scope alive while kill is pending", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       h.fake.exitOnKill = false;
-      const cleaned = yield* Deferred.make<void>();
+      const scopeReleased = yield* Deferred.make<void>();
       const fiber = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Effect.addFinalizer(() => Deferred.succeed(cleaned, undefined));
-          yield* h.service.start(LOGIN, "/fixture/disposable", "task");
+          yield* Effect.addFinalizer(() => Deferred.succeed(scopeReleased, undefined));
+          yield* h.service.start(LOGIN, "/fixture/project", "task");
         }),
       ).pipe(Effect.forkChild);
       yield* h.fake.ready;
       h.fake.emit("Do you trust the files in this folder?\n");
       yield* h.fake.killed;
-      expect(yield* Deferred.isDone(cleaned)).toBe(false);
+      expect(yield* Deferred.isDone(scopeReleased)).toBe(false);
       expect(h.fake.listeners).toBeGreaterThan(0);
       expect(h.fake.writes).toEqual([]);
       h.fake.finish(130);
       expect((yield* Fiber.join(fiber).pipe(Effect.flip)).outcome).toBe("rejected");
-      expect(yield* Deferred.isDone(cleaned)).toBe(true);
+      expect(yield* Deferred.isDone(scopeReleased)).toBe(true);
       expect(h.fake.listeners).toBe(0);
     }),
   ),
+);
+it.effect(
+  "retains the owned PTY listeners after SIGKILL until actual onExit releases the scope",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        h.fake.exitOnKill = false;
+        const scopeReleased = yield* Deferred.make<void>();
+        const fiber = yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() => Deferred.succeed(scopeReleased, undefined));
+            yield* h.service.start(LOGIN, "/fixture/project", "task");
+          }),
+        ).pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(FOLDER_TRUST_PROMPT);
+        yield* h.fake.killed;
+        yield* TestClock.adjust("2 seconds");
+        yield* h.fake.forceKilled;
+        expect(h.fake.killSignals).toEqual([undefined, "SIGKILL"]);
+        expect(yield* Deferred.isDone(scopeReleased)).toBe(false);
+        expect(h.fake.listeners).toBeGreaterThan(0);
+        h.fake.finish(130, 9);
+        expect((yield* Fiber.join(fiber).pipe(Effect.flip)).outcome).toBe("rejected");
+        expect(yield* Deferred.isDone(scopeReleased)).toBe(true);
+        expect(h.fake.listeners).toBe(0);
+        expect(h.starts).toHaveLength(1);
+        expect(h.fake.writes).toEqual([]);
+      }),
+    ),
 );
 it.effect("PTY receipt timeout is uncertain and releases only one owned process", () =>
   Effect.scoped(
@@ -433,13 +566,14 @@ it.effect.each([
   RECEIPT + "x".repeat(65537),
   RECEIPT + "Error: fixture network interrupted\n",
   RECEIPT + "Do you trust the files in this folder?\n",
+  ...SYNTHETIC_FOLDER_TRUST_REFUSALS.map((output) => RECEIPT + output),
   RECEIPT + "View: https://claude.ai/code/session_OTHER\n",
 ])("returns the first accepted identity before same-chunk failure (%#)", (output) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       const fiber = yield* h.service
-        .start(LOGIN, "/fixture/disposable", "task")
+        .start(LOGIN, "/fixture/project", "task")
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
       h.fake.emit(output);
@@ -452,16 +586,23 @@ it.effect.each([
     }),
   ),
 );
-it.effect("a generic after-spawn diagnostic without a receipt is uncertain", () =>
+it.effect.each([
+  "Error: request interrupted\n",
+  "Error: trust validation failed\n",
+  "Error: Workspace trust check failed\n",
+  "Error: This folder is not trusted by the fixture's test users.\n",
+])("a generic after-spawn diagnostic without a receipt is uncertain (%#)", (output) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
       const fiber = yield* h.service
-        .start(LOGIN, "/fixture/disposable", "task")
+        .start(LOGIN, "/fixture/project", "task")
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
-      h.fake.emit("Error: request interrupted\n");
+      for (const character of output) h.fake.emit(character);
       expect((yield* Fiber.join(fiber).pipe(Effect.flip)).outcome).toBe("uncertain");
+      expect(h.starts).toHaveLength(1);
+      expect(h.fake.writes).toEqual([]);
       h.fake.finish(1);
     }),
   ),

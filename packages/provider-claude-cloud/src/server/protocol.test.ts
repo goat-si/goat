@@ -7,7 +7,7 @@ import {
   sessionUrl,
   trustRequired,
 } from "./protocol.ts";
-import { RECEIPT } from "./testing.ts";
+import { FOLDER_TRUST_PROMPT, RECEIPT, SYNTHETIC_FOLDER_TRUST_REFUSALS } from "./testing.ts";
 
 describe("Claude Cloud protocol", () => {
   it("normalizes the observed three-line PTY receipt and does not complete a split ID", () => {
@@ -72,9 +72,35 @@ describe("Claude Cloud protocol", () => {
     ).toThrow(ClaudeCloudError);
   });
   it("recognizes a human-owned trust prompt", () => {
-    expect(
-      trustRequired("Do you trust the files in this folder?\r\n1. Yes, I trust this folder"),
-    ).toBe(true);
+    expect(trustRequired(`${FOLDER_TRUST_PROMPT}1. Yes, I trust this folder`)).toBe(true);
     expect(trustRequired(RECEIPT)).toBe(false);
+  });
+  // Refusal wording is synthetic; the native probe establishes the folder prompt only.
+  it.each([FOLDER_TRUST_PROMPT, ...SYNTHETIC_FOLDER_TRUST_REFUSALS])(
+    "recognizes specific ANSI folder trust output (%#)",
+    (output) => {
+      expect(trustRequired(`\u001b[33m${output}\u001b[0m`)).toBe(true);
+      expect(trustRequired(RECEIPT.replace("Test task", output.trim()))).toBe(false);
+    },
+  );
+  it.each([
+    "Do you trust this algorithm?\n",
+    "Error: trust validation failed\n",
+    "Error: Workspace trust check failed\n",
+    "Error: This folder is not trusted by the fixture's test users.\n",
+    "Task: This directory is not trusted.\n",
+    "Discuss whether this folder is trusted.\n",
+  ])("does not infer folder rejection from generic trust output (%#)", (output) => {
+    expect(trustRequired(output)).toBe(false);
+  });
+  it("waits for a terminated refusal line rather than rejecting a split generic diagnostic", () => {
+    const prefix = "Error: This folder is not trusted";
+    expect(trustRequired(prefix)).toBe(false);
+    expect(trustRequired(`${prefix}.\n`)).toBe(true);
+    let raw = "";
+    for (const character of `${prefix} by the fixture's test users.\n`) {
+      raw += character;
+      expect(trustRequired(raw)).toBe(false);
+    }
   });
 });

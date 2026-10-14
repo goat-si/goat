@@ -20,8 +20,10 @@ export class FakePty implements PtyAdapter.PtyProcess {
   private exit: PtyAdapter.PtyExitEvent | undefined;
   private readyLatch = Deferred.makeUnsafe<void>();
   private killedLatch = Deferred.makeUnsafe<void>();
+  private forceKilledLatch = Deferred.makeUnsafe<void>();
   readonly ready = Deferred.await(this.readyLatch);
   readonly killed = Deferred.await(this.killedLatch);
+  readonly forceKilled = Deferred.await(this.forceKilledLatch);
   exitOnKill = true;
   private checkReady() {
     if (this.data.size && this.exits.size) Deferred.doneUnsafe(this.readyLatch, Effect.void);
@@ -34,6 +36,7 @@ export class FakePty implements PtyAdapter.PtyProcess {
     this.kills += 1;
     this.killSignals.push(signal);
     Deferred.doneUnsafe(this.killedLatch, Effect.void);
+    if (signal === "SIGKILL") Deferred.doneUnsafe(this.forceKilledLatch, Effect.void);
     if (this.exitOnKill || (signal === "SIGKILL" && this.exitOnForceKill)) this.finish(130);
   }
   onData(callback: (data: string) => void) {
@@ -77,6 +80,15 @@ export const LOGIN: Cli.ClaudeCloudLogin = {
 };
 export const RECEIPT =
   "Created cloud session: Test task\r\nView: https://claude.ai/code/session_ABC123?from=cli&m=0\r\nResume with: claude --teleport session_ABC123\r\n";
+// Native folder prompt observed in the Claude 2.1.296 probe; no trust input was sent by GOAT.
+export const FOLDER_TRUST_PROMPT = "Do you trust the files in this folder?\r\n";
+// Representative synthetic refusals, not captured native output or exhaustive vendor wording.
+export const SYNTHETIC_FOLDER_TRUST_REFUSALS = [
+  "Error: This folder is not trusted.\r\n",
+  "This directory is not trusted.\r\n",
+  "Error: Workspace trust is required for this folder.\r\n",
+  "Error: Claude Code cannot run in an untrusted directory.\r\n",
+] as const;
 export const defaultReply = (args: readonly string[]) => {
   if (args[0] === "--version") return { code: 0, stdout: "2.1.296 (Claude Code)\n" };
   if (args[0] === "--help") return { code: 0, stdout: "--cloud [description|session_id|url]\n" };
