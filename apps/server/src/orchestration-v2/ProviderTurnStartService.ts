@@ -550,12 +550,15 @@ export const layer: Layer.Layer<
       }
       cloudSource = sourceResult.success;
       const { worktreePath, branch } = projection.thread;
-      if (!cloud && worktreePath !== null && branch !== null) {
+      if (!cloud && worktreePath !== null) {
         // Worktree removal holds this lease while it checks and deletes the
-        // checkout, so a turn that starts meanwhile waits and then recreates it.
+        // checkout, so a turn that starts meanwhile waits for it. A thread with
+        // a branch then recreates the checkout; one without has nothing to
+        // recreate it from, but still must not start inside a half-deleted folder.
         yield* withWorkspaceLease(
           worktreePath,
           Effect.gen(function* () {
+            if (branch === null) return;
             const exists = yield* fileSystem
               .exists(worktreePath)
               .pipe(Effect.orElseSucceed(() => true));

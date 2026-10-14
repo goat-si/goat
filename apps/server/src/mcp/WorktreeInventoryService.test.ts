@@ -297,6 +297,43 @@ describe("WorktreeInventoryService", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live("asks the remote for its default branch when none is recorded locally", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, repo, root, addWorktree } = yield* fixture;
+      // Cloned before origin had a branch, the clone recorded no origin/HEAD,
+      // as a repository pushed after `git remote add` does.
+      const path = yield* addWorktree("dev");
+      yield* run(path, ["push", "origin", "dev"]);
+      yield* run(root, [
+        "--git-dir",
+        root + "/origin.git",
+        "symbolic-ref",
+        "HEAD",
+        "refs/heads/dev",
+      ]);
+
+      const message = yield* refusal(service.remove({ path, force: true, deleteBranch: true }));
+      expect(message).toContain("branch dev is the repository's default branch");
+      expect(yield* fs.exists(path)).toBe(true);
+
+      // A pushed branch that is not the default is still deleted.
+      const pushed = yield* addWorktree("pushed");
+      yield* run(pushed, ["push", "origin", "pushed"]);
+      const result = yield* service.remove({ path: pushed, deleteBranch: true });
+      expect(result.branchDeleted).toBe(true);
+
+      // When the remote cannot answer, any branch it also has is kept.
+      yield* run(repo, ["remote", "set-url", "origin", root + "/unreachable.git"]);
+      const offline = yield* addWorktree("offline");
+      yield* run(repo, ["update-ref", "refs/remotes/origin/offline", "offline"]);
+      const kept = yield* refusal(
+        service.remove({ path: offline, force: true, deleteBranch: true }),
+      );
+      expect(kept).toContain("may be the repository's default branch");
+      expect((yield* run(repo, ["branch", "--list", "offline"])).stdout.trim()).not.toBe("");
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("keeps a branch with unsaved commits unless deleteUnsavedBranch is set", () =>
     Effect.gen(function* () {
       const { service, fs, run, repo, addWorktree, commit } = yield* fixture;

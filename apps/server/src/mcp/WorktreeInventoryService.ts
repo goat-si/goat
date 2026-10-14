@@ -436,6 +436,30 @@ const make = Effect.gen(function* () {
       return null;
     });
 
+  /**
+   * The remote's default branch: the recorded remote HEAD, or the remote's
+   * own answer when none is recorded, as after `git remote add` and a push.
+   */
+  const remoteDefaultBranch = (facts: WorktreeFacts, remote: string) =>
+    Effect.gen(function* () {
+      const recorded = yield* git
+        .resolveDefaultBranchName(facts.entry.repository, remote)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (recorded !== null) return recorded;
+      const listed = yield* git
+        .execute({
+          operation: "WorktreeInventory.remoteHead",
+          cwd: facts.entry.repository,
+          args: ["ls-remote", "--symref", remote, "HEAD"],
+          allowNonZeroExit: true,
+          timeoutMs: 15_000,
+          maxOutputBytes: 64 * 1024,
+        })
+        .pipe(Effect.orElseSucceed(() => null));
+      if (listed === null || listed.exitCode !== 0) return null;
+      return /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(listed.stdout)?.[1] ?? null;
+    });
+
   /** Why a branch must outlive its worktree, or null when deleting it loses nothing. */
   const branchBlocker = Effect.fn("WorktreeInventory.branchBlocker")(function* (
     facts: WorktreeFacts,
@@ -447,17 +471,28 @@ const make = Effect.gen(function* () {
     const remote = yield* git
       .resolvePrimaryRemoteName(facts.entry.repository)
       .pipe(Effect.orElseSucceed(() => null));
-    const defaultBranch =
-      remote === null
-        ? null
-        : yield* git
-            .resolveDefaultBranchName(facts.entry.repository, remote)
-            .pipe(Effect.orElseSucceed(() => null));
-    // Without a remote HEAD to name it, assume the usual default names.
-    if (
-      defaultBranch === null ? branch === "main" || branch === "master" : branch === defaultBranch
-    )
-      return "branch " + branch + " is the repository's default branch";
+    const defaultBranch = remote === null ? null : yield* remoteDefaultBranch(facts, remote);
+    if (defaultBranch !== null) {
+      if (branch === defaultBranch)
+        return "branch " + branch + " is the repository's default branch";
+    } else {
+      if (branch === "main" || branch === "master")
+        return "branch " + branch + " is the repository's default branch";
+      // The remote could not name its default, so any branch it also has might be it.
+      const onRemote =
+        remote !== null &&
+        (yield* git
+          .remoteBranchExists({ cwd: facts.entry.repository, remoteName: remote, refName: branch })
+          .pipe(Effect.orElseSucceed(() => true)));
+      if (onRemote)
+        return (
+          "branch " +
+          branch +
+          " may be the repository's default branch: " +
+          remote +
+          " could not be asked for its default and has a branch of this name"
+        );
+    }
     if (saved === null && !deleteUnsavedBranch)
       return (
         "branch " +

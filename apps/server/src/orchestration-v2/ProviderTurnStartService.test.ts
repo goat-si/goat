@@ -43,133 +43,144 @@ import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
-it("does not commit running state when inherited background routing cannot be read", async () => {
-  const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
-  const runId = RunId.make("run_provider_turn_start_projection_failure");
-  const attemptId = RunAttemptId.make("attempt_provider_turn_start_projection_failure");
-  const rootNodeId = NodeId.make("node_provider_turn_start_projection_failure");
-  const providerThreadId = ProviderThreadId.make(
-    "provider_thread_provider_turn_start_projection_failure",
-  );
-  const providerSessionId = ProviderSessionId.make(
-    "provider_session_provider_turn_start_projection_failure",
-  );
-  const messageId = MessageId.make("message_provider_turn_start_projection_failure");
-  const checkpointScopeId = CheckpointScopeId.make(
-    "checkpoint_scope_provider_turn_start_projection_failure",
-  );
-  const projection = {
-    thread: {
-      id: threadId,
-      projectId: ProjectId.make("project_provider_turn_start_projection_failure"),
-      branch: "feature/restore",
-      worktreePath: "/tmp/missing-provider-turn-start-worktree",
-    },
-    runs: [
-      {
-        id: runId,
-        status: "starting",
-        rootNodeId,
-        activeAttemptId: attemptId,
-        providerThreadId,
-        userMessageId: messageId,
-        ordinal: 2,
+it.each([
+  { label: "with a branch", branch: "feature/restore" },
+  { label: "without a branch", branch: null },
+])(
+  "waits for worktree removal and fails safely on a broken projection, $label",
+  async ({ branch }) => {
+    const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
+    const runId = RunId.make("run_provider_turn_start_projection_failure");
+    const attemptId = RunAttemptId.make("attempt_provider_turn_start_projection_failure");
+    const rootNodeId = NodeId.make("node_provider_turn_start_projection_failure");
+    const providerThreadId = ProviderThreadId.make(
+      "provider_thread_provider_turn_start_projection_failure",
+    );
+    const providerSessionId = ProviderSessionId.make(
+      "provider_session_provider_turn_start_projection_failure",
+    );
+    const messageId = MessageId.make("message_provider_turn_start_projection_failure");
+    const checkpointScopeId = CheckpointScopeId.make(
+      "checkpoint_scope_provider_turn_start_projection_failure",
+    );
+    const projection = {
+      thread: {
+        id: threadId,
+        projectId: ProjectId.make("project_provider_turn_start_projection_failure"),
+        branch,
+        worktreePath: "/tmp/missing-provider-turn-start-worktree",
       },
-    ],
-    nodes: [{ id: rootNodeId, checkpointScopeId }],
-    attempts: [{ id: attemptId }],
-    providerThreads: [{ id: providerThreadId, providerSessionId }],
-    providerSessions: [],
-    messages: [{ id: messageId, text: "Continue", attachments: [] }],
-    checkpointScopes: [{ id: checkpointScopeId }],
-    contextHandoffs: [],
-    contextTransfers: [],
-    turnItems: [],
-  } as unknown as OrchestrationV2ThreadProjection;
-  let projectionReadCount = 0;
-  const writeIfRunCurrent = vi.fn(() =>
-    Effect.succeed({ committed: true, storedEvents: [] } as never),
-  );
-  const startRootRun = vi.fn(() => Effect.void);
-  const pruneWorktrees = vi.fn(() => Effect.void);
-  const createWorktree = vi.fn(() => Effect.succeed({} as never));
-  const layer = ProviderTurnStart.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
-        Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
-        IdAllocator.layer,
-        Layer.succeed(FileSystem.FileSystem, { exists: () => Effect.succeed(false) } as never),
-        Layer.mock(GitWorkflow.GitWorkflowService)({ pruneWorktrees, createWorktree }),
-        Layer.mock(ProjectService.ProjectService)({
-          getById: () =>
-            Effect.succeed(
-              Option.some({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
-            ),
-        }),
-        Layer.mock(ProjectionStore.ProjectionStoreV2)({
-          getTurnStartContext: () => {
-            projectionReadCount += 1;
-            return Effect.succeed({
-              ...projection,
-              hasConversation: projection.messages.some(
-                (m) =>
-                  m.role === "user" &&
-                  (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
+      runs: [
+        {
+          id: runId,
+          status: "starting",
+          rootNodeId,
+          activeAttemptId: attemptId,
+          providerThreadId,
+          userMessageId: messageId,
+          ordinal: 2,
+        },
+      ],
+      nodes: [{ id: rootNodeId, checkpointScopeId }],
+      attempts: [{ id: attemptId }],
+      providerThreads: [{ id: providerThreadId, providerSessionId }],
+      providerSessions: [],
+      messages: [{ id: messageId, text: "Continue", attachments: [] }],
+      checkpointScopes: [{ id: checkpointScopeId }],
+      contextHandoffs: [],
+      contextTransfers: [],
+      turnItems: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    let projectionReadCount = 0;
+    const writeIfRunCurrent = vi.fn(() =>
+      Effect.succeed({ committed: true, storedEvents: [] } as never),
+    );
+    const startRootRun = vi.fn(() => Effect.void);
+    const pruneWorktrees = vi.fn(() => Effect.void);
+    const createWorktree = vi.fn(() => Effect.succeed({} as never));
+    const layer = ProviderTurnStart.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
+          Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
+          IdAllocator.layer,
+          Layer.succeed(FileSystem.FileSystem, { exists: () => Effect.succeed(false) } as never),
+          Layer.mock(GitWorkflow.GitWorkflowService)({ pruneWorktrees, createWorktree }),
+          Layer.mock(ProjectService.ProjectService)({
+            getById: () =>
+              Effect.succeed(
+                Option.some({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
               ),
-            });
-          },
-          getRuntimeRecoveryProjection: () => {
-            projectionReadCount += 1;
-            return Effect.fail(
-              new ProjectionStore.ProjectionStoreReadError({
-                threadId,
-                cause: "simulated inherited-background projection failure",
-              }),
-            );
-          },
-        }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
-        Layer.mock(ProviderAuthService.ProviderAuthService)({
-          tryHandlePromptCommand: () => Effect.succeed(false),
-        }),
-        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
-        Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getTurnStartContext: () => {
+              projectionReadCount += 1;
+              return Effect.succeed({
+                ...projection,
+                hasConversation: projection.messages.some(
+                  (m) =>
+                    m.role === "user" &&
+                    (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
+                ),
+              });
+            },
+            getRuntimeRecoveryProjection: () => {
+              projectionReadCount += 1;
+              return Effect.fail(
+                new ProjectionStore.ProjectionStoreReadError({
+                  threadId,
+                  cause: "simulated inherited-background projection failure",
+                }),
+              );
+            },
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+          Layer.mock(ProviderAuthService.ProviderAuthService)({
+            tryHandlePromptCommand: () => Effect.succeed(false),
+          }),
+          Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
+          Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
+        ),
       ),
-    ),
-  );
+    );
 
-  await Effect.gen(function* () {
-    // A worktree removal holds the lease; the turn must not recreate the
-    // checkout until that removal is done with it.
-    const held = yield* Deferred.make<void>();
-    const release = yield* Deferred.make<void>();
-    const removal = yield* withWorkspaceLease(
-      "/tmp/missing-provider-turn-start-worktree",
-      Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
-    ).pipe(Effect.forkChild);
-    yield* Deferred.await(held);
-    const start = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
-      .start({ threadId, runId })
-      .pipe(Effect.flip, Effect.forkChild);
-    for (let turn = 0; turn < 50; turn++) yield* Effect.yieldNow;
-    expect(createWorktree).not.toHaveBeenCalled();
-    yield* Deferred.succeed(release, undefined);
-    yield* Fiber.join(removal);
-    const error = yield* Fiber.join(start);
+    await Effect.gen(function* () {
+      // A worktree removal holds the lease; the turn must not recreate the
+      // checkout until that removal is done with it.
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const removal = yield* withWorkspaceLease(
+        "/tmp/missing-provider-turn-start-worktree",
+        Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const start = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+        .start({ threadId, runId })
+        .pipe(Effect.flip, Effect.forkChild);
+      for (let turn = 0; turn < 50; turn++) yield* Effect.yieldNow;
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(projectionReadCount).toBe(1);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(removal);
+      const error = yield* Fiber.join(start);
 
-    expect(error._tag).toBe("ProviderTurnStartError");
-    expect(projectionReadCount).toBe(2);
-    expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
-    expect(createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-turn-start-project",
-      refName: "feature/restore",
-      path: "/tmp/missing-provider-turn-start-worktree",
-    });
-    expect(writeIfRunCurrent).not.toHaveBeenCalled();
-    expect(startRootRun).not.toHaveBeenCalled();
-  }).pipe(Effect.provide(layer), Effect.runPromise);
-});
+      expect(error._tag).toBe("ProviderTurnStartError");
+      expect(projectionReadCount).toBe(2);
+      if (branch === null) {
+        expect(createWorktree).not.toHaveBeenCalled();
+      } else {
+        expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
+        expect(createWorktree).toHaveBeenCalledWith({
+          cwd: "/tmp/provider-turn-start-project",
+          refName: branch,
+          path: "/tmp/missing-provider-turn-start-worktree",
+        });
+      }
+      expect(writeIfRunCurrent).not.toHaveBeenCalled();
+      expect(startRootRun).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+  },
+);
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
