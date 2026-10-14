@@ -21,6 +21,7 @@ import {
   type RuntimeMode,
   type ScheduledTaskId,
   ThreadId,
+  describeWorktreesDirectoryUnavailable,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -556,6 +557,8 @@ const make = Effect.gen(function* () {
           branch = flattenTemporaryWorktreeBranchName(branch);
         }
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        // Set from the fallback callback; the cast keeps TS from narrowing it to null.
+        let worktreesDirectoryNotice = null as string | null;
         const worktree = yield* git
           .createWorktree(
             {
@@ -571,6 +574,10 @@ const make = Effect.gen(function* () {
                   Effect.sync(() => {
                     createdWorktreePath = path;
                   }),
+                onWorktreesDirectoryFallback: ({ configured, unavailable }) =>
+                  Effect.sync(() => {
+                    worktreesDirectoryNotice = `Used the default folder: ${configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}`;
+                  }),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
               },
@@ -581,7 +588,9 @@ const make = Effect.gen(function* () {
         branch = worktree.worktree.refName;
         createdWorktreePath = worktreePath;
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
-        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+        yield* worktreesDirectoryNotice === null
+          ? setupTracker.stageStatus(threadId, "checkout", "done")
+          : setupTracker.stageStatus(threadId, "checkout", "warning", worktreesDirectoryNotice);
       }
 
       // A reused worktree is already recorded, and rewriting it could undo

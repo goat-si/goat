@@ -150,6 +150,10 @@ such as another drive, set **Settings → Storage → Worktree location** to an 
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
 
+If the custom folder can't be used when a thread starts, for example because its drive is
+unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
+**Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

@@ -28,6 +28,7 @@ import {
   type VcsInitInput,
   type VcsListRefsInput,
   type VcsListRefsResult,
+  type WorktreesDirectoryStatus,
   type VcsPullResult,
   type VcsRemoveWorktreeInput,
   type VcsStatusInput,
@@ -133,6 +134,15 @@ export interface CreateWorktreeProgress {
    * cancel.
    */
   readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, never>;
+  /**
+   * Fires before checkout when the configured `worktreesDirectory` is
+   * unavailable and the worktree goes to the default directory instead.
+   */
+  readonly onWorktreesDirectoryFallback?: (
+    status: WorktreesDirectoryStatus & {
+      readonly unavailable: NonNullable<WorktreesDirectoryStatus["unavailable"]>;
+    },
+  ) => Effect.Effect<void, never>;
   readonly onCheckoutProgress?: (input: {
     percent: number;
     completed: number;

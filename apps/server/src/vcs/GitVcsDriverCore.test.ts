@@ -3139,23 +3139,53 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         );
         assert.equal(created.worktree.path, expected);
         assert.equal(yield* fileSystem.exists(expected), true);
-
-        const error = yield* driver
-          .createWorktree(
-            { cwd, path: null, refName: initialBranch, newRefName: "feature/relative-dir" },
-            { worktreesDirectory: "relative/worktrees" },
-          )
-          .pipe(Effect.flip);
-        assert.match(error.detail, /must be an absolute folder on this machine/);
-
-        const rootError = yield* driver
-          .createWorktree(
-            { cwd, path: null, refName: initialBranch, newRefName: "feature/root-dir" },
-            { worktreesDirectory: "/" },
-          )
-          .pipe(Effect.flip);
-        assert.match(rootError.detail, /not a drive root/);
       }),
+    );
+
+    it.effect(
+      "falls back to the default worktrees directory when the configured one is unavailable",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const pathService = yield* Path.Path;
+          const cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          const defaultWorktree = yield* driver.createWorktree({
+            cwd,
+            path: null,
+            refName: initialBranch,
+            newRefName: "feature/default-dir",
+          });
+          const repoWorktreesDir = pathService.dirname(defaultWorktree.worktree.path);
+          const missingParent = pathService.join(yield* makeTmpDir("gone-"), "gone", "worktrees");
+
+          const cases = [
+            { setting: missingParent, reason: "missing", branch: "feature/missing-dir" },
+            { setting: "relative/worktrees", reason: "invalid", branch: "feature/relative-dir" },
+            { setting: "/", reason: "invalid", branch: "feature/root-dir" },
+          ] as const;
+          for (const { setting, reason, branch } of cases) {
+            const fallbacks: Array<string> = [];
+            const created = yield* driver.createWorktree(
+              { cwd, path: null, refName: initialBranch, newRefName: branch },
+              {
+                worktreesDirectory: setting,
+                progress: {
+                  onWorktreesDirectoryFallback: (status) =>
+                    Effect.sync(() => {
+                      fallbacks.push(status.unavailable.reason);
+                    }),
+                },
+              },
+            );
+            const expected = pathService.join(repoWorktreesDir, branch.replace("/", "-"));
+            assert.equal(created.worktree.path, expected);
+            assert.equal(yield* fileSystem.exists(expected), true);
+            assert.deepStrictEqual(fallbacks, [reason]);
+          }
+          assert.equal(yield* fileSystem.exists(pathService.dirname(missingParent)), false);
+        }),
     );
 
     it.effect("resolves the submodule mode from the option, then t3.json", () =>

@@ -39,7 +39,8 @@ import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { describeWorktreesDirectoryUnavailable } from "@goat/contracts";
+import { resolveAvailableWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -3410,27 +3411,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
     let worktreePath = input.path;
+    const progress = options?.progress;
     if (worktreePath == null) {
-      const parentDir = resolveWorktreesDirectory(
-        options?.worktreesDirectory ?? "",
-        worktreesDir,
+      const location = yield* resolveAvailableWorktreesDirectory(
+        {
+          setting: options?.worktreesDirectory ?? "",
+          defaultDir: worktreesDir,
+        },
+        fileSystem,
         path,
-        yield* HostProcess.HomeDirectory,
       );
-      if (parentDir === null) {
-        return yield* new GitCommandError({
-          operation: "GitVcsDriver.createWorktree",
-          command: "git worktree add",
-          cwd: input.cwd,
-          detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Storage.`,
-        });
+      if (location.unavailable !== null) {
+        const unavailable = location.unavailable;
+        yield* Effect.logWarning(
+          `Worktree location "${location.configured}" ${describeWorktreesDirectoryUnavailable(unavailable.reason)}; using ${location.directory}`,
+        );
+        if (progress?.onWorktreesDirectoryFallback) {
+          yield* progress.onWorktreesDirectoryFallback({ ...location, unavailable });
+        }
       }
-      worktreePath = path.join(parentDir, repoName, sanitizedBranch);
+      worktreePath = path.join(location.directory, repoName, sanitizedBranch);
     }
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
-    const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";

@@ -196,6 +196,7 @@ import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { attachmentRelativePath, createDeterministicAttachmentId } from "./attachmentStore.ts";
+import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -1320,6 +1321,8 @@ const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2497,6 +2500,18 @@ const layerWsRpc = (
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
+        [WS_METHODS.serverGetWorktreesDirectoryStatus]: () =>
+          serverSettings.getSettings.pipe(
+            Effect.map((settings) => settings.worktreesDirectory),
+            Effect.orElseSucceed(() => ""),
+            Effect.flatMap((setting) =>
+              resolveAvailableWorktreesDirectory(
+                { setting, defaultDir: config.worktreesDir },
+                fileSystem,
+                path,
+              ),
+            ),
+          ),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>

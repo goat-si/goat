@@ -3,6 +3,7 @@ import type {
   StorageCleanupSettings,
   WorktreeCleanupRules,
 } from "@goat/contracts";
+import { describeWorktreesDirectoryUnavailable } from "@goat/contracts";
 import { resolveWorktreeCleanup } from "@goat/shared/projectSettings";
 import { useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
@@ -15,6 +16,7 @@ import { formatBytes } from "../../lib/formatBytes";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { CircleAlertIcon } from "~/components/solar";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
@@ -48,12 +50,50 @@ import {
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 
+/**
+ * One line per selected machine whose configured worktree folder can't be
+ * used right now, such as an unmounted drive. Those machines put new
+ * worktrees in their default folder until it comes back.
+ */
+function useUnavailableWorktreesDirectories() {
+  const { connectedEnvironments } = useSettingsScope();
+  return useAtomValue(
+    useMemo(
+      () =>
+        Atom.make((get) =>
+          connectedEnvironments.flatMap((environment) => {
+            if (
+              environment.serverConfig?.environment.capabilities.worktreesDirectoryStatus !== true
+            )
+              return [];
+            const query = get(
+              serverEnvironment.worktreesDirectoryStatus({
+                environmentId: environment.environmentId,
+                input: {},
+              }),
+            );
+            if (query._tag !== "Success" || query.value.unavailable === null) return [];
+            const { configured, directory, unavailable } = query.value;
+            return [
+              {
+                environmentId: environment.environmentId,
+                message: `${connectedEnvironments.length > 1 ? `${environment.label}: ` : ""}${unavailable.path ?? configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}. New worktrees go to ${directory} until it is available.`,
+              },
+            ];
+          }),
+        ),
+      [connectedEnvironments],
+    ),
+  );
+}
+
 function WorktreesDirectoryRow() {
   const { connectedEnvironments, targets } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const mixed = useScopedSettingsMixed(["worktreesDirectory"]);
   const edited = useRef(false);
+  const unavailable = useUnavailableWorktreesDirectories();
   if (
     connectedEnvironments.some(
       (environment) =>
@@ -71,6 +111,21 @@ function WorktreesDirectoryRow() {
       }
       serverScoped
       settingKeys={["worktreesDirectory"]}
+      status={
+        unavailable.length > 0 ? (
+          <div className="space-y-0.5" data-testid="worktrees-directory-unavailable">
+            {unavailable.map((entry) => (
+              <p
+                key={entry.environmentId}
+                className="flex items-start gap-1.5 text-warning-foreground wrap-anywhere"
+              >
+                <CircleAlertIcon aria-hidden className="mt-px size-3.5 shrink-0" />
+                <span>{entry.message}</span>
+              </p>
+            ))}
+          </div>
+        ) : undefined
+      }
       resetAction={
         mixed || settings.worktreesDirectory !== "" ? (
           <SettingResetButton
