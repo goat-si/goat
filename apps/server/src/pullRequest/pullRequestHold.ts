@@ -3,15 +3,58 @@ import type { PullRequestLabel } from "@goat/contracts";
 /** Label names that put a pull request on hold, compared after `normalizeLabel`. */
 const HOLD_LABELS = new Set(["hold", "on-hold", "do-not-merge", "dont-merge"]);
 
-/** A description line that starts with HOLD, such as `HOLD: do not merge until review`. */
-const HOLD_LINE = /^[\s>*_#-]*HOLD\b/m;
+/**
+ * A rendered line that starts with HOLD, such as `HOLD: do not merge until review`, after any
+ * quote, heading, list marker (`-`, `1.`), emphasis, or inline code that opens it.
+ */
+const HOLD_LINE = /^(?:[\s>#*_~`+-]|\d+[.)])*HOLD\b/;
 
+/** A fence line; the run of backticks or tildes opens a code block and closes it again. */
+const FENCE = /^[ \t>]*(`{3,}|~{3,})/;
+
+/** Separators collapse, so `On Hold`, `do_not_merge` and `do - not - merge` all match. */
 const normalizeLabel = (name: string) =>
   name
     .trim()
     .toLowerCase()
     .replaceAll(/['’]/g, "")
-    .replaceAll(/[\s_]+/g, "-");
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-|-$/g, "");
+
+/** Whether a line a reader would see starts with HOLD. Fenced code and HTML comments are hidden. */
+function hasHoldLine(body: string): boolean {
+  let fence: string | null = null;
+  let inComment = false;
+  for (const raw of body.split(/\r?\n/)) {
+    let line = raw;
+    if (fence !== null) {
+      const close = FENCE.exec(line)?.[1];
+      if (close !== undefined && close[0] === fence[0] && close.length >= fence.length) {
+        if (line.slice(line.indexOf(close) + close.length).trim() === "") fence = null;
+      }
+      continue;
+    }
+    if (inComment) {
+      const end = line.indexOf("-->");
+      if (end === -1) continue;
+      inComment = false;
+      line = line.slice(end + 3);
+    }
+    line = line.replaceAll(/<!--[\s\S]*?-->/g, "");
+    const open = line.indexOf("<!--");
+    if (open !== -1) {
+      inComment = true;
+      line = line.slice(0, open);
+    }
+    const opening = FENCE.exec(line)?.[1];
+    if (opening !== undefined && !inComment) {
+      fence = opening;
+      continue;
+    }
+    if (HOLD_LINE.test(line)) return true;
+  }
+  return false;
+}
 
 /**
  * Why a pull request must not be merged yet, or null when nothing holds it. A merge,
@@ -28,6 +71,6 @@ export function pullRequestHoldReason(pullRequest: {
     HOLD_LABELS.has(normalizeLabel(candidate.name)),
   );
   if (label !== undefined) return `it has the "${label.name}" label`;
-  if (HOLD_LINE.test(pullRequest.body)) return "its description has a HOLD line";
+  if (hasHoldLine(pullRequest.body)) return "its description has a HOLD line";
   return null;
 }

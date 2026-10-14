@@ -1622,6 +1622,60 @@ it.effect("refuses to merge or arm auto-merge on a held pull request", () =>
   }),
 );
 
+it.effect("refuses a stack merge that would also land a held lower pull request", () =>
+  Effect.gen(function* () {
+    const ran: Array<number> = [];
+    let heldLabel: string | null = "do - not - merge";
+    const github = fakeProvider(SourceControlProviderKind.make("github"));
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          capabilities: { ...github.capabilities, actions: ["merge"], stackActions: true },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["merge"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment"],
+              requestReviewers: false,
+            }),
+          getChangeRequest: ({ number }) =>
+            Effect.succeed({
+              ...hostedChangeRequest("Ready."),
+              number,
+              labels:
+                number === 1 && heldLabel !== null ? [{ name: heldLabel, color: "d73a4a" }] : [],
+            }),
+          runAction: (input) => Effect.sync(() => void ran.push(input.number)),
+        }),
+      ],
+    });
+    const input = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 2,
+      action: "merge" as const,
+      stackNumber: 50,
+      expectedStackHeads: [
+        { number: 1, headSha: "aaa" },
+        { number: 2, headSha: "bbb" },
+      ],
+    };
+
+    const refused = yield* Effect.flip(service.runAction(input));
+    assert.include(
+      refused.message,
+      'Pull request #1, which this merge would also land, is on hold: it has the "do - not - merge" label.',
+    );
+    assert.deepStrictEqual(ran, []);
+
+    heldLabel = null;
+    yield* service.runAction(input);
+    assert.deepStrictEqual(ran, [2]);
+  }),
+);
+
 it.effect("refuses an action this viewer may not take, and says what access it takes", () =>
   Effect.gen(function* () {
     let ran: string | null = null;

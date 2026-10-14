@@ -17,6 +17,10 @@ describe("pullRequestHoldReason", () => {
     "DO-NOT-MERGE",
     "don't merge",
     "do_not_merge",
+    "do - not - merge",
+    "do--not--merge",
+    "on - hold",
+    "Do not merge!",
   ])("holds the %s label", (name) => {
     expect(pullRequestHoldReason({ ...open, labels: [{ name }] })).toBe(
       `it has the "${name}" label`,
@@ -28,6 +32,12 @@ describe("pullRequestHoldReason", () => {
     "Summary\n\n**HOLD** until the API ships",
     "> HOLD — waiting on design",
     "- HOLD",
+    "`HOLD`: do not merge",
+    "1. HOLD: do not merge",
+    "Steps\n\n2) **HOLD** for the release",
+    "```sh\nnpm test\n```\n\nHOLD: after the fence",
+    "<!-- template -->\nHOLD: after a comment",
+    "<!--\nmultiline\n-->\nHOLD: after a comment",
   ])("holds a description line %j", (body) => {
     expect(pullRequestHoldReason({ ...open, body })).toBe("its description has a HOLD line");
   });
@@ -36,6 +46,10 @@ describe("pullRequestHoldReason", () => {
     "Raises the threshold. Hold Cmd to select.",
     "The lease HOLDER now retries.",
     "We should hold off on the rename later.",
+    "```\nHOLD: an example inside a fence\n```",
+    "~~~~\n```\nHOLD: still fenced\n~~~~",
+    "<!--\nHOLD: hidden in a template comment\n-->",
+    "<!-- HOLD -->",
   ])("does not read %j as a hold", (body) => {
     expect(
       pullRequestHoldReason({ ...open, body, labels: [{ name: "holdout-tests" }] }),

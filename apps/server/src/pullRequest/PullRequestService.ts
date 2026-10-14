@@ -2105,30 +2105,48 @@ export const make = Effect.gen(function* () {
               );
             }
             // A held pull request is refused before anything reaches the host. Read fresh,
-            // so a hold added moments ago in another client still counts.
+            // so a hold added moments ago in another client still counts. A stack merge lands
+            // every open layer below the target too, and each provider refuses one whose
+            // expected heads are not exactly those layers, so every one of them is checked.
+            const landing = [
+              ...new Set([
+                input.number,
+                ...(input.stackNumber === undefined
+                  ? []
+                  : (input.expectedStackHeads ?? []).map((layer) => layer.number)),
+              ]),
+            ];
             const holdCheck =
               input.action === "merge" || input.action === "enable-auto-merge"
-                ? project.api
-                    .getChangeRequest({
-                      cwd: project.project.workspaceRoot,
-                      repository: project.repository,
-                      host: project.host,
-                      number: input.number,
-                    })
-                    .pipe(
-                      Effect.mapError(toPullRequestError("runAction")),
-                      Effect.flatMap((detail) => {
-                        const reason = pullRequestHoldReason(detail);
-                        return reason === null
-                          ? Effect.void
-                          : Effect.fail(
+                ? Effect.forEach(
+                    landing,
+                    (number) =>
+                      project.api
+                        .getChangeRequest({
+                          cwd: project.project.workspaceRoot,
+                          repository: project.repository,
+                          host: project.host,
+                          number,
+                        })
+                        .pipe(
+                          Effect.mapError(toPullRequestError("runAction")),
+                          Effect.flatMap((detail) => {
+                            const reason = pullRequestHoldReason(detail);
+                            if (reason === null) return Effect.void;
+                            const subject =
+                              number === input.number
+                                ? "This pull request is"
+                                : `Pull request #${number}, which this merge would also land, is`;
+                            return Effect.fail(
                               new PullRequestOperationError({
                                 operation: "runAction",
-                                detail: `This pull request is on hold: ${reason}. Clear the hold before merging.`,
+                                detail: `${subject} on hold: ${reason}. Clear the hold before merging.`,
                               }),
                             );
-                      }),
-                    )
+                          }),
+                        ),
+                    { concurrency: 4, discard: true },
+                  )
                 : Effect.void;
             const mergeSettings =
               project.api.mergeMessageRewrite !== undefined &&
