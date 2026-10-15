@@ -2155,6 +2155,111 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
+  it.effect.each([
+    { name: "text-only reply", finalText: "Done", fileExists: true, imageCount: 1 },
+    { name: "authored image", finalText: "authored", fileExists: true, imageCount: 1 },
+    { name: "authored file URL", finalText: "file-url", fileExists: true, imageCount: 1 },
+    { name: "no reply", finalText: null, fileExists: true, imageCount: 1 },
+    { name: "missing saved file", finalText: "Done", fileExists: false, imageCount: 0 },
+  ])("keeps a generated image visible after $name", (scenario) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-image-" });
+        const savedPath = path.join(directory, "generated image.png");
+        if (scenario.fileExists) yield* fs.writeFileString(savedPath, "png fixture");
+        const finalText =
+          scenario.finalText === "authored"
+            ? `Done\n\n![Already here](<${savedPath}>)`
+            : scenario.finalText === "file-url"
+              ? `Done\n\n![Already here](<${new URL(`file://${savedPath}`).href}>)`
+              : scenario.finalText;
+        const nativeThreadId = `native-image-${scenario.name}`;
+        const nativeTurnId = `turn-image-${scenario.name}`;
+        const transcript = makeCodexReplayTranscript({
+          scenario: `codex-image-${scenario.name}`,
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Draw an image" }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/image-generation",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "imageGeneration",
+                    id: "image-generation-1",
+                    status: "completed",
+                    revisedPrompt: "Draw an image",
+                    result: "base64-image-bytes-stay-native",
+                    savedPath,
+                    failure: null,
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622441500,
+                },
+              },
+            },
+            ...(finalText === null
+              ? []
+              : [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "item/completed/answer",
+                    frame: {
+                      method: "item/completed",
+                      params: {
+                        item: {
+                          type: "agentMessage",
+                          id: "answer-1",
+                          text: finalText,
+                          phase: "final_answer",
+                        },
+                        threadId: nativeThreadId,
+                        turnId: nativeTurnId,
+                        completedAtMs: 1782622442000,
+                      },
+                    },
+                  },
+                ]),
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-image-${scenario.name}`),
+            text: "Draw an image",
+          }),
+        );
+        yield* harness.firstTerminal;
+        const messages = harness.events.flatMap((event) =>
+          event.type === "message.updated" ? [event.message] : [],
+        );
+        const text = messages.at(-1)?.text ?? "";
+        assert.lengthOf(text.match(/!\[[^\]]*\]\([^)]+\)/g) ?? [], scenario.imageCount);
+        assert.notInclude(text, "base64-image-bytes-stay-native");
+        if (scenario.fileExists) assert.include(decodeURI(text), savedPath);
+        else assert.equal(text, "Done");
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
   it.effect.each(["supported", "unsupported", "invalid"] as const)(
     "delivers native history with %s app-server protocol",
     (response) =>

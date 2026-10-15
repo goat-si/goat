@@ -40,6 +40,8 @@ import {
   type ProviderSetupError,
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
+import { parseFileUrlHref } from "@goat/shared/fileLinks";
+import { safeDecodeURIComponent } from "@goat/shared/markdownLinks";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
@@ -213,6 +215,22 @@ export function codexProviderTurnTokenUsage(
 const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryContextSnapshot));
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
+
+function appendGeneratedImageMarkdown(text: string, paths: ReadonlySet<string>): string {
+  const embeddedPaths = new Set(
+    [...text.matchAll(/!\[[^\]]*\]\((?:<([^>]+)>|([^)]*))\)/g)].map((match) => {
+      const href = match[1] ?? match[2] ?? "";
+      return safeDecodeURIComponent(parseFileUrlHref(href)?.path ?? href);
+    }),
+  );
+  const missing = [...paths].filter((path) => !embeddedPaths.has(path));
+  if (missing.length === 0) return text;
+  const images = missing.map(
+    (path) =>
+      `![Generated image](<${encodeURI(path).replaceAll("#", "%23").replaceAll("?", "%3F")}>)`,
+  );
+  return [text.trimEnd(), ...images].filter(Boolean).join("\n\n");
+}
 // Each plan flush stores the whole plan three times (node, plan, turn item), so
 // flush at the cadence clients already see for assistant text.
 const CODEX_PLAN_DELTA_FLUSH_INTERVAL_MS = 400;
@@ -2105,6 +2123,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const offeredContinuationItemsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         const finalAnswerItemIdsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         const completedFinalAnswerTextsByTurn = yield* Ref.make(new Map<string, Set<string>>());
+        const generatedImagePathsByTurn = yield* Ref.make(new Map<string, Set<string>>());
+        const lastFinalAnswerByTurn = yield* Ref.make(
+          new Map<string, { readonly id: string; readonly text: string }>(),
+        );
+        const clearGeneratedImageState = (nativeTurnId: string) =>
+          Effect.gen(function* () {
+            yield* Ref.update(generatedImagePathsByTurn, (current) => {
+              const updated = new Map(current);
+              updated.delete(nativeTurnId);
+              return updated;
+            });
+            yield* Ref.update(lastFinalAnswerByTurn, (current) => {
+              const updated = new Map(current);
+              updated.delete(nativeTurnId);
+              return updated;
+            });
+          });
         // Native completion and the interrupt timeout share one finalization
         // path. Serialize the race so only one can publish terminal events.
         const turnTerminalizationPermit = yield* Semaphore.make(1);
@@ -3693,6 +3728,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 turnItem: artifacts.turnItem,
               });
               if (finalAnswerItem && update.completed) {
+                yield* Ref.update(lastFinalAnswerByTurn, (current) =>
+                  new Map(current).set(update.turnId, { id: update.itemId, text: update.text }),
+                );
                 yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
                   const updated = new Map(current);
                   const texts = new Set(updated.get(update.turnId) ?? []);
@@ -5089,6 +5127,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             }
 
+            const savedImagePath =
+              payload.item.type === "imageGeneration" && payload.item.status === "completed"
+                ? payload.item.savedPath
+                : null;
+            if (savedImagePath) {
+              yield* Ref.update(generatedImagePathsByTurn, (current) => {
+                const updated = new Map(current);
+                const paths = new Set(updated.get(payload.turnId) ?? []);
+                paths.add(savedImagePath);
+                updated.set(payload.turnId, paths);
+                return updated;
+              });
+              return;
+            }
+
             if (payload.item.type === "commandExecution") {
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
               const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
@@ -6121,6 +6174,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     Effect.andThen(startRetry([])),
                     Effect.forkIn(scope),
                   );
+                  yield* clearGeneratedImageState(input.nativeTurnId);
                   return false;
                 }
               }
@@ -6166,6 +6220,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
+              if (input.status === "completed") {
+                const paths = (yield* Ref.get(generatedImagePathsByTurn)).get(input.nativeTurnId);
+                if (paths?.size) {
+                  const existing = (yield* Ref.get(lastFinalAnswerByTurn)).get(input.nativeTurnId);
+                  const available = new Set<string>();
+                  for (const path of paths) {
+                    if (yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false))) {
+                      available.add(path);
+                    }
+                  }
+                  const text = appendGeneratedImageMarkdown(existing?.text ?? "", available);
+                  if (text !== (existing?.text ?? "")) {
+                    const artifacts = yield* buildAgentMessageArtifacts(
+                      input.context,
+                      { id: existing?.id ?? `image-generation:${input.nativeTurnId}`, text },
+                      true,
+                    );
+                    yield* emitProviderEvent({
+                      type: "node.updated",
+                      driver: CODEX_PROVIDER,
+                      node: artifacts.node,
+                    });
+                    yield* emitProviderEvent({
+                      type: "message.updated",
+                      driver: CODEX_PROVIDER,
+                      message: artifacts.message,
+                    });
+                    yield* emitProviderEvent({
+                      type: "turn_item.updated",
+                      driver: CODEX_PROVIDER,
+                      turnItem: artifacts.turnItem,
+                    });
+                  }
+                }
+              }
+              yield* clearGeneratedImageState(input.nativeTurnId);
               for (const [key, part] of reasoningParts) {
                 if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
               }
