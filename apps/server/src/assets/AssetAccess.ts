@@ -22,9 +22,11 @@ import {
   hostPreviewMimeTypeFromExtension,
   isWorkspaceImagePreviewPath,
   isWorkspacePreviewEntryPath,
+  mediaMimeTypeFromExtension,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
 } from "@goat/shared/filePreview";
+import { GENERIC_MIME_TYPES } from "@goat/shared/image";
 import {
   IMAGE_DIMENSIONS_HEADER_BYTES,
   readImageDimensions,
@@ -615,12 +617,29 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       }
       // Generic files carry their extension inside the attachment id (that
       // shape resolves the on-disk path); images do not. Videos and images
-      // render inline. Other generic files download unless a viewer requests
-      // a supported document or audio format inline.
+      // render inline. Other generic files download unless they are playable
+      // media or a viewer requests a supported document or audio format inline.
       const extension = parseAttachmentFileExtension(input.resource.attachmentId);
       const isGenericFile = extension !== null;
-      const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
-      const isVideo = INLINE_VIDEO_MIME_TYPE_PATTERN.test(videoMimeType);
+      const suppliedMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
+      const inferMediaType =
+        suppliedMimeType === "" || GENERIC_MIME_TYPES.has(suppliedMimeType.toLowerCase());
+      const storedExtension = extension === null ? null : `.${extension}`;
+      const inferredVideoMimeType =
+        inferMediaType && storedExtension !== null
+          ? mediaMimeTypeFromExtension(storedExtension)
+          : null;
+      const videoMimeType = INLINE_VIDEO_MIME_TYPE_PATTERN.test(suppliedMimeType)
+        ? suppliedMimeType
+        : inferredVideoMimeType?.startsWith("video/")
+          ? inferredVideoMimeType
+          : undefined;
+      const inferredAudioMimeType =
+        inferMediaType && storedExtension !== null
+          ? audioMimeTypeFromExtension(storedExtension)
+          : null;
+      const inlineAudioMimeType =
+        input.resource.disposition !== "attachment" ? inferredAudioMimeType : null;
       const inlinePreviewMimeType =
         input.resource.disposition === "inline" && extension !== null
           ? inlinePreviewMimeTypeForExtension(extension)
@@ -632,15 +651,22 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         version: 1,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
-        ...(isGenericFile && !isVideo && inlinePreviewMimeType === undefined
+        ...(isGenericFile &&
+        videoMimeType === undefined &&
+        inlineAudioMimeType === null &&
+        inlinePreviewMimeType === undefined
           ? { download: true }
           : {}),
         ...(input.resource.fileName !== undefined ? { fileName: input.resource.fileName } : {}),
         ...(inlinePreviewMimeType !== undefined
           ? { mimeType: inlinePreviewMimeType }
-          : input.resource.mimeType !== undefined
-            ? { mimeType: isVideo ? videoMimeType : input.resource.mimeType }
-            : {}),
+          : videoMimeType !== undefined
+            ? { mimeType: videoMimeType }
+            : inlineAudioMimeType !== null
+              ? { mimeType: inlineAudioMimeType }
+              : input.resource.mimeType !== undefined
+                ? { mimeType: input.resource.mimeType }
+                : {}),
         ...(input.resource.renderIntent === "mcp-app" && inlinePreviewMimeType === "text/html"
           ? { renderIntent: "mcp-app" as const }
           : {}),

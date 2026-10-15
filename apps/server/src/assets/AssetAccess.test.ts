@@ -1060,6 +1060,93 @@ describe("AssetAccess", () => {
       });
     }).pipe(Effect.provide(layerTest)),
   );
+
+  it.effect("infers playable attachment media from the stored extension", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+
+      for (const [extension, mimeType, expectedMimeType] of [
+        ["mp4", "application/octet-stream", "video/mp4"],
+        ["mov", "binary/octet-stream", "video/quicktime"],
+        ["m4v", "", "video/mp4"],
+        ["webm", undefined, "video/webm"],
+        ["m4a", "application/octet-stream", "audio/mp4"],
+      ] as const) {
+        const attachmentId = `thread-1-00000000-0000-4000-8000-000000000011-${extension}`;
+        const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.${extension}`);
+        yield* fileSystem.writeFileString(attachmentPath, "0123456789");
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "attachment",
+            attachmentId,
+            fileName: "misleading.html",
+            ...(mimeType !== undefined ? { mimeType } : {}),
+          },
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const asset = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        expect(asset).toMatchObject({
+          kind: "file",
+          path: attachmentPath,
+          mimeType: expectedMimeType,
+        });
+        if (asset?.kind !== "file") throw new Error("Expected attachment file");
+        expect(asset).not.toHaveProperty("download");
+
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, "bytes=1-2"));
+        expect(response.status).toBe(206);
+        expect(response.headers.get("content-type")).toBe(expectedMimeType);
+        expect(response.headers.get("content-disposition")).toBeNull();
+        expect(response.headers.get("accept-ranges")).toBe("bytes");
+        expect(response.headers.get("content-range")).toBe("bytes 1-2/10");
+        expect(yield* Effect.promise(() => response.text())).toBe("12");
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps explicit non-media types and generic HTML and SVG as downloads", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+
+      for (const [extension, mimeType, fileName, expectedContentType] of [
+        ["mp4", "application/pdf", "clip.mp4", "application/pdf"],
+        ["html", "application/octet-stream", "page.html", "application/octet-stream"],
+        ["svg", "application/octet-stream", "icon.svg", "application/octet-stream"],
+        ["pdf", "application/octet-stream", "misleading.mp4", "application/octet-stream"],
+      ] as const) {
+        const attachmentId = `thread-1-00000000-0000-4000-8000-000000000012-${extension}`;
+        const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.${extension}`);
+        yield* fileSystem.writeFileString(attachmentPath, "content");
+        const result = yield* issueAssetUrl({
+          resource: { _tag: "attachment", attachmentId, fileName, mimeType },
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const asset = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        expect(asset).toMatchObject({
+          kind: "file",
+          path: attachmentPath,
+          fileName,
+          mimeType,
+          download: true,
+        });
+        if (asset?.kind !== "file") throw new Error("Expected attachment file");
+
+        const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+        expect(response.headers.get("content-type")).toBe(expectedContentType);
+        expect(response.headers.get("content-disposition")).toContain("attachment;");
+        expect(response.headers.get("accept-ranges")).toBeNull();
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("issues signed native application icon capabilities", () =>
     Effect.gen(function* () {
       const result = yield* issueAssetUrl({
