@@ -27,6 +27,14 @@ interface MediaVideoPlayerProps {
   readonly actionsSource?: MediaActionSource | undefined;
 }
 
+interface PlaybackState {
+  readonly currentTime: number;
+  readonly paused: boolean;
+  readonly volume: number;
+  readonly muted: boolean;
+  readonly playbackRate: number;
+}
+
 /** Keeps native range streaming and playback state consistent across inline and file previews. */
 export function MediaVideoPlayer({
   src: latestSrc,
@@ -49,29 +57,55 @@ export function MediaVideoPlayer({
   const [playbackSource, setPlaybackSource] = useState<{
     src: string;
     revision: string | null;
+    latestAtPin: string | null;
   } | null>(null);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [failure, setFailure] = useState<{ src: string; format: boolean } | null>(null);
   const [retrying, setRetrying] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
   const [preloadedSrc, setPreloadedSrc] = useState<string | null>(null);
+  const pendingRestore = useRef<PlaybackState | null>(null);
+  const autoRefreshUsed = useRef(false);
+  const recoveryFrom = useRef<string | null>(null);
+  const recoveryTime = useRef<number | null>(null);
+  const latestSrcRef = useRef(latestSrc);
   const src = playbackSource?.src ?? latestSrc;
-  const sourceRevision = playbackSource === null ? revision : playbackSource.revision;
-  const failed = src !== null ? failedSrc === src : sourceFailed;
+  const failed = src !== null ? failure?.src === src : sourceFailed;
+  const videoVisible = src !== null && !failed;
 
-  // Re-signing must not reset the playhead. Changed files refresh once playback pauses.
+  useEffect(() => {
+    latestSrcRef.current = latestSrc;
+  }, [latestSrc]);
+
+  const rememberPlayback = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    pendingRestore.current = {
+      currentTime: video.currentTime,
+      paused: video.paused,
+      volume: video.volume,
+      muted: video.muted,
+      playbackRate: video.playbackRate,
+    };
+  }, []);
+
+  // Keep a playing range request on its original URL, then adopt the latest signed URL on pause.
   const refreshPausedRevision = useCallback(() => {
     const video = videoRef.current;
-    if (video === null || video.paused || video.ended) {
-      setPlaybackSource((current) =>
-        current !== null && current.revision !== revision ? null : current,
-      );
+    if (
+      playbackSource !== null &&
+      latestSrc !== null &&
+      pendingRestore.current === null &&
+      (video === null || video.paused || video.ended) &&
+      (playbackSource.latestAtPin !== latestSrc || playbackSource.revision !== revision)
+    ) {
+      rememberPlayback();
+      setPlaybackSource(null);
     }
-  }, [revision]);
+  }, [latestSrc, playbackSource, rememberPlayback, revision]);
   useEffect(refreshPausedRevision, [refreshPausedRevision]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || preload === "metadata" || preloadedSrc === src) return;
+    if (!videoVisible || !video || preload === "metadata" || preloadedSrc === src) return;
     if (typeof IntersectionObserver === "undefined") {
       setPreloadedSrc(src);
       return;
@@ -90,9 +124,10 @@ export function MediaVideoPlayer({
       active = false;
       observer.disconnect();
     };
-  }, [src, preload, preloadedSrc, failed, loadAttempt]);
+  }, [src, preload, preloadedSrc, videoVisible]);
 
   useEffect(() => {
+    if (!videoVisible) return;
     const video = videoRef.current;
     if (!video) return;
     const pauseWhenHidden = () => {
@@ -111,18 +146,24 @@ export function MediaVideoPlayer({
       video.removeEventListener("webkitendfullscreen", pauseWhenHidden);
       video.pause();
     };
-  }, [src, failed, loadAttempt]);
+  }, [videoVisible]);
 
   const retry = async () => {
     if (retrying) return;
     setRetrying(true);
     try {
-      await onRetry?.();
-      setPlaybackSource(null);
-      setFailedSrc(null);
-      setLoadAttempt((current) => current + 1);
+      const renewed = await onRetry?.();
+      setPlaybackSource(
+        typeof renewed === "string"
+          ? { src: renewed, revision, latestAtPin: latestSrcRef.current }
+          : null,
+      );
+      setFailure(null);
+      autoRefreshUsed.current = false;
+      recoveryFrom.current = null;
+      recoveryTime.current = null;
     } catch {
-      setFailedSrc(src);
+      if (src !== null) setFailure({ src, format: false });
     } finally {
       setRetrying(false);
     }
@@ -146,7 +187,10 @@ export function MediaVideoPlayer({
         >
           <span className="inline-flex items-center gap-1.5">
             <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
-            Video unavailable{label ? ` · ${label}` : ""}
+            {failure?.src === src && failure.format
+              ? "This video format can't be played here"
+              : "Video unavailable"}
+            {label ? ` · ${label}` : ""}
           </span>
           <span className="flex flex-wrap items-center justify-center gap-2">
             {latestSrc !== null || onRetry ? (
@@ -165,7 +209,6 @@ export function MediaVideoPlayer({
         </span>
       ) : src !== null && !failed ? (
         <video
-          key={loadAttempt}
           ref={videoRef}
           src={src}
           aria-label={label || "Video preview"}
@@ -181,13 +224,82 @@ export function MediaVideoPlayer({
             videoClassName,
           )}
           style={style}
-          onLoadedMetadata={(event) => prepareVideoFirstFrame(event.currentTarget)}
-          onPlay={() => setPlaybackSource({ src, revision: sourceRevision })}
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            const restore = pendingRestore.current;
+            pendingRestore.current = null;
+            if (!restore) {
+              prepareVideoFirstFrame(video);
+              return;
+            }
+            video.volume = restore.volume;
+            video.muted = restore.muted;
+            video.playbackRate = restore.playbackRate;
+            try {
+              video.currentTime = restore.currentTime;
+            } catch {
+              // A rejected seek still leaves the refreshed video playable.
+            }
+            if (!restore.paused) void video.play().catch(() => undefined);
+          }}
+          onPlay={() =>
+            setPlaybackSource((current) =>
+              current?.src === src ? current : { src, revision, latestAtPin: latestSrc },
+            )
+          }
+          onTimeUpdate={(event) => {
+            const video = event.currentTarget;
+            if (
+              recoveryTime.current !== null &&
+              video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+              video.currentTime > recoveryTime.current + 0.5
+            ) {
+              autoRefreshUsed.current = false;
+              recoveryFrom.current = null;
+              recoveryTime.current = null;
+            }
+          }}
           onPause={refreshPausedRevision}
           onEnded={refreshPausedRevision}
-          onError={() => {
-            if (latestSrc !== null && src !== latestSrc) setPlaybackSource(null);
-            else setFailedSrc(src);
+          onError={(event) => {
+            if (recoveryFrom.current === src) return;
+            const code = event.currentTarget.error?.code;
+            const format = code === 3 || code === 4;
+            const newerSrc =
+              latestSrc !== null && latestSrc !== src && latestSrc !== playbackSource?.latestAtPin
+                ? latestSrc
+                : null;
+            if (autoRefreshUsed.current || (!newerSrc && !onRetry)) {
+              setFailure({ src, format: format && (autoRefreshUsed.current || src === latestSrc) });
+              return;
+            }
+            autoRefreshUsed.current = true;
+            recoveryFrom.current = src;
+            rememberPlayback();
+            recoveryTime.current = event.currentTarget.currentTime;
+            if (newerSrc) {
+              setPlaybackSource({ src: newerSrc, revision, latestAtPin: newerSrc });
+              return;
+            }
+            const refresh = onRetry;
+            if (!refresh) return;
+            setRetrying(true);
+            void refresh()
+              .then((renewed) => {
+                const nextSrc =
+                  latestSrcRef.current !== null && latestSrcRef.current !== src
+                    ? latestSrcRef.current
+                    : typeof renewed === "string" && renewed !== src
+                      ? renewed
+                      : null;
+                if (nextSrc === null) {
+                  setFailure({ src, format });
+                  return;
+                }
+                setPlaybackSource({ src: nextSrc, revision, latestAtPin: latestSrcRef.current });
+              })
+              .catch(() => setFailure({ src, format: false }))
+              .finally(() => setRetrying(false));
           }}
         />
       ) : (
