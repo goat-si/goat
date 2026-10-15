@@ -1584,18 +1584,23 @@ export const CLOUD_SIBLING_DRIVERS = {
   devinCloud: "acpRegistry",
 } as const;
 
+/** Own-key check, so ids such as `constructor` never match the prototype. */
+export const isCloudSiblingDriver = (
+  driver: string,
+): driver is keyof typeof CLOUD_SIBLING_DRIVERS => Object.hasOwn(CLOUD_SIBLING_DRIVERS, driver);
+
 /** Presence and effective enablement of an unconfigured built-in default slot. */
 export const implicitDefaultInstance = (
   settings: Pick<ServerSettings, "providerInstances">,
   driver: ProviderDriverKind,
 ): { readonly present: boolean; readonly enabled: boolean } => {
-  const siblingDriver = CLOUD_SIBLING_DRIVERS[driver as keyof typeof CLOUD_SIBLING_DRIVERS];
-  if (siblingDriver === undefined) {
+  if (!isCloudSiblingDriver(driver)) {
     return {
       present: true,
       enabled: isUnconfiguredDefaultInstanceEnabled(defaultInstanceIdForDriver(driver)),
     };
   }
+  const siblingDriver = CLOUD_SIBLING_DRIVERS[driver as keyof typeof CLOUD_SIBLING_DRIVERS];
   const present = !Object.values(settings.providerInstances).some(
     (instance) => instance.driver === driver,
   );
@@ -1654,8 +1659,10 @@ export const resolveProjectProviderInstanceEnabled = (
   const instanceConfig = Object.hasOwn(settings.providerInstances, instanceId)
     ? settings.providerInstances[instanceId]
     : undefined;
+  // Only cloud defaults depend on other settings; any other unconfigured id
+  // (custom, fork or removed) keeps the plain default-slot rule.
   const implicit =
-    instanceConfig === undefined
+    instanceConfig === undefined && isCloudSiblingDriver(instanceId)
       ? implicitDefaultInstance(settings, ProviderDriverKind.make(instanceId))
       : undefined;
   if (implicit !== undefined && !implicit.present) return false;
@@ -1665,7 +1672,7 @@ export const resolveProjectProviderInstanceEnabled = (
       : settings.projectSettingsOverrides[projectId]?.providerInstances?.[instanceId]?.enabled;
   if (override !== undefined) return override;
   if (instanceConfig !== undefined) return resolveProviderInstanceEnabled(instanceConfig);
-  return implicit?.enabled ?? false;
+  return implicit?.enabled ?? isUnconfiguredDefaultInstanceEnabled(instanceId);
 };
 
 export const ServerSettingsOperation = Schema.Literals([
