@@ -15,6 +15,8 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import {
   defaultInstanceIdForDriver,
+  implicitDefaultInstance,
+  CLOUD_SIBLING_DRIVERS,
   type EnvironmentId,
   type AcpRegistryUrlAuthAction,
   PROVIDER_DISPLAY_NAMES,
@@ -782,17 +784,24 @@ export function EnvironmentProviderSettings({
     const driver = providerSettings.provider;
     const defaultInstanceId = defaultInstanceIdForDriver(driver);
     const explicitInstance = settings.providerInstances?.[defaultInstanceId];
+    const implicitDefault = implicitDefaultInstance(settings, driver);
     // An unconfigured default slot runs with the driver's default config.
     const effectiveInstance: ProviderInstanceConfig = explicitInstance ?? { driver };
     const isDirty = explicitInstance !== undefined;
     // Drivers without a default instance list only their configured instances.
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
+    const hasDefaultSlot =
+      explicitInstance !== undefined ||
+      (providerSettings.hasDefaultInstance && implicitDefault.present);
+    // Cloud defaults follow their sibling, so they list only once it is on.
+    const enabledWhileUnconfigured = Object.hasOwn(CLOUD_SIBLING_DRIVERS, driver)
+      ? implicitDefault.enabled
+      : resolveProviderInstanceEnabled(effectiveInstance);
     if (
       hasDefaultSlot &&
       (driver === "codex" ||
         driver === "claudeAgent" ||
         isDirty ||
-        resolveProviderInstanceEnabled(effectiveInstance) ||
+        enabledWhileUnconfigured ||
         defaultInstanceId === targetInstanceId)
     ) {
       rows.push({
@@ -914,6 +923,20 @@ export function EnvironmentProviderSettings({
     const liveProvider = serverProviders.find(
       (candidate) => candidate.instanceId === row.instanceId,
     );
+    const authSource = liveProvider?.authSourceInstanceId
+      ? serverProviders.find(
+          (candidate) => candidate.instanceId === liveProvider.authSourceInstanceId,
+        )
+      : undefined;
+    const authSourceName =
+      authSource?.displayName ??
+      (authSource ? PROVIDER_DISPLAY_NAMES[authSource.driver] : undefined) ??
+      liveProvider?.authSourceInstanceId;
+    // Same rule the sibling's own card uses before offering in-app sign-in.
+    const authSourceSignsInHere =
+      authSource !== undefined &&
+      (authSource.setup?.canAuthenticate === true ||
+        (authSource.driver === "acpRegistry" && authSource.installed));
     const updateCandidate = providerUpdateCandidateByInstanceId.get(row.instanceId);
     const isInstanceUpdateRunning =
       updatingProviderInstanceIds.has(row.instanceId) ||
@@ -967,6 +990,7 @@ export function EnvironmentProviderSettings({
         }
         instanceId={row.instanceId}
         instance={row.instance}
+        settings={settings}
         driverOption={driverOption}
         liveProvider={liveProvider}
         mode={mode}
@@ -1022,6 +1046,39 @@ export function EnvironmentProviderSettings({
                 })
               }
             />
+          ) : mode === "editor" &&
+            liveProvider?.authSourceInstanceId &&
+            (liveProvider.status !== "ready" || authSource?.auth.canLogout) ? (
+            <>
+              <SettingsRow
+                title="Cloud sign-in"
+                description={
+                  authSource && authSource.enabled && !authSourceSignsInHere
+                    ? `Signs in with ${authSourceName}. Sign in to ${authSourceName} on this machine, then refresh.`
+                    : `Signs in with ${authSourceName}.`
+                }
+              />
+              {authSource && !authSource.enabled ? (
+                <SettingsRow
+                  title="Account provider is off"
+                  description={`Turn on ${authSourceName} to sign in.`}
+                />
+              ) : !readOnly && authSource && authSourceSignsInHere ? (
+                <ProviderAuthenticationSection
+                  key={`${environmentId}:${authSource.instanceId}`}
+                  environmentId={environmentId}
+                  environmentLabel={environmentLabel}
+                  instanceId={authSource.instanceId}
+                  provider={authSource}
+                  readOnly={readOnly}
+                />
+              ) : !authSource ? (
+                <SettingsRow
+                  title="Account unavailable"
+                  description="Refresh provider status to load the account sign-in controls."
+                />
+              ) : null}
+            </>
           ) : mode === "editor" &&
             !readOnly &&
             liveProvider &&

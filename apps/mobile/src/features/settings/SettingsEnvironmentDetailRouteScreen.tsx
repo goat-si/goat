@@ -4,6 +4,7 @@ import { useNavigation, type StaticScreenProps } from "@react-navigation/native"
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  PROVIDER_DISPLAY_NAMES,
   type EnvironmentId,
   type ServerProvider,
 } from "@goat/contracts";
@@ -32,6 +33,7 @@ import {
   findEnvironmentUpdate,
   supportsEnvironmentUpdate,
 } from "./environment-maintenance";
+import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsEnvironmentDetailRouteScreen({
   route,
@@ -50,6 +52,7 @@ export function SettingsEnvironmentDetailRouteScreen({
 function EnvironmentDetail({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
+  const { selectedIds, toggleEnvironment } = useSettingsEnvironmentFilter();
   const connections = useRemoteConnections();
   const environment = connections.connectedEnvironments.find(
     (entry) => entry.environmentId === environmentId,
@@ -315,64 +318,97 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                   />
                   {config.providers
                     .filter((provider) => provider.enabled)
-                    .map((provider) => (
-                      <View key={provider.instanceId}>
-                        <View className="gap-1 p-4">
-                          <View className="flex-row items-center gap-2">
-                            <ProviderIcon provider={provider.driver} size={18} />
-                            <Text className="min-w-0 flex-1 text-base font-goat-medium text-foreground">
-                              {provider.displayName ?? provider.driver}
-                            </Text>
-                          </View>
-                          <Text className="text-sm text-foreground-muted">
-                            {provider.installed
-                              ? (provider.version ?? "Version unknown")
-                              : "Not installed"}
-                            {provider.versionAdvisory?.latestVersion
-                              ? ` · Latest ${provider.versionAdvisory.latestVersion}`
-                              : ""}
-                          </Text>
-                          {provider.updateState && provider.updateState.status !== "idle" ? (
-                            <Text
-                              selectable
-                              className={
-                                provider.updateState.status === "failed"
-                                  ? "text-sm text-danger-foreground"
-                                  : "text-sm text-foreground-muted"
-                              }
-                            >
-                              {provider.updateState.message ??
-                                `Update ${provider.updateState.status}`}
-                            </Text>
-                          ) : null}
-                          {provider.compatibilityAdvisory?.message ? (
-                            <Text selectable className="text-sm text-foreground-muted">
-                              {provider.compatibilityAdvisory.message}
-                            </Text>
-                          ) : null}
-                          {provider.unavailableReason || provider.message ? (
-                            <Text selectable className="text-sm text-foreground-muted">
-                              {provider.unavailableReason ?? provider.message}
-                            </Text>
-                          ) : null}
-                          {provider.versionAdvisory?.status === "behind_latest" &&
-                          !provider.versionAdvisory.canUpdate ? (
+                    .map((provider) => {
+                      const authSource = provider.authSourceInstanceId
+                        ? config.providers.find(
+                            (candidate) => candidate.instanceId === provider.authSourceInstanceId,
+                          )
+                        : undefined;
+                      const siblingName =
+                        authSource?.displayName ??
+                        (authSource ? PROVIDER_DISPLAY_NAMES[authSource.driver] : undefined) ??
+                        provider.authSourceInstanceId;
+                      const needsSiblingSignIn =
+                        provider.authSourceInstanceId !== undefined && provider.status !== "ready";
+                      return (
+                        <View key={provider.instanceId}>
+                          <View className="gap-1 p-4">
+                            <View className="flex-row items-center gap-2">
+                              <ProviderIcon provider={provider.driver} size={18} />
+                              <Text className="min-w-0 flex-1 text-base font-goat-medium text-foreground">
+                                {provider.displayName ?? provider.driver}
+                              </Text>
+                            </View>
                             <Text className="text-sm text-foreground-muted">
-                              Update this provider on the environment's machine.
+                              {provider.installed
+                                ? (provider.version ?? "Version unknown")
+                                : "Not installed"}
+                              {provider.versionAdvisory?.latestVersion
+                                ? ` · Latest ${provider.versionAdvisory.latestVersion}`
+                                : ""}
                             </Text>
+                            {provider.updateState && provider.updateState.status !== "idle" ? (
+                              <Text
+                                selectable
+                                className={
+                                  provider.updateState.status === "failed"
+                                    ? "text-sm text-danger-foreground"
+                                    : "text-sm text-foreground-muted"
+                                }
+                              >
+                                {provider.updateState.message ??
+                                  `Update ${provider.updateState.status}`}
+                              </Text>
+                            ) : null}
+                            {provider.compatibilityAdvisory?.message ? (
+                              <Text selectable className="text-sm text-foreground-muted">
+                                {provider.compatibilityAdvisory.message}
+                              </Text>
+                            ) : null}
+                            {provider.unavailableReason || provider.message ? (
+                              <Text selectable className="text-sm text-foreground-muted">
+                                {provider.unavailableReason ?? provider.message}
+                              </Text>
+                            ) : null}
+                            {needsSiblingSignIn ? (
+                              <Text className="text-sm text-foreground-muted">
+                                Signs in with {siblingName}.
+                              </Text>
+                            ) : null}
+                            {provider.versionAdvisory?.status === "behind_latest" &&
+                            !provider.versionAdvisory.canUpdate ? (
+                              <Text className="text-sm text-foreground-muted">
+                                Update this provider on the environment's machine.
+                              </Text>
+                            ) : null}
+                          </View>
+                          {needsSiblingSignIn ? (
+                            <SettingsActionRow
+                              icon="person.crop.circle"
+                              label={`Open ${siblingName} account sign-in`}
+                              onPress={() => {
+                                if (selectedIds !== null && !selectedIds.has(environmentId)) {
+                                  toggleEnvironment(environmentId);
+                                }
+                                navigation.navigate("SettingsSheet", {
+                                  screen: "SettingsContent",
+                                  params: { screen: "SettingsProviderAccounts" },
+                                });
+                              }}
+                            />
+                          ) : null}
+                          {canUpdateEnvironmentProvider(provider) ? (
+                            <SettingsActionRow
+                              icon="arrow.up.circle"
+                              label={`Update ${provider.displayName ?? provider.driver}`}
+                              disabled={busy || !canManageProviders}
+                              loading={pending === provider.instanceId}
+                              onPress={() => requestProviderUpdate(provider)}
+                            />
                           ) : null}
                         </View>
-                        {canUpdateEnvironmentProvider(provider) ? (
-                          <SettingsActionRow
-                            icon="arrow.up.circle"
-                            label={`Update ${provider.displayName ?? provider.driver}`}
-                            disabled={busy || !canManageProviders}
-                            loading={pending === provider.instanceId}
-                            onPress={() => requestProviderUpdate(provider)}
-                          />
-                        ) : null}
-                      </View>
-                    ))}
+                      );
+                    })}
                 </SettingsSection>
               </>
             ) : null}

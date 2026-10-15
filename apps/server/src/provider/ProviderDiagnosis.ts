@@ -15,6 +15,8 @@ import {
   ClaudeCloudSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  implicitDefaultInstance,
+  isDevinAcpRegistryInstance,
   type ProviderDiagnoseInput,
   type ProviderDiagnoseResult,
   type ProviderDiagnosis,
@@ -29,7 +31,6 @@ import { ClaudeCloudCli } from "@goat/provider-claude-cloud/server";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { DevinCloudCli } from "@goat/provider-devin-cloud/server";
 import { DevinCloudSettings } from "@goat/provider-devin-cloud/settings";
-import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
@@ -54,8 +55,6 @@ export const LIVE_DIAGNOSIS_DRIVERS: ReadonlySet<string> = new Set([CLAUDE_CLOUD
 const SETTINGS = "Settings → Providers";
 const decodeClaudeCloud = Schema.decodeUnknownOption(ClaudeCloudSettings);
 const decodeDevinCloud = Schema.decodeUnknownOption(DevinCloudSettings);
-const decodeAcpRegistry = Schema.decodeUnknownOption(AcpRegistrySettings);
-
 /** One instance to diagnose: what settings say about it and what the registry last reported. */
 interface Target {
   readonly instanceId: ProviderInstanceId;
@@ -145,6 +144,17 @@ const enabledCheck = (target: Target, enabled: boolean) =>
         `${nameOf(target)} is disabled.`,
         "disabled",
         settingsChange(`Enable ${nameOf(target)} in ${SETTINGS}.`),
+      );
+
+const implicitCloudEnabledCheck = (target: Target, enabled: boolean, sibling: string) =>
+  enabled
+    ? check("enabled", "pass", `${nameOf(target)} follows the enabled ${sibling} provider.`)
+    : check(
+        "enabled",
+        "fail",
+        `${nameOf(target)} is off because its ${sibling} provider is disabled or missing.`,
+        "disabled",
+        settingsChange(`Enable the ${sibling} provider in ${SETTINGS}.`),
       );
 
 // ── Generic drivers: judged from the registry's readiness snapshot ─────────
@@ -237,21 +247,30 @@ export const snapshotChecks = (
     );
   }
   if (snapshot.auth.status === "unauthenticated") {
+    const sourceName =
+      snapshot.driver === ProviderDriverKind.make("cursorCloud")
+        ? `Cursor provider ${snapshot.authSourceInstanceId ?? "cursor"}`
+        : undefined;
     checks.push(
       check(
         "auth",
         "fail",
         `${name} is not signed in.`,
         "not_signed_in",
-        snapshot.setup?.canAuthenticate
-          ? human(`Sign in to ${name} from ${SETTINGS}.`, {
+        sourceName
+          ? human(`Sign in to ${sourceName} from the Cursor Cloud card in ${SETTINGS}.`, {
               path: "provider.login_start",
               handoff: "oauth",
             })
-          : human(`Sign in with ${name}'s own CLI on this machine.`, {
-              path: "provider.login_start",
-              handoff: "terminal",
-            }),
+          : snapshot.setup?.canAuthenticate
+            ? human(`Sign in to ${name} from ${SETTINGS}.`, {
+                path: "provider.login_start",
+                handoff: "oauth",
+              })
+            : human(`Sign in with ${name}'s own CLI on this machine.`, {
+                path: "provider.login_start",
+                handoff: "terminal",
+              }),
       ),
     );
   } else {
@@ -446,15 +465,30 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
     Option.getOrThrow(decodeClaudeCloud({})),
   );
   const sourceId = config.sourceInstanceId;
-  if (!configured) {
+  const host = yield* ProviderHost.ProviderHost;
+  const settings = yield* host.settings.get;
+  const implicit =
+    !configured &&
+    target.instanceId === ProviderInstanceId.make("claudeCloud") &&
+    implicitDefaultInstance(settings, CLAUDE_CLOUD).present;
+  if (implicit) {
+    checks.push(check("instance", "pass", "Claude Cloud is available automatically."));
+    checks.push(
+      implicitCloudEnabledCheck(
+        target,
+        implicitDefaultInstance(settings, CLAUDE_CLOUD).enabled,
+        `Claude instance ${sourceId}`,
+      ),
+    );
+  } else if (!configured) {
     checks.push(
       check(
         "instance",
         "fail",
-        "No Claude Cloud provider is configured on this environment.",
+        `No Claude Cloud instance ${target.instanceId} exists on this environment.`,
         "instance_missing",
         settingsChange(
-          `Add a Claude Cloud provider in ${SETTINGS}. It uses Claude instance ${sourceId} for its binary and claude.ai login.`,
+          `Use the automatic Claude Cloud card and sign in to Claude instance ${sourceId} with claude.ai, or add a custom Claude Cloud instance in ${SETTINGS}.`,
         ),
       ),
     );
@@ -465,8 +499,6 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
     checks.push(enabledCheck(target, resolveEntryEnabled(target.entry!, config)));
   }
 
-  const host = yield* ProviderHost.ProviderHost;
-  const settings = yield* host.settings.get;
   const sibling = settings.providerInstances[sourceId];
   const processEnv = yield* HostProcess.Environment;
   const resolution = yield* Effect.result(resolveClaudeCloudSibling(sourceId));
@@ -584,11 +616,14 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
             ? `Claude is signed in with ${error.authMethod ?? "another method"}. Claude Cloud needs a claude.ai subscription login.`
             : "Claude is not signed in.",
           error.reason,
-          human(`Sign in to claude.ai in a terminal on this machine: ${command}`, {
-            path: "provider.login_start",
-            handoff: "terminal",
-            command,
-          }),
+          human(
+            `Sign in to claude.ai from the Claude Cloud card in ${SETTINGS}, or run ${command} on this machine.`,
+            {
+              path: "provider.login_start",
+              handoff: "terminal",
+              command,
+            },
+          ),
         ),
       );
     } else if (error.reason === "cloud_unsupported") {
@@ -618,17 +653,9 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
 
 /** ACP Registry instances that would pass Devin Cloud's sibling check. */
 const devinCandidates = (settings: ServerSettings) =>
-  Object.entries(settings.providerInstances).flatMap(([id, entry]) => {
-    if (entry.driver !== "acpRegistry") return [];
-    const decoded = decodeAcpRegistry(entry.config ?? {});
-    if (Option.isNone(decoded)) return [];
-    const config = decoded.value;
-    const name = config.commandPath.split(/[\\/]/u).pop() ?? "";
-    const isDevin =
-      (config.source === "registry" && config.agentId === "devin") ||
-      (config.source === "local" && /^devin(?:\.exe)?$/iu.test(name));
-    return isDevin ? [id] : [];
-  });
+  Object.entries(settings.providerInstances).flatMap(([id, entry]) =>
+    isDevinAcpRegistryInstance(entry) ? [id] : [],
+  );
 
 const devinProbeChecks = (
   result: Result.Result<string, DevinCloudCli.DevinCloudCliError>,
@@ -674,11 +701,14 @@ const devinProbeChecks = (
           "fail",
           "The Devin CLI is not signed in.",
           "not_signed_in",
-          human("Sign in to Devin in a terminal on this machine: devin auth login", {
-            path: "provider.login_start",
-            handoff: "terminal",
-            command: "devin auth login",
-          }),
+          human(
+            `Sign in from the Devin Cloud card in ${SETTINGS}, or run devin auth login on this machine.`,
+            {
+              path: "provider.login_start",
+              handoff: "terminal",
+              command: "devin auth login",
+            },
+          ),
         ),
       ];
     default:
@@ -703,13 +733,23 @@ const devinSiblingFailure = (
           `Add an ACP Registry provider for Devin in ${SETTINGS}, then select it as the Devin ACP instance of ${nameOf(target)}.`,
         );
   switch (error.reason) {
+    case "ambiguous":
+      return check(
+        "sibling",
+        "fail",
+        "More than one enabled Devin ACP provider is available.",
+        "sibling_invalid",
+        settingsChange(
+          `Choose a Devin ACP provider in ${nameOf(target)} settings under ${SETTINGS}.`,
+        ),
+      );
     case "missing":
       return check(
         "sibling",
         "fail",
         siblingId
           ? `ACP instance ${siblingId} does not exist.`
-          : "No Devin ACP instance is selected.",
+          : "No enabled Devin ACP provider is available.",
         "sibling_missing",
         pick,
       );
@@ -795,15 +835,30 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
   const config = Option.getOrElse(decodeDevinCloud(target.entry?.config ?? {}), () =>
     Option.getOrThrow(decodeDevinCloud({})),
   );
-  if (!configured) {
+  const host = yield* ProviderHost.ProviderHost;
+  const settings = yield* host.settings.get;
+  const implicit =
+    !configured &&
+    target.instanceId === ProviderInstanceId.make("devinCloud") &&
+    implicitDefaultInstance(settings, DEVIN_CLOUD).present;
+  if (implicit) {
+    checks.push(check("instance", "pass", "Devin Cloud is available automatically."));
+    checks.push(
+      implicitCloudEnabledCheck(
+        target,
+        implicitDefaultInstance(settings, DEVIN_CLOUD).enabled,
+        "Devin ACP",
+      ),
+    );
+  } else if (!configured) {
     checks.push(
       check(
         "instance",
         "fail",
-        "No Devin Cloud provider is configured on this environment.",
+        `No Devin Cloud instance ${target.instanceId} exists on this environment.`,
         "instance_missing",
         settingsChange(
-          `Add a Devin Cloud provider in ${SETTINGS} and select a Devin ACP instance for it.`,
+          `Use the automatic Devin Cloud card and sign in to the Devin ACP provider, or add a custom Devin Cloud instance in ${SETTINGS}.`,
         ),
       ),
     );
@@ -813,11 +868,9 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
     );
     checks.push(enabledCheck(target, resolveEntryEnabled(target.entry!, config)));
   }
-  const host = yield* ProviderHost.ProviderHost;
-  const settings = yield* host.settings.get;
   const cli = yield* DevinCloudCli.DevinCloudCli;
   const candidates = devinCandidates(settings);
-  const siblingId = config.siblingInstanceId || (configured ? "" : (candidates[0] ?? ""));
+  const siblingId = config.siblingInstanceId;
   const launch = yield* Effect.result(cli.resolve(siblingId, host.paths.cwd));
   if (Result.isFailure(launch)) {
     checks.push(devinSiblingFailure(launch.failure, siblingId, target, candidates));
@@ -840,14 +893,20 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
       } else {
         const home = yield* HostProcess.HomeDirectory;
         const probed = yield* Effect.result(
-          cli.probe({ command: onPath, env: processEnv, cwd: home, binding: "" }),
+          cli.probe({
+            sourceInstanceId: target.instanceId,
+            command: onPath,
+            env: processEnv,
+            cwd: home,
+            binding: "",
+          }),
         );
         checks.push(...devinProbeChecks(probed, onPath));
       }
     }
     return finish(target, configured, checks);
   }
-  checks.push(check("sibling", "pass", `Uses ACP instance ${siblingId}.`));
+  checks.push(check("sibling", "pass", `Uses ACP instance ${launch.success.sourceInstanceId}.`));
   const probed = yield* Effect.result(cli.probe(launch.success));
   checks.push(...devinProbeChecks(probed, launch.success.command));
   return finish(target, configured, checks);
@@ -889,7 +948,7 @@ const selectTargets = (
   }
   if (input.driver === undefined) return all;
   const ofDriver = all.filter((target) => target.driver === input.driver);
-  // Cloud drivers run no default instance; diagnose the one that would be added.
+  // Diagnose an automatic cloud slot even before its first snapshot arrives.
   if (ofDriver.length === 0 && LIVE_DIAGNOSIS_DRIVERS.has(input.driver)) {
     return [
       {

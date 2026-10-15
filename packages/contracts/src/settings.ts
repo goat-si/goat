@@ -51,6 +51,7 @@ import {
   ProviderInstanceConfig,
   ProviderInstanceId,
   ProviderDriverKind,
+  defaultInstanceIdForDriver,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
@@ -1547,8 +1548,8 @@ const DEFAULT_ENABLED_DEFAULT_INSTANCES: ReadonlySet<ProviderInstanceId> = new S
 
 /**
  * Whether the built-in default instance at `instanceId` is enabled while
- * settings have no `providerInstances` entry for it. Only Codex and Claude
- * start on; any other id without an entry has no running instance.
+ * settings have no `providerInstances` entry for it. Cloud defaults use
+ * `implicitDefaultInstance` because their state depends on sibling settings.
  */
 export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanceId): boolean =>
   DEFAULT_ENABLED_DEFAULT_INSTANCES.has(instanceId);
@@ -1576,28 +1577,95 @@ export const resolveProviderInstanceEnabled = (
   return instance.enabled ?? configEnabled ?? defaultEnabledForDriver(instance.driver);
 };
 
+/** The local provider whose login makes each cloud default usable. */
+export const CLOUD_SIBLING_DRIVERS = {
+  cursorCloud: "cursor",
+  claudeCloud: "claudeAgent",
+  devinCloud: "acpRegistry",
+} as const;
+
+/** Presence and effective enablement of an unconfigured built-in default slot. */
+export const implicitDefaultInstance = (
+  settings: Pick<ServerSettings, "providerInstances">,
+  driver: ProviderDriverKind,
+): { readonly present: boolean; readonly enabled: boolean } => {
+  const siblingDriver = CLOUD_SIBLING_DRIVERS[driver as keyof typeof CLOUD_SIBLING_DRIVERS];
+  if (siblingDriver === undefined) {
+    return {
+      present: true,
+      enabled: isUnconfiguredDefaultInstanceEnabled(defaultInstanceIdForDriver(driver)),
+    };
+  }
+  const present = !Object.values(settings.providerInstances).some(
+    (instance) => instance.driver === driver,
+  );
+  if (driver === ProviderDriverKind.make("devinCloud")) {
+    return {
+      present,
+      enabled: Object.values(settings.providerInstances).some(isDevinAcpRegistryInstance),
+    };
+  }
+  const siblingId = ProviderInstanceId.make(siblingDriver);
+  const sibling = settings.providerInstances[siblingId];
+  return {
+    present,
+    enabled:
+      sibling === undefined
+        ? isUnconfiguredDefaultInstanceEnabled(siblingId)
+        : resolveProviderInstanceEnabled(sibling),
+  };
+};
+
+/**
+ * Whether an enabled ACP Registry instance runs the Devin CLI, either the
+ * registry's `devin` agent or a local command named `devin`. Devin Cloud can
+ * borrow only such an instance's executable and sign-in.
+ */
+export const isDevinAcpRegistryInstance = (
+  instance: Pick<ProviderInstanceConfig, "driver" | "enabled" | "config">,
+): boolean => {
+  if (
+    instance.driver !== ProviderDriverKind.make("acpRegistry") ||
+    !resolveProviderInstanceEnabled(instance)
+  )
+    return false;
+  const config = instance.config;
+  if (config === null || typeof config !== "object" || Array.isArray(config)) return false;
+  const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+  const source = "source" in config ? config.source : "registry";
+  if (source === "registry") return "agentId" in config && text(config.agentId) === "devin";
+  if (source !== "local" || !("commandPath" in config)) return false;
+  const name = text(config.commandPath).split(/[\\/]/u).pop() ?? "";
+  return /^devin(?:\.exe)?$/iu.test(name);
+};
+
 /**
  * Effective enablement for a provider instance within a project: the
  * project's `providerInstances[id].enabled` override when set, otherwise the
- * machine-wide `resolveProviderInstanceEnabled` value. `projectId` of `null`
- * (no project in scope) always resolves to the machine-wide value.
+ * machine-wide instance state (explicit or implicit). `projectId` of `null`
+ * (no project in scope) always resolves to that machine-wide value.
+ * A cloud default slot that hydration does not run is never enabled.
  */
 export const resolveProjectProviderInstanceEnabled = (
   settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
+  const instanceConfig = Object.hasOwn(settings.providerInstances, instanceId)
+    ? settings.providerInstances[instanceId]
+    : undefined;
+  const implicit =
+    instanceConfig === undefined
+      ? implicitDefaultInstance(settings, ProviderDriverKind.make(instanceId))
+      : undefined;
+  if (implicit !== undefined && !implicit.present) return false;
   const override =
     projectId === null
       ? undefined
       : settings.projectSettingsOverrides[projectId]?.providerInstances?.[instanceId]?.enabled;
   if (override !== undefined) return override;
-  const instanceConfig = Object.hasOwn(settings.providerInstances, instanceId)
-    ? settings.providerInstances[instanceId]
-    : undefined;
-  return instanceConfig !== undefined
-    ? resolveProviderInstanceEnabled(instanceConfig)
-    : isUnconfiguredDefaultInstanceEnabled(instanceId);
+  if (instanceConfig !== undefined) return resolveProviderInstanceEnabled(instanceConfig);
+  return implicit?.enabled ?? false;
 };
 
 export const ServerSettingsOperation = Schema.Literals([

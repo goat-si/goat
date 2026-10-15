@@ -17,6 +17,7 @@ export interface CloudRelay {
   readonly configureSource: (
     id: string,
     source: OrchestrationV2CloudTask["source"],
+    selection?: { readonly model: string; readonly platform: string },
   ) => Effect.Effect<void, DevinCloudCliError>;
   readonly attach: (id: string) => Effect.Effect<Acp.LoadSessionResponse, DevinCloudCliError>;
   readonly prompt: (
@@ -76,6 +77,36 @@ export function validateRepositorySelection(
         ? choice.options.some((entry) => entry.value === value)
         : choice.value === value,
     )
+  );
+}
+
+function offeredSelection(
+  options: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
+  id: string,
+  value: string,
+): boolean {
+  const matches = options?.filter((option) => option.id === id);
+  const selected = matches?.length === 1 ? matches[0] : undefined;
+  return (
+    selected?.type === "select" &&
+    selected.options.some((choice) =>
+      "options" in choice
+        ? choice.options.some((entry) => entry.value === value)
+        : choice.value === value,
+    )
+  );
+}
+
+function confirmedSelection(
+  options: ReadonlyArray<Acp.SessionConfigOption> | null | undefined,
+  id: string,
+  value: string,
+): boolean {
+  const matches = options?.filter((option) => option.id === id);
+  return (
+    matches?.length === 1 &&
+    matches[0]?.currentValue === value &&
+    offeredSelection(options, id, value)
   );
 }
 
@@ -139,19 +170,36 @@ const make = Effect.gen(function* () {
       return {
         capabilities,
         create,
-        configureSource: (sessionId, source) =>
+        configureSource: (sessionId, source, selection) =>
           Effect.gen(function* () {
             const value = repositoryChoice(source.repository);
-            const repos = setups.get(sessionId)?.find((option) => option.id === "repos");
-            if (
-              !value ||
-              repos?.type !== "select" ||
-              !repos.options.some((choice) =>
-                "options" in choice
-                  ? choice.options.some((entry) => entry.value === value)
-                  : choice.value === value,
-              )
-            ) {
+            const applied: Array<{ id: string; value: string }> = [];
+            for (const choice of [
+              { id: "devin_version", value: selection?.model ?? "default" },
+              { id: "platform", value: selection?.platform ?? "default" },
+            ]) {
+              if (choice.value === "default") continue;
+              if (!offeredSelection(setups.get(sessionId), choice.id, choice.value))
+                return yield* new DevinCloudCliError({
+                  stage: "relay",
+                  detail: `Devin does not offer ${choice.id}=${choice.value} for this cloud session; no prompt was sent.`,
+                });
+              const reply = yield* wrap(
+                client.agent.setSessionConfigOption({
+                  sessionId,
+                  configId: choice.id,
+                  value: choice.value,
+                }),
+              );
+              if (!confirmedSelection(reply.configOptions, choice.id, choice.value))
+                return yield* new DevinCloudCliError({
+                  stage: "relay",
+                  detail: `Devin did not confirm ${choice.id}=${choice.value}; no prompt was sent.`,
+                });
+              setups.set(sessionId, reply.configOptions);
+              applied.push(choice);
+            }
+            if (!value || !offeredSelection(setups.get(sessionId), "repos", value)) {
               return yield* new DevinCloudCliError({
                 stage: "relay",
                 detail:
@@ -161,10 +209,14 @@ const make = Effect.gen(function* () {
             const reply = yield* wrap(
               client.agent.setSessionConfigOption({ sessionId, configId: "repos", value }),
             );
-            if (!validateRepositorySelection(reply.configOptions, source)) {
+            if (
+              !validateRepositorySelection(reply.configOptions, source) ||
+              applied.some(({ id, value }) => !confirmedSelection(reply.configOptions, id, value))
+            ) {
               return yield* new DevinCloudCliError({
                 stage: "relay",
-                detail: "Devin did not confirm the selected repository; no prompt was sent.",
+                detail:
+                  "Devin did not confirm the selected version, platform and repository together; no prompt was sent.",
               });
             }
             setups.set(sessionId, reply.configOptions);

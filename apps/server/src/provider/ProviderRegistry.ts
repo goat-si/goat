@@ -643,6 +643,11 @@ export const layer = Layer.effect(
       return providers;
     });
 
+    // Assigned after refreshInstance is built; breaks the snapshot/refresh
+    // inference cycle while keeping auth-triggered refreshes in one place.
+    let refreshAuthDependents: (
+      instanceIds: ReadonlyArray<ProviderInstanceId>,
+    ) => Effect.Effect<void> = () => Effect.void;
     const compatibilityRefreshRunning = yield* Ref.make(false);
     const syncProvider = Effect.fn("syncProvider")(function* (
       provider: ServerProvider,
@@ -650,7 +655,19 @@ export const layer = Layer.effect(
         readonly publish?: boolean;
       },
     ) {
+      const previous = (yield* Ref.get(providersRef)).find(
+        (candidate) => candidate.instanceId === provider.instanceId,
+      );
       const providers = yield* upsertProviders([provider], options);
+      const current = providers.find((candidate) => candidate.instanceId === provider.instanceId);
+      if (previous && current && !Equal.equals(previous.auth, current.auth)) {
+        // Forked so a slow cloud probe never holds up the sibling's own sync.
+        yield* refreshAuthDependents(
+          providers
+            .filter((candidate) => candidate.authSourceInstanceId === provider.instanceId)
+            .map((candidate) => candidate.instanceId),
+        ).pipe(Effect.forkIn(serviceScope));
+      }
       // Reclassify the current read model after fetching. Never republish the
       // probe captured before the fetch: a newer health result may have landed.
       if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
@@ -786,6 +803,20 @@ export const layer = Layer.effect(
       }
       return yield* refreshOneSource(providerSource);
     });
+    refreshAuthDependents = (instanceIds) =>
+      Effect.forEach(
+        instanceIds,
+        (instanceId) =>
+          refreshInstance(instanceId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("cloud provider auth refresh failed", {
+                instanceId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
 
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",

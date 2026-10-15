@@ -20,6 +20,8 @@ import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  defaultInstanceIdForDriver,
+  implicitDefaultInstance,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
@@ -30,6 +32,7 @@ import {
   type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerSettings,
 } from "@goat/contracts";
 
 import {
@@ -594,6 +597,7 @@ interface ProjectOverrideControl {
 interface ProviderInstanceCardProps {
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
+  readonly settings?: Pick<ServerSettings, "providerInstances">;
   readonly driverOption: ProviderClientDefinition | undefined;
   readonly liveProvider: ServerProvider | undefined;
   readonly mode: "list" | "editor";
@@ -672,6 +676,7 @@ const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> 
 export function ProviderInstanceCard({
   instanceId,
   instance,
+  settings,
   driverOption,
   liveProvider,
   mode,
@@ -699,7 +704,14 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   projectOverride,
 }: ProviderInstanceCardProps) {
-  const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
+  const deviceEnabled =
+    settings &&
+    isProviderDriverKind(instance.driver) &&
+    instanceId === defaultInstanceIdForDriver(instance.driver) &&
+    !Object.hasOwn(settings.providerInstances, instanceId)
+      ? implicitDefaultInstance(settings, instance.driver).enabled
+      : resolveProviderInstanceEnabled(instance);
+  const enabled = projectOverride?.effectiveEnabled ?? deviceEnabled;
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.
@@ -1103,7 +1115,7 @@ export function ProviderInstanceCard({
             <span className="flex items-center">
               <ProjectOverrideInheritance
                 projectEnabled={projectOverride.value}
-                deviceEnabled={resolveProviderInstanceEnabled(instance)}
+                deviceEnabled={deviceEnabled}
               />
               <SettingResetButton
                 label={`${displayName} enablement`}

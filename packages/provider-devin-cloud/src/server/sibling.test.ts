@@ -135,6 +135,73 @@ it.effect("inspects before resolve and inherits only the selected executable and
   ),
 );
 
+it.effect("auto-selects one enabled Devin ACP sibling and fingerprints its resolved id", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sibling = settingsFor({ agentId: "devin", commandPath: "/chosen/devin" });
+      const catalog = catalogFor(
+        () =>
+          Effect.succeed({
+            status: "ready" as const,
+            agentId: "devin",
+            version: null,
+            distribution: "local" as const,
+          }),
+        (_settings, cwd, env) =>
+          Effect.succeed({
+            distribution: "local" as const,
+            spawn: { command: "/resolved/devin", args: [], cwd, env: env ?? {}, shell: false },
+          }),
+      );
+      const makeCli = (settings: ServerSettings) =>
+        Cli.DevinCloudCli.pipe(
+          Effect.provide(Cli.layer),
+          Effect.provideService(ProviderHost.ProviderHost, hostFor(settings)),
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        );
+      const missing = yield* makeCli({ ...sibling, providerInstances: {} });
+      const noMatch = yield* Effect.result(missing.resolve("", "/project"));
+      assert.isTrue(Result.isFailure(noMatch));
+      if (Result.isFailure(noMatch)) assert.equal(noMatch.failure.reason, "missing");
+      const one = yield* makeCli(sibling);
+      const selected = yield* one.resolve("", "/project");
+      const explicit = yield* one.resolve(id, "/project");
+      assert.equal(selected.sourceInstanceId, id);
+      assert.equal(selected.binding, explicit.binding);
+      assert.equal(JSON.parse(selected.binding)[0], id);
+      const many = yield* makeCli({
+        ...sibling,
+        providerInstances: {
+          ...sibling.providerInstances,
+          [ProviderInstanceId.make("second-devin")]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            config: { agentId: "devin", commandPath: "/another/devin" },
+          },
+        },
+      });
+      const ambiguous = yield* Effect.result(many.resolve("", "/project"));
+      assert.isTrue(Result.isFailure(ambiguous));
+      if (Result.isFailure(ambiguous)) {
+        assert.equal(ambiguous.failure.reason, "ambiguous");
+        assert.include(ambiguous.failure.message, "Choose a Devin ACP instance");
+      }
+      const disabled = yield* makeCli({
+        ...sibling,
+        providerInstances: {
+          ...sibling.providerInstances,
+          [ProviderInstanceId.make("second-devin")]: {
+            driver: ProviderDriverKind.make("acpRegistry"),
+            enabled: false,
+            config: { agentId: "devin" },
+          },
+        },
+      });
+      assert.equal((yield* disabled.resolve("", "/project")).sourceInstanceId, id);
+    }),
+  ),
+);
+
 it.effect("rejects unprepared and unavailable installs without resolving or installing", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -205,6 +272,7 @@ it.effect("readiness probes the selected command/profile without shell or ACP cr
     Effect.gen(function* () {
       const commands: ReadonlyArray<string>[] = [];
       const launch: Cli.DevinCloudLaunch = {
+        sourceInstanceId: id,
         command: "/chosen/devin",
         cwd: "/project",
         env: { HOME: "/sibling-home" },

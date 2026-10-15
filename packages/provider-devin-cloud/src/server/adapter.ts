@@ -1,4 +1,8 @@
-import { type ProviderInstanceId, type OrchestrationV2ProviderThread } from "@goat/contracts";
+import {
+  type ProviderInstanceId,
+  type OrchestrationV2ProviderThread,
+  type ProviderOptionSelection,
+} from "@goat/contracts";
 import * as Adapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -9,6 +13,19 @@ import * as Cli from "./cli.ts";
 import * as Relay from "./relay.ts";
 import { CAPABILITIES, DRIVER } from "./capabilities.ts";
 import { makeTaskObserver, sessionMetadata, sourcePrompt } from "./task.ts";
+import { DEVIN_MODELS } from "../settings.ts";
+
+/** Same option values by id, regardless of the order a client sent them in. */
+const sameOptions = (
+  left: ReadonlyArray<ProviderOptionSelection> | undefined,
+  right: ReadonlyArray<ProviderOptionSelection> | undefined,
+) => {
+  const values = (options: ReadonlyArray<ProviderOptionSelection> | undefined) =>
+    new Map((options ?? []).map((option) => [option.id, option.value]));
+  const a = values(left);
+  const b = values(right);
+  return a.size === b.size && [...a].every(([id, value]) => b.get(id) === value);
+};
 
 export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
   instanceId: ProviderInstanceId,
@@ -22,11 +39,11 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
     getCapabilities: () => Effect.succeed(CAPABILITIES),
     planSelectionTransition: ({ current, target }) =>
       Effect.succeed(
-        current.model === target.model
+        current.model === target.model && sameOptions(current.options, target.options)
           ? { type: "apply_on_next_turn" as const }
           : {
               type: "reject" as const,
-              reason: "Devin Cloud uses the cloud account's default model.",
+              reason: "Changing the Devin Cloud model requires a new thread.",
             },
       ),
     openSession: Effect.fn("DevinCloud.openSession")(function* (
@@ -39,16 +56,24 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
           ...(cause === undefined ? {} : { cause }),
         });
       const cwd = opened.runtimePolicy.cwd;
-      if (!cwd || opened.modelSelection.model !== "default")
-        return yield* fail("Select a project and the default cloud model");
+      const model = opened.modelSelection.model;
+      const options = opened.modelSelection.options ?? [];
+      const platformChoices = ["default", "linux", "macos", "windows"];
+      const platform = options.find((option) => option.id === "platform")?.value ?? "default";
+      if (!cwd || !DEVIN_MODELS.some(([slug]) => slug === model))
+        return yield* fail("Select a project and a supported Devin Cloud model");
+      if (
+        options.some((option) => option.id !== "platform") ||
+        options.filter((option) => option.id === "platform").length > 1 ||
+        typeof platform !== "string" ||
+        !platformChoices.includes(platform)
+      )
+        return yield* fail("Select a supported Devin Cloud platform");
       if (
         opened.runtimePolicy.runtimeMode !== "full-access" ||
-        opened.runtimePolicy.interactionMode !== "default" ||
-        Object.keys(opened.modelSelection.options ?? {}).length > 0
+        opened.runtimePolicy.interactionMode !== "default"
       ) {
-        return yield* fail(
-          "Devin Cloud uses the cloud account's default permissions/model options; select Full access and Build",
-        );
+        return yield* fail("Devin Cloud requires Full access and Build");
       }
       const launch = yield* cli.resolve(siblingId, cwd).pipe(
         Effect.mapError(
@@ -88,7 +113,7 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
         providerInstanceId: instanceId,
         status: "ready" as "ready" | "error",
         cwd,
-        model: "default",
+        model,
         capabilities: CAPABILITIES,
         createdAt: now,
         updatedAt: now,
@@ -285,9 +310,9 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
         current = { ...acceptedThread, cloudTask: accepted };
         yield* observer.bind({ ...input, providerThread: current }, false);
         if (needsNewSession) {
-          // configureSource validates setter readback against the original repository.
+          // Configure version, platform and repository before the first prompt.
           yield* relay
-            .configureSource(id, savedSource)
+            .configureSource(id, savedSource, { model, platform })
             .pipe(
               Effect.catch((cause) =>
                 observer

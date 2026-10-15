@@ -5,8 +5,9 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
  *
  * `settings.providerInstances` is the source of truth. Every built-in driver
  * with a default instance also runs at `defaultInstanceIdForDriver(kind)`
- * when that slot has no entry, using the driver's default config, so a fresh
- * install shows its built-in providers without writing settings first.
+ * when that slot has no entry, using the driver's default config. Cloud
+ * defaults follow their sibling's enablement and disappear when any explicit
+ * instance of that cloud driver is configured.
  *
  * Hot-reload
  * ----------
@@ -25,7 +26,9 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
  * @module provider/ProviderInstanceRegistryHydration
  */
 import {
+  CLOUD_SIBLING_DRIVERS,
   defaultInstanceIdForDriver,
+  implicitDefaultInstance,
   providerInstanceConfigEnabledFlag,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
@@ -74,7 +77,11 @@ export const deriveProviderInstanceConfigMap = (
     if (driver.metadata.hasDefaultInstance === false) continue;
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
     if (instanceId in merged) continue;
-    merged[instanceId] = { driver: driver.driverKind };
+    const implicit = implicitDefaultInstance(settings, driver.driverKind);
+    if (!implicit.present) continue;
+    merged[instanceId] = Object.hasOwn(CLOUD_SIBLING_DRIVERS, driver.driverKind)
+      ? { driver: driver.driverKind, enabled: implicit.enabled }
+      : { driver: driver.driverKind };
   }
 
   // A project that turns an instance on needs it alive and probed even when

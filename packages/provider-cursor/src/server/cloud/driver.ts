@@ -49,7 +49,7 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
   metadata: {
     displayName: "Cursor Cloud",
     supportsMultipleInstances: true,
-    hasDefaultInstance: false,
+    hasDefaultInstance: true,
   },
   configSchema: CursorCloudSettings,
   defaultConfig: () => decode({}),
@@ -103,6 +103,7 @@ export const CursorCloudDriver: ProviderDriver<CursorCloudSettings, CursorCloudD
               }),
             ),
             executionLocation: "cloud" as const,
+            authSourceInstanceId: ProviderInstanceId.make(input.config.sourceInstanceId),
             setup: { canAuthenticate: false, canInstall: false },
           })),
         );

@@ -276,6 +276,78 @@ describe("EnvironmentProviderSettings routing", () => {
     ).not.toBeNull();
   });
 
+  it("shows a cloud default while its sibling is off, then removes the ghost default for a custom cloud instance", () => {
+    const cloudId = ProviderInstanceId.make("cursorCloud");
+    const customCloudId = ProviderInstanceId.make("cursor_cloud_work");
+    let panel = renderPanel({ targetInstanceId: cloudId });
+    expect(
+      visitElements(
+        panel,
+        (element) => element.props.instanceId === cloudId && element.props.mode === "list",
+      ),
+    ).not.toBeNull();
+
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customCloudId]: { driver: ProviderDriverKind.make("cursorCloud"), enabled: false },
+      },
+    };
+    panel = renderPanel();
+    expect(
+      visitElements(
+        panel,
+        (element) => element.props.instanceId === cloudId && element.props.mode === "list",
+      ),
+    ).toBeNull();
+    expect(
+      visitElements(
+        panel,
+        (element) => element.props.instanceId === customCloudId && element.props.mode === "list",
+      ),
+    ).not.toBeNull();
+  });
+
+  it("opens the sibling account flow from a cloud card until ready, retaining sign-out when available", () => {
+    const sourceId = ProviderInstanceId.make("cursor");
+    const cloudId = ProviderInstanceId.make("cursorCloud");
+    const source = {
+      ...provider(),
+      instanceId: sourceId,
+      driver: ProviderDriverKind.make("cursor"),
+      displayName: "Cursor",
+      setup: { canAuthenticate: true, canInstall: false },
+    };
+    const cloud = {
+      ...provider(),
+      instanceId: cloudId,
+      driver: ProviderDriverKind.make("cursorCloud"),
+      status: "warning" as const,
+      authSourceInstanceId: sourceId,
+    };
+    atoms.providers = [source, cloud];
+
+    const authForSource = (panel: ReactElement<Record<string, unknown>>) =>
+      visitElements(
+        panel,
+        (element) => element.props.instanceId === sourceId && element.props.provider === source,
+      );
+    expect(authForSource(renderPanel({ targetInstanceId: cloudId }))).not.toBeNull();
+
+    atoms.providers = [source, { ...cloud, status: "ready" }];
+    expect(authForSource(renderPanel({ targetInstanceId: cloudId }))).toBeNull();
+
+    const sourceWithLogout = { ...source, auth: { ...source.auth, canLogout: true } };
+    atoms.providers = [sourceWithLogout, { ...cloud, status: "ready" }];
+    expect(
+      visitElements(
+        renderPanel({ targetInstanceId: cloudId }),
+        (element) =>
+          element.props.instanceId === sourceId && element.props.provider === sourceWithLogout,
+      ),
+    ).not.toBeNull();
+  });
+
   it("keeps legacy provider configuration visible when disabled", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,

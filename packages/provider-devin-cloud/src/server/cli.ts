@@ -1,4 +1,8 @@
-import { ProviderInstanceId } from "@goat/contracts";
+import {
+  isDevinAcpRegistryInstance,
+  ProviderInstanceId,
+  type ServerSettings,
+} from "@goat/contracts";
 import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
@@ -15,6 +19,23 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 const decodeSiblingSettings = Schema.decodeUnknownEffect(AcpRegistrySettings);
 const decodeInstanceId = Schema.decodeUnknownOption(ProviderInstanceId);
 
+export function selectSiblingInstanceId(
+  settings: Pick<ServerSettings, "providerInstances">,
+  configuredId: string,
+): { readonly id: ProviderInstanceId | undefined; readonly ambiguous: boolean } {
+  if (configuredId) {
+    const decoded = decodeInstanceId(configuredId);
+    return { id: Option.isSome(decoded) ? decoded.value : undefined, ambiguous: false };
+  }
+  const candidates = Object.entries(settings.providerInstances ?? {}).filter(([, instance]) =>
+    isDevinAcpRegistryInstance(instance),
+  );
+  return {
+    id: candidates.length === 1 ? ProviderInstanceId.make(candidates[0]![0]) : undefined,
+    ambiguous: candidates.length > 1,
+  };
+}
+
 export class DevinCloudCliError extends Schema.TaggedError<DevinCloudCliError>()(
   "DevinCloudCliError",
   {
@@ -26,6 +47,7 @@ export class DevinCloudCliError extends Schema.TaggedError<DevinCloudCliError>()
     reason: Schema.optional(
       Schema.Literals([
         "missing",
+        "ambiguous",
         "not_acp_registry",
         "disabled",
         "not_devin",
@@ -67,6 +89,7 @@ export function cloudVersionSupported(text: string): boolean {
 }
 
 export type DevinCloudLaunch = {
+  readonly sourceInstanceId: ProviderInstanceId;
   readonly command: string;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd: string;
@@ -117,10 +140,17 @@ const make = Effect.gen(function* () {
     const all = yield* host.settings.get.pipe(
       Effect.mapError((cause) => new DevinCloudCliError({ stage: "sibling", cause })),
     );
-    // The default sibling id is "", which is not a valid instance id; treat it as missing.
-    const id = decodeInstanceId(siblingId);
-    const sibling = Option.isSome(id) ? all.providerInstances?.[id.value] : undefined;
-    if (!sibling) {
+    const selected = selectSiblingInstanceId(all, siblingId);
+    if (selected.ambiguous)
+      return yield* new DevinCloudCliError({
+        stage: "sibling",
+        reason: "ambiguous",
+        detail:
+          "More than one enabled Devin ACP instance is available. Choose a Devin ACP instance in Devin Cloud settings.",
+      });
+    const selectedId = selected.id;
+    const sibling = selectedId ? all.providerInstances?.[selectedId] : undefined;
+    if (!sibling || !selectedId) {
       return yield* new DevinCloudCliError({ stage: "sibling", reason: "missing" });
     }
     if (sibling.driver !== "acpRegistry") {
@@ -164,7 +194,7 @@ const make = Effect.gen(function* () {
     const spawnEnv = resolved.spawn.env ?? env;
     // The native-ref contract trims fingerprints; JSON preserves empty profile slots across persistence.
     const binding = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)))([
-      siblingId,
+      selectedId,
       resolved.spawn.command,
       spawnEnv.HOME ?? "",
       spawnEnv.XDG_CONFIG_HOME ?? "",
@@ -173,7 +203,13 @@ const make = Effect.gen(function* () {
       spawnEnv.APPDATA ?? "",
       spawnEnv.LOCALAPPDATA ?? "",
     ]).pipe(Effect.mapError((cause) => new DevinCloudCliError({ stage: "resolve", cause })));
-    return { command: resolved.spawn.command, env: spawnEnv, cwd, binding };
+    return {
+      sourceInstanceId: selectedId,
+      command: resolved.spawn.command,
+      env: spawnEnv,
+      cwd,
+      binding,
+    };
   });
   const probe = Effect.fn("DevinCloudCli.probe")(function* (launch: DevinCloudLaunch) {
     return yield* probeCli((args) =>

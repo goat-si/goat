@@ -131,14 +131,18 @@ for those actions.
 
 ## Devin Cloud
 
-In **Settings → Providers**, add **Devin Cloud** and enter the instance ID of an existing
-Devin ACP provider on the same environment. It uses that provider's executable and CLI sign-in.
-Devin 3000.11.1 or newer is required. Sign in through the existing provider or with
-`devin auth login` on the server. The project folder must already be trusted by Devin, and your
-Devin organization must have access to the repository.
+Devin Cloud appears automatically in **Settings → Providers** and turns on when a Devin ACP
+provider is enabled. Sign in from the Devin Cloud card or its Devin ACP provider card. It uses that provider's
+executable and account; Devin 3000.11.1 or newer is required. If more than one Devin ACP provider
+is enabled, choose one in Devin Cloud settings. You can also add a custom Devin Cloud instance.
+Turn Devin Cloud off with its toggle; reset the cloud card to follow the Devin provider again.
+The project folder must already be trusted by Devin, and your Devin organization must have access
+to the repository.
 
-Push the branch you want Devin to start from, then select Devin Cloud for a new thread. Local
-changes are not included. Work runs in Devin's cloud environment and creates no local checkpoints.
+Push the branch you want Devin to start from, then select Devin Cloud for a new thread. Choose a
+Devin version in the model picker, and choose Ubuntu, macOS, or Windows in model options. macOS
+and Windows availability depends on your Devin plan. Local changes are not included. Work runs
+in Devin's cloud environment and creates no local checkpoints.
 The thread shows progress, the final response, and a matching PR link when Devin returns one.
 A completed response may still need more input or report a repository-access block.
 

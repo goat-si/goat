@@ -1,6 +1,7 @@
 import {
   ClaudeCloudSettings,
   ProviderDriverKind,
+  ProviderInstanceId,
   TextGenerationError,
   type ServerProvider,
 } from "@goat/contracts";
@@ -43,7 +44,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
   metadata: {
     displayName: "Claude Cloud",
     supportsMultipleInstances: true,
-    hasDefaultInstance: false,
+    hasDefaultInstance: true,
   },
   configSchema: ClaudeCloudSettings,
   defaultConfig: () => decodeSettings({}),
@@ -83,6 +84,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const base = (status: ServerProvider["status"], message?: string): ServerProvider =>
         stamp({
           executionLocation: "cloud",
+          authSourceInstanceId: ProviderInstanceId.make(config.sourceInstanceId),
           enabled,
           installed: false,
           version: null,

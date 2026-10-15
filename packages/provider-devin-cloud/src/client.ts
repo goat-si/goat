@@ -8,5 +8,5 @@ export const devinCloudClient = defineProviderClient({
   executionLocation: "cloud",
   badgeLabel: "Cloud",
   settingsSchema: DevinCloudSettings,
-  hasDefaultInstance: false,
+  hasDefaultInstance: true,
 });

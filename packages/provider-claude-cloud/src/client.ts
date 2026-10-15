@@ -7,5 +7,5 @@ export const claudeCloudClient = defineProviderClient({
   executionLocation: "cloud",
   badgeLabel: "Cloud",
   settingsSchema: ClaudeCloudSettings,
-  hasDefaultInstance: false,
+  hasDefaultInstance: true,
 });

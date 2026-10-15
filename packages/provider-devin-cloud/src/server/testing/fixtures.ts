@@ -73,7 +73,13 @@ export const taskInput: TaskInput = {
   commitCloudTask: () => Effect.void,
   commitCloudTaskMetadata: () => Effect.void,
 };
-export const launch = { command: "/selected/devin", cwd: "/trusted/project", env: {}, binding };
+export const launch = {
+  sourceInstanceId: ProviderInstanceId.make("devin-sibling"),
+  command: "/selected/devin",
+  cwd: "/trusted/project",
+  env: {},
+  binding,
+};
 export const opened: Adapter.ProviderAdapterV2OpenSessionInput = {
   threadId: taskInput.threadId,
   providerSessionId: sessionId,

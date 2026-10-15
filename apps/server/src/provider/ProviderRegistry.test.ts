@@ -2239,6 +2239,126 @@ it.layer(
       }),
     );
 
+    it.effect("refreshes cloud snapshots when the sibling auth object changes", () =>
+      Effect.gen(function* () {
+        const siblingId = ProviderInstanceId.make("cursor");
+        const cloudId = ProviderInstanceId.make("cursorCloud");
+        const siblingDriver = ProviderDriverKind.make("cursor");
+        const cloudDriver = ProviderDriverKind.make("cursorCloud");
+        const sibling = {
+          instanceId: siblingId,
+          driver: siblingDriver,
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated", label: "Personal" },
+          checkedAt: "2026-10-16T00:00:00.000Z",
+          version: null,
+          models: [],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const cloud = {
+          ...sibling,
+          instanceId: cloudId,
+          driver: cloudDriver,
+          authSourceInstanceId: siblingId,
+          status: "warning",
+        } as const satisfies ServerProvider;
+        const cloudReady = {
+          ...cloud,
+          status: "ready",
+          checkedAt: "2026-10-16T00:01:00.000Z",
+        } as const satisfies ServerProvider;
+        const siblingChanges = yield* PubSub.unbounded<ServerProvider>();
+        const cloudRefreshes = yield* Ref.make(0);
+        const makeInstance = (
+          provider: ServerProvider,
+          changes: Stream.Stream<ServerProvider>,
+          refresh: Effect.Effect<ServerProvider>,
+        ): ProviderInstance => ({
+          instanceId: provider.instanceId,
+          driverKind: provider.driver,
+          continuationIdentity: {
+            driverKind: provider.driver,
+            continuationKey: `${provider.driver}:instance:${provider.instanceId}`,
+          },
+          displayName: undefined,
+          enabled: true,
+          snapshot: {
+            resolveMaintenance: () =>
+              Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({
+                  provider: provider.driver,
+                  packageName: null,
+                }),
+              ),
+            getSnapshot: Effect.succeed(provider),
+            refresh,
+            streamChanges: changes,
+            applyUsageLimits: () => Effect.void,
+          },
+          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+          textGeneration: {} as ProviderInstance["textGeneration"],
+        });
+        const instances = [
+          makeInstance(sibling, Stream.fromPubSub(siblingChanges), Effect.succeed(sibling)),
+          makeInstance(
+            cloud,
+            Stream.empty,
+            Ref.update(cloudRefreshes, (count) => count + 1).pipe(Effect.as(cloudReady)),
+          ),
+        ];
+        const layerInstanceRegistry = Layer.succeed(
+          ProviderInstanceRegistry.ProviderInstanceRegistry,
+          {
+            getInstance: (instanceId) =>
+              Effect.succeed(instances.find((instance) => instance.instanceId === instanceId)),
+            listInstances: Effect.succeed(instances),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          },
+        );
+        const scope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+        const runtimeServices = yield* Layer.build(
+          ProviderRegistry.layer.pipe(
+            Layer.provideMerge(layerInstanceRegistry),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "goat-cloud-auth-refresh-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ).pipe(Scope.provide(scope));
+
+        yield* Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          assert.strictEqual(yield* Ref.get(cloudRefreshes), 0);
+          const cloudUpdated = yield* awaitPersistedProvider(registry, cloudReady.checkedAt);
+          yield* PubSub.publish(siblingChanges, {
+            ...sibling,
+            auth: { status: "authenticated", label: "Work" },
+            checkedAt: "2026-10-16T00:02:00.000Z",
+          });
+          yield* Fiber.join(cloudUpdated);
+          assert.strictEqual(yield* Ref.get(cloudRefreshes), 1);
+
+          const siblingUpdated = yield* awaitPersistedProvider(
+            registry,
+            "2026-10-16T00:03:00.000Z",
+          );
+          yield* PubSub.publish(siblingChanges, {
+            ...sibling,
+            auth: { status: "authenticated", label: "Work" },
+            checkedAt: "2026-10-16T00:03:00.000Z",
+          });
+          yield* Fiber.join(siblingUpdated);
+          assert.strictEqual(yield* Ref.get(cloudRefreshes), 1);
+        }).pipe(Effect.provide(runtimeServices));
+      }),
+    );
+
     it.effect("persists the merged snapshot when a live update has empty models", () =>
       Effect.gen(function* () {
         const cursorDriver = ProviderDriverKind.make("cursor");
@@ -3113,8 +3233,11 @@ it.layer(
             assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
               "antigravity",
               "claudeAgent",
+              "claudeCloud",
               "codex",
               "cursor",
+              "cursorCloud",
+              "devinCloud",
               "grok",
               "muse",
               "opencode",

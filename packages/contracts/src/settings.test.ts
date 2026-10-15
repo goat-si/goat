@@ -9,6 +9,8 @@ import {
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  implicitDefaultInstance,
+  isDevinAcpRegistryInstance,
   requiredScopesForProjectMutation,
   requiredScopesForServerSettingsPatch,
   resolveProjectProviderInstanceEnabled,
@@ -1138,6 +1140,117 @@ describe("resolveProjectProviderInstanceEnabled", () => {
       },
     };
     expect(resolveProjectProviderInstanceEnabled(overridden, projectId, instanceId)).toBe(true);
+  });
+});
+
+describe("implicitDefaultInstance", () => {
+  const cursor = ProviderInstanceId.make("cursor");
+  const cursorCloud = ProviderInstanceId.make("cursorCloud");
+  const cloudDriver = ProviderDriverKind.make("cursorCloud");
+
+  it("follows the effective sibling state and project resolution", () => {
+    const off = { ...DEFAULT_SERVER_SETTINGS, providerInstances: {} };
+    expect(implicitDefaultInstance(off, cloudDriver)).toEqual({ present: true, enabled: false });
+    expect(resolveProjectProviderInstanceEnabled(off, null, cursorCloud)).toBe(false);
+
+    const on = {
+      ...off,
+      providerInstances: { [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true } },
+    };
+    expect(implicitDefaultInstance(on, cloudDriver)).toEqual({ present: true, enabled: true });
+    expect(resolveProjectProviderInstanceEnabled(on, null, cursorCloud)).toBe(true);
+  });
+
+  it("suppresses the implicit cloud slot for a custom-id cloud instance", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("cursor_cloud_work")]: { driver: cloudDriver, enabled: true },
+      },
+    };
+    expect(implicitDefaultInstance(settings, cloudDriver)).toEqual({
+      present: false,
+      enabled: false,
+    });
+    expect(resolveProjectProviderInstanceEnabled(settings, null, cursorCloud)).toBe(false);
+  });
+
+  it("honors an explicit default-id disable ahead of sibling enablement", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
+        [cursorCloud]: { driver: cloudDriver, enabled: false },
+      },
+    };
+    expect(implicitDefaultInstance(settings, cloudDriver).present).toBe(false);
+    expect(resolveProjectProviderInstanceEnabled(settings, null, cursorCloud)).toBe(false);
+  });
+
+  it("enables Devin Cloud only for an enabled Devin ACP instance", () => {
+    const driver = ProviderDriverKind.make("devinCloud");
+    const acp = ProviderDriverKind.make("acpRegistry");
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("devin")]: {
+          driver: acp,
+          enabled: true,
+          config: { agentId: "devin" },
+        },
+      },
+    };
+    expect(implicitDefaultInstance(settings, driver)).toEqual({ present: true, enabled: true });
+    expect(
+      implicitDefaultInstance(
+        {
+          ...settings,
+          providerInstances: {
+            ...settings.providerInstances,
+            [ProviderInstanceId.make("devin")]: {
+              driver: acp,
+              enabled: false,
+              config: { agentId: "devin" },
+            },
+          },
+        },
+        driver,
+      ).enabled,
+    ).toBe(false);
+  });
+
+  it("treats a local devin command as a Devin ACP instance", () => {
+    const acp = ProviderDriverKind.make("acpRegistry");
+    expect(
+      isDevinAcpRegistryInstance({
+        driver: acp,
+        config: { source: "local", commandPath: "/opt/bin/devin" },
+      }),
+    ).toBe(true);
+    expect(
+      isDevinAcpRegistryInstance({
+        driver: acp,
+        config: { source: "local", commandPath: "/bin/sh" },
+      }),
+    ).toBe(false);
+    expect(
+      isDevinAcpRegistryInstance({ driver: acp, config: { agentId: "devin", enabled: false } }),
+    ).toBe(false);
+  });
+
+  it("ignores a project override for a cloud slot that does not run", () => {
+    const projectId = "project-1" as ProjectId;
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
+        [ProviderInstanceId.make("cursor_cloud_work")]: { driver: cloudDriver, enabled: true },
+      },
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { [cursorCloud]: { enabled: true } } },
+      },
+    };
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, cursorCloud)).toBe(false);
   });
 });
 

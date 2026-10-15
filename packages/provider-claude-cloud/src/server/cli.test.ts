@@ -27,9 +27,9 @@ it.effect(
         });
         expect(h.starts).toEqual([]);
         expect(h.commands.map((command) => command.args)).toEqual([
+          ["auth", "status"],
           ["--version"],
           ["--help"],
-          ["auth", "status"],
         ]);
         expect(
           h.commands.every(
@@ -54,9 +54,9 @@ it.effect.each([
         );
         expect(yield* h.service.readiness(LOGIN, "/fixture/repo")).toEqual({ version });
         expect(h.commands.map((command) => command.args)).toEqual([
+          ["auth", "status"],
           ["--version"],
           ["--help"],
-          ["auth", "status"],
         ]);
         expect(h.starts).toEqual([]);
       }),
@@ -76,6 +76,7 @@ it.effect.each([
       );
       const error = yield* h.service.readiness(LOGIN, "/fixture/repo").pipe(Effect.flip);
       expect(error.outcome).toBe("rejected");
+      expect(h.commands.map((command) => command.args)).toEqual([["auth", "status"]]);
       expect(h.starts).toEqual([]);
     }),
   ),

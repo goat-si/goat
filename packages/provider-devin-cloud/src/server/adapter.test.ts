@@ -28,6 +28,7 @@ const open = (
   captureUpdate?: (
     update: (notice: import("effect-acp/compat").SessionNotification) => Effect.Effect<void>,
   ) => void,
+  selection = opened,
 ) =>
   makeAdapter(instanceId, "sibling-fixture").pipe(
     Effect.provideService(
@@ -47,8 +48,127 @@ const open = (
           }),
       }),
     ),
-    Effect.flatMap((adapter) => adapter.openSession(opened)),
+    Effect.flatMap((adapter) => adapter.openSession(selection)),
   );
+it.effect("selected Devin version and platform reach setup; failed setup sends no prompt", () =>
+  Effect.gen(function* () {
+    for (const reason of [
+      "offered",
+      "unoffered version",
+      "unoffered platform",
+      "setter mismatch",
+      "final mismatch",
+    ] as const) {
+      const selected = {
+        ...opened,
+        modelSelection: {
+          ...opened.modelSelection,
+          model: "devin-ultra",
+          options: [{ id: "platform", value: "macos" }],
+        },
+      };
+      let prompts = 0;
+      let creates = 0;
+      let observedSelection: { readonly model: string; readonly platform: string } | undefined;
+      const completed = yield* Deferred.make<void>();
+      const runtime = yield* open(
+        relay({
+          create: Effect.sync(() => {
+            creates++;
+            return { sessionId: "devin-fixture-session", configOptions: repoOptions };
+          }),
+          configureSource: (_id, _source, selection) => {
+            observedSelection = selection;
+            return reason === "offered"
+              ? Effect.void
+              : Effect.fail(
+                  new Cli.DevinCloudCliError({
+                    stage: "relay",
+                    detail: `Devin ${reason}; no prompt was sent.`,
+                  }),
+                );
+          },
+          prompt: () =>
+            Effect.sync(() => {
+              prompts++;
+              return { stopReason: "end_turn" as const };
+            }),
+        }),
+        undefined,
+        selected,
+      );
+      if (reason === "offered")
+        yield* Stream.runForEach(runtime.events, (event) =>
+          event.type === "turn.terminal" ? Deferred.succeed(completed, undefined) : Effect.void,
+        ).pipe(Effect.forkScoped);
+      const started = yield* Effect.result(
+        runtime.startTurn({
+          ...turnInput,
+          providerThread: { ...thread, nativeThreadRef: null },
+        }),
+      );
+      assert.deepEqual(observedSelection, { model: "devin-ultra", platform: "macos" });
+      assert.equal(creates, 1);
+      if (reason === "offered") {
+        assert.isTrue(Result.isSuccess(started));
+        yield* Deferred.await(completed);
+        assert.equal(prompts, 1);
+      } else {
+        assert.isTrue(Result.isFailure(started));
+        assert.equal(prompts, 0);
+      }
+    }
+  }),
+);
+
+it.effect("an existing Devin cloud session rejects model or platform changes", () =>
+  Effect.gen(function* () {
+    const adapter = yield* makeAdapter(instanceId, "sibling-fixture").pipe(
+      Effect.provideService(
+        Cli.DevinCloudCli,
+        Cli.DevinCloudCli.of({
+          resolve: () => Effect.succeed(launch),
+          probe: () => Effect.succeed("3000.11.3"),
+        }),
+      ),
+      Effect.provideService(
+        Relay.DevinCloudRelay,
+        Relay.DevinCloudRelay.of({
+          open: () => Effect.succeed(relay()),
+        }),
+      ),
+    );
+    for (const target of [
+      { ...opened.modelSelection, model: "devin-ultra" },
+      { ...opened.modelSelection, options: [{ id: "platform", value: "macos" }] },
+    ]) {
+      const plan = yield* adapter.planSelectionTransition({
+        current: opened.modelSelection,
+        target,
+        sessionCapabilities: yield* adapter.getCapabilities(),
+      });
+      assert.equal(plan.type, "reject");
+    }
+    const reordered = yield* adapter.planSelectionTransition({
+      current: {
+        ...opened.modelSelection,
+        options: [
+          { id: "platform", value: "macos" },
+          { id: "extra", value: "kept" },
+        ],
+      },
+      target: {
+        ...opened.modelSelection,
+        options: [
+          { id: "extra", value: "kept" },
+          { id: "platform", value: "macos" },
+        ],
+      },
+      sessionCapabilities: yield* adapter.getCapabilities(),
+    });
+    assert.equal(reordered.type, "apply_on_next_turn");
+  }),
+);
 it.effect(
   "open/ensure do not create before base intent; identity commit precedes repos and prompt",
   () =>

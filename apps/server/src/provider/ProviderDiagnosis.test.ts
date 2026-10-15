@@ -186,18 +186,26 @@ it.effect("a configured Claude Cloud with a signed-in claude.ai sibling is ready
   }),
 );
 
-it.effect("an unconfigured Claude Cloud asks a person to add it and still checks the sibling", () =>
+it.effect("the automatic Claude Cloud slot checks its default claude.ai login", () =>
   Effect.gen(function* () {
     const { result } = yield* diagnose({ driver: driver("claudeCloud") });
     const diagnosis = only(result.diagnoses);
-    expect(diagnosis).toMatchObject({ instanceId: "claudeCloud", configured: false, ready: false });
-    expect(failures(diagnosis)).toEqual(["instance_missing"]);
-    expect(checkOf(diagnosis, "instance")?.fix).toMatchObject({
-      actor: "human",
-      path: "provider.setup",
-      handoff: "approval",
-    });
+    expect(diagnosis).toMatchObject({ instanceId: "claudeCloud", configured: false, ready: true });
+    expect(failures(diagnosis)).toEqual([]);
+    expect(checkOf(diagnosis, "instance")?.status).toBe("pass");
     expect(checkOf(diagnosis, "auth")?.status).toBe("pass");
+  }),
+);
+
+it.effect("the automatic Claude Cloud slot explains a disabled Claude sibling", () =>
+  Effect.gen(function* () {
+    const { result } = yield* diagnose(
+      { driver: driver("claudeCloud") },
+      { instances: { claudeAgent: { driver: driver("claudeAgent"), enabled: false } } },
+    );
+    const diagnosis = only(result.diagnoses);
+    expect(failures(diagnosis)).toContain("disabled");
+    expect(checkOf(diagnosis, "enabled")?.fix?.instruction).toContain("Enable the Claude instance");
   }),
 );
 
@@ -370,7 +378,7 @@ it.effect("Devin Cloud with a signed-in Devin ACP sibling is ready", () =>
   }),
 );
 
-it.effect("Devin Cloud without a sibling points at an existing Devin ACP instance", () =>
+it.effect("Devin Cloud auto-resolves one enabled Devin ACP sibling", () =>
   Effect.gen(function* () {
     const unconfigured = yield* diagnose(
       { instanceId: id("devin-cloud") },
@@ -383,12 +391,48 @@ it.effect("Devin Cloud without a sibling points at an existing Devin ACP instanc
 
     const withCandidate = yield* diagnose(
       { instanceId: id("devin-cloud") },
-      { instances: { ...devinCloud(""), "devin-acp": devinSibling() } },
+      {
+        instances: {
+          ...devinCloud(""),
+          "devin-acp": devinSibling({ source: "registry", agentId: "devin" }),
+        },
+      },
     );
-    expect(checkOf(only(withCandidate.result.diagnoses), "sibling")?.fix?.instruction).toContain(
-      "Select ACP instance devin-acp",
+    expect(only(withCandidate.result.diagnoses).ready).toBe(true);
+    expect(checkOf(only(withCandidate.result.diagnoses), "sibling")?.summary).toContain(
+      "devin-acp",
     );
   }),
+);
+
+it.effect(
+  "automatic Devin Cloud asks for a sibling when none exists and a choice when ambiguous",
+  () =>
+    Effect.gen(function* () {
+      const noSibling = yield* diagnose({ driver: driver("devinCloud") });
+      expect(failures(only(noSibling.result.diagnoses))).toContain("disabled");
+      expect(failures(only(noSibling.result.diagnoses))).toContain("sibling_missing");
+      expect(checkOf(only(noSibling.result.diagnoses), "instance")?.status).toBe("pass");
+
+      const first = devinSibling({ source: "registry", agentId: "devin" });
+      const one = yield* diagnose(
+        { driver: driver("devinCloud") },
+        { instances: { "devin-one": first } },
+      );
+      expect(only(one.result.diagnoses).ready).toBe(true);
+      expect(checkOf(only(one.result.diagnoses), "sibling")?.summary).toContain("devin-one");
+
+      const two = yield* diagnose(
+        { driver: driver("devinCloud") },
+        { instances: { "devin-one": first, "devin-two": first } },
+      );
+      const diagnosis = only(two.result.diagnoses);
+      expect(checkOf(diagnosis, "enabled")?.status).toBe("pass");
+      expect(checkOf(diagnosis, "sibling")?.summary).toContain("More than one enabled Devin");
+      expect(checkOf(diagnosis, "sibling")?.fix?.instruction).toContain(
+        "Choose a Devin ACP provider",
+      );
+    }),
 );
 
 it.effect("Devin Cloud names an old CLI, a signed-out CLI, and a disabled sibling", () =>
@@ -472,6 +516,21 @@ it("judges other drivers from their readiness snapshot", () => {
     actor: "human",
     path: "provider.login_start",
     handoff: "oauth",
+  });
+  const cursorCloud = snapshotChecks(
+    snapshot({
+      instanceId: id("cursorCloud"),
+      driver: driver("cursorCloud"),
+      authSourceInstanceId: id("cursor"),
+      auth: { status: "unauthenticated" },
+      status: "error",
+      setup: { canAuthenticate: false, canInstall: false },
+    }),
+  ).find((item) => item.id === "auth");
+  expect(cursorCloud?.fix).toMatchObject({
+    path: "provider.login_start",
+    handoff: "oauth",
+    instruction: expect.stringContaining("Cursor provider cursor"),
   });
   const tooOld = snapshotChecks(
     snapshot({

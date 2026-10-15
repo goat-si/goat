@@ -17,6 +17,106 @@ function settingsWith(overrides: Partial<ServerSettings>): ServerSettings {
 }
 
 describe("deriveProviderInstanceConfigMap", () => {
+  it("makes implicit cloud slots follow their siblings", () => {
+    const cursor = ProviderInstanceId.make("cursor");
+    const cursorCloud = ProviderInstanceId.make("cursorCloud");
+    const claudeCloud = ProviderInstanceId.make("claudeCloud");
+    const off = deriveProviderInstanceConfigMap(settingsWith({}));
+    expect(off[cursorCloud]).toEqual({
+      driver: ProviderDriverKind.make("cursorCloud"),
+      enabled: false,
+    });
+    expect(off[claudeCloud]).toEqual({
+      driver: ProviderDriverKind.make("claudeCloud"),
+      enabled: true,
+    });
+
+    const on = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
+        },
+      }),
+    );
+    expect(on[cursorCloud]).toEqual({
+      driver: ProviderDriverKind.make("cursorCloud"),
+      enabled: true,
+    });
+    expect(
+      deriveProviderInstanceConfigMap(
+        settingsWith({
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: false,
+            },
+          },
+        }),
+      )[claudeCloud]?.enabled,
+    ).toBe(false);
+  });
+
+  it("omits a cloud default when an explicit custom-id cloud instance exists", () => {
+    const custom = ProviderInstanceId.make("cursorCloud_work");
+    const merged = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [custom]: { driver: ProviderDriverKind.make("cursorCloud"), enabled: true },
+        },
+      }),
+    );
+    expect(merged[ProviderInstanceId.make("cursorCloud")]).toBeUndefined();
+    expect(merged[custom]?.enabled).toBe(true);
+  });
+
+  it("preserves an explicit disabled cloud default even with an enabled sibling", () => {
+    const cloud = ProviderInstanceId.make("cursorCloud");
+    const merged = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [ProviderInstanceId.make("cursor")]: {
+            driver: ProviderDriverKind.make("cursor"),
+            enabled: true,
+          },
+          [cloud]: { driver: ProviderDriverKind.make("cursorCloud"), enabled: false },
+        },
+      }),
+    );
+    expect(merged[cloud]).toEqual({
+      driver: ProviderDriverKind.make("cursorCloud"),
+      enabled: false,
+    });
+  });
+
+  it("enables Devin Cloud only with an enabled Devin ACP instance", () => {
+    const devinCloud = ProviderInstanceId.make("devinCloud");
+    const acpInstance = ProviderInstanceId.make("devin_acp");
+    const acpDriver = ProviderDriverKind.make("acpRegistry");
+    const without = deriveProviderInstanceConfigMap(settingsWith({}));
+    expect(without[devinCloud]).toEqual({
+      driver: ProviderDriverKind.make("devinCloud"),
+      enabled: false,
+    });
+
+    const withDisabled = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [acpInstance]: { driver: acpDriver, enabled: false, config: { agentId: "devin" } },
+        },
+      }),
+    );
+    expect(withDisabled[devinCloud]?.enabled).toBe(false);
+
+    const withEnabled = deriveProviderInstanceConfigMap(
+      settingsWith({
+        providerInstances: {
+          [acpInstance]: { driver: acpDriver, enabled: true, config: { agentId: "devin" } },
+        },
+      }),
+    );
+    expect(withEnabled[devinCloud]?.enabled).toBe(true);
+  });
+
   it("turns a machine-disabled instance on when a project enables it", () => {
     const settings = settingsWith({
       providerInstances: {

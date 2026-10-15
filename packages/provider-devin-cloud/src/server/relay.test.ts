@@ -10,8 +10,10 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Relay from "./relay.ts";
 import type * as Acp from "effect-acp/compat";
+import { ProviderInstanceId } from "@goat/contracts";
 
 const launch = {
+  sourceInstanceId: ProviderInstanceId.make("devin-sibling"),
   command: "/selected/devin",
   cwd: "/trusted/project",
   env: { HOME: "/sibling-home" },
@@ -69,6 +71,12 @@ it.effect(
           "setter-error",
           "load-error",
           "prompt-error",
+          "unoffered-version",
+          "unoffered-platform",
+          "version-mismatch",
+          "platform-mismatch",
+          "final-mismatch",
+          "selected",
         ] as const)
           yield* Effect.scoped(
             Effect.gen(function* () {
@@ -93,9 +101,50 @@ it.effect(
                         value: mode === "missing" ? "other/example" : "acme/example",
                       },
                     ];
-              const options = repoOptions.map((option) =>
-                option.id === "repos" ? { ...option, options: choices } : option,
-              );
+              const selectionMode = [
+                "unoffered-version",
+                "unoffered-platform",
+                "version-mismatch",
+                "platform-mismatch",
+                "final-mismatch",
+                "selected",
+              ].includes(mode);
+              const options: ReadonlyArray<Acp.SessionConfigOption> = [
+                ...repoOptions.map((option) =>
+                  option.id === "repos"
+                    ? ({ ...option, options: choices } as unknown as Acp.SessionConfigOption)
+                    : option,
+                ),
+                ...(selectionMode
+                  ? [
+                      {
+                        id: "devin_version",
+                        name: "Version",
+                        type: "select" as const,
+                        currentValue: "devin-auto",
+                        options: [
+                          {
+                            name: "Fusion",
+                            value: mode === "unoffered-version" ? "other" : "devin-ultra",
+                          },
+                        ],
+                      },
+                      {
+                        id: "platform",
+                        name: "Platform",
+                        type: "select" as const,
+                        currentValue: "linux",
+                        options: [
+                          {
+                            name: "macOS",
+                            value: mode === "unoffered-platform" ? "other" : "macos",
+                          },
+                        ],
+                      },
+                    ]
+                  : []),
+              ];
+              let currentOptions = options;
               const loadedOptions =
                 mode === "load-missing"
                   ? undefined
@@ -205,23 +254,34 @@ it.effect(
                         },
                       });
                     } else if (rpc.method === "session/set_config_option") {
-                      assert.deepEqual(rpc.params, {
-                        sessionId: "devin-fixture-session",
-                        configId: "repos",
-                        value: "acme/example",
-                      });
+                      const configId = rpc.params?.configId;
+                      const value = rpc.params?.value;
+                      assert.equal(rpc.params?.sessionId, "devin-fixture-session");
+                      if (!selectionMode)
+                        assert.deepEqual([configId, value], ["repos", "acme/example"]);
+                      currentOptions = currentOptions.map((option) =>
+                        option.type === "select" && option.id === configId
+                          ? {
+                              ...option,
+                              currentValue:
+                                mode === "mismatch" ||
+                                (mode === "version-mismatch" && configId === "devin_version") ||
+                                (mode === "platform-mismatch" && configId === "platform")
+                                  ? ""
+                                  : (value as string),
+                            }
+                          : option.type === "select" &&
+                              mode === "final-mismatch" &&
+                              configId === "repos" &&
+                              option.id === "devin_version"
+                            ? { ...option, currentValue: "devin-auto" }
+                            : option,
+                      );
                       yield* send({
                         jsonrpc: "2.0",
                         id: rpc.id,
                         result: {
-                          configOptions: options.map((option) =>
-                            option.id === "repos"
-                              ? {
-                                  ...option,
-                                  currentValue: mode === "mismatch" ? "" : "acme/example",
-                                }
-                              : option,
-                          ),
+                          configOptions: currentOptions,
                         },
                       });
                     } else if (rpc.method === "session/load") {
@@ -335,7 +395,35 @@ it.effect(
                     notice.update._meta?.["cognition.ai/session"] !== undefined,
                 ),
               );
-              const configured = yield* Effect.result(remote.configureSource(id, source));
+              const configured = yield* Effect.result(
+                remote.configureSource(
+                  id,
+                  source,
+                  selectionMode ? { model: "devin-ultra", platform: "macos" } : undefined,
+                ),
+              );
+              if (selectionMode) {
+                const expectedSetters =
+                  mode === "unoffered-version"
+                    ? []
+                    : mode === "unoffered-platform" || mode === "version-mismatch"
+                      ? ["devin_version"]
+                      : mode === "platform-mismatch"
+                        ? ["devin_version", "platform"]
+                        : ["devin_version", "platform", "repos"];
+                assert.deepEqual(methods, [
+                  "initialize",
+                  "session/new",
+                  ...expectedSetters.map(() => "session/set_config_option"),
+                ]);
+                assert.equal(prompts, 0);
+                assert.equal(Result.isSuccess(configured), mode === "selected");
+                if (mode !== "selected") return;
+                const sent = yield* remote.prompt(id, "task");
+                assert.equal(sent.stopReason, "end_turn");
+                assert.equal(prompts, 1);
+                return;
+              }
               if (mode === "missing" || mode === "mismatch" || mode === "setter-error") {
                 assert.isTrue(Result.isFailure(configured));
                 assert.equal(prompts, 0);

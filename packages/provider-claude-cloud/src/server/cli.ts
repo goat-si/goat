@@ -136,13 +136,11 @@ const run = Effect.fn("ClaudeCloudCli.run")(function* (
 });
 
 /**
- * Read-only readiness: `--version`, `--help`, and `auth status`. Never starts a session.
+ * Read-only readiness: `auth status` first, then `--version` and `--help`. Never starts a session.
  * Failures carry a `reason` so provider diagnosis can name the next step.
  */
 export const probeReadiness = Effect.fn("ClaudeCloudCli.readiness")(
   function* (login: ClaudeCloudLogin, cwd: string) {
-    const version = yield* run(login, cwd, ["--version"]);
-    const help = yield* run(login, cwd, ["--help"]);
     const auth = yield* run(login, cwd, ["auth", "status"]);
     const account = yield* parseAuthEffect(auth.stdout).pipe(
       Effect.mapError(
@@ -165,6 +163,8 @@ export const probeReadiness = Effect.fn("ClaudeCloudCli.readiness")(
         ...(signedIn ? { authMethod: account.authMethod } : {}),
       });
     }
+    const version = yield* run(login, cwd, ["--version"]);
+    const help = yield* run(login, cwd, ["--help"]);
     if (version.code !== 0 || help.code !== 0 || !/--cloud(?:\s|\[)/.test(help.stdout)) {
       return yield* new ClaudeCloudError({
         detail: "The sibling Claude CLI does not advertise cloud sessions. Update that CLI.",

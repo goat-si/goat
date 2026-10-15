@@ -29,8 +29,10 @@ the generated key before it expires, remove it from your Cursor dashboard's API 
 
 ## Cursor Cloud
 
-Sign in with your Cursor provider, then add Cursor Cloud in **Settings > Providers**.
-Choose the Cursor account source by its provider instance ID; the default is `cursor`.
+Cursor Cloud appears automatically in **Settings > Providers** and becomes available when you
+sign in to Cursor. You can start sign-in from the Cursor Cloud card; it uses the Cursor account.
+Turn Cursor Cloud off with its toggle. To follow Cursor's enabled state again, reset the cloud
+card. For another account, add a custom Cursor Cloud instance and choose its Cursor source.
 On mobile, manage the account under **Settings > Provider accounts**. If this environment
 has a saved Cursor SDK browser sign-in, GOAT can use it when the selected provider has
 no usable saved key. That saved sign-in may belong to a different account.
@@ -49,8 +51,8 @@ only after Cursor confirms it. Closing GOAT or changing the account detaches
 observation; cloud work may continue. An unknown submission or tracking outcome
 blocks further messages until reconciled; open the saved agent link to inspect it.
 
-Manage sign-in in the selected Cursor provider's settings on the environment running
-the task. Cursor Cloud does not have a separate key entry or sign-in flow.
+Manage sign-in from the Cursor Cloud card or the selected Cursor provider's settings on the
+environment running the task. Cursor Cloud uses that provider's account.
 
 ## V2 Capability Mapping
 

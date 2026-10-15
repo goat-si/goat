@@ -38,7 +38,7 @@ export const cursorCloudClient = defineProviderClient({
   label: "Cursor Cloud",
   settingsSchema: CursorCloudSettings,
   executionLocation: "cloud",
-  hasDefaultInstance: false,
+  hasDefaultInstance: true,
   badgeLabel: "Cloud",
   icon: cursorClient.icon,
 });
