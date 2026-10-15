@@ -190,7 +190,7 @@ it.effect("the automatic Claude Cloud slot checks its default claude.ai login", 
   Effect.gen(function* () {
     const { result } = yield* diagnose({ driver: driver("claudeCloud") });
     const diagnosis = only(result.diagnoses);
-    expect(diagnosis).toMatchObject({ instanceId: "claudeCloud", configured: false, ready: true });
+    expect(diagnosis).toMatchObject({ instanceId: "claudeCloud", configured: true, ready: true });
     expect(failures(diagnosis)).toEqual([]);
     expect(checkOf(diagnosis, "instance")?.status).toBe("pass");
     expect(checkOf(diagnosis, "auth")?.status).toBe("pass");
@@ -420,6 +420,7 @@ it.effect(
         { instances: { "devin-one": first } },
       );
       expect(only(one.result.diagnoses).ready).toBe(true);
+      expect(only(one.result.diagnoses).configured).toBe(true);
       expect(checkOf(only(one.result.diagnoses), "sibling")?.summary).toContain("devin-one");
 
       const two = yield* diagnose(

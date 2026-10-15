@@ -527,7 +527,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
             )
           : check("readiness", "fail", error.detail, "probe_failed", retry("the Claude settings")),
     );
-    return finish(target, configured, checks);
+    return finish(target, configured || implicit, checks);
   }
   checks.push(check("sibling", "pass", `Uses Claude instance ${sourceId}.`));
   const { nativeBinary } = resolution.success;
@@ -568,7 +568,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
         ),
       ),
     );
-    return finish(target, configured, checks);
+    return finish(target, configured || implicit, checks);
   }
 
   const resolved = yield* resolvesExecutable(login.binary, login.environment);
@@ -585,7 +585,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
         ),
       ),
     );
-    return finish(target, configured, checks);
+    return finish(target, configured || implicit, checks);
   }
 
   const home = yield* HostProcess.HomeDirectory;
@@ -646,7 +646,7 @@ const diagnoseClaudeCloud = Effect.fn("ProviderDiagnosis.claudeCloud")(function*
       );
     }
   }
-  return finish(target, configured, checks);
+  return finish(target, configured || implicit, checks);
 });
 
 // ── Devin Cloud ───────────────────────────────────────────────────────────
@@ -904,12 +904,12 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
         checks.push(...devinProbeChecks(probed, onPath));
       }
     }
-    return finish(target, configured, checks);
+    return finish(target, configured || implicit, checks);
   }
   checks.push(check("sibling", "pass", `Uses ACP instance ${launch.success.sourceInstanceId}.`));
   const probed = yield* Effect.result(cli.probe(launch.success));
   checks.push(...devinProbeChecks(probed, launch.success.command));
-  return finish(target, configured, checks);
+  return finish(target, configured || implicit, checks);
 });
 
 // ── Entry point ───────────────────────────────────────────────────────────

@@ -18,6 +18,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 const decodeSiblingSettings = Schema.decodeUnknownEffect(AcpRegistrySettings);
 const decodeInstanceId = Schema.decodeUnknownOption(ProviderInstanceId);
+// The native-ref contract trims fingerprints; JSON preserves empty profile slots across persistence.
+const encodeBinding = Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export function selectSiblingInstanceId(
   settings: Pick<ServerSettings, "providerInstances">,
@@ -192,8 +194,7 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((cause) => new DevinCloudCliError({ stage: "resolve", cause })));
     // Only executable and final credential/profile env are inherited. Never local ACP argv.
     const spawnEnv = resolved.spawn.env ?? env;
-    // The native-ref contract trims fingerprints; JSON preserves empty profile slots across persistence.
-    const binding = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)))([
+    const binding = yield* encodeBinding([
       selectedId,
       resolved.spawn.command,
       spawnEnv.HOME ?? "",
