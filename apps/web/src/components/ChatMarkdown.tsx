@@ -40,6 +40,7 @@ import {
   OctagonAlertIcon,
   PlayIcon,
   PresentationIcon,
+  RotateCwIcon,
   SparklesIcon,
   TriangleAlertIcon,
   WorkflowIcon,
@@ -1377,16 +1378,24 @@ function ChatMarkdownImageFallback(props: {
   readonly kind?: "image" | "video";
   readonly actionsSource?: MediaActionSource | undefined;
   readonly detail?: string | undefined;
+  readonly onRetry?: (() => void) | undefined;
+  readonly retrying?: boolean | undefined;
 }) {
   const content = (
     <span
       data-markdown-copy={props.copyMarkdown}
       className={cn(
         CHAT_MARKDOWN_MEDIA_LAYOUT_CLASS_NAME,
-        "rounded-md border border-border/40 bg-muted/40 px-2 py-1 text-xs text-muted-foreground",
+        "inline-flex items-center gap-2 rounded-md border border-border/40 bg-muted/40 px-2 py-1 text-xs text-muted-foreground",
       )}
     >
       <ChatMarkdownMediaUnavailableLabel alt={props.alt} kind={props.kind} detail={props.detail} />
+      {props.onRetry && (
+        <Button size="sm" variant="secondary" disabled={props.retrying} onClick={props.onRetry}>
+          <RotateCwIcon />
+          {props.retrying ? "Retrying…" : "Retry image"}
+        </Button>
+      )}
     </span>
   );
   return props.actionsSource ? (
@@ -1433,9 +1442,12 @@ function ChatMarkdownImage(props: {
   readonly actionsSource: MediaActionSource;
   readonly originalUrl?: string | undefined;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  readonly onRetry?: (() => Promise<unknown>) | undefined;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const src = props.src ?? loadedSrc;
   const failed = props.sourceFailed === true || (src !== null && failedSrc === src);
   // A failure forgets the decoded image so the next URL loads behind the slot.
@@ -1464,6 +1476,20 @@ function ChatMarkdownImage(props: {
       setLoadedSrc(null);
     },
   });
+  const retry = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await props.onRetry?.();
+      setFailedSrc(null);
+      setLoadedSrc(null);
+      setLoadAttempt((attempt) => attempt + 1);
+    } catch {
+      // Keep the failure visible until a later signed URL or retry succeeds.
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   if (settled) {
     return (
@@ -1471,6 +1497,7 @@ function ChatMarkdownImage(props: {
         <img
           {...props.imageProps}
           ref={markLoadedIfComplete}
+          key={loadAttempt}
           src={src}
           alt={props.alt}
           data-markdown-copy={props.copyMarkdown}
@@ -1495,6 +1522,8 @@ function ChatMarkdownImage(props: {
         copyMarkdown={props.copyMarkdown}
         actionsSource={props.actionsSource}
         detail={props.unavailableDetail}
+        onRetry={props.onRetry ? () => void retry() : undefined}
+        retrying={retrying}
       />
     ) : (
       <span
@@ -1522,12 +1551,24 @@ function ChatMarkdownImage(props: {
           : { role: "status" as const, "aria-label": "Loading image" })}
       >
         {failed ? (
-          <span className="flex size-full items-center justify-center p-2 text-center text-xs text-muted-foreground">
+          <span className="flex size-full flex-wrap items-center justify-center gap-2 p-2 text-center text-xs text-muted-foreground">
             <ChatMarkdownMediaUnavailableLabel alt={props.alt} detail={props.unavailableDetail} />
+            {props.onRetry && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={retrying}
+                onClick={() => void retry()}
+              >
+                <RotateCwIcon />
+                {retrying ? "Retrying…" : "Retry image"}
+              </Button>
+            )}
           </span>
         ) : src !== null ? (
           <img
             ref={markLoadedIfComplete}
+            key={loadAttempt}
             src={src}
             alt={props.alt}
             decoding="async"
@@ -1709,6 +1750,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
       actionsSource={actionsSource}
       originalUrl={props.originalUrl}
       onImageExpand={props.onImageExpand}
+      onRetry={fallbackSrc === undefined ? refreshAssetUrl : undefined}
     />
   );
 });

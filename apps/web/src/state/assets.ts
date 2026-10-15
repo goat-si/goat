@@ -10,6 +10,8 @@ import { isElectron } from "../env";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { environmentProjectClonesAtom } from "./projectClones";
 import { environmentSession } from "./session";
+import { environmentProjects } from "./projects";
+import { environmentThreadShells } from "./threads";
 
 const localMediaEnvironment = Atom.make((get) => {
   if (!isElectron) return null;
@@ -26,6 +28,18 @@ const localMediaEnvironment = Atom.make((get) => {
 export const assetEnvironment = createAssetEnvironmentAtoms(
   connectionAtomRuntime,
   localMediaEnvironment,
+  (environmentId, threadId) =>
+    Atom.make((get) => {
+      // Resolve against the thread's remote checkout, including its worktree when present.
+      const thread = get(environmentThreadShells.threadShellAtom({ environmentId, threadId }));
+      if (thread === null) return null;
+      return (
+        thread.worktreePath ??
+        get(environmentProjects.projectAtom({ environmentId, projectId: thread.projectId }))
+          ?.workspaceRoot ??
+        null
+      );
+    }),
 );
 
 export const projectFaviconUrlAtom = createProjectFaviconUrlAtomFamily({

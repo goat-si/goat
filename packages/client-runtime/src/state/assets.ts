@@ -5,6 +5,7 @@ import {
   AssetResource,
   EnvironmentId,
   type ProjectCloneSnapshot,
+  type ThreadId,
   WS_METHODS,
 } from "@goat/contracts";
 import { mediaMimeTypeFromExtension } from "@goat/shared/filePreview";
@@ -21,6 +22,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { mediaFileReference } from "../mediaReference.ts";
 import { request } from "../rpc/client.ts";
 import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
 import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
@@ -144,6 +146,10 @@ export function createAssetEnvironmentAtoms<R, E>(
     readonly environmentId: EnvironmentId;
     readonly httpBaseUrl: string;
   } | null>,
+  workspaceRootAtom?: (
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  ) => Atom.Atom<string | null>,
 ) {
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
     const result = yield* request(WS_METHODS.assetsCreateUrl, input).pipe(Effect.result);
@@ -154,8 +160,15 @@ export function createAssetEnvironmentAtoms<R, E>(
       ? (yield* AtomRegistry.AtomRegistry).get(localMediaEnvironment)
       : null;
     const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const workspaceRoot =
+      resource._tag === "media-file" && workspaceRootAtom
+        ? (yield* AtomRegistry.AtomRegistry).get(
+            workspaceRootAtom(supervisor.target.environmentId, resource.threadId),
+          )
+        : null;
     if (
       !local ||
+      !workspaceRoot ||
       local.environmentId === supervisor.target.environmentId ||
       !(
         error._tag === "AssetWorkspaceAssetNotFoundError" ||
@@ -164,6 +177,7 @@ export function createAssetEnvironmentAtoms<R, E>(
       ) ||
       resource._tag !== "media-file" ||
       !(resource.path.startsWith("/") || isWindowsAbsolutePath(resource.path)) ||
+      mediaFileReference(resource.path, workspaceRoot).relativePath !== undefined ||
       mediaMimeTypeFromExtension(resource.path.slice(resource.path.lastIndexOf("."))) === null
     )
       return yield* error;
@@ -181,8 +195,18 @@ export function createAssetEnvironmentAtoms<R, E>(
     staleTimeMs: ASSET_URL_STALE_TIME_MS,
     idleTtlMs: ASSET_URL_IDLE_TTL_MS,
     refreshIntervalMs: ASSET_URL_REFRESH_INTERVAL_MS,
-    refreshTrigger: ({ input }) =>
-      input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
+    refreshTrigger: ({ environmentId, input }) => {
+      const resource = input.resource;
+      if (resource._tag !== "media-file") return undefined;
+      if (!workspaceRootAtom) return localMediaEnvironment;
+      const workspaceRoot = workspaceRootAtom(environmentId, resource.threadId);
+      return Atom.make((get) =>
+        JSON.stringify([
+          get(workspaceRoot),
+          localMediaEnvironment ? get(localMediaEnvironment) : null,
+        ]),
+      );
+    },
   });
   const createUrlsFamily = Atom.family((key: string) => {
     const [environmentId, resources] = parseAssetCollectionKey(key);

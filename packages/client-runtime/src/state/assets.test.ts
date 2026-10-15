@@ -29,6 +29,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import { classifyMarkdownImageSource } from "../markdownImages.ts";
 import { createProjectFaviconCache } from "../projectFaviconCache.ts";
 import {
   createAssetEnvironmentAtoms,
@@ -60,12 +61,20 @@ describe("asset collection keys", () => {
 });
 
 describe("createAssetEnvironmentAtoms", () => {
+  const relativeMarkdownImage = classifyMarkdownImageSource("screens/logo.png", "/repo");
+  if (relativeMarkdownImage._tag !== "WorkspaceFile") throw new Error("Expected a workspace path");
   it.effect.each([
     { name: "missing video", path: "/tmp/clip.mp4", fallback: true },
     { name: "literal filename characters", path: "/tmp/frame#one?two.png", fallback: true },
     { name: "windows path", path: "C:\\Users\\demo\\clip.mp4", fallback: true },
+    { name: "windows workspace image", path: "C:\\Users\\demo\\repo\\logo.png" },
     { name: "inspection failure", path: "/tmp/clip.mp4", error: "inspection", fallback: true },
     { name: "foreign thread", path: "/tmp/clip.mp4", error: "context", fallback: true },
+    { name: "relative Markdown image missing remotely", path: relativeMarkdownImage.path },
+    { name: "workspace path with dot segments", path: "/repo/screens/../logo.png" },
+    { name: "workspace root prefix sibling", path: "/repo-other/logo.png", fallback: true },
+    { name: "unknown workspace root", path: "/tmp/clip.mp4", root: "missing" },
+    { name: "workspace root arrives", path: "/tmp/clip.mp4", root: "arriving" },
     { name: "remote success", path: "/tmp/clip.mp4", success: true },
     { name: "relative path", path: "clip.mp4" },
     { name: "no primary", path: "/tmp/clip.mp4", primary: "none" },
@@ -155,9 +164,17 @@ describe("createAssetEnvironmentAtoms", () => {
       const localEnvironment = Atom.make<typeof localTarget | null>(
         scenario.primary === "none" || scenario.primary === "reconnecting" ? null : localTarget,
       );
+      const workspaceRoot = Atom.make<string | null>(
+        scenario.root === "missing" || scenario.root === "arriving"
+          ? null
+          : scenario.path.startsWith("C:")
+            ? "C:\\Users\\demo\\repo"
+            : "/repo",
+      );
       const assets = createAssetEnvironmentAtoms(
         Atom.runtime(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments)),
         localEnvironment,
+        () => workspaceRoot,
       );
       const query = assets.createUrl({ environmentId: remoteId, input: { resource } });
       const result = AtomRegistry.getResult(registry, query, { suspendOnWaiting: true });
@@ -171,6 +188,11 @@ describe("createAssetEnvironmentAtoms", () => {
         expect(yield* Effect.flip(result)).toEqual(error);
       }
       expect(calls).toEqual(scenario.fallback ? [remoteId, localId] : [remoteId]);
+      if (scenario.root === "arriving") {
+        registry.set(workspaceRoot, "/repo");
+        expect((yield* result).relativeUrl).toBe("https://local.test/api/assets/local/media");
+        expect(calls).toEqual([remoteId, remoteId, localId]);
+      }
       if (scenario.primary === "reconnecting") {
         registry.set(localEnvironment, localTarget);
         expect((yield* result).relativeUrl).toBe("https://local.test/api/assets/local/media");
