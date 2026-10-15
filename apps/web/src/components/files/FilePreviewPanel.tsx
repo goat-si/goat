@@ -74,7 +74,7 @@ import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/envi
 import { previewEnvironment } from "~/state/preview";
 import { projectEnvironment } from "~/state/projects";
 import { useEnvironmentQuery } from "~/state/query";
-import { useEnvironmentScope } from "~/state/session";
+import { useEnvironmentScope, usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
@@ -116,6 +116,8 @@ import {
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
   workspaceAssetResource,
+  workspaceMediaPreviewUrl,
+  workspacePreviewAssetResource,
 } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
 import {
@@ -163,11 +165,11 @@ function WorkspaceImagePreview(props: {
   readonly workspaceRoot: string;
   readonly alt: string;
   readonly workspaceMutationId: string | null;
+  readonly refreshRequestId: number;
 }) {
   const resource = useMemo(
     () =>
-      workspaceAssetResource({
-        kind: "workspace-file",
+      workspacePreviewAssetResource({
         threadRef: props.threadRef,
         draft: props.draft,
         workspaceRoot: props.workspaceRoot,
@@ -176,12 +178,42 @@ function WorkspaceImagePreview(props: {
     [props.threadRef, props.draft, props.workspaceRoot, props.absolutePath],
   );
   const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
+  const connection = usePreparedConnection(props.environmentId);
+  const wasDisconnected = useRef(false);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const revisionSuffix =
-    props.workspaceMutationId === null
-      ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
-  const imageUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+  const [retryId, setRetryId] = useState(0);
+  useEffect(() => {
+    if (connection._tag === "None") {
+      wasDisconnected.current = true;
+    } else if (wasDisconnected.current) {
+      wasDisconnected.current = false;
+      void refreshAssetUrl()
+        .then(() => {
+          setFailedUrl(null);
+          setRetryId((current) => current + 1);
+        })
+        .catch(() => undefined);
+    }
+  }, [connection._tag, refreshAssetUrl]);
+  useWorkspaceMutationRefresh({
+    mutationId:
+      props.refreshRequestId === 0
+        ? props.workspaceMutationId
+        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
+    resourceKey: JSON.stringify([props.environmentId, resource]),
+    refresh: () => {
+      void refreshAssetUrl().catch(() => undefined);
+    },
+  });
+  const imageUrl =
+    assetUrl._tag === "Success"
+      ? workspaceMediaPreviewUrl(
+          assetUrl.url,
+          props.workspaceMutationId,
+          `${props.refreshRequestId}-${retryId}`,
+        )
+      : null;
   const actionsSource: MediaActionSource = {
     kind: "image",
     name: props.alt,
@@ -193,9 +225,14 @@ function WorkspaceImagePreview(props: {
   if (assetUrl._tag === "Failure" || (imageUrl !== null && failedUrl === imageUrl)) {
     return (
       <MediaActions source={actionsSource}>
-        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
-          Unable to load workspace image.
-        </div>
+        <FileSurfaceFailure
+          message="Unable to load workspace image."
+          onRetry={() => {
+            setFailedUrl(null);
+            setRetryId((current) => current + 1);
+            void refreshAssetUrl().catch(() => undefined);
+          }}
+        />
       </MediaActions>
     );
   }
@@ -205,6 +242,7 @@ function WorkspaceImagePreview(props: {
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
       <MediaActions source={actionsSource}>
         <img
+          key={imageUrl}
           className="max-h-full max-w-full object-contain"
           src={imageUrl}
           alt={props.alt}
@@ -235,18 +273,15 @@ function WorkspaceBrowserPreview(props: {
   readonly title: string;
   readonly workspaceMutationId: string | null;
 }) {
-  const insideWorkspace =
-    mediaFileReference(props.absolutePath, props.workspaceRoot).relativePath !== undefined;
   const resource = useMemo(
     () =>
-      workspaceAssetResource({
-        kind: insideWorkspace ? "workspace-file" : "media-file",
+      workspacePreviewAssetResource({
         threadRef: props.threadRef,
         draft: props.draft,
         workspaceRoot: props.workspaceRoot,
         absolutePath: props.absolutePath,
       }),
-    [insideWorkspace, props.threadRef, props.draft, props.workspaceRoot, props.absolutePath],
+    [props.threadRef, props.draft, props.workspaceRoot, props.absolutePath],
   );
   const assetUrl = useAssetUrlState(props.environmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
@@ -289,6 +324,7 @@ function WorkspaceVideoPreview(props: {
   readonly workspaceRoot: string;
   readonly name: string;
   readonly workspaceMutationId: string | null;
+  readonly refreshRequestId: number;
 }) {
   const resource = useMemo(
     () =>
@@ -304,18 +340,20 @@ function WorkspaceVideoPreview(props: {
   const assetUrl = useAssetUrlState(props.environmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
   useWorkspaceMutationRefresh({
-    mutationId: props.workspaceMutationId,
+    mutationId:
+      props.refreshRequestId === 0
+        ? props.workspaceMutationId
+        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
     resourceKey: JSON.stringify([props.environmentId, resource]),
     refresh: () => {
       // Failed refreshes flow through assetUrl and can be retried from the player.
       void refreshAssetUrl().catch(() => undefined);
     },
   });
-  const revisionSuffix =
-    props.workspaceMutationId === null
-      ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
-  const latestUrl = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+  const latestUrl =
+    assetUrl._tag === "Success"
+      ? workspaceMediaPreviewUrl(assetUrl.url, props.workspaceMutationId, props.refreshRequestId)
+      : null;
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
@@ -323,7 +361,11 @@ function WorkspaceVideoPreview(props: {
         src={latestUrl}
         sourceFailed={assetUrl._tag === "Failure"}
         label={props.name}
-        revision={props.workspaceMutationId}
+        revision={
+          props.refreshRequestId === 0
+            ? props.workspaceMutationId
+            : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`
+        }
         preload="metadata"
         className="flex h-full min-h-0 w-full max-w-5xl items-center justify-center"
         onRetry={refreshAssetUrl}
@@ -348,6 +390,7 @@ function WorkspaceAudioPreview(props: {
   readonly workspaceRoot: string;
   readonly name: string;
   readonly workspaceMutationId: string | null;
+  readonly refreshRequestId: number;
 }) {
   const resource = useMemo(
     () =>
@@ -364,17 +407,19 @@ function WorkspaceAudioPreview(props: {
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   useWorkspaceMutationRefresh({
-    mutationId: props.workspaceMutationId,
+    mutationId:
+      props.refreshRequestId === 0
+        ? props.workspaceMutationId
+        : `${props.workspaceMutationId ?? ""}:files:${props.refreshRequestId}`,
     resourceKey: JSON.stringify([props.environmentId, resource]),
     refresh: () => {
       void refreshAssetUrl().catch(() => undefined);
     },
   });
-  const revisionSuffix =
-    props.workspaceMutationId === null
-      ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(props.workspaceMutationId)}`;
-  const url = assetUrl._tag === "Success" ? `${assetUrl.url}${revisionSuffix}` : null;
+  const url =
+    assetUrl._tag === "Success"
+      ? workspaceMediaPreviewUrl(assetUrl.url, props.workspaceMutationId, props.refreshRequestId)
+      : null;
   if (assetUrl._tag === "Failure" || (url !== null && failedUrl === url)) {
     return (
       <FileSurfaceFailure
@@ -1131,6 +1176,7 @@ export default function FilePreviewPanel({
   const isAudio = relativePath !== null && !isVideo && isWorkspaceAudioPreviewPath(relativePath);
   const isImage = relativePath !== null && !isVideo && isWorkspaceImagePreviewPath(relativePath);
   const isMedia = isImage || isVideo || isAudio;
+  const [mediaRefreshRequestId, setMediaRefreshRequestId] = useState(0);
   // PDFs have no text to show; HTML has, and can toggle between page and source.
   const isPdf = relativePath !== null && isPdfPreviewFile(relativePath);
   const isHtml = relativePath !== null && !isPdf && isBrowserPreviewFile(relativePath);
@@ -1442,6 +1488,7 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               name={relativePath}
               workspaceMutationId={workspaceMutationId}
+              refreshRequestId={mediaRefreshRequestId}
             />
           ) : relativePath && isAudio && absolutePath ? (
             <WorkspaceAudioPreview
@@ -1453,6 +1500,7 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               name={relativePath}
               workspaceMutationId={workspaceMutationId}
+              refreshRequestId={mediaRefreshRequestId}
             />
           ) : relativePath && isImage && absolutePath ? (
             <WorkspaceImagePreview
@@ -1464,6 +1512,7 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               alt={relativePath}
               workspaceMutationId={workspaceMutationId}
+              refreshRequestId={mediaRefreshRequestId}
             />
           ) : relativePath && renderBrowserFile && absolutePath ? (
             <WorkspaceBrowserPreview
@@ -1586,8 +1635,12 @@ export default function FilePreviewPanel({
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}
               workspaceMutationId={workspaceMutationId}
-              {...(previewPath && !isMedia && !isPdf
-                ? { onRefreshSelectedFile: file.refresh }
+              {...(previewPath && !isPdf
+                ? {
+                    onRefreshSelectedFile: isMedia
+                      ? () => setMediaRefreshRequestId((current) => current + 1)
+                      : file.refresh,
+                  }
                 : {})}
             />
           </aside>

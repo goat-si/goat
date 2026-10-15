@@ -1,4 +1,5 @@
 import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@goat/contracts";
+import { mediaFileReference } from "@goat/client-runtime/media-reference";
 import { isAbsolutePath, workspaceRelativeFilePath } from "@goat/shared/path";
 
 /** Resolve workspace links before choosing between the explorer and a file preview. */
@@ -80,4 +81,31 @@ export function workspaceAssetResource(input: {
     return { _tag: "draft-workspace-file", cwd: input.workspaceRoot, path: input.absolutePath };
   }
   return { _tag: input.kind, threadId: input.threadRef.threadId, path: input.absolutePath };
+}
+
+export function workspacePreviewAssetResource(input: {
+  readonly threadRef: ScopedThreadRef;
+  readonly draft: boolean;
+  readonly workspaceRoot: string;
+  readonly absolutePath: string;
+}): AssetResource {
+  return workspaceAssetResource({
+    ...input,
+    kind:
+      mediaFileReference(input.absolutePath, input.workspaceRoot).relativePath === undefined
+        ? "media-file"
+        : "workspace-file",
+  });
+}
+
+export function workspaceMediaPreviewUrl(
+  url: string,
+  workspaceMutationId: string | null,
+  refreshId: string | number,
+): string {
+  const revision =
+    workspaceMutationId === null
+      ? ""
+      : `workspace-revision=${encodeURIComponent(workspaceMutationId)}&`;
+  return `${url}${url.includes("?") ? "&" : "?"}${revision}file-refresh=${encodeURIComponent(refreshId)}`;
 }

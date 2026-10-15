@@ -75,6 +75,8 @@ import {
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
   workspaceAssetResource,
+  workspaceMediaPreviewUrl,
+  workspacePreviewAssetResource,
 } from "./filePreviewMode";
 
 const decodeReadError = Schema.decodeSync(ProjectReadFileError);
@@ -373,5 +375,51 @@ describe("workspaceAssetResource", () => {
       cwd: "/repo",
       path: "/repo/docs/index.html",
     });
+  });
+});
+
+describe("workspacePreviewAssetResource", () => {
+  const input = {
+    threadRef: {
+      environmentId: "env" as ScopedThreadRef["environmentId"],
+      threadId: "thread-1" as ScopedThreadRef["threadId"],
+    },
+    workspaceRoot: "/repo",
+  };
+
+  it("uses a workspace asset inside the workspace and a media asset for a host image", () => {
+    expect(
+      workspacePreviewAssetResource({
+        ...input,
+        draft: false,
+        absolutePath: "/repo/images/shot.png",
+      }),
+    ).toEqual({ _tag: "workspace-file", threadId: "thread-1", path: "/repo/images/shot.png" });
+    expect(
+      workspacePreviewAssetResource({ ...input, draft: false, absolutePath: "/tmp/shot.png" }),
+    ).toEqual({ _tag: "media-file", threadId: "thread-1", path: "/tmp/shot.png" });
+  });
+
+  it("uses the draft asset for a host image before the server knows the thread", () => {
+    expect(
+      workspacePreviewAssetResource({ ...input, draft: true, absolutePath: "/tmp/shot.png" }),
+    ).toEqual({ _tag: "draft-workspace-file", cwd: "/repo", path: "/tmp/shot.png" });
+  });
+});
+
+describe("workspaceMediaPreviewUrl", () => {
+  it("keeps the signed query while changing the cache key for a file refresh", () => {
+    const signedUrl = "https://host.test/assets/shot.png?token=signed";
+    const before = workspaceMediaPreviewUrl(signedUrl, null, 0);
+    const after = workspaceMediaPreviewUrl(signedUrl, null, 1);
+    expect(before).not.toBe(after);
+    expect(new URL(after).searchParams.get("token")).toBe("signed");
+    expect(new URL(after).searchParams.get("file-refresh")).toBe("1");
+  });
+
+  it("changes the cache key after a workspace mutation", () => {
+    expect(workspaceMediaPreviewUrl("https://host.test/shot.png", "new revision", 0)).toContain(
+      "workspace-revision=new%20revision&file-refresh=0",
+    );
   });
 });
