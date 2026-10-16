@@ -66,6 +66,37 @@ describe("getQuestionAnswerAttribution", () => {
     );
     expect(value.answers).toEqual({ scope: "Use the private repository" });
   });
+  it("shows the user's relayed decision with the local or foreign orchestrator identity", () => {
+    const respondedBy = {
+      type: "agent" as const,
+      threadId: ThreadId.make("caller"),
+      environmentId: null,
+      title: "Coordinator",
+      reason: "The user chose the existing API.",
+      relayedFromUser: true,
+    };
+    expect(getQuestionAnswerAttribution(answer({ respondedBy }))).toBe(
+      'Answered by the user, relayed by orchestrator "Coordinator": The user chose the existing API.',
+    );
+    expect(
+      getQuestionAnswerAttribution(
+        answer({
+          respondedBy: {
+            ...respondedBy,
+            title: null,
+            environmentId: EnvironmentId.make("foreign"),
+          },
+        }),
+      ),
+    ).toBe(
+      'Answered by the user, relayed by orchestrator "caller" on another machine: The user chose the existing API.',
+    );
+    expect(
+      getQuestionAnswerAttribution(
+        answer({ respondedBy: { ...respondedBy, relayedFromUser: false } }),
+      ),
+    ).toBe('Answered by orchestrator "Coordinator": The user chose the existing API.');
+  });
   it("shows outside clients and keeps user and legacy history quiet", () => {
     expect(
       getQuestionAnswerAttribution(answer({ respondedBy: { type: "client", reason: "R" } })),

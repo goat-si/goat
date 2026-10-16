@@ -155,6 +155,9 @@ const make = Effect.gen(function* () {
           environmentId: null,
           title: context.caller.title,
           reason: input.reason,
+          ...(input.relayedFromUser === undefined
+            ? {}
+            : { relayedFromUser: input.relayedFromUser }),
         } satisfies UserInputRespondedBy;
       }
       const origin = input.respondedBy;

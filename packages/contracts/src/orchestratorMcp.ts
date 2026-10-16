@@ -469,6 +469,10 @@ export const OrchestratorMcpPendingRequestRespondInput = Schema.Struct({
     description:
       'Required provenance shown to the user: explain why you chose these answers or this decision. Send 1–2000 characters including non-whitespace text, e.g. "The user requested the existing API."',
   }),
+  relayedFromUser: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Set true when your answer relays the user's own decision. This records your claim, not verified human involvement; omit or set false for your own answer.",
+  }),
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
 export type OrchestratorMcpPendingRequestRespondInput =

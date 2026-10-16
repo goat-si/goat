@@ -2,6 +2,7 @@ import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoord
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  OrchestratorMcpPendingRequestRespondInput,
   EnvironmentId,
   NodeId,
   ProviderInstanceId,
@@ -23,6 +24,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -35,6 +37,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import { OrchestratorQuestionAlreadyAnsweredError } from "../orchestration-v2/Orchestrator.ts";
 
+const decodeRespondInput = Schema.decodeUnknownSync(OrchestratorMcpPendingRequestRespondInput);
 const callerId = ThreadId.make("caller");
 const targetId = ThreadId.make("asking");
 const requestId = RuntimeRequestId.make("question");
@@ -436,6 +439,71 @@ describe("PendingQuestionsMcpService", () => {
       });
     }),
   );
+  it.effect.each([undefined, false, true])(
+    "stores and reads agent relay provenance (%s)",
+    (relayedFromUser) =>
+      Effect.gen(function* () {
+        const input = {
+          ...respondInput,
+          ...(relayedFromUser === undefined ? {} : { relayedFromUser }),
+        };
+        const { result, commands, records } = yield* runService({}, (service) =>
+          Effect.gen(function* () {
+            yield* service.respond(scope, input);
+            return yield* service.read(scope, { threadId: targetId, requestId });
+          }),
+        );
+        const expected = {
+          type: "agent",
+          threadId: callerId,
+          environmentId: null,
+          title: callerId,
+          reason,
+          ...(relayedFromUser === undefined ? {} : { relayedFromUser }),
+        };
+        expect(commands[0]).toMatchObject({ respondedBy: expected });
+        expect(records.get(targetId)?.runtimeRequests[0]?.respondedBy).toEqual(expected);
+        expect(result).toMatchObject({ success: { status: "resolved", respondedBy: expected } });
+        if (result._tag === "Success") expect(result.success.respondedBy).toEqual(expected);
+      }),
+  );
+  it.effect("preserves the relay claim across host transport and remote reads", () =>
+    Effect.gen(function* () {
+      const sent = yield* runService({}, (service) =>
+        service.respond(scope, { ...respondInput, host: "box", relayedFromUser: true }),
+      );
+      expect(sent.result._tag).toBe("Success");
+      expect(sent.calls).toHaveLength(1);
+      const transported = decodeRespondInput(sent.calls[0]!.arguments);
+      const destination = { ...outside, environmentId: EnvironmentId.make("destination") };
+      const received = yield* runService({}, (service) =>
+        Effect.gen(function* () {
+          yield* service.respond(destination, transported);
+          return yield* service.read(destination, { threadId: targetId, requestId });
+        }),
+      );
+      const expected = {
+        type: "agent",
+        threadId: callerId,
+        environmentId: scope.environmentId,
+        title: callerId,
+        reason,
+        relayedFromUser: true,
+      };
+      expect(received.commands[0]).toMatchObject({ respondedBy: expected });
+      expect(received.records.get(targetId)?.runtimeRequests[0]?.respondedBy).toEqual(expected);
+      expect(received.result).toMatchObject({ success: { respondedBy: expected } });
+      if (received.result._tag !== "Success") return;
+      const remoteRead = received.result.success;
+      const readBack = yield* runService(
+        { hostCall: () => Effect.succeed(remoteRead) },
+        (service) => service.read(scope, { host: "box", threadId: targetId, requestId }),
+      );
+      expect(readBack.result).toMatchObject({
+        success: { host: "box", status: "resolved", respondedBy: expected },
+      });
+    }),
+  );
   it.effect.each([
     { name: "missing answers", answers: undefined },
     { name: "empty answers", answers: {} },
@@ -543,7 +611,8 @@ describe("PendingQuestionsMcpService", () => {
           service.respond(scope, {
             ...respondInput,
             ...(host === undefined ? {} : { host }),
-            respondedBy: foreign,
+            respondedBy: { ...foreign, relayedFromUser: true },
+            relayedFromUser: true,
           }),
         );
         expect(result).toMatchObject({ failure: { code: "invalid_request" } });

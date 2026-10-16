@@ -1956,13 +1956,14 @@ it("round-trips responder metadata in resolved requests, commands and history", 
     undefined,
     { type: "user" as const },
     { type: "client" as const, reason: "R" },
-    {
+    ...[undefined, false, true].map((relayedFromUser) => ({
       type: "agent" as const,
       threadId: ThreadId.make("caller"),
       environmentId: null,
       title: null,
       reason: "  R  ",
-    },
+      ...(relayedFromUser === undefined ? {} : { relayedFromUser }),
+    })),
   ]) {
     const metadata = respondedBy === undefined ? {} : { respondedBy };
     const request = decodeRuntimeRequestJson({
@@ -1979,6 +1980,18 @@ it("round-trips responder metadata in resolved requests, commands and history", 
       ...metadata,
     });
     expect(decodeRuntimeRequestJson(encodeRuntimeRequestJson(request))).toEqual(request);
+    const event = decodeOrchestrationV2DomainEvent({
+      id: "answer-event",
+      type: "runtime-request.updated",
+      threadId: "thread",
+      occurredAt: now,
+      payload: request,
+    });
+    expect(event.payload).toEqual(request);
+    if (respondedBy?.type === "agent" && respondedBy.relayedFromUser === undefined) {
+      expect(describeUserInputResponder({ respondedBy })).toBe('orchestrator "caller"');
+      expect(request.respondedBy).not.toHaveProperty("relayedFromUser");
+    }
     expect(
       decodeOrchestrationV2Command({
         type: "runtime-request.respond",
@@ -2018,6 +2031,32 @@ it("round-trips responder metadata in resolved requests, commands and history", 
       item,
     );
   }
+});
+it("counts human answers from direct users and agent relay claims only", () => {
+  const decode = Schema.decodeUnknownSync(UserInputRespondedBy);
+  const agent = {
+    type: "agent",
+    threadId: "caller",
+    environmentId: null,
+    title: "Coordinator",
+    reason: "The user decided this.",
+  };
+  const responders = [
+    { type: "user" },
+    { ...agent, relayedFromUser: true },
+    { ...agent, environmentId: "foreign", relayedFromUser: true },
+    agent,
+    { ...agent, relayedFromUser: false },
+    { type: "client", reason: "The user decided this." },
+  ].map((responder) => decode(responder));
+  expect(
+    responders.filter(
+      (responder) =>
+        responder.type === "user" ||
+        (responder.type === "agent" && responder.relayedFromUser === true),
+    ),
+  ).toHaveLength(3);
+  expect(() => decode({ ...agent, relayedFromUser: "true" })).toThrow();
 });
 it("describes responders and terminal outcomes truthfully", () => {
   expect(describeUserInputResponder({})).toBe("another responder");

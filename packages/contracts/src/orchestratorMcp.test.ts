@@ -317,6 +317,22 @@ it("keeps single select, multi select, free text and provider-specific answer va
   expect(jsonSchema).toContain("Required provenance shown to the user");
 });
 
+it("accepts only boolean relay claims and advertises them to MCP callers", () => {
+  const args = { requestId: "request", answers: { q: "Yes" }, reason: "The user decided." };
+  for (const relayedFromUser of [true, false]) {
+    expect(decodePendingRequestRespondInput({ ...args, relayedFromUser })).toEqual({
+      ...args,
+      relayedFromUser,
+    });
+  }
+  expect(decodePendingRequestRespondInput(args)).not.toHaveProperty("relayedFromUser");
+  for (const relayedFromUser of ["true", 1, null]) {
+    expect(() => decodePendingRequestRespondInput({ ...args, relayedFromUser })).toThrow();
+  }
+  expect(
+    JSON.stringify(Schema.toJsonSchemaDocument(OrchestratorMcpPendingRequestRespondInput)),
+  ).toContain("Set true when your answer relays the user's own decision.");
+});
 it("decodes pending tools and optional legacy result fields", () => {
   const args = {
     threadId: "thread",

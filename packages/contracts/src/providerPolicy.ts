@@ -90,6 +90,8 @@ export const UserInputRespondedBy = Schema.Union([
     environmentId: Schema.NullOr(EnvironmentId),
     title: Schema.NullOr(Schema.String),
     reason: UserInputResponseReason,
+    /** Agent-reported claim that this answer relays the user's own decision. */
+    relayedFromUser: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("client"),
@@ -118,7 +120,7 @@ export function describeUserInputResponder(input: {
     case "user":
       return "the user";
     case "agent":
-      return `orchestrator "${responder.title ?? responder.threadId}"${responder.environmentId === null ? "" : " on another machine"}`;
+      return `${responder.relayedFromUser === true ? "the user, relayed by " : ""}orchestrator "${responder.title ?? responder.threadId}"${responder.environmentId === null ? "" : " on another machine"}`;
     case "client":
       return responder.label === undefined ? "an MCP client" : `MCP client "${responder.label}"`;
     default:
