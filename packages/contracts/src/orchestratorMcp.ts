@@ -32,12 +32,14 @@ import {
   UserInputRespondedBy,
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2TaskRole,
   OrchestrationV2CloudTask,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
@@ -190,14 +192,7 @@ export const OrchestratorMcpInteractionMode = Schema.Union([
 ]);
 export type OrchestratorMcpInteractionMode = typeof OrchestratorMcpInteractionMode.Type;
 
-export const OrchestratorMcpTaskRole = Schema.Literals([
-  "implementation",
-  "research",
-  "review",
-  "design",
-  "test",
-  "general",
-]);
+export const OrchestratorMcpTaskRole = OrchestrationV2TaskRole;
 export type OrchestratorMcpTaskRole = typeof OrchestratorMcpTaskRole.Type;
 
 export const OrchestratorMcpDelegatedTaskStatus = Schema.Literals([
@@ -289,6 +284,9 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   latestTerminalResultContextTransferId: Schema.NullOr(ContextTransferId),
   providerInstanceId: ProviderInstanceId,
   model: Schema.NullOr(Schema.String),
+  role: Schema.optional(OrchestratorMcpTaskRole),
+  modelSelection: Schema.optional(ModelSelection),
+  parentModelSelection: Schema.optional(ModelSelection),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
@@ -689,6 +687,9 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   sourceThreadId: ThreadId,
   itemId: TurnItemId,
   subagentId: Schema.optional(NodeId),
+  role: Schema.optional(OrchestratorMcpTaskRole),
+  modelSelection: Schema.optional(ModelSelection),
+  parentModelSelection: Schema.optional(ModelSelection),
   runId: Schema.NullOr(RunId),
   messageId: Schema.NullOr(MessageId),
   createdBy: Schema.NullOr(OrchestrationV2Actor),

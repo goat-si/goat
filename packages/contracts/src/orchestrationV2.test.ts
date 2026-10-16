@@ -133,6 +133,7 @@ const decodeProviderReplayTranscript = Schema.decodeUnknownSync(ProviderReplayTr
 const encodeOrchestrationV2Subagent = Schema.encodeSync(OrchestrationV2Subagent);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
 const encodeOrchestrationV2SubagentJson = Schema.encodeSync(OrchestrationV2SubagentJson);
+const decodeOrchestrationV2SubagentJson = Schema.decodeUnknownSync(OrchestrationV2SubagentJson);
 const decodeOrchestrationV2ThreadProjection = Schema.decodeUnknownSync(
   OrchestrationV2ThreadProjection,
 );
@@ -2430,6 +2431,19 @@ describe("WP4 task ceiling propagation codecs", () => {
   it("defaults legacy commands to none and preserves explicit ceiling", () => {
     const legacy = decodeOrchestrationV2Command(delegate);
     expect(legacy).toMatchObject({ memoryGrantCeiling: "none" });
+    expect(legacy).not.toHaveProperty("role");
+    expect(legacy).not.toHaveProperty("parentModelSelection");
+    expect(
+      decodeOrchestrationV2Command({
+        ...delegate,
+        role: "review",
+        parentModelSelection: { instanceId: "author", model: "author-model" },
+      }),
+    ).toMatchObject({
+      role: "review",
+      parentModelSelection: { instanceId: "author", model: "author-model" },
+    });
+
     for (const memoryGrantCeiling of ["none", "read", "read_write"])
       expect(decodeOrchestrationV2Command({ ...delegate, memoryGrantCeiling })).toMatchObject({
         memoryGrantCeiling,
@@ -2461,6 +2475,19 @@ describe("WP4 task ceiling propagation codecs", () => {
       updatedAt: now,
     };
     expect(decodeOrchestrationV2Subagent(child)).toMatchObject({ memoryGrantCeiling: "none" });
+    const legacyTask = decodeOrchestrationV2Subagent(child);
+    expect(legacyTask).not.toHaveProperty("role");
+    expect(legacyTask).not.toHaveProperty("parentModelSelection");
+    const metadata = {
+      role: "review",
+      modelSelection: { instanceId: "reviewer", model: "reviewer-model" },
+      parentModelSelection: { instanceId: "author", model: "author-model" },
+    };
+    const review = decodeOrchestrationV2Subagent({ ...child, ...metadata });
+    const reviewJson = JSON.parse(JSON.stringify(encodeOrchestrationV2SubagentJson(review)));
+    expect(decodeOrchestrationV2SubagentJson(reviewJson)).toMatchObject(metadata);
+    expect(() => decodeOrchestrationV2Subagent({ ...child, role: "invalid" })).toThrow();
+
     expect(decodeOrchestrationV2Subagent(child)).not.toHaveProperty("currentMemoryAccess");
     const assessment = { access: "none", reason: "environment_off" } as const;
     expect(
@@ -2479,7 +2506,7 @@ describe("WP4 task ceiling propagation codecs", () => {
       } else {
         expect(json).toHaveProperty("memoryGrantCeiling", memoryGrantCeiling);
       }
-      expect(Schema.decodeUnknownSync(OrchestrationV2SubagentJson)(json)).toMatchObject({
+      expect(decodeOrchestrationV2SubagentJson(json)).toMatchObject({
         memoryGrantCeiling,
       });
     }

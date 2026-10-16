@@ -6979,6 +6979,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         title: command.title ?? null,
         model: command.modelSelection.model,
         modelSelection: command.modelSelection,
+        ...(command.role === undefined ? {} : { role: command.role }),
+        parentModelSelection: run.modelSelection,
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
         status: "running",
         result: null,
@@ -7344,6 +7346,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         prompt: command.task,
         title: command.title ?? null,
         model: command.modelSelection.model,
+        modelSelection: command.modelSelection,
+        ...(command.role === undefined ? {} : { role: command.role }),
+        parentModelSelection: parentRun.modelSelection,
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
         ...(isCloudExecution(targetCapabilities)
           ? { completionDelivery: { state: "pending" as const, observedByRunId: null } }

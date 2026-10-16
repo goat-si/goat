@@ -205,6 +205,8 @@ const fixture = Effect.gen(function* () {
               title: command.title ?? null,
               model: command.modelSelection.model,
               modelSelection: command.modelSelection,
+              ...(command.role === undefined ? {} : { role: command.role }),
+              parentModelSelection: command.parentModelSelection,
               status: "running",
               result: null,
               startedAt: now,
@@ -437,8 +439,11 @@ it.effect(
       f.pauseMetadata();
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        const first = yield* service.delegateTask(scope, input);
-        const retry = yield* service.delegateTask(scope, input);
+        const first = yield* service.delegateTask(scope, { ...input, role: "review" });
+        const retry = yield* service.delegateTask(scope, { ...input, role: "review" });
+        assert.equal(first.role, "review");
+        assert.deepEqual(first.parentModelSelection, f.projection.runs[0]!.modelSelection);
+        assert.deepEqual(first.modelSelection, f.projection.subagents[0]!.modelSelection);
         assert.equal(first.status, "running");
         assert.equal(retry.taskId, first.taskId);
         assert.equal(f.launches.length, 1);

@@ -653,40 +653,68 @@ const make = Effect.gen(function* () {
         decodeWait,
       );
     },
-    sendToThread: (scope, input) =>
-      (input.host === undefined
-        ? local
-            .sendToThread(scope, input)
-            .pipe(Effect.map((result): OrchestratorMcpThreadSendResult => result))
-        : onHost(
-            scope,
-            {
-              host: input.host,
-              tool: "goat_thread_send",
-              // The remote sees an outside client; a thread's queue or steer still means "like
-              // steering" there, which its auto now does.
-              arguments:
-                scope.thread !== undefined && (input.mode === "queue" || input.mode === "steer")
-                  ? { ...withoutHost(input), mode: "auto" }
-                  : withoutHost(input),
-              writes: true,
-              relay: relaySend(scope, { ...input, host: input.host }),
-            },
-            decodeSend,
-          )
+    sendToThread: (scope, input) => {
+      const host = input.host;
+      return (
+        host === undefined
+          ? local
+              .sendToThread(scope, input)
+              .pipe(Effect.map((result): OrchestratorMcpThreadSendResult => result))
+          : coordinator.taskOrigin(host, input.threadId).pipe(
+              Effect.mapError((error) => failure("orchestration_error", error.message)),
+              Effect.flatMap((originThreadId) =>
+                threads
+                  .assertReviewTaskSendAllowed({
+                    threadId: input.threadId,
+                    ...(originThreadId === null ? {} : { senderThreadId: originThreadId }),
+                    host,
+                    createdBy: "agent",
+                  })
+                  .pipe(
+                    Effect.mapError((error) =>
+                      failure(
+                        error._tag === "ThreadManagementReviewTaskFinishedError"
+                          ? "thread_not_sendable"
+                          : "orchestration_error",
+                        error.message,
+                      ),
+                    ),
+                  ),
+              ),
+              Effect.andThen(() =>
+                onHost(
+                  scope,
+                  {
+                    host,
+                    tool: "goat_thread_send",
+                    // The remote sees an outside client; a thread's queue or steer still means "like
+                    // steering" there, which its auto now does.
+                    arguments:
+                      scope.thread !== undefined &&
+                      (input.mode === "queue" || input.mode === "steer")
+                        ? { ...withoutHost(input), mode: "auto" }
+                        : withoutHost(input),
+                    writes: true,
+                    relay: relaySend(scope, { ...input, host }),
+                  },
+                  decodeSend,
+                ),
+              ),
+            )
       ).pipe(
         Effect.tap((result) => rearmAfterSend(scope, input, result)),
         // A send to a remote thread this one launched follows its reports again.
         Effect.tap((result) =>
-          input.host === undefined || result.delivery === "relayed"
+          host === undefined || result.delivery === "relayed"
             ? Effect.void
             : coordinator
-                .resume(input.host, input.threadId)
+                .resume(host, input.threadId)
                 .pipe(
                   Effect.catch(() => Effect.logWarning("Could not resume SSH report observation.")),
                 ),
         ),
-      ),
+      );
+    },
     interruptThread: (scope, input) =>
       input.host === undefined
         ? local.interruptThread(scope, input)

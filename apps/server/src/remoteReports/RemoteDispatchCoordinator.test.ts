@@ -112,6 +112,7 @@ const fixture = Effect.gen(function* () {
   let crashImport = false;
   let refuseReport = false;
   let deliveryFails = false;
+  const refusedReviews = new Map<ThreadId, ThreadId>();
   let pauseLaunch = false;
   let pauseRegistration = false;
   let shell: OrchestrationV2ThreadShell | null = liveThreadShell(origin);
@@ -205,6 +206,14 @@ const fixture = Effect.gen(function* () {
         }),
     }),
     Layer.mock(Threads.ThreadManagementService)({
+      assertReviewTaskSendAllowed: (input) => {
+        const owner = refusedReviews.get(input.threadId);
+        if (owner === undefined) return Effect.void;
+        assert.equal(input.senderThreadId, owner);
+        return Effect.fail(
+          new Threads.ThreadManagementReviewTaskFinishedError({ threadId: input.threadId }),
+        );
+      },
       getThreadRecords: (id) =>
         unavailableProjections.has(id)
           ? Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: id }))
@@ -268,6 +277,7 @@ const fixture = Effect.gen(function* () {
     },
     lost,
     attemptedCommands,
+    refusedReviews,
     recordedTasks,
     unavailableProjections,
     refusedTasks,
@@ -1053,6 +1063,9 @@ it.effect.each([true, false])("observes task A on %s despite a later B", (suppor
       yield* Queue.take(f.commits);
       assert.equal((yield* c.get(launched.correlationId))?.state, "settled");
       assert.equal(yield* c.isTaskThread("box", remote), true);
+      assert.equal(yield* c.taskOrigin("box", remote), origin);
+      assert.equal(yield* c.taskOrigin("another-host", remote), null);
+      assert.equal(yield* c.taskOrigin("box", "unknown-child"), null);
       yield* c.resume("box", remote);
       assert.equal(yield* Queue.size(f.calls), 0);
     }).pipe(Effect.provide(f.layer));
@@ -2005,5 +2018,33 @@ it.effect("legacy dispatch defaults to none through coordinator reconstruction",
         assert.equal((yield* c.listForOrigin(origin))[0]?.memoryGrantCeiling, "none");
       }).pipe(Effect.provide(f.layer));
     }
+  }).pipe(Effect.provide(database)),
+);
+
+it.effect("refuses a relayed send to a finished review owned by another thread", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const owner = ThreadId.make("other-review-owner");
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* f.launch(c, "wake");
+      yield* Queue.take(f.calls);
+      const at = DateTime.formatIso(yield* DateTime.now);
+      yield* f.sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, task_id, parent_run_id, created_at, updated_at)
+        VALUES ('finished-review', 'task', ${owner}, ${sibling.host}, ${sibling.threadId}, 'key', 'wake', 'settled', 'review-task', 'review-parent-run', ${at}, ${at})`;
+      f.refusedReviews.set(sibling.threadId, owner);
+      yield* f.replyLatest(Effect.succeed(answer([relayReport(1, sibling)])));
+      const notice = yield* Queue.take(f.notifications);
+      assert.equal(notice.type, "message.dispatch");
+      if (notice.type === "message.dispatch") {
+        assert.include(notice.text, "Not delivered.");
+        assert.include(notice.text, "delegate_task");
+      }
+      yield* Queue.take(f.commits);
+      const next = yield* Queue.take(f.calls);
+      assert.equal(next.call.tool, "goat_origin_reports_wait");
+      assert.deepEqual(f.rearms, []);
+    }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(database)),
 );

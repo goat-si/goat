@@ -110,6 +110,8 @@ const runService = <A, E>(
   options: {
     readonly interactionMode: "default" | "plan";
     readonly taskThread?: boolean;
+    readonly reviewFinished?: boolean;
+    readonly taskOwner?: ThreadId;
     readonly onResume?: (host: string, id: string) => void;
     readonly hosts?: ReadonlyArray<string>;
     /** The machine the caller was launched from, when it has a report binding. */
@@ -166,6 +168,7 @@ const runService = <A, E>(
     ),
     Layer.provide(
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+        taskOrigin: () => Effect.succeed(options.taskOwner ?? threadId),
         isTaskThread: () => Effect.succeed(options.taskThread ?? false),
         resume: (host, id) => Effect.sync(() => options.onResume?.(host, id)),
       }),
@@ -190,6 +193,16 @@ const runService = <A, E>(
     ),
     Layer.provide(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
+        assertReviewTaskSendAllowed: (input) => {
+          if (options.taskOwner !== undefined) expect(input.senderThreadId).toBe(options.taskOwner);
+          return options.reviewFinished
+            ? Effect.fail(
+                new ThreadManagementService.ThreadManagementReviewTaskFinishedError({
+                  threadId: input.threadId,
+                }),
+              )
+            : Effect.void;
+        },
         getThreadShell: () =>
           Effect.succeed({
             id: threadId,
@@ -869,4 +882,31 @@ it.effect(
       expect(enriched).toEqual([[threadId, runId]]);
       expect(calls).toEqual([]);
     }),
+);
+
+it.effect("refuses a finished remote review before forwarding or relaying", () =>
+  Effect.gen(function* () {
+    const { result, calls, relays } = yield* runService(
+      {
+        interactionMode: "default",
+        reviewFinished: true,
+        taskOwner: ThreadId.make("another-review-owner"),
+        relaySend: true,
+        originLabel: "origin",
+        hostCall: () => Effect.die("A finished review cannot be forwarded"),
+      },
+      (service) =>
+        service.sendToThread(scope, {
+          host: "box",
+          threadId: ThreadId.make("finished-review"),
+          message: "Review again",
+        }),
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag !== "Failure") return;
+    expect(result.failure).toMatchObject({ code: "thread_not_sendable" });
+    expect(result.failure.message).toContain("delegate_task");
+    expect(calls).toHaveLength(0);
+    expect(relays).toHaveLength(0);
+  }),
 );

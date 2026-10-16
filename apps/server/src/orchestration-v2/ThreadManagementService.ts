@@ -275,6 +275,15 @@ export class ThreadManagementNoSteerableRunError extends Schema.TaggedError<Thre
   }
 }
 
+export class ThreadManagementReviewTaskFinishedError extends Schema.TaggedError<ThreadManagementReviewTaskFinishedError>()(
+  "ThreadManagementReviewTaskFinishedError",
+  { threadId: ThreadId },
+) {
+  override get message(): string {
+    return `Review task on thread ${this.threadId} has finished. Use delegate_task to start a new review round with a fresh child.`;
+  }
+}
+
 export class ThreadManagementTargetStoppedError extends Schema.TaggedError<ThreadManagementTargetStoppedError>()(
   "ThreadManagementTargetStoppedError",
   {
@@ -356,6 +365,7 @@ export const ThreadManagementError = Schema.Union([
   ThreadManagementThreadArchivedError,
   ThreadManagementNoSteerableRunError,
   ThreadManagementTargetStoppedError,
+  ThreadManagementReviewTaskFinishedError,
   ThreadManagementThreadNotInterruptibleError,
   ThreadManagementProjectionLoadError,
   ThreadManagementProjectThreadsListError,
@@ -436,6 +446,13 @@ export interface ThreadManagementServiceShape {
     /** Also list archived threads; active only when omitted. */
     readonly includeArchived?: boolean;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
+  /** Also checked at the origin before forwarding a send to a remote delegated child. */
+  readonly assertReviewTaskSendAllowed: (input: {
+    readonly threadId: ThreadId;
+    readonly senderThreadId?: ThreadId;
+    readonly host?: string;
+    readonly createdBy: OrchestrationV2Actor;
+  }) => Effect.Effect<void, ThreadManagementFailure>;
   readonly sendToThread: (
     input: ThreadManagementSendInput,
   ) => Effect.Effect<ThreadManagementSendResult, ThreadManagementFailure>;
@@ -1386,8 +1403,37 @@ const make = Effect.gen(function* () {
       return yield* deliverFrom(input, input.commandId, sequence, undefined, deadline, false);
     });
 
+  const assertReviewTaskSendAllowed: ThreadManagementServiceShape["assertReviewTaskSendAllowed"] = (
+    input,
+  ) =>
+    Effect.gen(function* () {
+      if (input.createdBy !== "agent") return;
+      let parentThreadId = input.senderThreadId;
+      if (input.host === undefined) {
+        const target = yield* orchestrator.getThreadRecords(input.threadId, []);
+        parentThreadId = target.thread.lineage.parentThreadId ?? undefined;
+      }
+      if (parentThreadId === undefined) return;
+      const parent = yield* orchestrator.getThreadRecords(parentThreadId, ["subagents"]);
+      const finishedReview = parent.subagents.some(
+        (task) =>
+          task.origin === "app_owned" &&
+          task.role === "review" &&
+          (task.status === "completed" ||
+            task.status === "failed" ||
+            task.status === "cancelled" ||
+            task.status === "interrupted") &&
+          (input.host === undefined
+            ? task.childThreadId === input.threadId
+            : task.remote?.host === input.host && task.remote.threadId === input.threadId),
+      );
+      if (finishedReview)
+        return yield* new ThreadManagementReviewTaskFinishedError({ threadId: input.threadId });
+    });
+
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
+      yield* assertReviewTaskSendAllowed(input);
       if (input.mode === "steer_when_ready") return yield* sendAgentMessage(input);
       const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
       if (target.thread.archivedAt !== null) {
@@ -1795,6 +1841,7 @@ const make = Effect.gen(function* () {
     getThreadShell: orchestrator.getThreadShell,
     listProjectThreads,
     sendToThread,
+    assertReviewTaskSendAllowed,
     assertProviderInstanceEnabled,
     isProviderInstanceEnabledForProject,
     hasReceipt,

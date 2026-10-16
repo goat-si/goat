@@ -1655,3 +1655,203 @@ it.effect("settleAfterRun waits through a question and settles on completion", (
     expect(commands).toEqual(["thread.settle"]);
   }),
 );
+
+it.effect.each([
+  {
+    role: "review",
+    status: "running",
+    createdBy: "agent",
+    mode: "steer_when_ready",
+    refused: false,
+  },
+  ...["completed", "failed", "cancelled", "interrupted"].flatMap((status) =>
+    ["steer_when_ready", "queue", "restart"].map((mode) => ({
+      role: "review",
+      status,
+      createdBy: "agent",
+      mode,
+      refused: true,
+    })),
+  ),
+  ...["implementation", "research", "design", "test", "general", undefined].map((role) => ({
+    role,
+    status: "completed",
+    createdBy: "agent",
+    mode: "queue",
+    refused: false,
+  })),
+  { role: "review", status: "completed", createdBy: "user", mode: "queue", refused: false },
+] as const)("review send policy: $role/$status/$createdBy/$mode", (scenario) =>
+  Effect.gen(function* () {
+    const parentId = ThreadId.make("review-parent");
+    const childId = ThreadId.make("review-child");
+    const messageId = MessageId.make("review-followup");
+    const runId = RunId.make("review-run");
+    const child = idleThreadProjection(liveThreadShell(childId));
+    const parent = idleThreadProjection(liveThreadShell(parentId));
+    const projection = {
+      ...child,
+      thread: {
+        ...child.thread,
+        lineage: {
+          ...child.thread.lineage,
+          parentThreadId: parentId,
+          relationshipToParent: "subagent",
+        },
+      },
+      runs: [
+        {
+          id: runId,
+          status: scenario.status === "running" ? "running" : "completed",
+          ordinal: 1,
+          activeAttemptId: "attempt",
+          providerThreadId: "provider-thread",
+          userMessageId: null,
+        },
+      ],
+      providerTurns: [{ status: "running", runAttemptId: "attempt" }],
+      providerThreads: [{ id: "provider-thread", providerSessionId: "session" }],
+      providerSessions: [
+        { id: "session", capabilities: { turns: { supportsActiveSteering: true } } },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const parentProjection = {
+      ...parent,
+      subagents: [
+        {
+          id: NodeId.make("review-task"),
+          origin: "app_owned",
+          childThreadId: childId,
+          role: scenario.role,
+          status: scenario.status,
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const dispatched: OrchestrationV2ServerCommand[] = [];
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(
+        ThreadManagementService.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(layerReceiptsTest),
+          Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+          Layer.provide(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadRecords: (id, _fields, filter) =>
+                Effect.succeed(
+                  id === parentId
+                    ? parentProjection
+                    : {
+                        ...projection,
+                        // Intake reads interrupt requests separately from the delivery item.
+                        turnItems: filter?.turnItemTypes?.includes("run_interrupt_request")
+                          ? []
+                          : projection.turnItems,
+                      },
+                ),
+              getThreadEventSequence: () => Effect.succeed(0),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatched.push(command);
+                  if (command.type !== "message.dispatch")
+                    throw new Error("Expected message dispatch");
+                  (projection as unknown as { messages: unknown[] }).messages = [
+                    { id: messageId, runId },
+                  ];
+                  (projection as unknown as { turnItems: unknown[] }).turnItems = [
+                    {
+                      type: "user_message",
+                      messageId,
+                      inputIntent:
+                        command.dispatchMode.type === "steer_active" ? "steer" : "queued_turn",
+                    },
+                  ];
+                  return { sequence: 1, storedEvents: [] };
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const result = yield* service
+      .sendToThread({
+        projectId: child.thread.projectId,
+        commandId: CommandId.make("review-send"),
+        threadId: childId,
+        // Even an agent other than the parent must obey the review's lifecycle.
+        senderThreadId: ThreadId.make("another-agent"),
+        messageId,
+        text: "Review again",
+        attachments: [],
+        mode: scenario.mode as ThreadManagementService.ThreadManagementSendMode,
+        createdBy: scenario.createdBy === "user" ? "user" : "agent",
+        creationSource: scenario.createdBy === "user" ? "web" : "mcp",
+      })
+      .pipe(Effect.result);
+    if (scenario.refused) {
+      expect(result._tag).toBe("Failure");
+      if (result._tag !== "Failure") return;
+      expect(result.failure).toBeInstanceOf(
+        ThreadManagementService.ThreadManagementReviewTaskFinishedError,
+      );
+      expect(result.failure.message).toContain("delegate_task");
+      expect(dispatched).toHaveLength(0);
+    } else {
+      expect(result._tag).toBe("Success");
+      expect(dispatched).toHaveLength(1);
+      if (scenario.status === "running" && result._tag === "Success")
+        expect(result.success.delivery).toBe("steered");
+    }
+  }),
+);
+
+it.effect.each(["running", "completed"] as const)(
+  "checks the persisted remote review owner when %s",
+  (status) =>
+    Effect.gen(function* () {
+      const originId = ThreadId.make("remote-review-owner");
+      const remoteId = ThreadId.make("remote-review-child");
+      const parent = idleThreadProjection(liveThreadShell(originId));
+      const records = {
+        ...parent,
+        subagents: [
+          {
+            origin: "app_owned",
+            role: "review",
+            status,
+            remote: { host: "box", threadId: remoteId },
+          },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+        Effect.provide(
+          ThreadManagementService.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(layerReceiptsTest),
+            Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+            Layer.provide(
+              Layer.mock(Orchestrator.OrchestratorV2)({
+                getThreadRecords: (id) => {
+                  expect(id).toBe(originId);
+                  return Effect.succeed(records);
+                },
+              }),
+            ),
+          ),
+        ),
+      );
+      const input = {
+        senderThreadId: originId,
+        threadId: remoteId,
+        host: "box",
+        createdBy: "agent" as const,
+      };
+      const result = yield* service.assertReviewTaskSendAllowed(input).pipe(Effect.result);
+      expect(result._tag).toBe(status === "running" ? "Success" : "Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toBeInstanceOf(
+          ThreadManagementService.ThreadManagementReviewTaskFinishedError,
+        );
+      yield* service.assertReviewTaskSendAllowed({ ...input, host: "another-box" });
+      yield* service.assertReviewTaskSendAllowed({ ...input, createdBy: "user" });
+    }),
+);

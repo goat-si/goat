@@ -234,6 +234,7 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("thread_not_found", error.message);
     case "ThreadManagementRunNotFoundError":
       return failure("run_not_found", error.message);
+    case "ThreadManagementReviewTaskFinishedError":
     case "ThreadManagementThreadArchivedError":
     case "ThreadManagementNoSteerableRunError":
     case "ThreadManagementTargetStoppedError":
@@ -941,8 +942,16 @@ function timelineItem(input: {
   readonly maxChars: number;
   readonly textOffset?: number;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
+  readonly tasksByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["subagents"]>;
 }): OrchestratorMcpThreadTimelineItem {
-  const text = turnItemText(input.row.item);
+  const item = input.row.item;
+  const task =
+    item.type === "subagent"
+      ? input.tasksByThreadId
+          .get(input.row.sourceThreadId)
+          ?.find((task) => task.id === item.subagentId)
+      : undefined;
+  const text = turnItemText(item);
   const offset = input.textOffset ?? 0;
   const end = offset + input.maxChars;
   const textTruncated = text !== null && text.length > end;
@@ -962,6 +971,11 @@ function timelineItem(input: {
     sourceThreadId: input.row.sourceThreadId,
     itemId: input.row.sourceItemId,
     ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
+    ...(task?.role === undefined ? {} : { role: task.role }),
+    ...(task?.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
+    ...(task?.parentModelSelection === undefined
+      ? {}
+      : { parentModelSelection: task.parentModelSelection }),
     runId: input.row.item.runId,
     messageId,
     createdBy: message?.createdBy ?? null,
@@ -1692,6 +1706,11 @@ const make = Effect.gen(function* () {
           hasPendingChildRuns: false,
           providerInstanceId: task.providerInstanceId,
           model: task.model,
+          ...(task.role === undefined ? {} : { role: task.role }),
+          ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
+          ...(task.parentModelSelection === undefined
+            ? {}
+            : { parentModelSelection: task.parentModelSelection }),
           summary: task.result,
           resultContextTransferId: null,
           latestTerminalRunId: null,
@@ -1852,6 +1871,11 @@ const make = Effect.gen(function* () {
         hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
         providerInstanceId: task.providerInstanceId,
         model: task.model,
+        ...(task.role === undefined ? {} : { role: task.role }),
+        ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
+        ...(task.parentModelSelection === undefined
+          ? {}
+          : { parentModelSelection: task.parentModelSelection }),
         summary: derivedResult,
         resultContextTransferId: resultTransfer?.id ?? null,
         latestTerminalRunId: terminalRun?.id ?? null,
@@ -2566,6 +2590,8 @@ const make = Effect.gen(function* () {
             yield* threadManagement
               .dispatch({
                 type: "delegated_task.remote.register",
+                ...(input.role === undefined ? {} : { role: input.role }),
+                parentModelSelection: parentRun.modelSelection,
                 memoryGrantCeiling: record.memoryGrantCeiling,
                 commandId,
                 parentThreadId: scope.thread.threadId,
@@ -2753,6 +2779,8 @@ const make = Effect.gen(function* () {
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
+            ...(input.role === undefined ? {} : { role: input.role }),
+            parentModelSelection: parentRun.modelSelection,
             memoryGrantCeiling,
             createdBy: "agent",
             creationSource: "mcp",
@@ -3329,6 +3357,19 @@ const make = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(threadManagementFailure));
         const page = timeline.items;
+        const taskSources = [
+          ...new Set(
+            page.filter((row) => row.item.type === "subagent").map((row) => row.sourceThreadId),
+          ),
+        ];
+        const tasksByThreadId = new Map(
+          yield* Effect.forEach(taskSources, (threadId) =>
+            threadManagement.getThreadRecords(threadId, ["subagents"]).pipe(
+              Effect.map((records) => [threadId, records.subagents] as const),
+              Effect.mapError(threadManagementFailure),
+            ),
+          ),
+        );
         const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
         for (const row of page) {
           if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
@@ -3406,6 +3447,7 @@ const make = Effect.gen(function* () {
               row,
               maxChars,
               messagesByThreadId,
+              tasksByThreadId,
               ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
             }),
           ),
