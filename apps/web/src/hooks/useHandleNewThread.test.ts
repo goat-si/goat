@@ -289,7 +289,8 @@ describe.each(["new", "stored", "active", "fallback"] as const)(
       };
       const result = await useNewThreadHandler()(projectRef);
       await testState.failProjectFileRead();
-      expectReset(result!.draftId, "worktree", false);
+      // newWorktreesStartFromOrigin defaults to true.
+      expectReset(result!.draftId, "worktree", true);
     });
     it("ignores a late project file once the project is removed", async () => {
       prepare();
