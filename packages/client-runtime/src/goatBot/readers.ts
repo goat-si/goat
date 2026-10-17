@@ -10,6 +10,7 @@ import type {
   GoatBotCardTone,
   GoatBotItemReaders,
   GoatBotMessagePresentation,
+  GoatBotPullRequestLink,
   GoatBotTaskCard,
 } from "./rows.ts";
 
@@ -43,17 +44,48 @@ function workerlessLabel(status: ChannelTaskStatus): string {
   return status === "received" || status === "dispatching" ? "Not started yet" : "No worker thread";
 }
 
-function questionLabel(count: number): string | null {
+function countLabel(count: number, noun: string): string | null {
   if (count <= 0) return null;
-  return count === 1 ? "1 question" : `${count} questions`;
+  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
 }
 
-/** A finished task whose worker never reported its outcome is worth a second look. */
+/**
+ * What waits on a person, whatever the task's status says: questions on the task or in the worker
+ * thread, tool approvals, a provider sign-in, or a usage limit nothing will resume on its own. A
+ * finished task whose worker never reported its outcome is worth a second look too.
+ */
 function attentionLabel(chip: ChannelTaskChip): string | null {
   if (chip.status === "completed" && chip.completionReport === "missing") {
     return "Finished without a report";
   }
-  return questionLabel(chip.openQuestionCount);
+  const needsYou = chip.observed?.needsYou ?? [];
+  const count = (kind: (typeof needsYou)[number]["kind"]) =>
+    needsYou.filter((item) => item.kind === kind).length;
+  const parts = [
+    countLabel(chip.openQuestionCount + count("question"), "question"),
+    countLabel(count("approval"), "approval"),
+    count("sign_in") > 0 ? "Sign-in needed" : null,
+    count("usage_limit") > 0 ? "Usage limit: resume needed" : null,
+  ].filter((part) => part !== null);
+  if (parts.length > 0) return parts.join(" · ");
+  if (chip.observed?.usageLimitResetAt !== undefined) return "Usage limit: resumes after reset";
+  return null;
+}
+
+function pullRequestLinks(chip: ChannelTaskChip): ReadonlyArray<GoatBotPullRequestLink> {
+  return (chip.observed?.pullRequests ?? []).map((pullRequest) => {
+    const detail =
+      pullRequest.state !== undefined && pullRequest.state !== "open"
+        ? pullRequest.state
+        : pullRequest.watching
+          ? "watching"
+          : null;
+    return {
+      key: `${pullRequest.repository}#${pullRequest.number}`,
+      label: detail === null ? `#${pullRequest.number}` : `#${pullRequest.number} · ${detail}`,
+      url: pullRequest.url,
+    };
+  });
 }
 
 export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
@@ -72,6 +104,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     sourceLabel: host === undefined ? requester : `${requester} · on ${host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
+    pullRequests: pullRequestLinks(chip),
     target:
       chip.worker === undefined
         ? { kind: "none", label: workerlessLabel(chip.status) }

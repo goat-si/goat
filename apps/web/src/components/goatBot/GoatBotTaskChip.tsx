@@ -59,6 +59,21 @@ export function GoatBotTaskChip({ card }: { readonly card: GoatBotTaskCard }) {
       {card.summary ? (
         <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
       ) : null}
+      {card.pullRequests.length > 0 ? (
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-xs">
+          {card.pullRequests.map((pullRequest) => (
+            <a
+              key={pullRequest.key}
+              href={pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-info-foreground hover:underline"
+            >
+              {pullRequest.label}
+            </a>
+          ))}
+        </div>
+      ) : null}
       <time dateTime={card.updatedAt} className="text-xs text-muted-foreground">
         Updated {formatShortTimestamp(card.updatedAt, timestampFormat)}
       </time>

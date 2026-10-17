@@ -39,6 +39,7 @@ describe("presentTaskChip", () => {
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
       attentionLabel: null,
+      pullRequests: [],
       target: { kind: "thread", environmentId: "env", threadId: "worker" },
     });
   });
@@ -123,6 +124,71 @@ describe("presentTaskChip", () => {
     expect(presentTaskChip(chip({ openQuestionCount: 3 })).attentionLabel).toBe("3 questions");
     expect(presentTaskChip(chip({ summary: "  " })).summary).toBeNull();
     expect(presentTaskChip(chip({ summary: "Found the cause" })).summary).toBe("Found the cause");
+  });
+
+  it("shows what the worker thread waits on without changing the status", () => {
+    const observed = (
+      needsYou: NonNullable<ChannelTaskChip["observed"]>["needsYou"],
+      usageLimitResetAt?: string,
+    ) => ({
+      observed: {
+        pullRequests: [],
+        needsYou,
+        ...(usageLimitResetAt === undefined ? {} : { usageLimitResetAt }),
+      },
+    });
+    const since = "2026-10-12T12:02:00.000Z";
+    expect(
+      presentTaskChip(
+        chip({
+          openQuestionCount: 1,
+          ...observed([
+            { kind: "question", since },
+            { kind: "approval", since },
+            { kind: "approval", since },
+          ]),
+        }),
+      ),
+    ).toMatchObject({ statusLabel: "Working", attentionLabel: "2 questions · 2 approvals" });
+    expect(presentTaskChip(chip(observed([{ kind: "usage_limit", since }]))).attentionLabel).toBe(
+      "Usage limit: resume needed",
+    );
+    expect(presentTaskChip(chip(observed([], "2026-10-12T17:00:00.000Z"))).attentionLabel).toBe(
+      "Usage limit: resumes after reset",
+    );
+  });
+
+  it("lists the worker's pull requests with their state", () => {
+    const pullRequests = [
+      {
+        repository: "goat-si/goat",
+        number: 41,
+        url: "https://github.com/goat-si/goat/pull/41",
+        state: "merged" as const,
+        watching: false,
+      },
+      {
+        repository: "goat-si/goat",
+        number: 42,
+        url: "https://github.com/goat-si/goat/pull/42",
+        state: "open" as const,
+        watching: true,
+      },
+    ];
+    expect(
+      presentTaskChip(chip({ observed: { pullRequests, needsYou: [] } })).pullRequests,
+    ).toEqual([
+      {
+        key: "goat-si/goat#41",
+        label: "#41 · merged",
+        url: "https://github.com/goat-si/goat/pull/41",
+      },
+      {
+        key: "goat-si/goat#42",
+        label: "#42 · watching",
+        url: "https://github.com/goat-si/goat/pull/42",
+      },
+    ]);
   });
 });
 

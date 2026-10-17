@@ -61,7 +61,7 @@ function GoatBotTaskCard(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${card.title}. ${card.statusLabel}. ${action}`}
+      accessibilityLabel={`${card.title}. ${card.statusLabel}.${card.attentionLabel ? ` ${card.attentionLabel}.` : ""} ${action}`}
       disabled={target.kind !== "thread" || unreachableHost !== null}
       onPress={() => {
         if (target.kind === "thread" && unreachableHost === null)
@@ -86,6 +86,11 @@ function GoatBotTaskCard(props: {
       {card.summary ? (
         <Text numberOfLines={3} className="text-sm text-foreground">
           {card.summary}
+        </Text>
+      ) : null}
+      {card.pullRequests.length > 0 ? (
+        <Text className="text-xs text-foreground-muted">
+          {"Pull requests: " + card.pullRequests.map((pullRequest) => pullRequest.label).join(", ")}
         </Text>
       ) : null}
       <Text className="text-xs text-foreground-muted">

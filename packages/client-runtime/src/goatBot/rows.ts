@@ -43,9 +43,18 @@ export interface GoatBotTaskCard {
    */
   readonly sourceLabel: string | null;
   readonly summary: string | null;
-  /** Something waiting on a person, such as "2 questions". */
+  /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;
+  /** Pull requests the worker opened or linked, newest state first known. */
+  readonly pullRequests: ReadonlyArray<GoatBotPullRequestLink>;
   readonly target: GoatBotCardTarget;
+}
+
+export interface GoatBotPullRequestLink {
+  readonly key: string;
+  /** Such as "#42 · merged" or "#42 · watching". */
+  readonly label: string;
+  readonly url: string;
 }
 
 export interface GoatBotMessagePresentation {

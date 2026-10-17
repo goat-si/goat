@@ -111,6 +111,7 @@ function card(key: string, revision: number, statusLabel = "Working"): GoatBotTa
     sourceLabel: null,
     summary: null,
     attentionLabel: null,
+    pullRequests: [],
     target: {
       kind: "thread",
       environmentId: EnvironmentId.make("env"),
