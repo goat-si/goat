@@ -1401,6 +1401,7 @@ const make = Effect.gen(function* () {
       if (target.messages.some((message) => message.id === input.messageId)) {
         return yield* readDelivery(input, { sequence, storedEvents: [] }, "steer_active");
       }
+      yield* assertReviewTaskSendAllowed(input);
       const deadline = (yield* Clock.currentTimeMillis) + STEER_READY_WAIT_MS;
       return yield* deliverFrom(input, input.commandId, sequence, undefined, deadline, false);
     });
@@ -1417,33 +1418,61 @@ const make = Effect.gen(function* () {
       }
       if (parentThreadId === undefined) return;
       const parent = yield* orchestrator.getThreadRecords(parentThreadId, ["subagents"]);
-      const finishedReview = parent.subagents.some(
+      const tasks = parent.subagents.filter(
         (task) =>
           task.origin === "app_owned" &&
-          task.role === "review" &&
-          (task.status === "completed" ||
-            task.status === "failed" ||
-            task.status === "cancelled" ||
-            task.status === "interrupted") &&
           (input.host === undefined
             ? task.childThreadId === input.threadId
             : task.remote?.host === input.host && task.remote.threadId === input.threadId),
       );
-      if (finishedReview)
+      if (
+        tasks.some(
+          (task) =>
+            task.status === "pending" || task.status === "running" || task.status === "waiting",
+        )
+      )
+        return;
+      // Provider progress and ledger writes can update an older task after a
+      // follow-up starts. Choose the latest launch, not the latest update.
+      const latest = tasks
+        .map((task, index) => ({ task, index }))
+        .toSorted(
+          (a, b) =>
+            (b.task.startedAt == null ? -1 : DateTime.toEpochMillis(b.task.startedAt)) -
+              (a.task.startedAt == null ? -1 : DateTime.toEpochMillis(a.task.startedAt)) ||
+            b.index - a.index,
+        )[0]?.task;
+      if (
+        latest?.role === "review" &&
+        (latest.status === "completed" ||
+          latest.status === "failed" ||
+          latest.status === "cancelled" ||
+          latest.status === "interrupted")
+      )
         return yield* new ThreadManagementReviewTaskFinishedError({ threadId: input.threadId });
     });
 
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
-      yield* assertReviewTaskSendAllowed(input);
       if (input.mode === "steer_when_ready") return yield* sendAgentMessage(input);
-      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
+      const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns", "messages"], {
+        messageIds: [input.messageId],
+      });
       if (target.thread.archivedAt !== null) {
         return yield* new ThreadManagementThreadArchivedError({
           threadId: input.threadId,
         });
       }
 
+      if (target.messages.some((message) => message.id === input.messageId)) {
+        const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
+        return yield* readDelivery(
+          input,
+          { sequence, storedEvents: [] },
+          input.mode === "restart" ? "restart_active" : "steer_active",
+        );
+      }
+      yield* assertReviewTaskSendAllowed(input);
       const steerableRun = latestSteerableRun(target);
       let dispatchMode: Extract<
         OrchestrationV2Command,

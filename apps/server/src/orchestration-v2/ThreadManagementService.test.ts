@@ -1664,6 +1664,30 @@ it.effect.each([
     mode: "steer_when_ready",
     refused: false,
   },
+  ...["steer_when_ready", "queue", "restart"].map((mode) => ({
+    role: "review",
+    status: "running",
+    createdBy: "agent",
+    mode,
+    refused: false,
+    retryAfterCompletion: true,
+  })),
+  {
+    role: "review",
+    status: "completed",
+    createdBy: "agent",
+    mode: "steer_when_ready",
+    refused: false,
+    followup: "running",
+  },
+  {
+    role: "review",
+    status: "completed",
+    createdBy: "agent",
+    mode: "queue",
+    refused: false,
+    followup: "completed_general",
+  },
   ...["completed", "failed", "cancelled", "interrupted"].flatMap((status) =>
     ["steer_when_ready", "queue", "restart"].map((mode) => ({
       role: "review",
@@ -1702,7 +1726,11 @@ it.effect.each([
       runs: [
         {
           id: runId,
-          status: scenario.status === "running" ? "running" : "completed",
+          status:
+            scenario.status === "running" ||
+            ("followup" in scenario && scenario.followup === "running")
+              ? "running"
+              : "completed",
           ordinal: 1,
           activeAttemptId: "attempt",
           providerThreadId: "provider-thread",
@@ -1715,7 +1743,7 @@ it.effect.each([
         { id: "session", capabilities: { turns: { supportsActiveSteering: true } } },
       ],
     } as unknown as OrchestrationV2ThreadProjection;
-    const parentProjection = {
+    let parentProjection = {
       ...parent,
       subagents: [
         {
@@ -1725,6 +1753,17 @@ it.effect.each([
           role: scenario.role,
           status: scenario.status,
         },
+        ...("followup" in scenario
+          ? [
+              {
+                id: NodeId.make("followup-task"),
+                origin: "app_owned",
+                childThreadId: childId,
+                role: scenario.followup === "running" ? "review" : "general",
+                status: scenario.followup === "running" ? "running" : "completed",
+              },
+            ]
+          : []),
       ],
     } as unknown as OrchestrationV2ThreadProjection;
     const dispatched: OrchestrationV2ServerCommand[] = [];
@@ -1772,21 +1811,31 @@ it.effect.each([
         ),
       ),
     );
-    const result = yield* service
-      .sendToThread({
-        projectId: child.thread.projectId,
-        commandId: CommandId.make("review-send"),
-        threadId: childId,
-        // Even an agent other than the parent must obey the review's lifecycle.
-        senderThreadId: ThreadId.make("another-agent"),
-        messageId,
-        text: "Review again",
-        attachments: [],
-        mode: scenario.mode as ThreadManagementService.ThreadManagementSendMode,
-        createdBy: scenario.createdBy === "user" ? "user" : "agent",
-        creationSource: scenario.createdBy === "user" ? "web" : "mcp",
-      })
-      .pipe(Effect.result);
+    const send = {
+      projectId: child.thread.projectId,
+      commandId: CommandId.make("review-send"),
+      threadId: childId,
+      // Even an agent other than the parent must obey the review's lifecycle.
+      senderThreadId: ThreadId.make("another-agent"),
+      messageId,
+      text: "Review again",
+      attachments: [],
+      mode: scenario.mode as ThreadManagementService.ThreadManagementSendMode,
+      createdBy: scenario.createdBy === "user" ? "user" : "agent",
+      creationSource: scenario.createdBy === "user" ? "web" : "mcp",
+    } satisfies ThreadManagementService.ThreadManagementSendInput;
+    const result = yield* service.sendToThread(send).pipe(Effect.result);
+    if ("retryAfterCompletion" in scenario && result._tag === "Success") {
+      parentProjection = {
+        ...parentProjection,
+        subagents: parentProjection.subagents.map((task) => ({ ...task, status: "completed" })),
+      };
+      const replay = yield* service.sendToThread(send);
+      expect(replay.message.id).toBe(result.success.message.id);
+      expect(replay.run.id).toBe(result.success.run.id);
+      expect(replay.delivery).toBe(result.success.delivery);
+      expect(dispatched).toHaveLength(1);
+    }
     if (scenario.refused) {
       expect(result._tag).toBe("Failure");
       if (result._tag !== "Failure") return;
@@ -1798,7 +1847,7 @@ it.effect.each([
     } else {
       expect(result._tag).toBe("Success");
       expect(dispatched).toHaveLength(1);
-      if (scenario.status === "running" && result._tag === "Success")
+      if (scenario.mode === "steer_when_ready" && result._tag === "Success")
         expect(result.success.delivery).toBe("steered");
     }
   }),
@@ -1811,7 +1860,7 @@ it.effect.each(["running", "completed"] as const)(
       const originId = ThreadId.make("remote-review-owner");
       const remoteId = ThreadId.make("remote-review-child");
       const parent = idleThreadProjection(liveThreadShell(originId));
-      const records = {
+      let records = {
         ...parent,
         subagents: [
           {
@@ -1853,5 +1902,20 @@ it.effect.each(["running", "completed"] as const)(
         );
       yield* service.assertReviewTaskSendAllowed({ ...input, host: "another-box" });
       yield* service.assertReviewTaskSendAllowed({ ...input, createdBy: "user" });
+      if (status === "completed") {
+        records = {
+          ...records,
+          subagents: [...records.subagents, { ...records.subagents[0]!, status: "running" }],
+        };
+        yield* service.assertReviewTaskSendAllowed(input);
+        records = {
+          ...records,
+          subagents: [
+            records.subagents[0]!,
+            { ...records.subagents[1]!, status: "completed", role: "general" },
+          ],
+        };
+        yield* service.assertReviewTaskSendAllowed(input);
+      }
     }),
 );

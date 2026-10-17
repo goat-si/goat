@@ -107,6 +107,8 @@ const Row = Schema.Struct({
   Schema.makeFilter((r) => r.kind !== "task" || (r.task_id !== null && r.parent_run_id !== null)),
 );
 type Row = typeof Row.Type;
+
+const RELAY_REQUEST_OUTCOME_LIMIT = 1_000;
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(Row));
 const encodeRequestIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(RuntimeRequestId)));
 const decodeReportWait = Schema.decodeUnknownEffect(RemoteOriginReportsWaitResult);
@@ -455,13 +457,23 @@ const make = Effect.gen(function* () {
    * outcome it already has.
    */
   const relayOutcomes = new Map<string, RelayOutcome>();
+  // Keyed by the caller's request id for retries after a lost response; bounded, oldest first out.
+  const relayRequestOutcomes = new Map<string, RelayOutcome>();
   const relay = Effect.fn("RemoteDispatchCoordinator.relay")(function* (
     r: Row,
     report: RemoteReport,
     send: RemoteRelaySend,
   ) {
     const key = `${r.correlation_id}:${report.sequence}`;
-    const known = relayOutcomes.get(key);
+    const requestKey =
+      send.clientRequestId === undefined
+        ? undefined
+        : [r.correlation_id, send.host, send.threadId, send.clientRequestId]
+            .map(encodeURIComponent)
+            .join(":");
+    const known =
+      relayOutcomes.get(key) ??
+      (requestKey === undefined ? undefined : relayRequestOutcomes.get(requestKey));
     if (known !== undefined) return known;
     const outcome = (
       status: string,
@@ -598,6 +610,13 @@ const make = Effect.gen(function* () {
       return outcome(`Delivered: ${result.delivery}, run ${frameLiteral(result.runId)}.`, false);
     });
     relayOutcomes.set(key, decided);
+    if (requestKey !== undefined) {
+      relayRequestOutcomes.set(requestKey, decided);
+      if (relayRequestOutcomes.size > RELAY_REQUEST_OUTCOME_LIMIT) {
+        const oldest = relayRequestOutcomes.keys().next().value;
+        if (oldest !== undefined) relayRequestOutcomes.delete(oldest);
+      }
+    }
     return decided;
   });
   const importBatch = Effect.fn("RemoteDispatchCoordinator.importBatch")(function* (

@@ -40,7 +40,10 @@ and [`ssh.md`](ssh.md).
 caller named except `restart`. `OrchestratorMcpService` passes the call through
 `threadSendMode` in `apps/server/src/orchestration-v2/ThreadManagementService.ts`, which returns
 `steer_when_ready` for that case and for every `auto` send. The message joins a running turn,
-waits for a turn that is still starting, or starts an idle thread. A provider that cannot steer,
+waits for a turn that is still starting, or starts an idle thread. When a child's latest task is
+a finished review and no task is active, it refuses new agent follow-ups; start a new review
+round with `delegate_task`. Retrying an already delivered send returns its existing result.
+A provider that cannot steer,
 a turn that is already finishing, and the slash commands `/compact`, `/logout`, and `/goal` take
 it as the next turn. A thread sending to itself, and a client that is not inside a GOAT thread,
 keep an explicit `queue` or `steer`. A send to another host rewrites those two modes to `auto`

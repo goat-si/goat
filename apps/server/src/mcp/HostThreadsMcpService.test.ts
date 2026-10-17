@@ -110,7 +110,7 @@ const runService = <A, E>(
   options: {
     readonly interactionMode: "default" | "plan";
     readonly taskThread?: boolean;
-    readonly reviewFinished?: boolean;
+    readonly reviewFinished?: boolean | (() => boolean);
     readonly taskOwner?: ThreadId;
     readonly onResume?: (host: string, id: string) => void;
     readonly hosts?: ReadonlyArray<string>;
@@ -195,7 +195,11 @@ const runService = <A, E>(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         assertReviewTaskSendAllowed: (input) => {
           if (options.taskOwner !== undefined) expect(input.senderThreadId).toBe(options.taskOwner);
-          return options.reviewFinished
+          return (
+            typeof options.reviewFinished === "function"
+              ? options.reviewFinished()
+              : options.reviewFinished
+          )
             ? Effect.fail(
                 new ThreadManagementService.ThreadManagementReviewTaskFinishedError({
                   threadId: input.threadId,
@@ -908,5 +912,45 @@ it.effect("refuses a finished remote review before forwarding or relaying", () =
     expect(result.failure.message).toContain("delegate_task");
     expect(calls).toHaveLength(0);
     expect(relays).toHaveLength(0);
+  }),
+);
+
+it.effect("reuses a successful remote send before the finished-review precheck on retry", () =>
+  Effect.gen(function* () {
+    let finished = false;
+    const target = ThreadId.make("review-retry");
+    const delivered = {
+      threadId: target,
+      messageId: "sent-review-message",
+      runId: "review-run",
+      status: "running",
+      delivery: "steered",
+    };
+    const { result, calls } = yield* runService(
+      {
+        interactionMode: "default",
+        reviewFinished: () => finished,
+        hostCall: () => Effect.succeed(delivered),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const input = {
+            host: "box",
+            threadId: target,
+            message: "Steer once",
+            clientRequestId: "lost-response",
+          };
+          const first = yield* service.sendToThread(scope, input);
+          finished = true;
+          expect(yield* service.sendToThread(scope, input)).toEqual(first);
+          const refused = yield* service
+            .sendToThread(scope, { ...input, clientRequestId: "new-request" })
+            .pipe(Effect.result);
+          expect(refused._tag).toBe("Failure");
+          if (refused._tag === "Failure") expect(refused.failure.code).toBe("thread_not_sendable");
+        }),
+    );
+    expect(result._tag).toBe("Success");
+    expect(calls).toHaveLength(1);
   }),
 );
