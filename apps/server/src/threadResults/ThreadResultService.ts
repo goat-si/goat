@@ -114,6 +114,23 @@ const ReportRow = Schema.Struct({
 const decodeRows = Schema.decodeUnknownEffect(Schema.Array(ReportRow));
 const encodeReport = Schema.encodeEffect(Schema.fromJsonString(ThreadResultReport));
 
+/**
+ * The report an agent stored for one run, or null when it never reported. Channel settlement
+ * and remote run observation read this without the rest of the merged result.
+ */
+export const readStoredThreadResultReport = (threadId: ThreadId, runId: RunId) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql`
+      SELECT report_json AS "reportJson", reported_at AS "reportedAt"
+      FROM thread_run_results WHERE thread_id = ${threadId} AND run_id = ${runId}
+    `.pipe(Effect.flatMap(decodeRows));
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : ({ report: row.reportJson, reportedAt: row.reportedAt } satisfies StoredThreadResultReport);
+  }).pipe(Effect.mapError((cause) => new ThreadResultError({ reason: "storage", cause })));
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -123,17 +140,8 @@ const make = Effect.gen(function* () {
     threads.getThreadRecords(threadId, ["runs"]).pipe(Effect.mapError(storage));
 
   const storedReport = (threadId: ThreadId, runId: RunId) =>
-    sql`
-      SELECT report_json AS "reportJson", reported_at AS "reportedAt"
-      FROM thread_run_results WHERE thread_id = ${threadId} AND run_id = ${runId}
-    `.pipe(
-      Effect.flatMap(decodeRows),
-      Effect.map((rows) =>
-        rows[0] === undefined
-          ? null
-          : ({ report: rows[0].reportJson, reportedAt: rows[0].reportedAt } as const),
-      ),
-      Effect.mapError(storage),
+    readStoredThreadResultReport(threadId, runId).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
     );
 
   const forRun = Effect.fn("ThreadResultService.forRun")(function* (

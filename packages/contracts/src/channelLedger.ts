@@ -151,6 +151,13 @@ export const ChannelProposedCompletion = Schema.Struct({
 });
 export type ChannelProposedCompletion = typeof ChannelProposedCompletion.Type;
 
+/**
+ * Whether the worker reported its outcome with goat_thread_report_result before its run
+ * completed. Events and tasks from before this field read as unknown and show nothing.
+ */
+export const ChannelTaskCompletionReport = Schema.Literals(["present", "missing"]);
+export type ChannelTaskCompletionReport = typeof ChannelTaskCompletionReport.Type;
+
 export const ChannelTask = Schema.Struct({
   taskId: ChannelTaskId,
   conversationId: ChannelConversationId,
@@ -170,6 +177,7 @@ export const ChannelTask = Schema.Struct({
   target: Schema.optional(ChannelDispatchTarget),
   worker: Schema.optional(ChannelWorkerAssignment),
   resultSummary: Schema.optional(Schema.String),
+  completionReport: Schema.optional(ChannelTaskCompletionReport),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   openQuestions: Schema.Array(ChannelOpenQuestion),
   createdAt: IsoDateTime,
@@ -252,6 +260,7 @@ export const ChannelTaskEvent = Schema.Union([
     generation: PositiveInt,
     runId: Schema.optional(RunId),
     summary: Schema.String,
+    report: Schema.optional(ChannelTaskCompletionReport),
   }),
   taskEvent("task.failed", {
     generation: PositiveInt,
@@ -281,6 +290,7 @@ export const ChannelTaskChip = Schema.Struct({
   worker: Schema.optional(ChannelWorkerRef),
   summary: Schema.optional(Schema.String),
   openQuestionCount: NonNegativeInt,
+  completionReport: Schema.optional(ChannelTaskCompletionReport),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 

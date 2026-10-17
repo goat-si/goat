@@ -8,6 +8,7 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
+import { ThreadResultOutcome } from "./threadResult.ts";
 
 export const REMOTE_REPORT_SUMMARY_MAX_CHARS = 4000;
 export const RemoteReportKind = Schema.Literals(["progress", "completed", "failed", "needs_input"]);
@@ -65,6 +66,15 @@ export const RemoteRunHolds = Schema.Struct({
   continuationPending: Schema.Boolean,
 });
 export type RemoteRunHolds = typeof RemoteRunHolds.Type;
+/**
+ * What the worker reported about a terminal run with goat_thread_report_result. Absent when
+ * it did not report, and from an older GOAT, which the origin reads as "no report".
+ */
+export const RemoteReportedOutcome = Schema.Struct({
+  outcome: ThreadResultOutcome,
+  summary: Schema.optional(Summary),
+});
+export type RemoteReportedOutcome = typeof RemoteReportedOutcome.Type;
 export const RemoteObservedRun = Schema.Struct({
   runId: RunId,
   status: OrchestrationV2RunStatus,
@@ -72,6 +82,7 @@ export const RemoteObservedRun = Schema.Struct({
   /** Pending user-input questions on this run. An older GOAT omits it. */
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   holds: Schema.optional(RemoteRunHolds),
+  reported: Schema.optional(RemoteReportedOutcome),
 });
 export type RemoteObservedRun = typeof RemoteObservedRun.Type;
 /**
