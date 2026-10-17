@@ -7,6 +7,8 @@ import type {
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
 } from "@goat/contracts";
+import { SshHostResult } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
@@ -151,6 +153,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
         target,
         ...(options === undefined ? {} : { options }),
+      }),
+    ),
+  getSshHostStatus: async (target) =>
+    Schema.decodeUnknownSync(SshHostResult)(
+      await ipcRenderer.invoke(IpcChannels.SSH_HOST_STATUS_CHANNEL, { target }),
+    ),
+  updateSshRuntime: async (target, mode) =>
+    Schema.decodeUnknownSync(SshHostResult)(
+      await ipcRenderer.invoke(IpcChannels.SSH_RUNTIME_UPDATE_CHANNEL, {
+        target,
+        ...(mode === undefined ? {} : { mode }),
       }),
     ),
   disconnectSshEnvironment: (target) =>

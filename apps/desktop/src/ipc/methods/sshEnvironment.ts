@@ -14,6 +14,9 @@ import {
   DesktopSshEnvironmentEnsureInputSchema,
   DesktopSshEnvironmentEnsureResultSchema,
   DesktopSshEnvironmentTargetSchema,
+  DesktopSshHostStatusInputSchema,
+  DesktopSshRuntimeUpdateInputSchema,
+  SshHostResult,
   DesktopSshHttpBaseUrlInputSchema,
   DesktopSshPasswordPromptCancelledType,
   DesktopSshPasswordPromptResolutionInputSchema,
@@ -186,6 +189,27 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
         }),
       ),
     );
+  }),
+});
+
+export const getSshHostStatus = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SSH_HOST_STATUS_CHANNEL,
+  payload: DesktopSshHostStatusInputSchema,
+  result: SshHostResult,
+  handler: Effect.fn("desktop.ipc.sshEnvironment.status")(function* ({ target }) {
+    const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
+    return yield* sshEnvironment.status(target);
+  }),
+});
+
+export const updateSshRuntime = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SSH_RUNTIME_UPDATE_CHANNEL,
+  payload: DesktopSshRuntimeUpdateInputSchema,
+  result: SshHostResult,
+  handler: Effect.fn("desktop.ipc.sshEnvironment.update")(function* ({ target, mode }) {
+    const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
+    yield* requireReadiedCloudMachine(target.alias);
+    return yield* sshEnvironment.update(target, mode);
   }),
 });
 

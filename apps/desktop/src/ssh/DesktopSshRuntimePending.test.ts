@@ -57,6 +57,7 @@ describe("desktop SSH pending result", () => {
         Layer.effect(DesktopSshEnvironment.DesktopSshEnvironment, DesktopSshEnvironment.make).pipe(
           Layer.provide(
             Layer.succeed(SshTunnel.SshEnvironmentManager, {
+              status: () => Effect.die("Unexpected status"),
               ensureEnvironment: () => Effect.succeed(pending),
               disconnectEnvironment: () => Effect.void,
               revalidateTunnels: () => Effect.void,

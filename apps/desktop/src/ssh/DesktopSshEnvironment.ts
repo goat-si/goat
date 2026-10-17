@@ -2,6 +2,8 @@ import type {
   DesktopDiscoveredSshHost,
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshEnvironmentTarget,
+  SshHostResult,
+  SshRuntimeUpdateMode,
 } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
 import * as SshAuth from "@goat/ssh/auth";
@@ -60,6 +62,13 @@ export class DesktopSshEnvironment extends Context.Service<
       target: DesktopSshEnvironmentTarget,
       options?: { readonly issuePairingToken?: boolean; readonly keyOnly?: boolean },
     ) => Effect.Effect<DesktopSshEnvironmentReadyOrPending, DesktopSshEnvironmentOperationError>;
+    readonly status: (
+      target: DesktopSshEnvironmentTarget,
+    ) => Effect.Effect<SshHostResult, DesktopSshEnvironmentOperationError>;
+    readonly update: (
+      target: DesktopSshEnvironmentTarget,
+      mode?: SshRuntimeUpdateMode,
+    ) => Effect.Effect<SshHostResult, DesktopSshEnvironmentOperationError>;
     readonly disconnectEnvironment: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
@@ -133,6 +142,43 @@ export const make = Effect.gen(function* () {
   const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
   const runtimeContext = yield* Effect.context<DesktopSshEnvironmentRuntimeServices>();
   const passwordPrompt = SshAuth.SshPasswordPrompt.of(makePasswordPrompt(prompts));
+  const keyOnlyPasswordPrompt = SshAuth.SshPasswordPrompt.of({
+    isAvailable: false,
+    request: () =>
+      Effect.fail(new SshPasswordPromptError({ message: "SSH key authentication is required." })),
+  });
+  const generations = new Map<string, number>();
+  const targetKey = (target: DesktopSshEnvironmentTarget) =>
+    JSON.stringify([target.alias, target.hostname, target.username, target.port]);
+  const cancelledResult = (target: DesktopSshEnvironmentTarget): SshHostResult => ({
+    kind: "error",
+    code: "cancelled",
+    message: `SSH runtime request cancelled for ${target.alias || target.hostname}.`,
+  });
+  const withCurrentRequest = (
+    target: DesktopSshEnvironmentTarget,
+    operation: (
+      isCurrent: () => boolean,
+    ) => Effect.Effect<SshHostResult, DesktopSshEnvironmentOperationError>,
+  ) =>
+    Effect.gen(function* () {
+      const key = targetKey(target);
+      const generation = generations.get(key) ?? 0;
+      const isCurrent = () => (generations.get(key) ?? 0) === generation;
+      const result = yield* operation(isCurrent).pipe(
+        Effect.catch((error) =>
+          isCurrent() ? Effect.fail(error) : Effect.succeed(cancelledResult(target)),
+        ),
+      );
+      return isCurrent() ? result : cancelledResult(target);
+    });
+  const readStatus = (target: DesktopSshEnvironmentTarget) =>
+    manager
+      .status(target)
+      .pipe(
+        Effect.provideService(SshAuth.SshPasswordPrompt, keyOnlyPasswordPrompt),
+        Effect.provide(runtimeContext),
+      );
 
   return DesktopSshEnvironment.of({
     discoverHosts: (input) =>
@@ -153,14 +199,42 @@ export const make = Effect.gen(function* () {
           Effect.provide(runtimeContext),
           Effect.withSpan("desktop.ssh.ensureEnvironment"),
         ),
+    status: (target) =>
+      withCurrentRequest(target, () => readStatus(target)).pipe(
+        Effect.withSpan("desktop.ssh.status"),
+      ),
+    update: (target, mode = "when_idle") =>
+      withCurrentRequest(target, (isCurrent) =>
+        manager
+          .ensureEnvironment(target, {
+            refreshRuntime: true,
+            confirmReplacement: mode === "now",
+            keyOnly: true,
+            issuePairingToken: false,
+          })
+          .pipe(
+            Effect.provideService(SshAuth.SshPasswordPrompt, keyOnlyPasswordPrompt),
+            Effect.provide(runtimeContext),
+            // The manager publishes structured failures as well as successful updates.
+            Effect.matchEffect({
+              onFailure: () =>
+                isCurrent() ? readStatus(target) : Effect.succeed(cancelledResult(target)),
+              onSuccess: () =>
+                isCurrent() ? readStatus(target) : Effect.succeed(cancelledResult(target)),
+            }),
+          ),
+      ).pipe(Effect.withSpan("desktop.ssh.update")),
     disconnectEnvironment: (target) =>
-      manager
-        .disconnectEnvironment(target)
-        .pipe(
-          Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
-          Effect.provide(runtimeContext),
-          Effect.withSpan("desktop.ssh.disconnectEnvironment"),
-        ),
+      Effect.suspend(() => {
+        const key = targetKey(target);
+        // Do not start a status probe when an update completes after disconnect.
+        generations.set(key, (generations.get(key) ?? 0) + 1);
+        return manager.disconnectEnvironment(target);
+      }).pipe(
+        Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
+        Effect.provide(runtimeContext),
+        Effect.withSpan("desktop.ssh.disconnectEnvironment"),
+      ),
     revalidateTunnels: manager
       .revalidateTunnels()
       .pipe(

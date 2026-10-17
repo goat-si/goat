@@ -11,7 +11,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
-import { SshRuntimeUpdateMode } from "./sshHost.ts";
+import { type SshHostResult, SshRuntimeUpdateMode } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -1297,6 +1297,11 @@ export interface DesktopBridge {
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean; keyOnly?: boolean },
   ) => Promise<DesktopSshEnvironmentReadyOrPending>;
+  getSshHostStatus: (target: DesktopSshEnvironmentTarget) => Promise<SshHostResult>;
+  updateSshRuntime: (
+    target: DesktopSshEnvironmentTarget,
+    mode?: SshRuntimeUpdateMode,
+  ) => Promise<SshHostResult>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (

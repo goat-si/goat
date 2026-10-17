@@ -3,6 +3,10 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import { SshHttpBridgeError } from "@goat/ssh/errors";
+import { SshHostResult } from "@goat/contracts";
+import * as SshTunnel from "@goat/ssh/tunnel";
+import * as NetService from "@goat/shared/Net";
+import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -19,6 +24,8 @@ import {
   fetchSshEnvironmentDescriptor,
   ensureSshEnvironment,
   requireReadiedCloudMachine,
+  getSshHostStatus,
+  updateSshRuntime,
 } from "./sshEnvironment.ts";
 
 /** A desktop whose home is `home`, for the cloud machine guard. */
@@ -54,6 +61,194 @@ function layerHttpClient(
   );
 }
 
+const target = { alias: "devbox", hostname: "box.example.test", username: "owner", port: 2207 };
+const baseStatus = { host: target.alias, runtimeVersion: "1.2.2", requestedVersion: "1.2.3" };
+const unusedSshService = {
+  discoverHosts: () => Effect.die("unexpected discovery"),
+  resolveHost: () => Effect.die("unexpected resolve"),
+  ensureEnvironment: () => Effect.die("unexpected ensure"),
+  status: () => Effect.die("unexpected status"),
+  update: () => Effect.die("unexpected update"),
+  disconnectEnvironment: () => Effect.die("unexpected disconnect"),
+  revalidateTunnels: Effect.die("unexpected revalidation"),
+} satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
+
+describe("SSH runtime IPC", () => {
+  it.effect("decodes structured status and failures over IPC", () =>
+    Effect.gen(function* () {
+      const results = [
+        { kind: "ok", status: { ...baseStatus, state: "preparing", phase: "uploading" } },
+        {
+          kind: "ok",
+          status: {
+            ...baseStatus,
+            state: "update_waiting",
+            detail: "Another computer is updating devbox. GOAT will retry.",
+          },
+        },
+        {
+          kind: "ok",
+          status: {
+            ...baseStatus,
+            state: "failed",
+            failure: {
+              reason: "archive_unavailable",
+              archive: {
+                requestedVersion: "1.2.3",
+                platformKey: "linux-x64",
+                sourcesTried: ["bundle", "https"],
+              },
+              fix: {
+                actor: "human",
+                instruction: "Install a published GOAT release, or set a release mirror.",
+              },
+            },
+          },
+        },
+        {
+          kind: "error",
+          code: "host_unreachable",
+          message: "Can't reach devbox.",
+          fix: { actor: "agent", instruction: "Try again" },
+        },
+      ] satisfies readonly SshHostResult[];
+      for (const result of results) {
+        const encoded = yield* getSshHostStatus.handler({ target }).pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+            ...unusedSshService,
+            status: () => Effect.succeed(result),
+          }),
+        );
+        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(encoded), result);
+        const updated = yield* updateSshRuntime.handler({ target }).pipe(
+          Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+            ...unusedSshService,
+            update: () => Effect.succeed(result),
+          }),
+          Effect.provide(desktopAt("/nonexistent-home")),
+        );
+        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(updated), result);
+      }
+    }),
+  );
+
+  it.effect("rejects malformed runtime requests and results", () =>
+    Effect.gen(function* () {
+      const invalidRequests = [{ target: { ...target, port: "2207" } }, { target, mode: "force" }];
+      for (const input of invalidRequests) {
+        const exit = yield* updateSshRuntime.handler(input).pipe(Effect.exit);
+        assert(Exit.isFailure(exit));
+      }
+      const invalidResult = yield* getSshHostStatus.handler({ target }).pipe(
+        Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+          ...unusedSshService,
+          status: () =>
+            Effect.succeed({ kind: "ok", status: { ...baseStatus, state: "preparing" } }),
+        }),
+        Effect.exit,
+      );
+      assert(Exit.isFailure(invalidResult));
+    }).pipe(
+      Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, unusedSshService),
+      Effect.provide(desktopAt("/nonexistent-home")),
+    ),
+  );
+
+  it.effect(
+    "desktop now uses its owner manager without server WS and preserves hostname user and port",
+    () => {
+      let confirmed = false;
+      const manager = {
+        status: () =>
+          Effect.succeed({
+            kind: "ok",
+            status: {
+              ...baseStatus,
+              state: confirmed ? "ready" : "update_waiting",
+              runtimeVersion: confirmed ? "1.2.3" : "1.2.2",
+            },
+          } satisfies SshHostResult),
+        ensureEnvironment: (receivedTarget, options) =>
+          Effect.sync(() => {
+            assert.deepEqual(receivedTarget, target);
+            assert.equal(options?.keyOnly, true);
+            assert.equal(options?.issuePairingToken, false);
+            confirmed = options?.refreshRuntime === true && options.confirmReplacement === true;
+            return {
+              target: receivedTarget,
+              httpBaseUrl: "http://127.0.0.1:41773/",
+              wsBaseUrl: "ws://127.0.0.1:41773/",
+              pairingToken: null,
+            };
+          }),
+        disconnectEnvironment: () => Effect.void,
+        revalidateTunnels: () => Effect.void,
+        issueMcpClientSession: () => Effect.die("unexpected MCP session"),
+        runRemoteScript: () => Effect.die("unexpected remote script"),
+      } satisfies SshTunnel.SshEnvironmentManagerShape;
+      return Effect.gen(function* () {
+        const service = yield* DesktopSshEnvironment.make;
+        const invoke = (mode?: "when_idle" | "now") =>
+          updateSshRuntime
+            .handler({ target, ...(mode === undefined ? {} : { mode }) })
+            .pipe(
+              Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, service),
+              Effect.flatMap(Schema.decodeUnknownEffect(SshHostResult)),
+            );
+        assert.equal((yield* invoke()).status?.state, "update_waiting");
+        assert.equal((yield* invoke("when_idle")).status?.state, "update_waiting");
+        const updated = yield* invoke("now");
+        assert.equal(updated.status?.state, "ready");
+        assert.equal(updated.status?.requestedVersion, "1.2.3");
+      }).pipe(
+        Effect.provideService(SshTunnel.SshEnvironmentManager, manager),
+        Effect.provideService(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {
+          request: () => Effect.die("unexpected password"),
+          resolve: () => Effect.die("unexpected resolution"),
+        }),
+        Effect.provide(
+          Layer.mergeAll(
+            desktopAt("/nonexistent-home"),
+            layerHttpClient(() => Effect.die("unexpected HTTP request")),
+            NetService.layer,
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect(
+    "reads cloud runtime status without provisioning and guards updates before mutation",
+    () => {
+      const cloudTarget = { ...target, alias: "boat-bx_23456789" };
+      return Effect.gen(function* () {
+        const status = yield* getSshHostStatus.handler({ target: cloudTarget });
+        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(status), {
+          kind: "ok",
+          status: { ...baseStatus, host: cloudTarget.alias, state: "stopped" },
+        });
+        const exit = yield* updateSshRuntime
+          .handler({ target: cloudTarget, mode: "now" })
+          .pipe(Effect.exit);
+        assert(Exit.isFailure(exit));
+        const failure = Cause.findErrorOption(exit.cause);
+        assert(Option.isSome(failure));
+        assert.include(failure.value.message, "belongs to another GOAT server");
+      }).pipe(
+        Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+          ...unusedSshService,
+          status: () =>
+            Effect.succeed({
+              kind: "ok",
+              status: { ...baseStatus, host: cloudTarget.alias, state: "stopped" },
+            }),
+        }),
+        Effect.provide(desktopAt("/nonexistent-home")),
+      );
+    },
+  );
+});
+
 describe("SSH environment IPC", () => {
   it.effect("preserves key-only options across the IPC handler", () =>
     Effect.gen(function* () {
@@ -69,6 +264,8 @@ describe("SSH environment IPC", () => {
         .pipe(
           Effect.provide(desktopAt("/nonexistent-home")),
           Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
+            status: () => Effect.die("unused"),
+            update: () => Effect.die("unused"),
             discoverHosts: () => Effect.die("unused"),
             resolveHost: () => Effect.die("unused"),
             disconnectEnvironment: () => Effect.die("unused"),
