@@ -695,10 +695,7 @@ const make = Effect.gen(function* () {
         ),
       );
       if (advertisesMemory && !declared.has("memoryGrantCeiling"))
-        return yield* failure(
-          "remote_refused",
-          "Remote memory tools require explicit task ceiling admission.",
-        );
+        return yield* memoryRefusal("Remote memory tools require explicit task ceiling admission.");
       const capabilities = { declared, advertisesMemory };
       if (declared.has("report") && declared.has("standingInstructions"))
         launchArguments.set(key, declared);
