@@ -41,7 +41,15 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { REMOTE_COPY, REMOTE_SETTLE_WAIT_MS } from "./ChannelRemoteWorkers.ts";
+import {
+  ChannelRemoteWorkers,
+  OUTAGE_NOTICE_AFTER,
+  REMOTE_COPY,
+  REMOTE_SETTLE_WAIT_MS,
+  type RemoteWorkerState,
+} from "./ChannelRemoteWorkers.ts";
+import { remoteBranchFor, remoteCorrelationFor } from "./channelIds.ts";
+import { resumeBranchFor } from "./channelReplica.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
@@ -95,7 +103,26 @@ class RemoteMachine {
   readonly threads = new Map<string, Array<RemoteRun>>();
   readonly launches: Array<SshRemoteDispatch.SshLaunchInput> = [];
   readonly sends: Array<Readonly<Record<string, unknown>>> = [];
-  readonly calls: Array<{ readonly tool: string; readonly ceiling: string }> = [];
+  readonly calls: Array<{
+    readonly tool: string;
+    readonly ceiling: string;
+    readonly host: string;
+    readonly arguments: Readonly<Record<string, unknown>>;
+  }> = [];
+  readonly peers: Array<RemoteMachine> = [];
+  readonly scripts: Array<{
+    readonly host: string;
+    readonly script: string;
+    readonly kind: "capture" | "apply";
+  }> = [];
+  readonly interrupts: Array<Readonly<Record<string, unknown>>> = [];
+  captureOutput = "GOAT_REPLICA_NO_WORKTREE\n";
+  applyOutput = "GOAT_REPLICA_APPLIED " + REPLICA_COMMIT + "\n";
+  scriptDown = false;
+  scriptCalled = Deferred.makeUnsafe<void>();
+  waitUnavailable = Deferred.makeUnsafe<void>();
+  waitIdle = Deferred.makeUnsafe<void>();
+  unreachableWaitCount = 0;
   /** A test observes the persisted brief before SSH accepts the launch. */
   beforeLaunch: ((input: SshRemoteDispatch.SshLaunchInput) => Effect.Effect<void>) | undefined;
   /** While true, every call fails as if SSH could not reach the host. */
@@ -293,20 +320,26 @@ class RemoteMachine {
 
   private makeLayer() {
     // oxlint-disable-next-line typescript/no-this-alias -- the fake's handlers close over it.
-    const machine = this;
+    const network = this;
+    const machineFor = (host: string | undefined) =>
+      [network, ...network.peers].find((candidate) => candidate.host === host) ?? network;
     return Layer.succeed(
       SshRemoteDispatch.SshRemoteDispatch,
       SshRemoteDispatch.SshRemoteDispatch.of({
         listHosts: () =>
           Effect.sync(() => [
-            { alias: machine.host, source: "ssh-config" },
-            ...machine.knownHostsOnly.map((alias) => ({ alias, source: "known-hosts" as const })),
+            ...[network, ...network.peers].map((machine) => ({
+              alias: machine.host,
+              source: "ssh-config" as const,
+            })),
+            ...network.knownHostsOnly.map((alias) => ({ alias, source: "known-hosts" as const })),
           ]),
         launchThread: <E, R>(
           input: SshRemoteDispatch.SshLaunchInput,
           beforeLaunch: Effect.Effect<void, E, R>,
         ) =>
           Effect.gen(function* () {
+            const machine = machineFor(input.host);
             if (machine.down) return yield* machine.unreachable("down");
             yield* beforeLaunch;
             if (machine.beforeLaunch !== undefined) yield* machine.beforeLaunch(input);
@@ -374,15 +407,50 @@ class RemoteMachine {
               notes: [],
             } as never;
           }),
+        runHostScript: (input: {
+          readonly host: string;
+          readonly script: string;
+          readonly timeoutMs: number;
+        }) =>
+          Effect.gen(function* () {
+            const machine = machineFor(input.host);
+            const kind = input.script.includes("git bundle create") ? "capture" : "apply";
+            assert.include(
+              input.script,
+              kind === "capture" ? "git bundle create" : "git bundle verify",
+            );
+            machine.scripts.push({ ...input, kind });
+            yield* Deferred.succeed(machine.scriptCalled, undefined);
+            if (machine.down || machine.scriptDown)
+              return yield* machine.unreachable("script transport down");
+            return {
+              stdout: kind === "capture" ? machine.captureOutput : machine.applyOutput,
+              stderr: "",
+            };
+          }),
         callHostTool: <E, R>(
           call: SshRemoteDispatch.SshHostToolCall,
           authorize: Effect.Effect<RuntimeMode, E, R>,
         ) =>
           Effect.gen(function* () {
+            const machine = machineFor(call.host);
             const ceiling = yield* authorize;
-            machine.calls.push({ tool: call.tool, ceiling });
+            machine.calls.push({
+              tool: call.tool,
+              ceiling,
+              host: call.host,
+              arguments: call.arguments,
+            });
             debugTrail.push(call.tool);
-            if (machine.down) return yield* machine.unreachable("down");
+            if (machine.down) {
+              if (call.tool === "goat_origin_reports_wait") {
+                const failed = machine.waitUnavailable;
+                machine.unreachableWaitCount += 1;
+                machine.waitUnavailable = Deferred.makeUnsafe<void>();
+                yield* Deferred.succeed(failed, undefined);
+              }
+              return yield* machine.unreachable("down");
+            }
             switch (call.tool) {
               case "goat_project_list":
                 return { projects: machine.projects, nextCursor: null };
@@ -436,6 +504,9 @@ class RemoteMachine {
                     },
                   ],
                 };
+              case "goat_thread_interrupt":
+                machine.interrupts.push(call.arguments);
+                return {};
               case "goat_thread_send": {
                 machine.sends.push(call.arguments);
                 if (machine.refuseSendWith !== undefined) {
@@ -486,6 +557,7 @@ class RemoteMachine {
                 const change = machine.changed;
                 if (machine.onWait !== undefined) yield* machine.onWait(call.arguments);
                 if (changed || timeoutMs === 0) return first.value;
+                yield* Deferred.succeed(machine.waitIdle, undefined);
                 yield* Effect.raceFirst(
                   Deferred.await(change),
                   Effect.sleep(Duration.millis(timeoutMs)),
@@ -501,6 +573,21 @@ class RemoteMachine {
     );
   }
 }
+
+const REPLICA_COMMIT = "b".repeat(40);
+// The transport fixture need only satisfy the wire parser; no shell or git is run here.
+const REPLICA_BYTES = Buffer.from("worker commits and uncommitted edits\n");
+const REPLICA_OUTPUT = [
+  "GOAT_REPLICA_OK",
+  "HEAD " + "a".repeat(40),
+  "COMMIT " + REPLICA_COMMIT,
+  "BYTES " + REPLICA_BYTES.length,
+  "EXCLUDED ",
+  "GOAT_REPLICA_BUNDLE_BEGIN",
+  REPLICA_BYTES.toString("base64"),
+  "GOAT_REPLICA_BUNDLE_END",
+  "",
+].join("\n");
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
@@ -589,12 +676,7 @@ const readState = (taskId: ChannelTask["taskId"]) =>
   Effect.gen(function* () {
     const ledger = yield* ChannelLedger.ChannelLedger;
     const json = yield* ledger.getRemoteWorker(taskId);
-    return JSON.parse(json ?? "{}") as {
-      readonly readKey: string;
-      readonly cursor: number;
-      readonly knownRun?: RemoteKnownRun;
-      readonly settleRunId?: string;
-    };
+    return JSON.parse(json ?? "{}") as RemoteWorkerState;
   });
 
 /** Read the persisted event after until has driven the task to its expected state. */
@@ -611,6 +693,450 @@ const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
       rows[0]!.event_json,
     );
   });
+
+/** Observes committed SQLite writes without replacing their behavior or polling the ledger. */
+const channelWriteMilestones = Effect.gen(function* () {
+  const ledger = yield* ChannelLedger.ChannelLedger;
+  const listeners = new Set<{
+    readonly check: (task: ChannelTask, state: RemoteWorkerState | undefined) => boolean;
+    readonly done: Deferred.Deferred<ChannelTask>;
+  }>();
+  const notify = Effect.gen(function* () {
+    if (listeners.size === 0) return;
+    const task = yield* onlyTask;
+    const json = yield* ledger.getRemoteWorker(task.taskId);
+    const state = json === undefined ? undefined : (JSON.parse(json) as RemoteWorkerState);
+    for (const listener of listeners) {
+      if (!listener.check(task, state)) continue;
+      listeners.delete(listener);
+      yield* Deferred.succeed(listener.done, task);
+    }
+  }).pipe(Effect.provideService(ChannelLedger.ChannelLedger, ledger));
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      // These two methods stay live; the wrappers only signal after their writes commit.
+      const observed: {
+        updateRemoteWorker: typeof ledger.updateRemoteWorker;
+        applyTaskEvent: typeof ledger.applyTaskEvent;
+      } = ledger;
+      const update = observed.updateRemoteWorker;
+      const apply = observed.applyTaskEvent;
+      observed.updateRemoteWorker = (input) => update(input).pipe(Effect.tap(() => notify));
+      observed.applyTaskEvent = (input) => apply(input).pipe(Effect.tap(() => notify));
+      return () => {
+        observed.updateRemoteWorker = update;
+        observed.applyTaskEvent = apply;
+      };
+    }),
+    (restore) => Effect.sync(restore),
+  );
+  return {
+    waitFor: (check: (task: ChannelTask, state: RemoteWorkerState | undefined) => boolean) =>
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<ChannelTask>();
+        listeners.add({ check, done });
+        yield* notify;
+        return yield* Deferred.await(done);
+      }),
+  };
+});
+
+type ChannelWriteMilestones = Effect.Success<typeof channelWriteMilestones>;
+
+const failoverHarness = () => {
+  const { machine, harness } = remoteHarness();
+  const destination = new RemoteMachine();
+  destination.host = "mac-mini";
+  destination.projects = destination.projects.map((project) => ({
+    ...project,
+    workspaceRoot: "/srv/goat",
+  }));
+  machine.peers.push(destination);
+  machine.captureOutput = REPLICA_OUTPUT;
+  return { machine, destination, harness };
+};
+
+const startFailoverTask = (writes: ChannelWriteMilestones, machine: RemoteMachine, local = false) =>
+  Effect.gen(function* () {
+    yield* setupBot;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    yield* gateway.ingest(
+      goatInput(
+        local ? "do: continue the build" : "do@mac-studio: continue the build",
+        "failover-start",
+      ),
+      rpcContext,
+    );
+    yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+    const task = yield* writes.waitFor((task) => task.status === "running");
+    if (!local) yield* Deferred.await(machine.waitIdle);
+    return task;
+  });
+
+const replicaFiles = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = path.join((yield* ServerConfig.ServerConfig).stateDir, "channel-replicas");
+  return (yield* fs.exists(directory)) ? yield* fs.readDirectory(directory) : [];
+});
+
+/** Drive precisely the observer's failed-wait/backoff milestones, then its durable notice. */
+const noticeMachineOutage = (machine: RemoteMachine, writes: ChannelWriteMilestones) =>
+  Effect.gen(function* () {
+    const previousFailures = machine.unreachableWaitCount;
+    machine.down = true;
+    for (let attempt = 0; attempt < OUTAGE_NOTICE_AFTER; attempt += 1) {
+      const failed = machine.waitUnavailable;
+      if (attempt === 0) machine.timeoutWait();
+      else yield* TestClock.adjust(Duration.seconds(5 * 2 ** (attempt - 1)));
+      yield* Deferred.await(failed);
+    }
+    assert.strictEqual(machine.unreachableWaitCount - previousFailures, OUTAGE_NOTICE_AFTER);
+    return yield* writes.waitFor(
+      (task, state) =>
+        state?.outageNoticed === true && task.resultSummary === REMOTE_COPY.outage(machine.host),
+    );
+  });
+
+const prepareFailover = (machine: RemoteMachine, writes: ChannelWriteMilestones) =>
+  Effect.gen(function* () {
+    const running = yield* startFailoverTask(writes, machine);
+    const correlationId = correlationOf(machine);
+    machine.finishRun(correlationId, "waiting", null);
+    yield* writes.waitFor((_task, state) => state?.replica !== undefined);
+    const replica = (yield* readState(running.taskId)).replica!;
+    const away = yield* noticeMachineOutage(machine, writes);
+    return { task: away, correlationId, replica };
+  });
+
+const moveTo = (task: ChannelTask, host: string) =>
+  Effect.gen(function* () {
+    const workers = yield* ChannelRemoteWorkers;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    return yield* workers.move({
+      taskId: task.taskId,
+      host,
+      actor: "user",
+      owner: runtime.ownerToken,
+    });
+  });
+
+describe("copies of remote work and host failover", () => {
+  it.effect.each(["completed", "waiting"] as const)(
+    "saves the bundle after a %s turn and does not recapture that turn",
+    (status) => {
+      const { machine, harness } = failoverHarness();
+      // Keep a completed run open so another observation can prove deduplication.
+      machine.holds = { backgroundTasks: 1, continuationPending: false };
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const task = yield* startFailoverTask(writes, machine);
+        const correlationId = correlationOf(machine);
+        const runId = machine.runs(correlationId).at(-1)!.runId;
+        machine.finishRun(correlationId, status, "Turn ended.");
+        yield* writes.waitFor((_task, state) => state?.replica?.key === runId + ":" + status);
+        const replica = (yield* readState(task.taskId)).replica!;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const stateDir = (yield* ServerConfig.ServerConfig).stateDir;
+        assert.strictEqual(path.dirname(replica.file), path.join(stateDir, "channel-replicas"));
+        assert.strictEqual(
+          path.basename(replica.file),
+          task.taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g1.bundle",
+        );
+        assert.deepStrictEqual(yield* fs.readFile(replica.file), new Uint8Array(REPLICA_BYTES));
+        assert.strictEqual(replica.bytes, REPLICA_BYTES.length);
+        assert.strictEqual(replica.commitOid, REPLICA_COMMIT);
+        assert.isFalse(Number.isNaN(Date.parse(replica.capturedAt)));
+        machine.report(correlationId, "progress", "Observed the same turn again.");
+        yield* writes.waitFor(
+          (current) => current.resultSummary === "Observed the same turn again.",
+        );
+        assert.lengthOf(
+          machine.scripts.filter((call) => call.kind === "capture"),
+          1,
+        );
+        assert.deepStrictEqual((yield* readState(task.taskId)).replica, replica);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([
+    { output: "GOAT_REPLICA_TOO_LARGE 8388609\n", reason: "too_large" },
+    { output: "GOAT_REPLICA_NO_WORKTREE\n", reason: "no_worktree" },
+    { output: "truncated response", reason: "invalid" },
+  ])("records $reason once without creating a bundle", ({ output, reason }) => {
+    const { machine, harness } = failoverHarness();
+    machine.captureOutput = output;
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine);
+      const correlationId = correlationOf(machine);
+      machine.finishRun(correlationId, "waiting", null);
+      yield* writes.waitFor((_task, state) => state?.replicaSkipped?.reason === reason);
+      const state = yield* readState(task.taskId);
+      assert.isUndefined(state.replica);
+      assert.strictEqual(
+        state.replicaSkipped?.key,
+        machine.runs(correlationId).at(-1)!.runId + ":waiting",
+      );
+      assert.deepStrictEqual(yield* replicaFiles, []);
+      machine.report(correlationId, "progress", "Checked the skipped turn again.");
+      yield* writes.waitFor(
+        (current) => current.resultSummary === "Checked the skipped turn again.",
+      );
+      assert.lengthOf(machine.scripts, 1);
+      assert.deepStrictEqual((yield* readState(task.taskId)).replicaSkipped, state.replicaSkipped);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves no record or bundle when the replica transport cannot connect", () => {
+    const { machine, harness } = failoverHarness();
+    machine.scriptDown = true;
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine);
+      const correlationId = correlationOf(machine);
+      machine.finishRun(correlationId, "waiting", null);
+      yield* Deferred.await(machine.scriptCalled);
+      yield* writes.waitFor((_task, state) => state?.knownRun?.status === "waiting");
+      const failed = yield* readState(task.taskId);
+      assert.isUndefined(failed.replica);
+      assert.isUndefined(failed.replicaSkipped);
+      assert.lengthOf(machine.scripts, 1);
+      assert.deepStrictEqual(yield* replicaFiles, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect.each([
+    "no_replica",
+    "host_reachable",
+    "same_host",
+    "unknown_host",
+    "not_remote",
+  ] as const)("refuses $reason without changing the task or remote state", (reason) => {
+    const { machine, destination, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine, reason === "not_remote");
+      if (reason === "no_replica") yield* noticeMachineOutage(machine, writes);
+      const before = yield* onlyTask;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const stateBefore = yield* ledger.getRemoteWorker(task.taskId);
+      const host =
+        reason === "same_host"
+          ? machine.host
+          : reason === "unknown_host"
+            ? "unknown-host"
+            : destination.host;
+      const result = yield* moveTo(before, host).pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag !== "Failure") return;
+      assert.strictEqual(result.failure._tag, "ChannelTaskMoveError");
+      if (result.failure._tag !== "ChannelTaskMoveError") return;
+      assert.strictEqual(result.failure.reason, reason);
+      assert.deepStrictEqual(yield* onlyTask, before);
+      assert.strictEqual(yield* ledger.getRemoteWorker(task.taskId), stateBefore);
+      assert.lengthOf(destination.launches, 0);
+      assert.lengthOf(destination.scripts, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("refuses a move when the recorded replica file has disappeared", () => {
+    const { machine, destination, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task, replica } = yield* prepareFailover(machine, writes);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(replica.file);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const stateBefore = yield* ledger.getRemoteWorker(task.taskId);
+      const result = yield* moveTo(task, destination.host).pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure" && result.failure._tag === "ChannelTaskMoveError") {
+        assert.strictEqual(result.failure.reason, "no_replica");
+      } else assert.fail("expected no_replica");
+      assert.deepStrictEqual(yield* onlyTask, task);
+      assert.strictEqual(yield* ledger.getRemoteWorker(task.taskId), stateBefore);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("moves the next generation onto the copied work in the destination project", () => {
+    const { machine, destination, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task, correlationId, replica } = yield* prepareFailover(machine, writes);
+      const moved = yield* moveTo(task, destination.host);
+      assert.deepStrictEqual(moved, {
+        taskId: task.taskId,
+        generation: task.generation + 1,
+        host: destination.host,
+        fromHost: machine.host,
+        replicaCapturedAt: replica.capturedAt,
+      });
+      const event = yield* readTaskEvent(task, "task.moved");
+      assert.strictEqual(event.type, "task.moved");
+      assert.strictEqual(event.actor, "user");
+      if (event.type !== "task.moved") return;
+      assert.deepStrictEqual(event.payload, {
+        generation: moved.generation,
+        host: destination.host,
+        fromHost: machine.host,
+        replicaCapturedAt: replica.capturedAt,
+      });
+      const carried = yield* readState(task.taskId);
+      assert.strictEqual(carried.resumeFrom?.generation, moved.generation);
+      assert.strictEqual(carried.resumeFrom?.file, replica.file);
+      assert.strictEqual(
+        carried.resumeFrom?.ref,
+        "refs/goat/replicas/" + task.taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "/1",
+      );
+      assert.strictEqual(carried.superseded?.[0]?.correlationId, correlationId);
+      assert.strictEqual(carried.superseded?.[0]?.noticed, false);
+      yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+      const running = yield* writes.waitFor(
+        (current) => current.status === "running" && current.generation === moved.generation,
+      );
+      assert.strictEqual(running.host, destination.host);
+      assert.strictEqual(running.worker?.host, destination.host);
+      assert.strictEqual(running.movedFrom?.host, machine.host);
+      assert.lengthOf(destination.scripts, 1);
+      assert.strictEqual(destination.scripts[0]?.kind, "apply");
+      assert.strictEqual(destination.scripts[0]?.host, destination.host);
+      assert.include(destination.scripts[0]!.script, REPLICA_BYTES.toString("base64"));
+      assert.include(
+        destination.scripts[0]!.script,
+        "refs/heads/" + resumeBranchFor(task.taskId, moved.generation),
+      );
+      assert.lengthOf(destination.launches, 1);
+      const launch = destination.launches[0]!;
+      assert.strictEqual(launch.host, destination.host);
+      assert.strictEqual(launch.cwd, "/srv/goat");
+      assert.deepStrictEqual(launch.workspace, {
+        type: "worktree",
+        branch: remoteBranchFor(task.taskId, moved.generation),
+        baseRef: "refs/heads/" + resumeBranchFor(task.taskId, moved.generation),
+      });
+      assert.strictEqual(
+        launch.report?.correlationId,
+        remoteCorrelationFor(task.taskId, moved.generation),
+      );
+      assert.notStrictEqual(launch.report?.correlationId, correlationId);
+      assert.include(launch.message, "This continues work that started on mac-studio");
+      assert.include(launch.message, replica.capturedAt);
+      assert.include(launch.message, "Check git status and git log before you go on.");
+      assert.lengthOf(machine.launches, 1);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect("fences the returning host once and only accepts the new generation's outcome", () => {
+    const { machine, destination, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task, correlationId } = yield* prepareFailover(machine, writes);
+      const moved = yield* moveTo(task, destination.host);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      // A dispatcher pass may already start the fence; register before running that pass.
+      const failed = machine.waitUnavailable;
+      yield* runtime.drain;
+      yield* writes.waitFor(
+        (current) => current.status === "running" && current.generation === moved.generation,
+      );
+      yield* (yield* ChannelRemoteWorkers).ensure(runtime.ownerToken);
+      yield* Deferred.await(failed);
+      machine.finishRun(correlationId, "completed", "Old host claimed completion.");
+      machine.report(correlationId, "completed", "Old host claimed completion.");
+      machine.down = false;
+      yield* TestClock.adjust(Duration.seconds(5));
+      const fenced = yield* writes.waitFor(
+        (_current, state) => state?.superseded?.[0]?.noticed === true,
+      );
+      assert.strictEqual(fenced.status, "running");
+      assert.strictEqual(fenced.generation, moved.generation);
+      assert.strictEqual(fenced.worker?.host, destination.host);
+      assert.strictEqual(fenced.resultSummary, REMOTE_COPY.staleMachineBack(machine.host));
+      assert.lengthOf(machine.interrupts, 1);
+      assert.strictEqual(machine.interrupts[0]?.threadId, machine.thread(correlationId));
+      assert.strictEqual(machine.interrupts[0]?.clientRequestId, "channel-fence:" + correlationId);
+      assert.lengthOf(destination.interrupts, 0);
+      const probe = machine.calls.find(
+        (call) =>
+          call.tool === "goat_origin_reports_wait" &&
+          call.arguments.timeoutMs === 0 &&
+          call.arguments.correlationId === correlationId,
+      );
+      assert.isDefined(probe);
+      assert.strictEqual(probe?.host, machine.host);
+      machine.finishRun(correlationId, "failed", "Old host then failed.");
+      machine.report(correlationId, "failed", "Old host then failed.");
+      // The old observer's outstanding outage backoff also expires; it must retire on g2.
+      yield* TestClock.adjust(Duration.seconds(20));
+      const currentCorrelation = correlationOf(destination);
+      destination.report(currentCorrelation, "progress", "New worker is in charge.");
+      yield* writes.waitFor((current) => current.resultSummary === "New worker is in charge.");
+      yield* runtime.drain;
+      yield* (yield* ChannelRemoteWorkers).ensure(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.lengthOf(machine.interrupts, 1);
+      const messages = (yield* botMessages).messages;
+      assert.lengthOf(
+        messages.filter((message) =>
+          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+        ),
+        1,
+      );
+      const sql = yield* SqlClient.SqlClient;
+      const premature =
+        yield* sql`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type IN ('task.completed', 'task.failed')`;
+      assert.lengthOf(premature, 0);
+      destination.finishRun(currentCorrelation, "completed", "Finished on the new host.");
+      yield* writes.waitFor(
+        (_current, state) =>
+          state?.settleRunId === destination.runs(currentCorrelation).at(-1)!.runId,
+      );
+      yield* TestClock.adjust(Duration.millis(REMOTE_SETTLE_WAIT_MS));
+      const done = yield* writes.waitFor((current) => current.status === "completed");
+      assert.strictEqual(done.generation, moved.generation);
+      assert.strictEqual(done.resultSummary, "Finished on the new host.");
+      assert.strictEqual(done.worker?.host, destination.host);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect(
+    "fails with resume_failed and tells the requester when the destination lacks base commits",
+    () => {
+      const { machine, destination, harness } = failoverHarness();
+      destination.applyOutput = "GOAT_REPLICA_BASE_MISSING\n";
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const { task } = yield* prepareFailover(machine, writes);
+        const moved = yield* moveTo(task, destination.host);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* runtime.drain;
+        const failed = yield* writes.waitFor((current) => current.status === "failed");
+        const event = yield* readTaskEvent(failed, "task.failed");
+        if (event.type !== "task.failed") return yield* Effect.die("expected task.failed");
+        assert.strictEqual(event.payload.reason, "resume_failed");
+        assert.strictEqual(event.payload.generation, moved.generation);
+        assert.strictEqual(
+          failed.resultSummary,
+          REMOTE_COPY.resumeBaseMissing(destination.host, machine.host),
+        );
+        assert.lengthOf(destination.scripts, 1);
+        assert.strictEqual(destination.scripts[0]?.kind, "apply");
+        assert.lengthOf(destination.launches, 0);
+        yield* runtime.drain;
+        assert.isTrue(
+          (yield* botMessages).messages.some((message) =>
+            message.text.includes(REMOTE_COPY.resumeBaseMissing(destination.host, machine.host)),
+          ),
+        );
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+});
 
 describe("memory grants on another machine", () => {
   it.effect.each([
