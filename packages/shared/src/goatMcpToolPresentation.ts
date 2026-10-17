@@ -401,6 +401,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Start", "Starting", "Started", "a thread on another machine"],
     "ssh-thread-launch",
   ),
+  // A handoff starts the continuing thread on the other machine, so it shares that summary.
+  goat_ssh_thread_handoff: tool(
+    ["Continue", "Continuing", "Continued", "a thread on another machine"],
+    "ssh-thread-launch",
+  ),
   goat_connection_list: tool(["List", "Listing", "Listed", "saved connections"], "connection-list"),
   goat_connection_add_ssh: tool(["Save", "Saving", "Saved", "an SSH connection"], "connection-add"),
   goat_connection_remove: tool(
