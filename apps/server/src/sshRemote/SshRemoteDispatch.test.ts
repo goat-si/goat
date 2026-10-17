@@ -1233,8 +1233,14 @@ const withLaunchRemote = <A, E>(
             "orchestrator_capabilities",
           ].map((name) => ({
             name,
-            ...(name === "goat_thread_launch" && options.declaresMemoryCeiling === true
-              ? { inputSchema: { type: "object", properties: { memoryGrantCeiling: {} } } }
+            // Memory admission lists strictly, which requires an input schema on every tool.
+            ...(options.declaresMemoryCeiling === true
+              ? {
+                  inputSchema: {
+                    type: "object",
+                    properties: name === "goat_thread_launch" ? { memoryGrantCeiling: {} } : {},
+                  },
+                }
               : {}),
           })),
         };
