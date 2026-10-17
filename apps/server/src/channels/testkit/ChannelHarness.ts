@@ -187,9 +187,57 @@ export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
   listHosts: () => Effect.succeed([]),
 });
 
+/** A provider account on this machine as placement sees it: signed in, with one weekly window. */
+export interface FakeProviderInstance {
+  readonly instanceId: string;
+  readonly displayName?: string;
+  /** The weekly window's use; absent when the account reports no quota. */
+  readonly weeklyUsedPercent?: number;
+  readonly resetsAt?: string;
+}
+
+const fakeInstance = (instance: FakeProviderInstance) =>
+  ({
+    instanceId: ProviderInstanceId.make(instance.instanceId),
+    driverKind: "codex",
+    displayName: instance.displayName,
+    enabled: true,
+    snapshot: {
+      getSnapshot: Effect.succeed({
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        // No models listed, so any model counts as offered.
+        models: [],
+        ...(instance.weeklyUsedPercent === undefined
+          ? {}
+          : {
+              usageLimits: {
+                checkedAt: "2026-10-12T00:00:00.000Z",
+                windows: [
+                  {
+                    id: "weekly",
+                    kind: "weekly",
+                    label: "Weekly",
+                    usedPercent: instance.weeklyUsedPercent,
+                    ...(instance.resetsAt === undefined ? {} : { resetsAt: instance.resetsAt }),
+                  },
+                ],
+              },
+            }),
+      }),
+    },
+  }) as never;
+
 export function makeHarness(
   options: {
     readonly projects?: number;
+    /**
+     * Provider accounts on this machine. By default only the configured one exists and it lists
+     * no models, so any model counts as offered and placement has nothing to choose.
+     */
+    readonly providerInstances?: ReadonlyArray<FakeProviderInstance>;
     /** List the bot's own workspace among the projects, as a real server does. */
     readonly botWorkspace?: boolean;
     /** Settings overrides, including a publisher for live home changes. */
@@ -338,8 +386,17 @@ export function makeHarness(
     }),
     Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
       // Every instance exists and lists no models, so any model counts as offered.
-      getInstance: () =>
-        Effect.succeed({ snapshot: { getSnapshot: Effect.succeed({ models: [] }) } } as never),
+      getInstance: (instanceId) => {
+        const listed = options.providerInstances?.find(
+          (instance) => instance.instanceId === instanceId,
+        );
+        return Effect.succeed(
+          listed !== undefined
+            ? fakeInstance(listed)
+            : ({ snapshot: { getSnapshot: Effect.succeed({ models: [] }) } } as never),
+        );
+      },
+      listInstances: Effect.succeed((options.providerInstances ?? []).map(fakeInstance)),
     }),
     Layer.mock(ServerEnvironment.ServerEnvironment)({
       getEnvironmentId: Effect.succeed(environmentId),
