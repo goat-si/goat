@@ -8121,7 +8121,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
       // Position allocation orders a runless item before the first run, so attach the notice to
-      // the latest run: it then lands after everything the thread has shown so far.
+      // the latest run the timeline still shows: it then lands after everything visible so far.
       const { runs } = yield* projectionStore
         .getThreadRecords(command.threadId, ["runs"])
         .pipe(
@@ -8129,10 +8129,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      const latestRun = runs.reduce<(typeof runs)[number] | undefined>(
-        (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
-        undefined,
-      );
+      const latestRun = runs
+        .filter((run) => run.status !== "rolled_back")
+        .reduce<(typeof runs)[number] | undefined>(
+          (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
+          undefined,
+        );
       const ordinal =
         existing?.ordinal ??
         (yield* projectionStore
