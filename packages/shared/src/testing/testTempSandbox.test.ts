@@ -6,7 +6,22 @@ import * as NodePath from "node:path";
 import { expect, it } from "vite-plus/test";
 
 import * as HostProcess from "../HostProcess.ts";
-import { enterTestTempSandbox } from "./testTempSandbox.ts";
+import { enterTestTempSandbox, sandboxParentFor } from "./testTempSandbox.ts";
+
+it("moves only macOS's long per-user temp directory under /tmp", () => {
+  const tmp = () => "/private/tmp";
+  expect(sandboxParentFor("darwin", "/private/var/folders/ab/cd/T", tmp)).toBe("/private/tmp");
+  expect(sandboxParentFor("darwin", "/var/folders/ab/cd/T", tmp)).toBe("/private/tmp");
+  // A TMPDIR the job chose stays, so its cleanup and leak check see the sandbox.
+  expect(sandboxParentFor("darwin", "/Users/runner/work/_temp/goat-ci-x", tmp)).toBe(
+    "/Users/runner/work/_temp/goat-ci-x",
+  );
+  expect(sandboxParentFor("linux", "/var/folders/ab/cd/T", tmp)).toBe("/var/folders/ab/cd/T");
+  const missing = () => {
+    throw new Error("ENOENT");
+  };
+  expect(sandboxParentFor("darwin", "/var/folders/ab/cd/T", missing)).toBe("/var/folders/ab/cd/T");
+});
 
 it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "reports goat-* leftovers, deletes the sandbox, and restores TMPDIR",

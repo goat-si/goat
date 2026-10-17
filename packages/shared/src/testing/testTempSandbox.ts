@@ -14,19 +14,33 @@ export const GUARD_ENV = "GOAT_TEST_TMP_GUARD";
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 /**
+ * Where a test file's sandbox goes, given the temp directory it inherited.
+ *
  * macOS's per-user temp directory is already long (/private/var/folders/xx/…/T), and one more
  * segment pushes Unix socket paths past the 104-byte sun_path limit, so sockets fail with EINVAL.
- * The sandbox goes under /tmp there instead.
+ * Only that default moves under /tmp. A TMPDIR the caller chose, such as a CI job's own temp
+ * directory, is kept so the job's cleanup and leak check still see the sandbox.
  */
-const sandboxParent = (): string => {
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Same reason as below: HostProcess cannot load in every test config.
-  if (NodeOS.platform() !== "darwin") return NodeOS.tmpdir();
+export const sandboxParentFor = (
+  platform: NodeJS.Platform,
+  inherited: string,
+  resolveTmp: () => string,
+): string => {
+  if (platform !== "darwin" || !/^(\/private)?\/var\/folders\//.test(inherited)) return inherited;
   try {
-    return NodeFS.realpathSync.native("/tmp");
+    return resolveTmp();
   } catch {
-    return NodeOS.tmpdir();
+    return inherited;
   }
 };
+
+const sandboxParent = (): string =>
+  sandboxParentFor(
+    // oxlint-disable-next-line goat/no-global-process-runtime -- Same reason as below: HostProcess cannot load in every test config.
+    NodeOS.platform(),
+    NodeOS.tmpdir(),
+    () => NodeFS.realpathSync.native("/tmp"),
+  );
 
 export interface TestTempSandbox {
   readonly directory: string;
