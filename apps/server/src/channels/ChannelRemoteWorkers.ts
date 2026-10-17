@@ -37,6 +37,7 @@ import {
   ModelSelection as ModelSelectionSchema,
   PositiveInt,
   ProjectId,
+  ProviderInstanceId,
   RemoteOriginReportsWaitResult,
   RemoteReport,
   RemoteRunHolds,
@@ -71,6 +72,7 @@ import {
   remoteReportEventIdFor,
 } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
+import { choosePlacement } from "./channelPlacement.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
@@ -209,13 +211,45 @@ const decodeProjects = Schema.decodeUnknownEffect(
 const decodeEnvironment = Schema.decodeUnknownEffect(
   Schema.Struct({ environmentId: EnvironmentId }),
 );
-/** Only what the model check needs from orchestrator_capabilities, so newer fields never break it. */
-const decodeOffered = Schema.decodeUnknownEffect(
+/**
+ * Only what the model check and placement need from orchestrator_capabilities, so newer fields
+ * never break it. An older GOAT omits driverKind; its accounts are then never swapped.
+ */
+const OfferedProviders = Schema.Struct({
+  providers: Schema.Array(
+    Schema.Struct({
+      providerInstanceId: Schema.String,
+      driverKind: Schema.optional(Schema.String),
+      displayName: Schema.optional(Schema.String),
+      models: Schema.Array(Schema.Struct({ id: Schema.String })),
+    }),
+  ),
+});
+type OfferedProviders = typeof OfferedProviders.Type;
+const decodeOffered = Schema.decodeUnknownEffect(OfferedProviders);
+/** The quota windows goat_host_status reports for each provider account on that machine. */
+const decodeHostQuotas = Schema.decodeUnknownEffect(
   Schema.Struct({
-    providers: Schema.Array(
+    hosts: Schema.Array(
       Schema.Struct({
-        providerInstanceId: Schema.String,
-        models: Schema.Array(Schema.Struct({ id: Schema.String })),
+        metrics: Schema.optional(
+          Schema.Struct({
+            quotas: Schema.Array(
+              Schema.Struct({
+                instanceId: Schema.String,
+                limits: Schema.Struct({
+                  windows: Schema.Array(
+                    Schema.Struct({
+                      label: Schema.String,
+                      usedPercent: Schema.Number,
+                      resetsAt: Schema.optional(Schema.String),
+                    }),
+                  ),
+                }),
+              }),
+            ),
+          }),
+        ),
       }),
     ),
   }),
@@ -493,6 +527,70 @@ const make = Effect.gen(function* () {
     return projects.length === 1 && !askedForOne ? projects[0] : undefined;
   };
 
+  /**
+   * The account to run a model on over there, with the reason for the chip. Another account of
+   * the same provider that offers the model can take the work when it has more quota left; the
+   * configured account wins ties. Quotas come from that machine's goat_host_status; when it cannot
+   * say, the configured account runs as before.
+   */
+  const placeOnHost = (
+    host: string,
+    selection: ModelSelection,
+    offered: OfferedProviders | undefined,
+    authorize: Effect.Effect<RuntimeMode, Superseded>,
+  ) =>
+    Effect.gen(function* () {
+      const providers = offered?.providers ?? [];
+      const configured = providers.find(
+        (provider) => provider.providerInstanceId === selection.instanceId,
+      );
+      if (configured === undefined) return { modelSelection: selection, reason: undefined };
+      const candidates = providers.filter(
+        (provider) =>
+          provider === configured ||
+          (configured.driverKind !== undefined &&
+            provider.driverKind === configured.driverKind &&
+            provider.models.some((entry) => entry.id === selection.model)),
+      );
+      const status = yield* callHost(
+        {
+          host,
+          tool: "goat_host_status",
+          arguments: { local: true },
+          writes: false,
+          timeoutMs: READ_TIMEOUT_MS,
+        },
+        authorize,
+      ).pipe(Effect.flatMap(decodeHostQuotas), Effect.option);
+      const quotas = new Map(
+        (status._tag === "Some" ? (status.value.hosts[0]?.metrics?.quotas ?? []) : []).map(
+          (quota) => [quota.instanceId, quota.limits.windows] as const,
+        ),
+      );
+      const placed = choosePlacement(
+        candidates.map((provider) => {
+          const windows = quotas.get(provider.providerInstanceId) ?? [];
+          return {
+            value:
+              provider === configured
+                ? selection
+                : {
+                    ...selection,
+                    instanceId: ProviderInstanceId.make(provider.providerInstanceId),
+                  },
+            // Every candidate is on this host and the chip already names it.
+            host: null,
+            providerLabel: provider.displayName ?? provider.providerInstanceId,
+            preferred: provider === configured,
+            windows: windows.length === 0 ? null : windows,
+            activeTasks: 0,
+          };
+        }),
+        DateTime.toEpochMillis(yield* DateTime.now),
+      );
+      return { modelSelection: placed?.chosen.value ?? selection, reason: placed?.reason };
+    });
+
   const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local, owner) =>
     Effect.gen(function* () {
       const task = stored.task;
@@ -639,10 +737,11 @@ const make = Effect.gen(function* () {
               : REMOTE_COPY.defaultModelMissing(host, chosen.title),
         } as const;
       }
+      const placed = yield* placeOnHost(host, modelSelection, offered, authorize);
       const target: ChannelDispatchTarget = {
         environmentId: environment.success.environmentId,
         projectId: chosen.id,
-        modelSelection,
+        modelSelection: placed.modelSelection,
         runtimeMode: local.runtimeMode,
         interactionMode: "default",
         // A repository gets its own worktree per task, as on this machine.
@@ -651,6 +750,7 @@ const make = Effect.gen(function* () {
             ? { type: "worktree" }
             : { type: "root" },
         remote: { host, cwd: chosen.workspaceRoot },
+        ...(placed.reason === undefined ? {} : { placementReason: placed.reason }),
         ...(local.memoryGrantCeiling === undefined || local.memoryGrantCeiling === "none"
           ? {}
           : { memoryGrantCeiling: local.memoryGrantCeiling }),

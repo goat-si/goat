@@ -114,7 +114,10 @@ export function choosePlacement<A>(
     };
   }
   const skipped = candidates.filter((candidate) => isExhausted(candidate, now));
-  // A lone candidate that reports nothing gives the requester nothing to read.
+  // Nothing reported and nothing moved: the requester has nothing to read.
+  if (chosen.preferred && candidates.every((candidate) => candidate.windows === null)) {
+    return { chosen, reason: undefined };
+  }
   if (candidates.length === 1 && used === null) return { chosen, reason: undefined };
 
   const parts = [labelOf(chosen)];

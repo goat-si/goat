@@ -94,13 +94,20 @@ describe("choosePlacement", () => {
     assert.notInclude(placed?.reason ?? "", "usage limit");
   });
 
-  it("keeps the configured candidate on a tie and stays quiet when nothing is known", () => {
+  it("keeps the configured candidate on a tie and stays quiet when nothing is reported", () => {
     const tie = choosePlacement(
       [candidate("other"), candidate("configured", { preferred: true })],
       NOW,
     );
     assert.strictEqual(tie?.chosen.value, "configured");
-    assert.strictEqual(tie?.reason, "Codex · usage not reported");
+    assert.strictEqual(tie?.reason, undefined);
+    // Moved by load alone: say why, even without quota.
+    const moved = choosePlacement(
+      [candidate("busy", { preferred: true, activeTasks: 1 }), candidate("idle")],
+      NOW,
+    );
+    assert.strictEqual(moved?.chosen.value, "idle");
+    assert.strictEqual(moved?.reason, "Codex · usage not reported · free while others work");
     const lone = choosePlacement([candidate("only", { preferred: true })], NOW);
     assert.strictEqual(lone?.chosen.value, "only");
     assert.strictEqual(lone?.reason, undefined);
