@@ -119,6 +119,8 @@ class RemoteMachine {
   capabilitiesUnreachable = false;
   /** Weekly quota use per account that goat_host_status reports; unset, the tool is refused. */
   hostQuotas: Readonly<Record<string, number>> | undefined;
+  /** Accounts orchestrator_capabilities lists but reports as unable to run work. */
+  unrunnable: ReadonlyArray<string> = [];
   /** goat_thread_send names a run that never exists. */
   sendNamesMissingRun = false;
   /** After the answer's run, another run starts at once and asks this. */
@@ -363,6 +365,9 @@ class RemoteMachine {
                     (instance) => ({
                       providerInstanceId: instance,
                       driverKind: "codex",
+                      // A real GOAT sends null for an account without a display name.
+                      displayName: null,
+                      canRunChildTask: !machine.unrunnable.includes(instance),
                       models: machine
                         .offeredModels!.filter((entry) => entry.instance === instance)
                         .map((entry) => ({ id: entry.model })),
@@ -2189,4 +2194,26 @@ describe("which account runs work on another machine", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("never moves work to an account there that cannot run it", () => {
+    const { machine, harness } = remoteHarness();
+    machine.offeredModels = [
+      { instance: "codex", model: "gpt-6.1-sol" },
+      { instance: "codex-signed-out", model: "gpt-6.1-sol" },
+    ];
+    machine.unrunnable = ["codex-signed-out"];
+    // The signed-out account reports no quota, which alone would score it below 80%.
+    machine.hostQuotas = { codex: 80 };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(
+        goatInput("do@mac-studio: busy there", "placement-unrunnable"),
+        rpcContext,
+      );
+      const running = yield* until("running", (task) => task.status === "running");
+      assert.strictEqual(machine.launches[0]?.modelSelection?.instanceId, "codex");
+      assert.strictEqual(running.target?.placementReason, "codex · 80% weekly used");
+    }).pipe(Effect.provide(harness.layer));
+  });
 });

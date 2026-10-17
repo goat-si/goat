@@ -19,6 +19,11 @@ import type { ChannelBotFiles } from "./channelBotNotes.ts";
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
 export const REMOTE_SKILLS_LIMIT = 3;
 export const REMOTE_SKILL_CHARS = 4_000;
+/**
+ * The remote goat_thread_launch takes at most 120,000 characters, and the SSH dispatch appends
+ * its reporting note; the notes and skills give way first so the work itself still starts.
+ */
+export const REMOTE_MESSAGE_CHARS = 115_000;
 
 type BriefTask = Pick<
   ChannelTask,
@@ -70,13 +75,29 @@ export const channelWorkerRules = (reporting: "local" | "remote") =>
         FINISH,
       ];
 
-/** The first message of a worker on another machine, carrying the home machine's notes. */
-export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) =>
-  [
-    ...workerHeader(task),
-    ...remoteContextLines(task, context),
-    ...channelWorkerRules("remote"),
-  ].join("\n");
+/**
+ * The first message of a worker on another machine, carrying the home machine's notes. When it
+ * would run past the budget, skills drop from the last one named, then the notes; an instruction
+ * too long on its own is sent as before and the remote refuses it.
+ */
+export const remoteWorkerMessage = (task: BriefTask, context: RemoteBotContext) => {
+  const render = (current: RemoteBotContext) =>
+    [
+      ...workerHeader(task),
+      ...remoteContextLines(task, current),
+      ...channelWorkerRules("remote"),
+    ].join("\n");
+  let kept = context.skills.length;
+  let message = render(context);
+  while (message.length > REMOTE_MESSAGE_CHARS && kept > 0) {
+    kept -= 1;
+    message = render({ notes: context.notes, skills: context.skills.slice(0, kept) });
+  }
+  if (message.length > REMOTE_MESSAGE_CHARS && context.notes !== "") {
+    message = render({ notes: "", skills: context.skills.slice(0, kept) });
+  }
+  return message;
+};
 
 const remoteContextLines = (task: BriefTask, context: RemoteBotContext) => {
   // The notes file lives on the home machine, so a requested change cannot be made from there.

@@ -1,7 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ChannelTaskId } from "@goat/contracts";
 
-import { channelWorkerRules, remoteWorkerMessage, skillsNamedIn } from "./channelWorkerBrief.ts";
+import {
+  channelWorkerRules,
+  REMOTE_MESSAGE_CHARS,
+  remoteWorkerMessage,
+  skillsNamedIn,
+} from "./channelWorkerBrief.ts";
 
 const task = {
   taskId: ChannelTaskId.make("channel-task:1"),
@@ -45,6 +50,31 @@ describe("channel worker brief", () => {
     );
     assert.include(change, '"forget the draft rule"');
     assert.include(change, "still needs to be made there");
+  });
+
+  it("drops skills, then notes, to keep the message within what the remote accepts", () => {
+    const context = {
+      notes: "n".repeat(3_000),
+      skills: [
+        { name: "first", text: "f".repeat(4_000) },
+        { name: "second", text: "s".repeat(4_000) },
+      ],
+    };
+    const roomy = remoteWorkerMessage(
+      { ...task, instruction: "x".repeat(REMOTE_MESSAGE_CHARS - 9_000) },
+      context,
+    );
+    assert.isAtMost(roomy.length, REMOTE_MESSAGE_CHARS);
+    assert.include(roomy, "<goat_bot_notes>");
+    assert.include(roomy, 'name="first"');
+    assert.notInclude(roomy, 'name="second"');
+
+    const tooLong = remoteWorkerMessage(
+      { ...task, instruction: "x".repeat(REMOTE_MESSAGE_CHARS) },
+      context,
+    );
+    assert.notInclude(tooLong, "goat_bot");
+    assert.include(tooLong, "goat_thread_report_result");
   });
 
   it("matches skills the instruction names as whole words", () => {
