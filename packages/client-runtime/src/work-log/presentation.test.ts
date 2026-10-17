@@ -1172,4 +1172,30 @@ describe("commands that only inspect files", () => {
       toolGroupSummaryKind([...reads, entry("s2", "rg foo", [{ type: "search", query: "foo" }])]),
     ).toBe("code-search");
   });
+
+  it("counts each kind a mixed command ran without counting the command twice", () => {
+    const listAndRead = entry("m1", "ls src && cat a.ts", [
+      { type: "list", path: "src" },
+      { type: "read", path: "a.ts" },
+    ]);
+    expect(summarizeToolGroup([listAndRead]).summary).toBe("Explored 1 file, 1 list");
+    expect(
+      summarizeToolGroup([
+        listAndRead,
+        entry("s1", "rg foo src && rg bar src", [
+          { type: "search", query: "foo", path: "src" },
+          { type: "search", query: "bar", path: "src" },
+        ]),
+        entry("c1", "vp test run", []),
+        entry("c2", "git status", []),
+        {
+          id: "w1",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          label: "Search",
+          tone: "tool",
+          itemType: "web_search",
+        },
+      ]).summary,
+    ).toBe("Explored 1 file, 2 searches, 1 list, ran 2 commands, and performed 1 other action");
+  });
 });

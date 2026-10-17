@@ -130,12 +130,24 @@ export function workEntryCommandActions(
     : null;
 }
 
+const COMMAND_ACTION_GROUP = {
+  read: "read",
+  list: "list",
+  search: "code-search",
+} as const satisfies Record<OrchestrationV2CommandAction["type"], ToolGroupAction>;
+
+function commandActionsGroupActions(
+  actions: ReadonlyArray<OrchestrationV2CommandAction>,
+): ReadonlyArray<ToolGroupAction> {
+  return [...new Set(actions.map((action) => COMMAND_ACTION_GROUP[action.type]))];
+}
+
+/** A row's single kind; a command mixing kinds is filed under search. */
 function commandActionsGroupAction(
   actions: ReadonlyArray<OrchestrationV2CommandAction>,
 ): ToolGroupAction {
-  if (actions.every((action) => action.type === "read")) return "read";
-  if (actions.every((action) => action.type === "list")) return "list";
-  return "code-search";
+  const kinds = commandActionsGroupActions(actions);
+  return kinds.length === 1 ? kinds[0]! : "code-search";
 }
 
 function commandActionPhrase(
@@ -559,6 +571,12 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   return workLogEntryIsToolLike(entry) ? "other" : "update";
 }
 
+/** Every kind a row counts toward in a summary: `ls && cat a.ts` is a listing and a read. */
+function toolGroupActions(entry: WorkLogPresentationEntry): ReadonlyArray<ToolGroupAction> {
+  const commandActions = workEntryCommandActions(entry);
+  return commandActions ? commandActionsGroupActions(commandActions) : [toolGroupAction(entry)];
+}
+
 export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): string | null {
   const viewedImagePath = entry.viewedImagePath?.trim();
   if (
@@ -619,9 +637,21 @@ function toolGroupActionCount(
     for (const entry of entries) {
       const actions = workEntryCommandActions(entry);
       if (actions === null) otherReads += 1;
-      else for (const commandAction of actions) commandReadPaths.add(commandAction.path ?? "");
+      else
+        for (const commandAction of actions) {
+          if (commandAction.type === "read") commandReadPaths.add(commandAction.path ?? "");
+        }
     }
     return otherReads + commandReadPaths.size;
+  }
+  if (action === "list" || action === "code-search") {
+    // A command counts each listing or search it ran.
+    const type = action === "list" ? "list" : "search";
+    return entries.reduce((count, entry) => {
+      const actions = workEntryCommandActions(entry);
+      if (actions === null) return count + 1;
+      return count + actions.filter((commandAction) => commandAction.type === type).length;
+    }, 0);
   }
   if (action !== "edit") return entries.length;
   const changedFiles = new Set<string>();
@@ -791,11 +821,12 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
       sources.set(entry.toolSource.key, entry.toolSource);
       continue;
     }
-    const action = toolGroupAction(entry);
-    const key = goatAction ?? action;
-    const group = groups.get(key);
-    if (group) group.entries.push(entry);
-    else groups.set(key, { action, goatAction, entries: [entry] });
+    for (const action of goatAction === null ? toolGroupActions(entry) : [toolGroupAction(entry)]) {
+      const key = goatAction ?? action;
+      const group = groups.get(key);
+      if (group) group.entries.push(entry);
+      else groups.set(key, { action, goatAction, entries: [entry] });
+    }
   }
   // Two or more exploration kinds share one "Explored …" phrase so they never
   // crowd a real command or edit out of the two-category summary.
@@ -806,11 +837,12 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   const summaries = [...groups].flatMap(([action, group], index) => {
     if (mergeExplore && exploreGroups.includes(group)) {
       if (group !== exploreGroups[0]) return [];
-      const exploreEntries = exploreGroups.flatMap((explore) => explore.entries);
+      // A command that both lists and reads sits in two exploration groups.
+      const exploreEntries = [...new Set(exploreGroups.flatMap((explore) => explore.entries))];
       return [
         {
           index,
-          count: exploreEntries.length,
+          entries: exploreEntries,
           priority: summaryActionPriority(action),
           label: exploreSummaryLabel(exploreGroups),
           failedCount: exploreEntries.filter(workEntryDisplayIndicatesToolFailure).length,
@@ -820,7 +852,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
     return [
       {
         index,
-        count: group.entries.length,
+        entries: group.entries,
         priority: summaryActionPriority(action),
         ...(group.goatAction
           ? summarizeGoatToolCalls(group.goatAction, group.entries.map(goatToolSummaryCall))
@@ -858,8 +890,8 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
       entry.toolSource !== undefined &&
       resolveGoatMcpToolDefinition(workEntryToolName(entry)) === null,
   ).length;
-  const remainingCount =
-    entries.length - sourcedCount - selected.reduce((count, group) => count + group.count, 0);
+  const summarizedCount = new Set(selected.flatMap((group) => group.entries)).size;
+  const remainingCount = entries.length - sourcedCount - summarizedCount;
   if (remainingCount > 0) {
     labels.push(`Performed ${remainingCount} other ${remainingCount === 1 ? "action" : "actions"}`);
   }
