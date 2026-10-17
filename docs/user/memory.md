@@ -62,7 +62,7 @@ The provider’s original conversation stays, but forgotten content is never imp
 
 ## Agent access
 
-Agent memory access depends on the environment’s current policy and the run’s permissions. For scheduled tasks and subagents, **Saved limit** is the stored maximum: none, read only, or read and write. **Allowed now** is what the server currently permits, which may be narrower. If **Allowed now** is absent, the server does not know the current value. Turning agent memory access on cannot widen the saved limit.
+Agent memory access depends on the environment’s current policy and the run’s permissions. For scheduled tasks, subagents, and work GOAT Bot or Slack starts for you, **Saved limit** is the stored maximum: none, read only, or read and write. **Allowed now** is what the server currently permits, which may be narrower. If **Allowed now** is absent, the server does not know the current value. Turning agent memory access on cannot widen the saved limit.
 
 When connecting an outside agent through OAuth, select **Read memory** or **Write memory** under **Memory access (optional)** if needed. Nothing is selected by default, and memory permissions are separate from thread access.
 

@@ -35,14 +35,18 @@ GOAT Bot screen shows only a chip for the work and its final report.
 - GOAT Bot answers questions about the machine it runs on, such as its name,
   OS, memory, and what is running, without starting work.
 - Ask GOAT Bot to remember a standing rule ("always reply in Korean") and it
-  follows it from then on, in Slack and in GOAT. Notes live in
+  follows it from then on, in Slack and in GOAT. It keeps a note only when the
+  message you send asks for it, and each note names the message it came from.
+  Notes live in
   `goat-bot/memory.md` in GOAT's data folder on that machine; edit the file
   to change them. Put written procedures in `goat-bot/skills/` as Markdown
   files, and the bot points its coding agents to the one that fits.
 - For memories used in coding conversations and shared between devices, see
   [Memory](./memory.md).
 - Work you start from Slack is capped at the access level chosen when you
-  created the link code.
+  created the link code. Its coding agents can use GOAT memory only as far as
+  the link allows, and a link you narrow later applies to work that has not
+  started yet.
 - When you connect to several machines, Slack runs only on the machine GOAT
   Bot lives on. Change it in **Settings → Integrations → GOAT Bot**; set up
   Slack on that machine.
