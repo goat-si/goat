@@ -7,6 +7,12 @@ import {
 } from "./handoff.ts";
 import * as Memory from "./memory.ts";
 import {
+  SshHostStatusInput,
+  SshHostResult,
+  SshHandoffProgressInput,
+  SshHandoffProgressResult,
+} from "./sshHost.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -524,6 +530,8 @@ export const WS_METHODS = {
   vcsInit: "vcs.init",
   sshWorkspaceLaunch: "sshWorkspace.launch",
   sshWorkspaceFetchBack: "sshWorkspace.fetchBack",
+  sshHostStatus: "sshHost.status",
+  sshHostHandoffProgress: "sshHost.handoffProgress",
 
   // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
@@ -1556,6 +1564,18 @@ const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
   payload: VcsSwitchRefInput,
   success: VcsSwitchRefResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+// Registered with authorization and handlers when the SSH setup transports are added.
+export const WsSshHostStatusRpc = Rpc.make(WS_METHODS.sshHostStatus, {
+  payload: SshHostStatusInput,
+  success: SshHostResult,
+  error: EnvironmentAuthorizationError,
+});
+export const WsSshHostHandoffProgressRpc = Rpc.make(WS_METHODS.sshHostHandoffProgress, {
+  payload: SshHandoffProgressInput,
+  success: SshHandoffProgressResult,
+  error: Schema.Union([HandoffError, EnvironmentAuthorizationError]),
 });
 
 const WsSshWorkspaceLaunchRpc = Rpc.make(WS_METHODS.sshWorkspaceLaunch, {

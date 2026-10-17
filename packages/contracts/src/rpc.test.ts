@@ -21,7 +21,14 @@ import {
   RpcScopeAuthorization,
   WsRpcGroup,
   WsSubscribeServerConfigRpc,
+  WsSshHostStatusRpc,
+  WsSshHostHandoffProgressRpc,
 } from "./rpc.ts";
+
+const decodeSshHostStatusPayload = Schema.decodeUnknownSync(WsSshHostStatusRpc.payloadSchema);
+const decodeSshHandoffProgressPayload = Schema.decodeUnknownSync(
+  WsSshHostHandoffProgressRpc.payloadSchema,
+);
 
 /**
  * The client always sends `environmentThemes`, including to servers built
@@ -50,6 +57,16 @@ describe("subscribeServerConfig payload compatibility", () => {
 });
 
 describe("WebSocket RPC contracts", () => {
+  it("declares alias status and authenticated handoff progress payloads", () => {
+    expect(WsSshHostStatusRpc._tag).toBe(WS_METHODS.sshHostStatus);
+    expect(WsSshHostHandoffProgressRpc._tag).toBe(WS_METHODS.sshHostHandoffProgress);
+    expect(decodeSshHostStatusPayload({ host: "vps-1" })).toEqual({ host: "vps-1" });
+    expect(() => decodeSshHostStatusPayload({ host: "2001:db8::1" })).toThrow();
+    const progress = { threadId: "thread-1", handoffId: "handoff-1" };
+    expect(decodeSshHandoffProgressPayload(progress)).toEqual(progress);
+    expect(() => decodeSshHandoffProgressPayload({ handoffId: "handoff-1" })).toThrow();
+  });
+
   it("exposes only the V2 orchestration transport surface", () => {
     const methods = [...WsRpcGroup.requests.keys()];
 

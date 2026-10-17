@@ -1,8 +1,10 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime } from "./baseSchemas.ts";
-import { HandoffSummary } from "./handoff.ts";
+import { IsoDateTime, PortSchema, SshHostAlias, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HandoffHuman, HandoffReadInput, HandoffSummary } from "./handoff.ts";
 import { ProviderDiagnosisFix } from "./providerDiagnosis.ts";
+
+export { SshHostAlias } from "./baseSchemas.ts";
 
 export const SshHostState = Schema.Literals([
   "untrusted",
@@ -72,6 +74,14 @@ export const SshHostErrorCode = Schema.Literals([
 ]);
 export type SshHostErrorCode = typeof SshHostErrorCode.Type;
 
+/** Identifies the operation whose runtime and diagnosis publications clients are following. */
+export const SshHostSetupProgress = Schema.Struct({
+  operationId: TrimmedNonEmptyString,
+  generation: Schema.Int,
+  stage: Schema.Literals(["runtime", "diagnosis", "complete"]),
+});
+export type SshHostSetupProgress = typeof SshHostSetupProgress.Type;
+
 const SshHostStatusShape = Schema.Struct({
   host: Schema.String,
   state: SshHostState,
@@ -82,6 +92,8 @@ const SshHostStatusShape = Schema.Struct({
   detail: Schema.optionalKey(Schema.String),
   failure: Schema.optionalKey(SshHostFailure),
   providers: Schema.optionalKey(SshHostProviders),
+  publicKey: Schema.optionalKey(Schema.String),
+  setup: Schema.optionalKey(SshHostSetupProgress),
 });
 
 /** Check a snapshot before publishing it through IPC or an SSH host tool. */
@@ -89,6 +101,7 @@ export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
   if ((status.state === "preparing") !== (status.phase !== undefined)) return false;
   if (status.state === "failed" && status.failure === undefined) return false;
   if (status.waitingReason !== undefined && status.state !== "update_waiting") return false;
+  if (status.publicKey !== undefined && status.state !== "auth_failed") return false;
   if (
     status.failure !== undefined &&
     (status.failure.reason === "archive_unavailable") !== (status.failure.archive !== undefined)
@@ -104,15 +117,49 @@ export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
 export const SshHostStatus = SshHostStatusShape.check(Schema.makeFilter(validateSshHostStatus));
 export type SshHostStatus = typeof SshHostStatus.Type;
 
-export const SshHostStatusInput = Schema.Struct({ host: Schema.String });
+export const SshHostStatusInput = Schema.Struct({ host: SshHostAlias });
 export type SshHostStatusInput = typeof SshHostStatusInput.Type;
 
 export const SshRuntimeUpdateInput = Schema.Struct({
-  host: Schema.String,
+  host: SshHostAlias,
   // Callers omit mode to use the service's idle-safe when_idle default.
   mode: Schema.optionalKey(SshRuntimeUpdateMode),
 });
 export type SshRuntimeUpdateInput = typeof SshRuntimeUpdateInput.Type;
+
+export const SshHostAddInput = Schema.Struct({
+  address: TrimmedNonEmptyString,
+  user: Schema.optional(TrimmedNonEmptyString),
+  port: Schema.optional(PortSchema),
+  alias: Schema.optional(SshHostAlias),
+  label: Schema.optional(TrimmedNonEmptyString),
+  identityFile: Schema.optional(TrimmedNonEmptyString),
+});
+export type SshHostAddInput = typeof SshHostAddInput.Type;
+
+export const SshHostPrepareInput = Schema.Struct({ host: SshHostAlias });
+export type SshHostPrepareInput = typeof SshHostPrepareInput.Type;
+
+export const SshHostForgetInput = Schema.Struct({
+  host: SshHostAlias,
+  stopRuntime: Schema.Literals(["if_idle", "no"]),
+});
+export type SshHostForgetInput = typeof SshHostForgetInput.Type;
+
+export const SshHostTrustInput = Schema.Struct({
+  probeId: TrimmedNonEmptyString,
+  accepted: Schema.Boolean,
+});
+export type SshHostTrustInput = typeof SshHostTrustInput.Type;
+
+/** Private client response; never use as an MCP result schema. */
+export const SshHostProbeResult = Schema.Struct({
+  probeId: TrimmedNonEmptyString,
+  host: SshHostAlias,
+  human: HandoffHuman,
+  includeRequired: Schema.Boolean,
+});
+export type SshHostProbeResult = typeof SshHostProbeResult.Type;
 
 function sameProviders(left: SshHostProviders, right: SshHostProviders) {
   return (
@@ -166,3 +213,58 @@ export const SshHostResult = Schema.Union([
   ),
 );
 export type SshHostResult = typeof SshHostResult.Type;
+
+export const SshHandoffProgressInput = HandoffReadInput;
+export type SshHandoffProgressInput = typeof SshHandoffProgressInput.Type;
+
+export const SshHandoffProgressResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("available"),
+    host: SshHostAlias,
+    operationId: TrimmedNonEmptyString,
+    generation: Schema.Int,
+    result: SshHostResult,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["not_ssh", "expired", "superseded"]),
+  }),
+]).check(
+  Schema.makeFilter((progress) => {
+    if (progress.kind === "unavailable") return true;
+    const setup = progress.result.status?.setup;
+    return (
+      setup === undefined ||
+      (setup.operationId === progress.operationId && setup.generation === progress.generation)
+    );
+  }),
+);
+export type SshHandoffProgressResult = typeof SshHandoffProgressResult.Type;
+
+const quoteShellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** Formats public key-auth guidance for the person using the SSH origin's terminal. */
+export function buildSshKeyAuthInstructions(context: {
+  readonly originLabel: string;
+  readonly host: string;
+  readonly user: string;
+  readonly port: number;
+  readonly publicKey?: string;
+  readonly publicKeyPath?: string;
+  readonly generatedKey?: boolean;
+}) {
+  const introduction =
+    context.generatedKey && context.publicKey !== undefined
+      ? `GOAT created a key for ${context.host}. Add this public key to the server. Most providers ask for it when you create a server.`
+      : "Add your existing public key to the server, then retry key authentication.";
+  const command =
+    context.publicKeyPath === undefined
+      ? undefined
+      : `ssh-copy-id -i ${quoteShellArgument(context.publicKeyPath)} -p ${quoteShellArgument(String(context.port))} ${quoteShellArgument(`${context.user}@${context.host}`)}`;
+  return {
+    originLabel: context.originLabel,
+    instruction: `${introduction} Run this on ${context.originLabel}.`,
+    ...(command === undefined ? {} : { command }),
+    ...(context.publicKey === undefined ? {} : { publicKey: context.publicKey }),
+  };
+}

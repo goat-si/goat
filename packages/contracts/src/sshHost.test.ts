@@ -4,6 +4,15 @@ import { describe, expect, it } from "vite-plus/test";
 import { DesktopSshHostStatusInputSchema, DesktopSshRuntimeUpdateInputSchema } from "./ipc.ts";
 import {
   SshHostErrorCode,
+  SshHostAddInput,
+  SshHostAlias,
+  SshHostForgetInput,
+  SshHostPrepareInput,
+  SshHostProbeResult,
+  SshHostSetupProgress,
+  SshHostTrustInput,
+  SshHandoffProgressInput,
+  SshHandoffProgressResult,
   SshHostFailure,
   SshHostFailureReason,
   SshHostResult,
@@ -13,6 +22,7 @@ import {
   SshRuntimePhase,
   SshRuntimeUpdateInput,
   validateSshHostStatus,
+  buildSshKeyAuthInstructions,
 } from "./sshHost.ts";
 
 const stopped = {
@@ -36,6 +46,256 @@ const decodeStatus = Schema.decodeUnknownSync(SshHostStatus);
 const decodeResult = Schema.decodeUnknownSync(SshHostResult);
 const decodeStatusInput = Schema.decodeUnknownSync(SshHostStatusInput);
 const decodeDesktopStatusInput = Schema.decodeUnknownSync(DesktopSshHostStatusInputSchema);
+const decodeAdd = Schema.decodeUnknownSync(SshHostAddInput);
+const decodeAlias = Schema.decodeUnknownSync(SshHostAlias);
+const decodePrepare = Schema.decodeUnknownSync(SshHostPrepareInput);
+const decodeForget = Schema.decodeUnknownSync(SshHostForgetInput);
+const decodeTrust = Schema.decodeUnknownSync(SshHostTrustInput);
+const decodeProbe = Schema.decodeUnknownSync(SshHostProbeResult);
+const decodeSetup = Schema.decodeUnknownSync(SshHostSetupProgress);
+const decodeProgressInput = Schema.decodeUnknownSync(SshHandoffProgressInput);
+const decodeProgress = Schema.decodeUnknownSync(SshHandoffProgressResult);
+const decodeUpdateInput = Schema.decodeUnknownSync(SshRuntimeUpdateInput);
+const resultCodec = Schema.toCodecJson(SshHostResult);
+const decodeResultWire = Schema.decodeUnknownSync(resultCodec);
+const encodeResultWire = Schema.encodeSync(resultCodec);
+const progressCodec = Schema.toCodecJson(SshHandoffProgressResult);
+const decodeProgressWire = Schema.decodeUnknownSync(progressCodec);
+const encodeProgressWire = Schema.encodeSync(progressCodec);
+
+const setup = { operationId: "setup-1", generation: 2, stage: "runtime" } as const;
+const progress = {
+  kind: "available",
+  host: "vps-1",
+  operationId: setup.operationId,
+  generation: setup.generation,
+  result: { kind: "ok", status: { ...stopped, setup } },
+} as const;
+
+describe("SSH host setup contracts", () => {
+  it("accepts address context separately from managed aliases", () => {
+    expect(decodeAdd({ address: " 2001:db8::1 " })).toEqual({ address: "2001:db8::1" });
+    const input = {
+      address: "192.0.2.1",
+      user: "root",
+      port: 2222,
+      alias: "goat-vps_1.example",
+      label: "My VPS",
+      identityFile: "/Users/runner/.ssh/existing",
+    };
+    expect(decodeAdd(input)).toEqual(input);
+    expect(decodeAlias("a".repeat(64))).toHaveLength(64);
+    expect(decodeAlias(" vps-1 ")).toBe("vps-1");
+    expect(() => decodeAdd({ address: " " })).toThrow();
+    expect(() => decodeAdd({ address: "vps", port: 0 })).toThrow();
+    expect(() => decodeAdd({ address: "vps", port: 65536 })).toThrow();
+    expect(() => decodeAdd({ address: "vps", port: 22.5 })).toThrow();
+  });
+
+  it.each([
+    "",
+    " ",
+    "-option",
+    "two hosts",
+    "a/b",
+    "vps\nother",
+    "vps\0",
+    "2001:db8::1",
+    "a".repeat(65),
+  ])("rejects invalid server alias %j in every alias input", (host) => {
+    expect(() => decodeAlias(host)).toThrow();
+    expect(() => decodeStatusInput({ host })).toThrow();
+    expect(() => decodeUpdateInput({ host })).toThrow();
+    expect(() => decodePrepare({ host })).toThrow();
+    expect(() => decodeForget({ host, stopRuntime: "no" })).toThrow();
+    expect(() => decodeAdd({ address: "vps", alias: host })).toThrow();
+  });
+
+  it("requires an explicit stop policy and a boolean trust decision", () => {
+    for (const stopRuntime of ["if_idle", "no"] as const) {
+      expect(decodeForget({ host: "vps-1", stopRuntime })).toEqual({ host: "vps-1", stopRuntime });
+    }
+    for (const stopRuntime of [undefined, "force", true]) {
+      expect(() => decodeForget({ host: "vps-1", stopRuntime })).toThrow();
+    }
+    expect(decodePrepare({ host: "vps-1" })).toEqual({ host: "vps-1" });
+    for (const accepted of [true, false]) {
+      expect(decodeTrust({ probeId: "probe-1", accepted })).toEqual({
+        probeId: "probe-1",
+        accepted,
+      });
+    }
+    expect(() => decodeTrust({ probeId: "", accepted: true })).toThrow();
+    expect(() => decodeTrust({ probeId: "probe-1", accepted: "yes" })).toThrow();
+    const probe = {
+      probeId: "probe-1",
+      host: "vps-1",
+      human: { location: "Origin Mac", fingerprint: "SHA256:negotiated-key" },
+      includeRequired: true,
+    };
+    expect(decodeProbe(probe)).toEqual(probe);
+    expect(() => decodeProbe({ ...probe, human: undefined })).toThrow();
+  });
+
+  it.each(["2001:db8::1", "a".repeat(100)])(
+    "preserves existing Desktop host %s through request and renderer result codecs",
+    (hostname) => {
+      const target = {
+        alias: hostname.includes(":") ? `[${hostname}]:22` : hostname,
+        hostname,
+        username: "root",
+        port: 22,
+      };
+      const request = decodeDesktopStatusInput({ target });
+      expect(request.target).toEqual(target);
+      const snapshot = { ...stopped, host: request.target.hostname };
+      const result = { kind: "ok", status: snapshot } as const;
+      const wire = JSON.parse(JSON.stringify(encodeResultWire(result)));
+      expect(decodeResultWire(wire)).toEqual(result);
+      expect(() => decodeStatusInput({ host: hostname })).toThrow();
+    },
+  );
+
+  it.each(["runtime", "diagnosis", "complete"] as const)(
+    "preserves the current setup operation at stage %s",
+    (stage) => {
+      const result = {
+        kind: "ok",
+        status: { ...stopped, state: "ready", setup: { ...setup, stage } },
+      } as const;
+      expect(decodeResultWire(JSON.parse(JSON.stringify(encodeResultWire(result))))).toEqual(
+        result,
+      );
+      expect(decodeStatus({ ...stopped, state: "ready" }).setup).toBeUndefined();
+    },
+  );
+
+  it("rejects malformed setup markers", () => {
+    for (const invalid of [
+      { ...setup, stage: "waiting" },
+      { ...setup, operationId: " " },
+      { ...setup, generation: 0.5 },
+      { ...setup, generation: "2" },
+      { ...setup, generation: undefined },
+    ]) {
+      expect(() => decodeSetup(invalid)).toThrow();
+      expect(() => decodeResult({ kind: "ok", status: { ...stopped, setup: invalid } })).toThrow();
+    }
+  });
+
+  it("allows managed public keys only in auth_failed snapshots", () => {
+    const publicKey = "ssh-ed25519 public-key";
+    const result = { kind: "ok", status: { ...stopped, state: "auth_failed", publicKey } } as const;
+    expect(decodeResultWire(JSON.parse(JSON.stringify(encodeResultWire(result))))).toEqual(result);
+    for (const state of SshHostState.literals) {
+      if (state === "auth_failed") continue;
+      const status = {
+        ...stopped,
+        state,
+        publicKey,
+        ...(state === "preparing" ? { phase: "checking" as const } : {}),
+        ...(state === "failed" ? { failure: { reason: "missing_tools" as const, fix } } : {}),
+        ...(state === "providers_not_ready" ? { providers } : {}),
+      };
+      expect(validateSshHostStatus(status)).toBe(false);
+      expect(() => decodeStatus(status)).toThrow();
+    }
+  });
+
+  it("binds progress to thread/handoff ids and the same operation and generation", () => {
+    const input = { threadId: "thread-1", handoffId: "handoff-1" };
+    expect(decodeProgressInput(input)).toEqual(input);
+    expect(() => decodeProgressInput({ handoffId: "handoff-1" })).toThrow();
+    expect(() => decodeProgressInput({ threadId: "thread-1" })).toThrow();
+    expect(decodeProgressWire(JSON.parse(JSON.stringify(encodeProgressWire(progress))))).toEqual(
+      progress,
+    );
+    for (const mismatched of [
+      { ...setup, operationId: "setup-old" },
+      { ...setup, generation: 1 },
+    ]) {
+      expect(() =>
+        decodeProgress({
+          ...progress,
+          result: { kind: "ok", status: { ...stopped, setup: mismatched } },
+        }),
+      ).toThrow();
+    }
+    expect(decodeProgress({ ...progress, result: { kind: "ok", status: stopped } }).kind).toBe(
+      "available",
+    );
+    expect(
+      decodeProgress({
+        ...progress,
+        result: { kind: "error", code: "cancelled", message: "Expired" },
+      }).kind,
+    ).toBe("available");
+    expect(() => decodeProgress({ ...progress, generation: 2.5 })).toThrow();
+    expect(() => decodeProgress({ ...progress, operationId: "" })).toThrow();
+    expect(() => decodeProgress({ ...progress, host: "2001:db8::1" })).toThrow();
+    expect(() => decodeProgress({ ...progress, result: undefined })).toThrow();
+    for (const reason of ["not_ssh", "expired", "superseded"] as const) {
+      expect(decodeProgress({ kind: "unavailable", reason })).toEqual({
+        kind: "unavailable",
+        reason,
+      });
+    }
+    expect(() => decodeProgress({ kind: "unavailable", reason: "unknown" })).toThrow();
+  });
+
+  it("keeps private trust context out of progress results", () => {
+    expect(
+      decodeProgress({
+        ...progress,
+        fingerprint: "SHA256:private",
+        human: { location: "origin" },
+        args: { private: true },
+      }),
+    ).toEqual(progress);
+  });
+});
+
+describe("SSH key-auth instructions", () => {
+  const context = { originLabel: "Home Mac", host: "vps-1", user: "root", port: 2222 };
+
+  it("gives generated-key guidance and a command for the origin terminal", () => {
+    const result = buildSshKeyAuthInstructions({
+      ...context,
+      generatedKey: true,
+      publicKey: "ssh-ed25519 public-key",
+      publicKeyPath: "/home/runner/.ssh/goat-hosts/id_ed25519.pub",
+    });
+    expect(result.originLabel).toBe("Home Mac");
+    expect(result.instruction).toBe(
+      "GOAT created a key for vps-1. Add this public key to the server. Most providers ask for it when you create a server. Run this on Home Mac.",
+    );
+    expect(result.publicKey).toBe("ssh-ed25519 public-key");
+    expect(result.command).toBe(
+      "ssh-copy-id -i '/home/runner/.ssh/goat-hosts/id_ed25519.pub' -p '2222' 'root@vps-1'",
+    );
+  });
+
+  it("quotes each argument including apostrophes and shell metacharacters", () => {
+    const result = buildSshKeyAuthInstructions({
+      ...context,
+      host: "vps;$(touch nope)",
+      user: "o'brien",
+      publicKeyPath: "/home/O'Brien/key $(touch nope).pub",
+    });
+    expect(result.command).toBe(
+      "ssh-copy-id -i '/home/O'\\''Brien/key $(touch nope).pub' -p '2222' 'o'\\''brien@vps;$(touch nope)'",
+    );
+  });
+
+  it("guides existing-key or agent-only authentication without inventing a key or command", () => {
+    const result = buildSshKeyAuthInstructions(context);
+    expect(result.instruction).toContain("existing public key");
+    expect(result.instruction).toContain("Run this on Home Mac");
+    expect(result.instruction).not.toContain("GOAT created");
+    expect(result).not.toHaveProperty("publicKey");
+    expect(result).not.toHaveProperty("command");
+  });
+});
 
 describe("SSH host contracts", () => {
   it("keeps waiting reasons exclusive to pending runtime updates", () => {

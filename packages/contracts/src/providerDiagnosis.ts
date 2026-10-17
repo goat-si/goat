@@ -7,7 +7,7 @@
  */
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { SshHostAlias, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 /** Who takes the next step. A person is needed whenever the step widens access or signs in. */
@@ -109,3 +109,16 @@ export const ProviderDiagnoseResult = Schema.Struct({
   diagnoses: Schema.Array(ProviderDiagnosis),
 });
 export type ProviderDiagnoseResult = typeof ProviderDiagnoseResult.Type;
+
+/** Transport wrapper; remove host before invoking the destination's local diagnosis. */
+export const ProviderDiagnoseOnHostInput = Schema.Struct({
+  ...ProviderDiagnoseInput.fields,
+  host: Schema.optional(SshHostAlias),
+});
+export type ProviderDiagnoseOnHostInput = typeof ProviderDiagnoseOnHostInput.Type;
+
+export const ProviderDiagnoseOnHostResult = Schema.Struct({
+  ...ProviderDiagnoseResult.fields,
+  host: Schema.optional(SshHostAlias),
+});
+export type ProviderDiagnoseOnHostResult = typeof ProviderDiagnoseOnHostResult.Type;

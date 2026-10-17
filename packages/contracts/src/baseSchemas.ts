@@ -26,6 +26,12 @@ const isNonBlank = Schema.makeFilter((value: string) => value.trim().length > 0,
 });
 export const TrimmedNonEmptyString = TrimmedString.check(isNonBlank);
 
+/** Managed SSH alias inputs; shared Desktop host snapshots may contain raw hostnames. */
+export const SshHostAlias = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u),
+);
+export type SshHostAlias = typeof SshHostAlias.Type;
+
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));

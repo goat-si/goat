@@ -72,6 +72,7 @@ export const isHandoffPending = (state: HandoffState) => state === "pending" || 
 /** Returned only through authenticated client RPC, never a thread projection or MCP result. */
 export const HandoffHuman = Schema.Struct({
   location: TrimmedNonEmptyString,
+  fingerprint: Schema.optional(TrimmedNonEmptyString),
   url: Schema.optional(TrimmedNonEmptyString),
   userCode: Schema.optional(TrimmedNonEmptyString),
   command: Schema.optional(TrimmedNonEmptyString),
