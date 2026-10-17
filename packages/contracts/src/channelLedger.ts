@@ -184,6 +184,8 @@ export const ChannelTask = Schema.Struct({
   worker: Schema.optional(ChannelWorkerAssignment),
   resultSummary: Schema.optional(Schema.String),
   completionReport: Schema.optional(ChannelTaskCompletionReport),
+  /** The person's request, quoted from the origin input, to change or forget a GOAT Bot note. */
+  notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   openQuestions: Schema.Array(ChannelOpenQuestion),
   createdAt: IsoDateTime,
@@ -247,6 +249,7 @@ export const ChannelTaskEvent = Schema.Union([
     title: TrimmedNonEmptyString,
     instruction: Schema.String,
     originInputId: ChannelInputId,
+    notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   }),
   taskEvent("task.dispatch.claimed", {
     generation: PositiveInt,

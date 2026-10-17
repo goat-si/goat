@@ -43,12 +43,13 @@ export const readChannelBotNotes = (fs: FileSystem.FileSystem, files: ChannelBot
     return body.length <= NOTES_READ_CHARS ? body.trim() : body.slice(-NOTES_READ_CHARS).trim();
   }).pipe(Effect.orElseSucceed(() => ""));
 
-/** Appends one note as a single dated line. */
+/** Appends one note as a single dated line, naming the channel input that asked for it. */
 export const appendChannelBotNote = (
   fs: FileSystem.FileSystem,
   files: ChannelBotFiles,
   note: string,
   date: string,
+  sourceInputId: string,
 ) =>
   Effect.gen(function* () {
     const line = note.replace(/\s+/gu, " ").trim().slice(0, NOTE_MAX_CHARS);
@@ -57,10 +58,27 @@ export const appendChannelBotNote = (
     const exists = yield* fs.exists(files.notes);
     yield* fs.writeFileString(
       files.notes,
-      (exists ? "" : NOTES_HEADER) + "- " + date.slice(0, 10) + ": " + line + "\n",
+      (exists ? "" : NOTES_HEADER) +
+        "- " +
+        date.slice(0, 10) +
+        ": " +
+        line +
+        " (asked in " +
+        sourceInputId.replace(/\s+/gu, "") +
+        ")\n",
       { flag: "a" },
     );
   });
+
+/**
+ * Whether `quote` occurs in the person's message, ignoring differences in whitespace. Used to
+ * check that a note request the model reports came from the current input.
+ */
+export const quotedFromInput = (quote: string, input: string): boolean => {
+  const collapse = (text: string) => text.replace(/\s+/gu, " ").trim();
+  const needle = collapse(quote);
+  return needle !== "" && collapse(input).includes(needle);
+};
 
 /** Skills by file name and first line, alphabetically. A missing folder means none. */
 export const listChannelBotSkills = (

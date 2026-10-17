@@ -55,6 +55,7 @@ import {
   appendChannelBotNote,
   channelBotFilesFor,
   listChannelBotSkills,
+  quotedFromInput,
   readChannelBotNotes,
 } from "./channelBotNotes.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
@@ -465,11 +466,21 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // Notes shape every later reply, so only people may add them.
-      if (decision.remember !== undefined && requester.originKind !== "mcp") {
-        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt).pipe(
-          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
-        );
+      // Notes shape every later reply, so a note is kept only when a person asked for it in this
+      // input: the quote the model returns must occur in the message itself, never in the tail.
+      // This records the request; it does not prove intent, and it fails closed.
+      const rememberRefusal =
+        decision.remember === undefined
+          ? undefined
+          : requester.originKind === "mcp"
+            ? "not_a_person"
+            : decision.rememberQuote === undefined
+              ? "missing_quote"
+              : !quotedFromInput(decision.rememberQuote, message.text)
+                ? "quote_not_in_input"
+                : undefined;
+      if (decision.remember !== undefined && rememberRefusal !== undefined) {
+        yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
 
       let replyText = decision.replyText;
@@ -491,6 +502,12 @@ const make = Effect.gen(function* () {
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
           const taskId = taskIdFor(inputId, 0);
+          // Only a task the person asked, in this input, to change or forget a note may edit them.
+          const notesChangeRequested =
+            action.notesChangeRequested !== undefined &&
+            quotedFromInput(action.notesChangeRequested, message.text)
+              ? action.notesChangeRequested
+              : undefined;
           const task: ChannelTask = {
             taskId,
             conversationId,
@@ -506,6 +523,7 @@ const make = Effect.gen(function* () {
             ...(action.projectId === undefined ? {} : { projectId: action.projectId }),
             // The dispatcher checks the host again before anything runs there.
             ...(action.host === undefined ? {} : { host: action.host }),
+            ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
             openQuestions: [],
             createdAt: now,
             updatedAt: now,
@@ -520,6 +538,7 @@ const make = Effect.gen(function* () {
                   title: task.title,
                   instruction: task.instruction,
                   originInputId: inputId,
+                  ...(notesChangeRequested === undefined ? {} : { notesChangeRequested }),
                 },
               },
               now,
@@ -655,6 +674,12 @@ const make = Effect.gen(function* () {
           inputId,
           receptionId,
         });
+      }
+      // Saved only once this pass's result is the one that counts, linked to the input it came from.
+      if (committed && decision.remember !== undefined && rememberRefusal === undefined) {
+        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
+          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
+        );
       }
       yield* wake.wake;
     });

@@ -84,7 +84,12 @@ const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
       files.notes +
       "; follow them. Reusable procedures (skills) are in " +
       files.skills +
-      "; read the one the instruction names. Edit the notes file only when asked to change or forget a note.",
+      "; read the one the instruction names.",
+    task.notesChangeRequested === undefined
+      ? "Leave the notes file unchanged; this task did not ask to change a note."
+      : "The person asked to change or forget a note (" +
+        JSON.stringify(task.notesChangeRequested) +
+        "). Edit the notes file only to make that change.",
     'For progress on long work, call channel_task_report with status "running" at meaningful milestones.',
     "Before anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing), ask first: show the draft or plan in a waiting_input question.",
     'If you need a decision from the person who asked, call channel_task_report with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.',

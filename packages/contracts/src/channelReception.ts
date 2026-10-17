@@ -120,6 +120,11 @@ export const ChannelReceptionAction = Schema.Union([
     /** One of `allowedHosts`, when the person asked for another machine. */
     host: Schema.optional(TrimmedNonEmptyString),
     requestedTarget: Schema.optional(ChannelDispatchTarget),
+    /**
+     * The person's words in the current input asking the work to change or forget a standing
+     * note. The server keeps it only when it occurs in that input; only such tasks may edit notes.
+     */
+    notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("status"),
@@ -146,6 +151,11 @@ export const ChannelReceptionResult = Schema.Struct({
   action: ChannelReceptionAction,
   /** A lasting rule or fact the person asked the bot to keep, added to its notes. */
   remember: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The person's words in the current input that ask for `remember`. The server saves the note
+   * only when this occurs in that input from a person; otherwise it drops the note.
+   */
+  rememberQuote: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelReceptionResult = typeof ChannelReceptionResult.Type;
 
