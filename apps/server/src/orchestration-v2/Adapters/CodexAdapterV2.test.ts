@@ -38,6 +38,7 @@ import {
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { toolOutputImages } from "@goat/shared/toolOutput";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexError from "effect-codex-app-server/errors";
@@ -2156,11 +2157,42 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
 
   it.effect.each([
-    { name: "text-only reply", finalText: "Done", fileExists: true, imageCount: 1 },
-    { name: "authored image", finalText: "authored", fileExists: true, imageCount: 1 },
-    { name: "authored file URL", finalText: "file-url", fileExists: true, imageCount: 1 },
-    { name: "no reply", finalText: null, fileExists: true, imageCount: 1 },
-    { name: "missing saved file", finalText: "Done", fileExists: false, imageCount: 0 },
+    ...[
+      { name: "text-only reply", finalText: "Done", fileExists: true, appended: true },
+      { name: "authored image", finalText: "authored", fileExists: true, appended: false },
+      { name: "authored file URL", finalText: "file-url", fileExists: true, appended: false },
+      { name: "relative image", finalText: "relative", fileExists: true, appended: false },
+      { name: "reference image", finalText: "reference", fileExists: true, appended: false },
+      { name: "fenced code", finalText: "fenced", fileExists: true, appended: true },
+      { name: "tilde code fence", finalText: "tilde", fileExists: true, appended: true },
+      { name: "indented code", finalText: "indented", fileExists: true, appended: true },
+      { name: "inline code", finalText: "inline", fileExists: true, appended: true },
+      { name: "escaped image", finalText: "escaped", fileExists: true, appended: true },
+      { name: "no reply", finalText: null, fileExists: true, appended: true },
+      { name: "missing saved file", finalText: "Done", fileExists: false, appended: false },
+    ].map((scenario) => ({
+      ...scenario,
+      terminalStatus: "completed" as const,
+      savedPathMode: "path" as const,
+    })),
+    ...(["interrupted", "failed"] as const).flatMap((terminalStatus) =>
+      ["Done", null].map((finalText) => ({
+        name: `${terminalStatus} turn with ${finalText === null ? "no reply" : "a reply"}`,
+        finalText,
+        fileExists: true,
+        appended: true,
+        terminalStatus,
+        savedPathMode: "path" as const,
+      })),
+    ),
+    ...(["omitted", "null"] as const).map((savedPathMode) => ({
+      name: `result-only image with ${savedPathMode} savedPath`,
+      finalText: "Done",
+      fileExists: false,
+      appended: false,
+      terminalStatus: "completed" as const,
+      savedPathMode,
+    })),
   ])("keeps a generated image visible after $name", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2169,12 +2201,25 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-image-" });
         const savedPath = path.join(directory, "generated image.png");
         if (scenario.fileExists) yield* fs.writeFileString(savedPath, "png fixture");
+        const relativePath = path.relative("/workspace", savedPath);
+        const authoredImage = `![Already here](<${savedPath}>)`;
+        const answerVariants: Record<string, string> = {
+          authored: `Done\n\n${authoredImage}`,
+          "file-url": `Done\n\n![Already here](<${new URL(`file://${savedPath}`).href}>)`,
+          relative: `Done\n\n![Already here](<${encodeURI(relativePath)}> "Generated result")`,
+          reference: `Done\n\n![Already here][result]\n\n[result]: <${relativePath}>`,
+          fenced: `Example:\n\n\`\`\`markdown\n${authoredImage}\n\`\`\``,
+          tilde: `Example:\n\n~~~markdown\n${authoredImage}\n~~~`,
+          indented: `Example:\n\n    ${authoredImage}`,
+          inline: `Example: \`${authoredImage}\``,
+          escaped: `Example: \\${authoredImage}`,
+        };
         const finalText =
-          scenario.finalText === "authored"
-            ? `Done\n\n![Already here](<${savedPath}>)`
-            : scenario.finalText === "file-url"
-              ? `Done\n\n![Already here](<${new URL(`file://${savedPath}`).href}>)`
-              : scenario.finalText;
+          scenario.finalText === null
+            ? null
+            : (answerVariants[scenario.finalText] ?? scenario.finalText);
+        const imageBytes =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jr1sAAAAASUVORK5CYII=";
         const nativeThreadId = `native-image-${scenario.name}`;
         const nativeTurnId = `turn-image-${scenario.name}`;
         const transcript = makeCodexReplayTranscript({
@@ -2192,8 +2237,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     id: "image-generation-1",
                     status: "completed",
                     revisedPrompt: "Draw an image",
-                    result: "base64-image-bytes-stay-native",
-                    savedPath,
+                    result: imageBytes,
+                    ...(scenario.savedPathMode === "path"
+                      ? { savedPath }
+                      : scenario.savedPathMode === "null"
+                        ? { savedPath: null }
+                        : {}),
                     failure: null,
                   },
                   threadId: nativeThreadId,
@@ -2231,7 +2280,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 method: "turn/completed",
                 params: {
                   threadId: nativeThreadId,
-                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: scenario.terminalStatus }),
                 },
               },
             },
@@ -2252,10 +2301,35 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           event.type === "message.updated" ? [event.message] : [],
         );
         const text = messages.at(-1)?.text ?? "";
-        assert.lengthOf(text.match(/!\[[^\]]*\]\([^)]+\)/g) ?? [], scenario.imageCount);
-        assert.notInclude(text, "base64-image-bytes-stay-native");
-        if (scenario.fileExists) assert.include(decodeURI(text), savedPath);
-        else assert.equal(text, "Done");
+        assert.lengthOf(text.match(/!\[Generated image\]/g) ?? [], scenario.appended ? 1 : 0);
+        assert.notInclude(text, imageBytes);
+        if (finalText !== null) assert.include(text, finalText);
+        if (scenario.savedPathMode !== "path") {
+          const imageItems = harness.events.flatMap((event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.nativeItemRef?.nativeId === "image-generation-1"
+              ? [event.turnItem]
+              : [],
+          );
+          assert.lengthOf(imageItems, 1);
+          const imageItem = imageItems[0]!;
+          assert.equal(imageItem.status, "completed");
+          assert.deepEqual(toolOutputImages(imageItem.output), [
+            { mimeType: "image/png", data: imageBytes },
+          ]);
+        } else if (scenario.appended) {
+          assert.include(decodeURI(text), savedPath);
+        } else {
+          assert.equal(text, finalText);
+        }
+        const providerTurn = harness.events.findLast(
+          (event) => event.type === "provider_turn.updated",
+        );
+        assert.equal(
+          providerTurn?.type === "provider_turn.updated" ? providerTurn.providerTurn.status : null,
+          scenario.terminalStatus,
+        );
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

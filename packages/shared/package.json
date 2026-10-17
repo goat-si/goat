@@ -499,6 +499,10 @@
       "types": "./src/markdownLinks.ts",
       "import": "./src/markdownLinks.ts"
     },
+    "./markdownImages": {
+      "types": "./src/markdownImages.ts",
+      "import": "./src/markdownImages.ts"
+    },
     "./fileLinks": {
       "types": "./src/fileLinks.ts",
       "import": "./src/fileLinks.ts"

@@ -40,8 +40,7 @@ import {
   type ProviderSetupError,
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
-import { parseFileUrlHref } from "@goat/shared/fileLinks";
-import { safeDecodeURIComponent } from "@goat/shared/markdownLinks";
+import { appendGeneratedImageMarkdown } from "./CodexGeneratedImageMarkdown.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
@@ -80,6 +79,7 @@ import type {
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
@@ -216,21 +216,6 @@ const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryConte
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 
-function appendGeneratedImageMarkdown(text: string, paths: ReadonlySet<string>): string {
-  const embeddedPaths = new Set(
-    [...text.matchAll(/!\[[^\]]*\]\((?:<([^>]+)>|([^)]*))\)/g)].map((match) => {
-      const href = match[1] ?? match[2] ?? "";
-      return safeDecodeURIComponent(parseFileUrlHref(href)?.path ?? href);
-    }),
-  );
-  const missing = [...paths].filter((path) => !embeddedPaths.has(path));
-  if (missing.length === 0) return text;
-  const images = missing.map(
-    (path) =>
-      `![Generated image](<${encodeURI(path).replaceAll("#", "%23").replaceAll("?", "%3F")}>)`,
-  );
-  return [text.trimEnd(), ...images].filter(Boolean).join("\n\n");
-}
 // Each plan flush stores the whole plan three times (node, plan, turn item), so
 // flush at the cadence clients already see for assistant text.
 const CODEX_PLAN_DELTA_FLUSH_INTERVAL_MS = 400;
@@ -1799,6 +1784,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
+  const path = yield* Path.Path.pipe(Effect.provide(NodePath.layer));
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const memorySnapshots = Option.getOrUndefined(
@@ -3995,11 +3981,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         const buildDynamicToolArtifacts = (
           context: ActiveCodexTurnContext,
-          item: CodexDynamicToolItem,
+          item:
+            | CodexDynamicToolItem
+            | Extract<
+                CodexSchema.V2ItemCompletedNotification__ThreadItem,
+                { type: "imageGeneration" }
+              >,
         ) =>
           Effect.gen(function* () {
             const updatedAt = yield* DateTime.now;
-            const status = codexItemStatus(item.status);
+            const status = codexItemStatus(
+              item.type === "imageGeneration" ? "completed" : item.status,
+            );
             const completedAt = status.completed ? updatedAt : null;
             const nodeId = idAllocator.derive.nodeFromProviderItem({
               driver: CODEX_PROVIDER,
@@ -4010,9 +4003,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeItemId: item.id,
             });
             const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
-            const projection = yield* projectCodexDynamicToolItem(item).pipe(
-              Effect.provideService(Crypto.Crypto, crypto),
-            );
+            const projection: CodexDynamicToolProjection =
+              item.type === "imageGeneration"
+                ? {
+                    toolName: "imageGeneration",
+                    input: { prompt: item.revisedPrompt ?? "" },
+                    output: [{ type: "image", mimeType: "image/png", data: item.result }],
+                    status: "completed",
+                  }
+                : yield* projectCodexDynamicToolItem(item).pipe(
+                    Effect.provideService(Crypto.Crypto, crypto),
+                  );
             const node: OrchestrationV2ExecutionNode = {
               id: nodeId,
               threadId: context.projectionThreadId,
@@ -5127,18 +5128,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             }
 
-            const savedImagePath =
-              payload.item.type === "imageGeneration" && payload.item.status === "completed"
-                ? payload.item.savedPath
-                : null;
-            if (savedImagePath) {
-              yield* Ref.update(generatedImagePathsByTurn, (current) => {
-                const updated = new Map(current);
-                const paths = new Set(updated.get(payload.turnId) ?? []);
-                paths.add(savedImagePath);
-                updated.set(payload.turnId, paths);
-                return updated;
-              });
+            if (payload.item.type === "imageGeneration" && payload.item.status === "completed") {
+              const savedImagePath = payload.item.savedPath;
+              if (savedImagePath) {
+                yield* Ref.update(generatedImagePathsByTurn, (current) => {
+                  const updated = new Map(current);
+                  const paths = new Set(updated.get(payload.turnId) ?? []);
+                  paths.add(savedImagePath);
+                  updated.set(payload.turnId, paths);
+                  return updated;
+                });
+              } else if (payload.item.result) {
+                // Keep inline bytes on the tool output so the existing image asset
+                // ingestion/serving path owns their storage and wire projection.
+                const artifacts = yield* buildDynamicToolArtifacts(context, payload.item);
+                yield* emitProviderEvent({
+                  type: "node.updated",
+                  driver: CODEX_PROVIDER,
+                  node: artifacts.node,
+                });
+                yield* emitProviderEvent({
+                  type: "turn_item.updated",
+                  driver: CODEX_PROVIDER,
+                  turnItem: artifacts.turnItem,
+                });
+              }
               return;
             }
 
@@ -6220,39 +6234,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
-              if (input.status === "completed") {
-                const paths = (yield* Ref.get(generatedImagePathsByTurn)).get(input.nativeTurnId);
-                if (paths?.size) {
-                  const existing = (yield* Ref.get(lastFinalAnswerByTurn)).get(input.nativeTurnId);
-                  const available = new Set<string>();
-                  for (const path of paths) {
-                    if (yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false))) {
-                      available.add(path);
-                    }
+              const paths = (yield* Ref.get(generatedImagePathsByTurn)).get(input.nativeTurnId);
+              if (paths?.size) {
+                const existing = (yield* Ref.get(lastFinalAnswerByTurn)).get(input.nativeTurnId);
+                const available = new Set<string>();
+                for (const path of paths) {
+                  if (yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false))) {
+                    available.add(path);
                   }
-                  const text = appendGeneratedImageMarkdown(existing?.text ?? "", available);
-                  if (text !== (existing?.text ?? "")) {
-                    const artifacts = yield* buildAgentMessageArtifacts(
-                      input.context,
-                      { id: existing?.id ?? `image-generation:${input.nativeTurnId}`, text },
-                      true,
-                    );
-                    yield* emitProviderEvent({
-                      type: "node.updated",
-                      driver: CODEX_PROVIDER,
-                      node: artifacts.node,
-                    });
-                    yield* emitProviderEvent({
-                      type: "message.updated",
-                      driver: CODEX_PROVIDER,
-                      message: artifacts.message,
-                    });
-                    yield* emitProviderEvent({
-                      type: "turn_item.updated",
-                      driver: CODEX_PROVIDER,
-                      turnItem: artifacts.turnItem,
-                    });
-                  }
+                }
+                const text = appendGeneratedImageMarkdown(
+                  existing?.text ?? "",
+                  available,
+                  input.context.input.runtimePolicy.cwd ?? process.cwd(),
+                  path,
+                );
+                if (text !== (existing?.text ?? "")) {
+                  const artifacts = yield* buildAgentMessageArtifacts(
+                    input.context,
+                    { id: existing?.id ?? `image-generation:${input.nativeTurnId}`, text },
+                    true,
+                  );
+                  yield* emitProviderEvent({
+                    type: "node.updated",
+                    driver: CODEX_PROVIDER,
+                    node: artifacts.node,
+                  });
+                  yield* emitProviderEvent({
+                    type: "message.updated",
+                    driver: CODEX_PROVIDER,
+                    message: artifacts.message,
+                  });
+                  yield* emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CODEX_PROVIDER,
+                    turnItem: artifacts.turnItem,
+                  });
                 }
               }
               yield* clearGeneratedImageState(input.nativeTurnId);
