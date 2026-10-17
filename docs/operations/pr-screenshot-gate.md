@@ -7,8 +7,9 @@ is not a draft, changes a file under `apps/web`, `apps/desktop`, `apps/mobile`, 
 maintainer can waive it with the `gui-screenshot-waived` label. The contract is in
 [structure/ci.md](../../structure/ci.md#pr-screenshot-gate).
 
-goat-ci does not start on description edits or label changes. The script reads the live PR, so
-re-run only the `goat-screenshot-gate` job after adding a screenshot or the label:
+goat-ci does not start on description edits, and a label other than `ci:*` (the waiver included)
+starts no job. The script reads the live PR, so re-run only the `goat-screenshot-gate` job after
+adding a screenshot or the label:
 
 ```sh
 gh run rerun <run-id> --job <job-id> -R goat-si/goat

@@ -15,13 +15,37 @@ nothing. On a pull request the `goat-scope` job diffs the merge commit against i
 `.github/scripts/goat-ci-scope.cjs` picks the matrix tasks the changed files reach through the
 workspace dependencies in the `package.json` files. Documentation alone runs only `check`. A file
 the script cannot place, any `package.json`, a workflow, a script, or the lockfile runs everything.
-The hour-long memory growth suite follows only memory, persistence, and the server's top-level code,
-plus contracts and shared.
 
-The `ci:full` label runs everything after a re-run, and so does a manual run
-(`gh workflow run goat-ci.yml --ref <branch>`). `goat-ci-result` is the one check to read: it fails
-when goat-scope or any selected task failed or was cancelled. A successful manual run on `dev` is
-what starts a nightly ([release channels](../docs/internals/release-channels.md)).
+The two slow suites follow the static import graph that `.github/scripts/goat-ci-imports.cjs` reads
+from the sources (relative imports, package `exports`, `vi.mock`, literal dynamic imports, and
+`new URL(…, import.meta.url)`). The server suite runs only the test files that import a changed
+file, in one to four shards, plus files that name a changed file in a string (a script a test
+spawns, a fixture directory a test loads). It runs in full when those files carry half of the
+suite's estimated time, when a change reaches the Vitest config or its setup files, or when a
+changed data file is neither imported nor named anywhere. The memory growth suite runs when a
+change under `apps/server/src/memory` or `apps/server/src/persistence` reaches it. The `goat-scope`
+job summary lists each chosen server test file and the change that reached it.
+
+A draft runs `check` and `typecheck`; marking it ready runs its full scope. Labels widen a run as
+soon as they are added: `ci:full` runs everything, `ci:server` the full server suite, and
+`ci:memory` the memory growth suite. Any other label starts a run whose jobs all skip under the name
+`goat-ci (label ignored)`, so it neither cancels the real run nor puts a skipped check with a real
+name on the commit. `goat-ci-result` is the one check to read: it fails when goat-scope or any
+selected task failed or was cancelled.
+
+A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
+(the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
+typecheck). Each manual run has a concurrency group of its own, so a merge into `dev` or another
+dispatch cannot cancel it. A successful `lane=all` run on `dev` is what starts a nightly
+([release channels](../docs/internals/release-channels.md)); goat-ci names manual runs
+`goat-ci <lane> on <branch>` and the nightly checks that name.
+
+Path selection trades a little coverage for runner time, so `dev` needs a full run regularly. A
+GitHub `schedule` trigger would run only from the default branch, `main`, whose goat-ci is an older
+copy, and the guard does not allow `schedule`. The daily full run is therefore a manual
+`lane=all` dispatch on `dev` (`gh workflow run goat-ci.yml --ref dev`) from a scheduler outside
+GitHub. Moving it into the workflow means promoting `goat-ci.yml` to `main` and allowing `schedule`
+in the guard.
 
 ## PR screenshot gate
 
@@ -33,8 +57,9 @@ do not count, so the untouched `.github/pull_request_template.md` never satisfie
 or maintain role.
 
 The repository variable `GOAT_SCREENSHOT_GATE` selects `warn` (the default: annotation only),
-`enforce` (the job fails), or `off`. goat-ci does not run on description edits or label changes,
-so the script reads the live PR and a re-run of that one job re-evaluates it. Switching modes is in
+`enforce` (the job fails), or `off`. goat-ci does not run on description edits, and a label other
+than `ci:*` (the waiver included) starts no job, so the script reads the live PR and a re-run of
+that one job re-evaluates it. Switching modes is in
 [the operations guide](../docs/operations/pr-screenshot-gate.md).
 
 Screenshot evidence never lands on `dev`. Authors drag images into the description editor or

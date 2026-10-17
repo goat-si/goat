@@ -1,6 +1,6 @@
 # GOAT nightly releases and the Mac release runner
 
-Merging into `dev` runs no CI. A successful `goat-ci` run that a maintainer starts by hand on `dev` (`gh workflow run goat-ci.yml --ref dev`) starts `.github/workflows/goat-nightly.yml`. It builds every platform from that commit, signs and notarizes macOS on one self-hosted Mac (the Mac Studio, `juns-mac-studio`), verifies the artifacts, and publishes a prerelease `v<version>` to the public repository goat-si/goat-releases. Windows and Linux builds are unsigned for now. The design and the decisions behind it are in `devlog/_plan/261012_release_nightly/`.
+Merging into `dev` runs no CI. A successful full (`lane=all`, the default) `goat-ci` run that a maintainer starts by hand on `dev` (`gh workflow run goat-ci.yml --ref dev`) starts `.github/workflows/goat-nightly.yml`. It builds every platform from that commit, signs and notarizes macOS on one self-hosted Mac (the Mac Studio, `juns-mac-studio`), verifies the artifacts, and publishes a prerelease `v<version>` to the public repository goat-si/goat-releases. Windows and Linux builds are unsigned for now. The design and the decisions behind it are in `devlog/_plan/261012_release_nightly/`.
 
 The Developer ID identity and the notary credentials live only in the Mac Studio's login keychain. The only release secret in GitHub is the goat-releases App key, which only the hosted publish job reads.
 

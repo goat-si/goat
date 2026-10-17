@@ -15,14 +15,14 @@ Each release carries the same set of files on both channels:
 
 ## Channels
 
-|                  | Nightly                                                 | Stable                             |
-| ---------------- | ------------------------------------------------------- | ---------------------------------- |
-| Starts from      | a successful manual goat-ci run on dev, or a manual run | a manual run with `channel=stable` |
-| Version          | `X.Y.Z-nightly.YYYYMMDD.N`                              | `X.Y.Z`                            |
-| GitHub release   | prerelease, never latest                                | full release, marked latest        |
-| Update manifests | `nightly*.yml`                                          | `latest*.yml`                      |
-| Desktop app      | "GOAT (Nightly)", its own app ID                        | "GOAT"                             |
-| Retention        | pruned after 30 releases or 30 days                     | kept                               |
+|                  | Nightly                                                            | Stable                             |
+| ---------------- | ------------------------------------------------------------------ | ---------------------------------- |
+| Starts from      | a successful manual goat-ci `lane=all` run on dev, or a manual run | a manual run with `channel=stable` |
+| Version          | `X.Y.Z-nightly.YYYYMMDD.N`                                         | `X.Y.Z`                            |
+| GitHub release   | prerelease, never latest                                           | full release, marked latest        |
+| Update manifests | `nightly*.yml`                                                     | `latest*.yml`                      |
+| Desktop app      | "GOAT (Nightly)", its own app ID                                   | "GOAT"                             |
+| Retention        | pruned after 30 releases or 30 days                                | kept                               |
 
 `X.Y.Z` is the version in the four release manifests that `scripts/check-release-version.ts` keeps in step. Everything else follows from the version string: `resolveDesktopUpdateChannel` picks the branding and the feed channel, and `cliReleaseChannelOf` picks the runtime channel. A build therefore cannot ship with a feed that disagrees with its name.
 
@@ -38,9 +38,9 @@ After a stable `vX.Y.Z` is published, bump the release manifests to the next ver
 
 Building and publishing are separate decisions:
 
-goat-ci does not run when commits land on dev. A maintainer starts it by hand (`gh workflow run goat-ci.yml --ref dev`), and that full run is what can start a nightly.
+goat-ci does not run when commits land on dev. A maintainer starts it by hand (`gh workflow run goat-ci.yml --ref dev`, lane `all` by default), and only a full `lane=all` run can start a nightly: the nightly's prepare job requires the run name `goat-ci all on dev`.
 
 - With the repository variable `GOAT_RELEASES_PUBLISH` unset, a goat-ci run on dev starts nothing, and a manual run of the nightly workflow builds, signs and verifies everything, then stops. The verified files remain on the run as the `release-assets` artifact, which is how to dry-run a channel.
-- With `GOAT_RELEASES_PUBLISH=true`, every successful manual goat-ci run on dev publishes a nightly, and a manual run of the nightly workflow publishes when its `publish` input is checked.
+- With `GOAT_RELEASES_PUBLISH=true`, every successful manual `lane=all` goat-ci run on dev publishes a nightly, and a manual run of the nightly workflow publishes when its `publish` input is checked.
 
 Only the hosted publish job reads the goat-releases App credentials. Publishing is idempotent per tag: identical bytes count as already published, and different bytes fail the run rather than replacing a release that users may already have.

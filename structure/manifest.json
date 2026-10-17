@@ -57,6 +57,7 @@
       "scope": "The goat-ci workflow, its pre-push guard, and the PR screenshot gate.",
       "documents": [
         ".github/pull_request_template.md",
+        ".github/scripts/goat-ci-imports.cjs",
         ".github/scripts/goat-ci-scope.cjs",
         ".github/scripts/pr-screenshot-gate.cjs",
         ".github/workflows/goat-ci.yml",
