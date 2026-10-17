@@ -2,8 +2,10 @@ name: goat-nightly
 
 # GOAT release channels (docs/internals/release-channels.md).
 # goat-ci does not run on push, so a nightly starts when a maintainer runs goat-ci
-# by hand on dev (gh workflow run goat-ci.yml --ref dev) and that full run
-# succeeds. It builds every platform from that commit, signs and notarizes macOS
+# by hand on dev (gh workflow run goat-ci.yml --ref dev) and that run succeeds.
+# Only the full lane counts: goat-ci names a manual run "goat-ci <lane> on
+# <branch>", and prepare requires "goat-ci all on dev". It builds every platform
+# from that commit, signs and notarizes macOS
 # on the Mac Studio, verifies everything, and publishes a nightly prerelease to
 # the public goat-si/goat-releases repository. A manual run of this workflow
 # builds a nightly or a stable release of a dev commit. Nothing publishes
@@ -51,6 +53,7 @@ jobs:
       (vars.GOAT_RELEASES_PUBLISH == 'true' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.display_title == 'goat-ci all on dev' &&
       github.event.workflow_run.head_branch == 'dev' &&
       github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))
     # Hosted: the resolve step needs gh, which the EPYC runners do not carry.
