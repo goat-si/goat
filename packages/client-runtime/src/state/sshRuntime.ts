@@ -75,11 +75,11 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
       return phase;
     }
     case "stopped":
-      return `Runtime ${version} · Not running`;
+      return `Not running · Runtime ${version}`;
     case "ready":
-      return `Runtime ${version} · ${status.runtimeVersion === status.requestedVersion ? "Up to date" : `Update to ${status.requestedVersion} available`}`;
+      return `${status.runtimeVersion === status.requestedVersion ? "Up to date" : "Update available"} · Runtime ${version}`;
     case "update_waiting":
-      return `Update to ${status.requestedVersion} waits for running work`;
+      return `Update waits for running work · Runtime ${version}`;
     case "update_blocked": {
       const order =
         status.runtimeVersion === null
@@ -93,7 +93,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
         : `A GOAT server that this app didn't start is running on ${status.host}. Stop it on the host, then reconnect.`;
     }
     case "providers_not_ready":
-      return `Runtime ${version} · Providers need attention`;
+      return `Providers need attention · Runtime ${version}`;
     case "failed": {
       const failure = status.failure;
       if (!failure) return status.detail ?? `GOAT setup failed on ${status.host}.`;

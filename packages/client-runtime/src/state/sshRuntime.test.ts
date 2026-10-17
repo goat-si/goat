@@ -34,10 +34,10 @@ describe("Desktop SSH runtime state", () => {
   it("names the available owner version and keeps setup titles out of phase copy", () => {
     const base = { host: "vps-1", runtimeVersion: "0.4.2", requestedVersion: "0.4.3" };
     expect(sshRuntimeStatusText({ ...base, state: "ready" })).toBe(
-      "Runtime 0.4.2 · Update to 0.4.3 available",
+      "Update available · Runtime 0.4.2",
     );
     expect(sshRuntimeStatusText({ ...base, state: "ready", runtimeVersion: "0.4.3" })).toBe(
-      "Runtime 0.4.3 · Up to date",
+      "Up to date · Runtime 0.4.3",
     );
     expect(sshRuntimeStatusText({ ...base, state: "preparing" })).toBe("Starting setup");
     expect(sshRuntimeStatusText({ ...base, state: "preparing", phase: "checking" })).toBe(

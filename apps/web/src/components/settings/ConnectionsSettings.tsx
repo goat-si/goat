@@ -1650,6 +1650,10 @@ function SavedBackendListRow({
     versionMismatch
       ? `\nUpdate available: ${versionMismatch.serverVersion} → ${versionMismatch.clientVersion}`
       : ""
+  }${
+    savedSshTarget && runtimeStatus
+      ? `\nRuntime ${runtimeStatus.runtimeVersion ?? "unknown"} · This app ${runtimeStatus.requestedVersion}`
+      : ""
   }`;
 
   return (
