@@ -1,18 +1,58 @@
 "use strict";
 
-// Chooses the goat-ci tasks a pull request needs. Runs as the goat-scope job of
-// goat-ci.yml and hands the ci job its matrix. A change reaches a task when it
-// touches a workspace package the task tests or builds, directly or through
-// workspace dependencies read from the package.json files. A file this script
-// cannot place runs everything, so a new kind of file costs CI time instead of
-// skipping a check. Manual runs and the ci:full label also run everything.
+// Chooses the goat-ci tasks a run needs. Runs as the goat-scope job of goat-ci.yml and hands the ci
+// job its matrix.
+//
+// A pull request runs the tasks its changes reach: a change reaches a task when it touches a
+// workspace package the task tests or builds, directly or through workspace dependencies read from
+// the package.json files. The server suite and the memory growth suite go further and follow the
+// static import graph (goat-ci-imports.cjs): a pull request runs only the server test files that
+// import a changed file, and the full four-shard suite when that is most of the suite anyway or the
+// change is one the graph cannot place. A file this script cannot place runs everything, so a new
+// kind of file costs CI time instead of skipping a check.
+//
+// A draft runs check and typecheck. Labels widen a run: ci:full runs everything, ci:server the full
+// server suite, ci:memory the memory growth suite. A manual run takes a lane (all by default).
 
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { buildImportGraph, dependents, isSource, mentionsOf } = require("./goat-ci-imports.cjs");
 
 const FULL_LABEL = "ci:full";
+const SERVER_LABEL = "ci:server";
+const MEMORY_LABEL = "ci:memory";
+const LANES = ["all", "server", "memory-growth", "quick"];
 const SERVER_SHARDS = 4;
+const SERVER_DIR = "apps/server";
+const SERVER_TEST_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+/** goat-ci.yml runs these with GOAT_MEMORY_GROWTH=1 in the test-memory-growth task. */
+const MEMORY_GROWTH_TESTS = [
+  "apps/server/src/memory/MemoryImport.growth.test.ts",
+  "apps/server/src/memory/MemoryReceive.growth.test.ts",
+];
+/** Server directories whose changes run the memory growth suite on a pull request. */
+const MEMORY_GROWTH_DIRS = ["apps/server/src/memory/", "apps/server/src/persistence/"];
+/**
+ * Files that change how every server test runs: the Vitest configs, their setup files, and what
+ * they import (the shard sequencer and its weights). A change that reaches one runs the full suite.
+ */
+const SERVER_RUN_CONFIG = [
+  "vite.config.ts",
+  "apps/server/vite.config.ts",
+  "packages/shared/src/testing/longTempDir.ts",
+  "apps/server/src/testUtils/gitConfig.setup.ts",
+];
+/** Selected server tests carrying at least this share of the suite's time run as the full suite. */
+const SERVER_FULL_SHARE = 0.5;
+/** Estimated seconds one related-test shard aims for. */
+const SERVER_SHARD_TARGET_SECONDS = 360;
+/**
+ * Estimated seconds a server test file costs on CI beyond its recorded time in shardWeights.json,
+ * which records only the slowest files: the full suite took about 66 runner-minutes for 579 files
+ * (goat-ci run 39029230802). Only the split decision uses it; WeightedShardSequencer still shards.
+ */
+const FILE_ESTIMATE_SECONDS = 6;
 
 /** Every task in the order goat-ci lists them. */
 const TASKS = [
@@ -62,20 +102,6 @@ const TYPECHECK_ONLY_RE = /^(?:infra\/[^/]+|oxlint-plugin-goat)\//;
 function isDocument(file) {
   if (/^(?:docs|devlog|structure)\//.test(file)) return true;
   return !file.includes("/") && /\.md$/i.test(file);
-}
-
-/**
- * The memory growth suite runs for over an hour, so it follows the code it
- * measures: apps/server/src/memory and persistence, the server's own top-level
- * files and configuration, and the contracts and shared packages it encodes
- * with. Other server directories reach it only through a full run.
- */
-function reachesMemoryGrowth(file) {
-  if (file.startsWith("packages/contracts/") || file.startsWith("packages/shared/")) return true;
-  if (!file.startsWith("apps/server/")) return false;
-  const inSource = /^apps\/server\/src\/([^/]+)\//.exec(file);
-  if (!inSource) return true;
-  return inSource[1] === "memory" || inSource[1] === "persistence";
 }
 
 /** Reads apps/* and packages/* package.json files into a map of directory to workspace dependencies. */
@@ -138,11 +164,104 @@ function packageOf(workspace, file) {
   return workspace.has(dir) ? dir : undefined;
 }
 
+/** Recorded seconds per server test file, keyed relative to apps/server. */
+function readServerWeights(root) {
+  try {
+    return JSON.parse(
+      fs.readFileSync(path.join(root, SERVER_DIR, "src/testUtils/shardWeights.json"), "utf8"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+const serverKey = (file) => file.slice(SERVER_DIR.length + 1);
+
 /**
- * Decides which tasks the changed files reach. Returns { full, tasks, reasons }
- * where reasons maps each selected task (or "full") to the first file that chose it.
+ * Which server test files the changed files reach. Returns { mode, files, shards, reason, reached }:
+ * mode "none" (no server test imports a change), "related" (files, keyed relative to apps/server,
+ * in shards), or "full" (the whole suite in four shards). reached maps each related file to the
+ * changed file that reached it.
  */
-function selectTasks(files, workspace) {
+function planServerTests(changed, graph, weights) {
+  const full = (reason) => ({
+    mode: "full",
+    files: [],
+    shards: SERVER_SHARDS,
+    reason,
+    reached: new Map(),
+  });
+  const seeds = new Map();
+  for (const file of changed) {
+    if (!graph.files.has(file)) continue; // Deleted: whatever imported it changed too.
+    if (SERVER_RUN_CONFIG.includes(file)) return full(file + " configures every server test");
+    seeds.set(file, file);
+    const mentions = mentionsOf(graph, file);
+    for (const mention of mentions) if (!seeds.has(mention)) seeds.set(mention, file);
+    if (!isSource(file) && !graph.importers.has(file) && mentions.length === 0) {
+      return full("nothing imports or names " + file);
+    }
+  }
+  const reach = dependents(graph, seeds.keys());
+  const config = SERVER_RUN_CONFIG.find((file) => reach.has(file));
+  if (config) return full(seeds.get(reach.get(config)) + " reaches " + config);
+
+  const allTests = [...graph.sources.keys()].filter(
+    (file) => file.startsWith(SERVER_DIR + "/") && SERVER_TEST_RE.test(file),
+  );
+  const seconds = (file) => (weights[serverKey(file)] ?? 0) + FILE_ESTIMATE_SECONDS;
+  const selected = allTests.filter((file) => reach.has(file));
+  if (selected.length === 0) {
+    return {
+      mode: "none",
+      files: [],
+      shards: 0,
+      reason: "no server test imports a change",
+      reached: new Map(),
+    };
+  }
+  const total = allTests.reduce((sum, file) => sum + seconds(file), 0);
+  const chosen = selected.reduce((sum, file) => sum + seconds(file), 0);
+  if (chosen >= total * SERVER_FULL_SHARE) {
+    return full(
+      selected.length +
+        " related files carry " +
+        Math.round((100 * chosen) / total) +
+        "% of the suite's time",
+    );
+  }
+  const reached = new Map(
+    selected.sort().map((file) => [serverKey(file), seeds.get(reach.get(file))]),
+  );
+  return {
+    mode: "related",
+    files: [...reached.keys()],
+    shards: Math.max(
+      1,
+      Math.min(SERVER_SHARDS, selected.length, Math.ceil(chosen / SERVER_SHARD_TARGET_SECONDS)),
+    ),
+    reason: selected.length + " related files, about " + Math.round(chosen / 60) + " min estimated",
+    reached,
+  };
+}
+
+/** The memory growth suite runs when a memory or persistence change reaches one of its files. */
+function reachesMemoryGrowth(changed, graph) {
+  const seeds = changed.filter(
+    (file) => graph.files.has(file) && MEMORY_GROWTH_DIRS.some((dir) => file.startsWith(dir)),
+  );
+  if (seeds.length === 0) return undefined;
+  const reach = dependents(graph, seeds);
+  const test = MEMORY_GROWTH_TESTS.find((file) => reach.has(file));
+  return test ? reach.get(test) : undefined;
+}
+
+/**
+ * Decides which tasks the changed files reach. Returns { full, tasks, reasons, server } where
+ * reasons maps each selected task (or "full") to the first file that chose it and server is the
+ * plan for test-server. Without a graph the server suite runs in full when selected.
+ */
+function selectTasks(files, workspace, { graph, weights = {} } = {}) {
   const reasons = new Map();
   const choose = (task, file) => {
     if (!reasons.has(task)) reasons.set(task, file);
@@ -160,7 +279,6 @@ function selectTasks(files, workspace) {
     if (dir === undefined) return everything(file);
     choose("typecheck", file);
     if (!changed.has(dir)) changed.set(dir, file);
-    if (reachesMemoryGrowth(file)) choose("test-memory-growth", file);
   }
   for (const [task, roots] of Object.entries(TASK_ROOTS)) {
     const reach = closure(workspace, roots, task === "build" ? [] : BUILD_ONLY_EDGES);
@@ -172,25 +290,64 @@ function selectTasks(files, workspace) {
     }
   }
   choose("check", files[0] ?? "(no changed files)");
+
+  let server = { mode: "none", files: [], shards: 0, reason: "", reached: new Map() };
+  if (reasons.has("test-server")) {
+    server = graph
+      ? planServerTests(files, graph, weights)
+      : {
+          mode: "full",
+          files: [],
+          shards: SERVER_SHARDS,
+          reason: reasons.get("test-server"),
+          reached: new Map(),
+        };
+    if (server.mode === "none") reasons.delete("test-server");
+    else if (server.mode === "full") reasons.set("test-server", server.reason);
+  }
+  const growth = graph ? reachesMemoryGrowth(files, graph) : undefined;
+  if (growth) choose("test-memory-growth", growth);
+  else if (server.mode === "full" && /configures every server test|reaches /.test(server.reason)) {
+    choose("test-memory-growth", server.reason);
+  }
   const tasks = TASKS.filter((task) => reasons.has(task));
-  return { full: false, tasks, reasons };
+  return { full: false, tasks, reasons, server };
 
   function everything(file) {
-    return { full: true, tasks: [...TASKS], reasons: new Map([["full", file]]) };
+    return {
+      full: true,
+      tasks: [...TASKS],
+      reasons: new Map([["full", file]]),
+      server: {
+        mode: "full",
+        files: [],
+        shards: SERVER_SHARDS,
+        reason: "full run",
+        reached: new Map(),
+      },
+    };
   }
 }
 
-/** The ci job matrix for the selected tasks; test-server expands into its shards. */
-function matrixFor(tasks) {
+/** The ci job matrix; test-server expands into its shards. Each entry carries the job title. */
+function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of TASKS) {
     if (!tasks.includes(task)) continue;
     if (task === "test-server") {
-      for (let shard = 1; shard <= SERVER_SHARDS; shard += 1) {
-        include.push({ task, shard, shard_count: SERVER_SHARDS });
+      const related = server.mode === "related";
+      const count = related ? server.shards : SERVER_SHARDS;
+      for (let shard = 1; shard <= count; shard += 1) {
+        include.push({
+          task,
+          title: "test-server " + (related ? "related " : "") + shard + "/" + count,
+          shard,
+          shard_count: count,
+          related,
+        });
       }
     } else {
-      include.push({ task });
+      include.push({ task, title: task });
     }
   }
   return { include };
@@ -206,7 +363,7 @@ function changedFiles(cwd) {
     .filter(Boolean);
 }
 
-/** Labels on the PR now, so re-running the workflow after adding ci:full takes effect. */
+/** Labels on the PR now, so a re-run sees labels added after the event. */
 async function liveLabels(env, fetchImpl) {
   const url =
     (env.GITHUB_API_URL ?? "https://api.github.com") +
@@ -227,49 +384,122 @@ async function liveLabels(env, fetchImpl) {
   return (await response.json()).map((label) => label.name);
 }
 
-/** Why the whole matrix runs regardless of paths, or undefined for path-based selection. */
-async function fullRunReason(env, payload, fetchImpl) {
-  if (env.GITHUB_EVENT_NAME !== "pull_request") return env.GITHUB_EVENT_NAME + " event";
-  const labels = (payload.pull_request?.labels ?? []).map((label) => label.name);
-  if (labels.includes(FULL_LABEL)) return FULL_LABEL + " label";
+/** The PR's labels: the event's, the label this event added, and the live ones when readable. */
+async function labelsOf(env, payload, fetchImpl) {
+  const labels = new Set((payload.pull_request?.labels ?? []).map((label) => label.name));
+  if (payload.label?.name) labels.add(payload.label.name);
   try {
-    if ((await liveLabels(env, fetchImpl)).includes(FULL_LABEL)) return FULL_LABEL + " label";
+    for (const name of await liveLabels(env, fetchImpl)) labels.add(name);
   } catch (error) {
-    // The label only widens a run; path-based selection already errs toward running more.
+    // Labels only widen a run; path selection already errs toward running more.
     console.log(
       "::warning::Could not read live PR labels (" + error.message + "); using the event's labels.",
     );
   }
-  return undefined;
+  return labels;
 }
 
-async function main(env = process.env, fetchImpl = fetch) {
-  const payload = env.GITHUB_EVENT_PATH
-    ? JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, "utf8"))
-    : {};
-  const root = process.cwd();
-  let result;
-  const forced = await fullRunReason(env, payload, fetchImpl);
-  if (forced !== undefined) {
-    result = { full: true, tasks: [...TASKS], reasons: new Map([["full", forced]]) };
-  } else {
-    const files = changedFiles(root);
-    result =
-      files === undefined
-        ? {
-            full: true,
-            tasks: [...TASKS],
-            reasons: new Map([["full", "HEAD is not the PR merge commit"]]),
-          }
-        : selectTasks(files, readWorkspace(root));
+const fullServer = (reason) => ({
+  mode: "full",
+  files: [],
+  shards: SERVER_SHARDS,
+  reason,
+  reached: new Map(),
+});
+
+/** The tasks a manual run's lane selects. */
+function laneRun(lane) {
+  const reasons = (tasks, why) => new Map(tasks.map((task) => [task, why]));
+  const why = "lane " + lane;
+  if (lane === "server") {
+    return {
+      full: false,
+      tasks: ["test-server"],
+      reasons: reasons(["test-server"], why),
+      server: fullServer(why),
+    };
   }
-  const matrix = matrixFor(result.tasks);
+  if (lane === "memory-growth") {
+    return {
+      full: false,
+      tasks: ["test-memory-growth"],
+      reasons: reasons(["test-memory-growth"], why),
+      server: fullServer(why),
+    };
+  }
+  if (lane === "quick") {
+    return {
+      full: false,
+      tasks: ["check", "typecheck"],
+      reasons: reasons(["check", "typecheck"], why),
+      server: fullServer(why),
+    };
+  }
+  return {
+    full: true,
+    tasks: [...TASKS],
+    reasons: new Map([["full", why]]),
+    server: fullServer(why),
+  };
+}
+
+/**
+ * The whole decision for one run: a manual run follows its lane; a pull request follows its
+ * changes, narrowed for a draft and widened by labels.
+ */
+async function planRun({ env, payload, root, fetchImpl, files }) {
+  if (env.GITHUB_EVENT_NAME !== "pull_request") {
+    const lane = LANES.includes(env.INPUT_LANE) ? env.INPUT_LANE : "all";
+    return laneRun(lane);
+  }
+  const labels = await labelsOf(env, payload, fetchImpl);
+  if (labels.has(FULL_LABEL))
+    return { ...laneRun("all"), reasons: new Map([["full", FULL_LABEL + " label"]]) };
+  const changed = files === undefined ? changedFiles(root) : files;
+  if (changed === undefined) {
+    return { ...laneRun("all"), reasons: new Map([["full", "HEAD is not the PR merge commit"]]) };
+  }
+  let result = selectTasks(changed, readWorkspace(root), {
+    graph: buildImportGraph(root),
+    weights: readServerWeights(root),
+  });
+  if (payload.pull_request?.draft) {
+    const tasks = result.tasks.filter((task) => task === "check" || task === "typecheck");
+    result = {
+      full: false,
+      tasks,
+      reasons: new Map(tasks.map((task) => [task, "draft pull request"])),
+      server: { mode: "none", files: [], shards: 0, reason: "draft", reached: new Map() },
+    };
+  }
+  const tasks = new Set(result.tasks);
+  const reasons = new Map(result.reasons);
+  let server = result.server;
+  if (labels.has(SERVER_LABEL) && !(tasks.has("test-server") && server.mode === "full")) {
+    tasks.add("test-server");
+    reasons.set("test-server", SERVER_LABEL + " label");
+    server = fullServer(SERVER_LABEL + " label");
+  }
+  if (labels.has(MEMORY_LABEL) && !tasks.has("test-memory-growth")) {
+    tasks.add("test-memory-growth");
+    reasons.set("test-memory-growth", MEMORY_LABEL + " label");
+  }
+  return { full: result.full, tasks: TASKS.filter((task) => tasks.has(task)), reasons, server };
+}
+
+function summaryLines(result) {
   const lines = [
     "### goat-ci scope",
     "",
     result.full
       ? "Full run: " + result.reasons.get("full")
-      : "Path-based run. Add the " + FULL_LABEL + " label and re-run for everything.",
+      : "Path-based run. Labels widen it: " +
+        FULL_LABEL +
+        " (everything), " +
+        SERVER_LABEL +
+        " (full server suite), " +
+        MEMORY_LABEL +
+        " (memory growth).",
     "",
     "| Task | Chosen by |",
     "| --- | --- |",
@@ -277,23 +507,68 @@ async function main(env = process.env, fetchImpl = fetch) {
       (task) => "| " + task + " | " + (result.full ? "full run" : result.reasons.get(task)) + " |",
     ),
   ];
+  if (result.tasks.includes("test-server")) {
+    lines.push(
+      "",
+      "#### Server tests",
+      "",
+      result.server.mode === "related"
+        ? "Related files only (" +
+            result.server.reason +
+            ") in " +
+            result.server.shards +
+            " shard(s):"
+        : "Full suite in four shards: " + result.server.reason + ".",
+    );
+    if (result.server.mode === "related") {
+      lines.push("", "| Test file | Reached from |", "| --- | --- |");
+      for (const [file, seed] of result.server.reached)
+        lines.push("| " + file + " | " + seed + " |");
+    }
+  }
+  return lines;
+}
+
+async function main(env = process.env, fetchImpl = fetch) {
+  const payload = env.GITHUB_EVENT_PATH
+    ? JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, "utf8"))
+    : {};
+  const result = await planRun({ env, payload, root: process.cwd(), fetchImpl });
+  const matrix = matrixFor(result.tasks, result.server);
+  const lines = summaryLines(result);
   console.log(lines.join("\n"));
   if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
-  if (env.GITHUB_OUTPUT)
-    fs.appendFileSync(env.GITHUB_OUTPUT, "matrix=" + JSON.stringify(matrix) + "\n");
+  if (env.GITHUB_OUTPUT) {
+    fs.appendFileSync(
+      env.GITHUB_OUTPUT,
+      "matrix=" +
+        JSON.stringify(matrix) +
+        "\nserver_files=" +
+        JSON.stringify(result.server.files) +
+        "\n",
+    );
+  }
   return { ...result, matrix };
 }
 
 module.exports = {
   FULL_LABEL,
+  SERVER_LABEL,
+  MEMORY_LABEL,
+  LANES,
   TASKS,
+  MEMORY_GROWTH_TESTS,
+  SERVER_RUN_CONFIG,
   isDocument,
-  reachesMemoryGrowth,
   readWorkspace,
+  readServerWeights,
   closure,
+  planServerTests,
+  reachesMemoryGrowth,
   selectTasks,
   matrixFor,
-  fullRunReason,
+  laneRun,
+  planRun,
 };
 
 if (require.main === module) {
