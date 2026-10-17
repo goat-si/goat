@@ -43,6 +43,10 @@ GOAT Bot screen shows only a chip for the work and its final report.
   files, and the bot points its coding agents to the one that fits. Work sent
   to another machine gets the notes, and any procedure the request names, in
   its first message.
+- If a machine running your work goes to sleep or disconnects, GOAT Bot tells
+  you. Say "continue on <another host>" to continue from the last copy of its
+  work. Large files and files that look like secrets are not copied. The work
+  on the original machine is not deleted.
 - When a provider has more than one signed-in account on the machine running
   the work, GOAT uses the one with more quota left and the task card says why,
   such as "Codex (work) · 20% weekly used".
