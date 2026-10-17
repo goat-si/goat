@@ -1,0 +1,16 @@
+# The vendored .repos/alchemy-effect subtree (scripts/sync-reference-repos.ts) carries
+# upstream's submodule gitlinks without their contents or their .gitmodules entries.
+# `git submodule foreach` dies on a gitlink it cannot map, and actions/checkout runs it
+# while removing credentials, so these entries exist only to map them. Nothing
+# initializes them: `update = none` keeps them out of `git submodule update` and
+# recursive clones, and foreach skips unpopulated submodules.
+[submodule "alchemy-effect-distilled"]
+	path = .repos/alchemy-effect/submodules/distilled
+	url = https://github.com/alchemy-run/distilled.git
+	update = none
+	ignore = all
+[submodule "alchemy-effect-floci"]
+	path = .repos/alchemy-effect/submodules/floci
+	url = https://github.com/alchemy-run/floci.git
+	update = none
+	ignore = all
