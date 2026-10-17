@@ -1,5 +1,6 @@
 import { snapshotDraftContent, isDraftContentUnchanged } from "./ChatView.logic";
 import {
+  sshThreadHandoffBlockReason,
   savedSshWorktreeOptions,
   findSavedSshWorktreeOption,
   sshWorktreeSendBlockReason,
@@ -8,11 +9,15 @@ import {
 import {
   submitSshWorktree,
   openSshThread,
+  remoteRefOf,
   sshWorktreeErrorFeedback,
   type SshWorktreeSubmissionOutcome,
   type SshThreadOpenPorts,
   type SshWorktreeSubmissionPorts,
 } from "../lib/sshWorktreeSubmission";
+import { SshThreadHandoffDialog } from "./chat/SshThreadHandoffDialog";
+import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
+import type { SavedSshWorktreeOption } from "../lib/sshWorktree";
 import type { DraftSshDestination } from "../composerDraftStore";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
@@ -438,7 +443,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment } from "../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../state/threads";
 import { workspacePreparationRetryRunIds } from "@goat/client-runtime/state/turn-item-presentation";
 import { resolveProviderSkillsForCwd } from "@goat/client-runtime/providerSkills";
 import { vcsEnvironment } from "../state/vcs";
@@ -447,6 +452,7 @@ import { useProjectClone } from "../state/projectClones";
 import { projectCloneDisplayName, projectCloneProgressSummary } from "@goat/contracts";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readThreadShell,
   resolveThreadDetailRef,
   useEnvironmentSupportsServerBrowser,
   useProject,
@@ -1633,6 +1639,19 @@ export default function ChatView(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const [sshHandoffThreadKey, setSshHandoffThreadKey] = useState<string | null>(null);
+  useEffect(
+    () =>
+      subscribeSshThreadHandoff((ref) => {
+        if (routeKind === "server" && scopedThreadKey(ref) === routeThreadKey) {
+          setSshHandoffThreadKey(routeThreadKey);
+        }
+      }),
+    [routeKind, routeThreadKey],
+  );
+  if (sshHandoffThreadKey !== null && sshHandoffThreadKey !== routeThreadKey) {
+    setSshHandoffThreadKey(null);
+  }
   const currentRouteThreadKeyRef = useRef<string | null>(routeThreadKey);
   useLayoutEffect(() => {
     currentRouteThreadKeyRef.current = routeThreadKey;
@@ -4487,6 +4506,22 @@ export default function ChatView(props: ChatViewProps) {
   });
   // Host selection is available before the user removes text-only transfer blockers.
   const sshDisabledReason = sshWorktreeSelectionBlockReason(sshGuardInput);
+
+  const canHandoffSsh = useAtomValue(sshWorkspaceLaunchCommand.permissionAtom(environmentId));
+  const sshHandoffGuard = {
+    desktopAvailable: window.desktopBridge !== undefined,
+    sourceIsPrimary: environmentId === primaryEnvironmentId,
+    sourceThreadAvailable: isServerThread,
+    hasMessages: activeMessageCount > 0,
+    sourceProjectAvailable: activeProject !== null,
+    sourceIsGitRepo: gitStatusQuery.data?.isRepo ?? null,
+    threadBusy: isWorking,
+    runs: serverProjection?.runs ?? [],
+    catalogReady: sshCatalog.isReady,
+    options: sshOptions,
+    canLaunch: canHandoffSsh,
+  };
+  const sshHandoffBlockReason = sshThreadHandoffBlockReason(sshHandoffGuard);
 
   // When context is enabled, keep a hidden, off-flow strip mounted so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
@@ -9173,6 +9208,93 @@ export default function ChatView(props: ChatViewProps) {
     show(outcome.reason);
   };
 
+  const continueThreadOnSsh = async (
+    selected: SavedSshWorktreeOption,
+    instructions: string,
+  ): Promise<boolean> => {
+    if (sendInFlightRef.current) return false;
+    const source = readThreadShell(routeThreadRef);
+    const projection = appAtomRegistry.get(
+      environmentThreadDetails.threadAtom(routeThreadRef),
+    )?.projection;
+    const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
+    const option = findSavedSshWorktreeOption(
+      savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
+      selected.destination,
+    );
+    const reason =
+      sshThreadHandoffBlockReason({
+        ...sshHandoffGuard,
+        sourceThreadAvailable: source !== null,
+        hasMessages: (projection?.messages.length ?? 0) > 0,
+        runs: projection?.runs ?? [],
+        catalogReady: catalog.isReady,
+        options: savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
+        canLaunch: appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(environmentId)),
+      }) ??
+      option?.disabledReason ??
+      (option === null ? "This saved SSH connection is unavailable. Choose another host." : null);
+    if (reason !== null || source === null || option === null) {
+      toastManager.add(
+        stackedThreadToast({ type: "error", title: reason ?? "This thread is unavailable." }),
+      );
+      return false;
+    }
+    const capturedRouteKey = routeThreadKey;
+    sendInFlightRef.current = true;
+    let dispatchBegan = false;
+    try {
+      dispatchBegan = true;
+      const result = await launchSshWorkspace({
+        environmentId,
+        input: {
+          sourceProjectId: source.projectId,
+          sourceThreadId: source.id,
+          destination: {
+            connectionId: option.destination.connectionId,
+            expectedEnvironmentId: option.destination.environmentId,
+            target: option.profile.target,
+          },
+          title: source.title,
+          modelSelection: source.modelSelection,
+          runtimeMode: source.runtimeMode,
+          interactionMode: source.interactionMode,
+          initialMessage: { text: instructions },
+        },
+      });
+      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      const remoteRef = remoteRefOf(result.value);
+      try {
+        await openSshThread(
+          { remoteRef, savedEnvironmentId: option.destination.environmentId },
+          makeSshThreadOpenPorts(option.destination, capturedRouteKey),
+        );
+      } catch (error) {
+        showSshStartedNotOpened(
+          {
+            kind: "started-not-opened",
+            remoteRef,
+            reason: error instanceof Error ? error.message : "Could not open the remote thread.",
+          },
+          { destination: option.destination, hostLabel: option.label },
+        );
+      }
+      return true;
+    } catch (error) {
+      const feedback = sshWorktreeErrorFeedback(error, option.label, dispatchBegan, "thread");
+      toastManager.add(
+        stackedThreadToast({
+          type: feedback.uncertain ? "warning" : "error",
+          title: feedback.message,
+          description: feedback.details,
+        }),
+      );
+      return false;
+    } finally {
+      sendInFlightRef.current = false;
+    }
+  };
+
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -12012,6 +12134,17 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
         </WizardPopup>
       </Dialog>
+      {sshHandoffThreadKey === routeThreadKey ? (
+        <SshThreadHandoffDialog
+          key={routeThreadKey}
+          options={sshOptions}
+          blockReason={sshHandoffBlockReason}
+          onClose={() =>
+            setSshHandoffThreadKey((current) => (current === routeThreadKey ? null : current))
+          }
+          onSubmit={continueThreadOnSsh}
+        />
+      ) : null}
       {rightPanelControlsAtRoot ? panelLayoutControls : null}
       <div
         className={cn(

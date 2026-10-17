@@ -85,6 +85,7 @@ import {
   SunIcon,
   TextSearchIcon,
 } from "~/components/solar";
+import { requestSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { requestThreadFindOpen } from "./chat/threadFindActionBus";
 import {
   useCallback,
@@ -1963,6 +1964,18 @@ function OpenCommandPaletteDialog(props: {
       icon: <LinkIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "thread.copyReference",
       run: copyActiveThreadReference,
+    });
+  }
+
+  if (routeThreadRef !== null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:continue-on-ssh",
+      searchTerms: ["continue", "ssh", "host", "handoff", "remote"],
+      title: "Continue on SSH host…",
+      description: "Choose a saved SSH host and optional instructions",
+      icon: <MonitorIcon className={ITEM_ICON_CLASS} />,
+      run: async () => requestSshThreadHandoff(routeThreadRef),
     });
   }
 

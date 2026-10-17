@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, OrchestrationV2RunStatus } from "@goat/contracts";
 import type { ConnectionCatalogEntry, SshConnectionProfile } from "@goat/client-runtime/connection";
 import { connectionRoutes, sshTargetKey } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
@@ -114,5 +114,47 @@ export function sshWorktreeSelectionBlockReason(input: {
   if (!input.sourceIsGitRepo) return "SSH worktrees need a Git project.";
   if (!input.canLaunch) return "This connection cannot copy code and start SSH threads.";
   if (input.multipleModels) return "Choose one model before sending to SSH.";
+  return null;
+}
+
+/** Availability shared by the existing-thread dialog and its submit-time guard. */
+export function sshThreadHandoffBlockReason(input: {
+  desktopAvailable: boolean;
+  sourceIsPrimary: boolean;
+  sourceThreadAvailable: boolean;
+  hasMessages: boolean;
+  sourceProjectAvailable: boolean;
+  sourceIsGitRepo: boolean | null;
+  threadBusy: boolean;
+  runs: ReadonlyArray<{ readonly status: OrchestrationV2RunStatus }>;
+  catalogReady: boolean;
+  options: ReadonlyArray<SavedSshWorktreeOption>;
+  canLaunch: boolean;
+}): string | null {
+  if (!input.desktopAvailable) return "Continue on SSH host is available in the desktop app.";
+  if (!input.sourceIsPrimary) return "Continue on SSH host needs a local thread.";
+  if (!input.sourceThreadAvailable) return "This thread is no longer available.";
+  if (!input.hasMessages) return "Send a message before continuing this thread on SSH.";
+  if (!input.sourceProjectAvailable) return "This thread's local project is unavailable.";
+  if (input.sourceIsGitRepo === null) return "Checking this thread's Git workspace.";
+  if (!input.sourceIsGitRepo) return "Continue on SSH host needs a Git project.";
+  if (
+    input.threadBusy ||
+    input.runs.some(
+      (run) =>
+        run.status === "preparing" ||
+        run.status === "queued" ||
+        run.status === "starting" ||
+        run.status === "running" ||
+        run.status === "waiting",
+    )
+  )
+    return "Wait for this thread's running and queued work to finish.";
+  if (!input.catalogReady) return "Loading saved SSH connections.";
+  if (input.options.length === 0) return "Save an SSH host in Settings → Connections first.";
+  if (!input.canLaunch) return "This connection cannot copy code and start SSH threads.";
+  if (input.options.every((option) => option.disabledReason !== null)) {
+    return input.options[0]!.disabledReason;
+  }
   return null;
 }

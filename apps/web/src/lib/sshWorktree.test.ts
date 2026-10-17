@@ -8,6 +8,7 @@ import {
 } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
 import {
+  sshThreadHandoffBlockReason,
   savedSshWorktreeOptions,
   findSavedSshWorktreeOption,
   sshWorktreeSendBlockReason,
@@ -142,4 +143,74 @@ describe("saved SSH worktrees", () => {
     expect(
       sshWorktreeSendBlockReason({ ...valid, selected: false, draftAvailable: false }),
     ).toBeNull());
+});
+
+describe("continuing an existing thread on SSH", () => {
+  const valid = {
+    desktopAvailable: true,
+    sourceIsPrimary: true,
+    sourceThreadAvailable: true,
+    hasMessages: true,
+    sourceProjectAvailable: true,
+    sourceIsGitRepo: true,
+    threadBusy: false,
+    runs: [],
+    catalogReady: true,
+    options: options(),
+    canLaunch: true,
+  };
+  it("allows an idle local Git thread with a usable saved host", () => {
+    expect(sshThreadHandoffBlockReason(valid)).toBeNull();
+  });
+  it.each([
+    [{ desktopAvailable: false }, "Continue on SSH host is available in the desktop app."],
+    [{ sourceIsPrimary: false }, "Continue on SSH host needs a local thread."],
+    [{ sourceThreadAvailable: false }, "This thread is no longer available."],
+    [{ hasMessages: false }, "Send a message before continuing this thread on SSH."],
+    [{ sourceProjectAvailable: false }, "This thread's local project is unavailable."],
+    [{ sourceIsGitRepo: false }, "Continue on SSH host needs a Git project."],
+    [{ sourceIsGitRepo: null }, "Checking this thread's Git workspace."],
+    [{ threadBusy: true }, "Wait for this thread's running and queued work to finish."],
+    [{ catalogReady: false }, "Loading saved SSH connections."],
+    [{ options: [] }, "Save an SSH host in Settings → Connections first."],
+    [{ canLaunch: false }, "This connection cannot copy code and start SSH threads."],
+  ])("blocks unavailable handoffs with a visible reason: %j", (override, reason) => {
+    expect(sshThreadHandoffBlockReason({ ...valid, ...override })).toBe(reason);
+  });
+  it("waits for the catalog before telling the user to save a host", () => {
+    expect(sshThreadHandoffBlockReason({ ...valid, catalogReady: false, options: [] })).toBe(
+      "Loading saved SSH connections.",
+    );
+  });
+  it("preserves disabled-host guidance and accepts another usable route", () => {
+    const disabled = savedSshWorktreeOptions(entries(savedEntry("disabled", false)), true);
+    expect(sshThreadHandoffBlockReason({ ...valid, options: disabled })).toBe(
+      "Enable this saved connection in Settings → Connections.",
+    );
+    expect(
+      sshThreadHandoffBlockReason({ ...valid, options: [...disabled, ...valid.options] }),
+    ).toBeNull();
+  });
+  it.each(["preparing", "queued", "starting", "running", "waiting"] as const)(
+    "blocks a %s run even when local dispatch is idle",
+    (status) => {
+      expect(sshThreadHandoffBlockReason({ ...valid, runs: [{ status }] })).toBe(
+        "Wait for this thread's running and queued work to finish.",
+      );
+    },
+  );
+  it("allows completed, interrupted, failed, cancelled and rolled-back history", () => {
+    expect(
+      sshThreadHandoffBlockReason({
+        ...valid,
+        runs: [
+          { status: "completed" },
+          { status: "interrupted" },
+          { status: "failed" },
+          { status: "cancelled" },
+          { status: "rolled_back" },
+        ],
+      }),
+    ).toBeNull();
+  });
 });

@@ -1,3 +1,4 @@
+import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
@@ -154,6 +155,7 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
+          canOpenSshHandoff: true,
           canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
           branch: thread.branch ?? null,
           projectFilter: null,
@@ -206,6 +208,9 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "continue-on-ssh":
+            requestSshThreadHandoff(threadRef);
+            return;
           case "promote":
             await promoteThread(threadRef);
             return;

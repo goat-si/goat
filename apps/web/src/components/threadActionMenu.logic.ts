@@ -7,6 +7,7 @@ import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
  * remains data-driven.
  */
 export type ThreadActionMenuId =
+  | "continue-on-ssh"
   | "new-thread-on-branch"
   | "promote"
   | "filter-by-project"
@@ -72,6 +73,8 @@ export function buildDraftActionMenuItems(options: {
 
 export interface ThreadActionMenuState {
   readonly canOperate: boolean;
+  /** The active chat owns the SSH host dialog. */
+  readonly canOpenSshHandoff?: boolean | undefined;
   readonly branch: string | null;
   /**
    * Project scoping for the thread list. Null on surfaces with no scoped
@@ -121,6 +124,7 @@ const GLOBAL_AGENT_HIDDEN_ACTIONS: ReadonlySet<ThreadActionMenuId> = new Set([
 /** Local navigation, read markers, and copying remain available to read-only clients. */
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
+    "continue-on-ssh", // The dialog uses sshWorkspaceLaunch.permissionAtom.
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -157,6 +161,9 @@ export function buildThreadActionMenuItems(
             icon: "message-square-plus",
           },
         ]
+      : []),
+    ...(state.canOpenSshHandoff
+      ? [{ id: "continue-on-ssh" as const, label: "Continue on SSH host…", icon: "terminal" }]
       : []),
     ...(state.supports.pinning
       ? [

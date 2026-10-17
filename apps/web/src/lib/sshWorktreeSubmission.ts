@@ -107,6 +107,12 @@ export async function submitSshWorktree(
 
 export const sshWorkspaceErrorCopy = {
   invalid_target: "This saved SSH target is invalid. Choose another host or update Connections.",
+  thread_not_found: "The local thread no longer exists. Open another thread.",
+  thread_project_mismatch:
+    "This thread no longer belongs to the selected project. Reopen it and try again.",
+  thread_busy: "Wait for this thread's running and queued work to finish before continuing on SSH.",
+  thread_worktree_invalid:
+    "This thread's worktree is unavailable or invalid. Restore it before continuing on SSH.",
   project_not_found: "The local project no longer exists. Choose a local project.",
   not_git_repository: "SSH worktrees need a Git project.",
   project_not_repo_root: "Choose the repository root as the local project before sending to SSH.",
@@ -147,6 +153,7 @@ export function sshWorktreeErrorFeedback(
   error: unknown,
   hostLabel: string,
   dispatchBegan: boolean,
+  source: "draft" | "thread" = "draft",
 ) {
   const host = hostLabel.slice(0, 120);
   const typed = isSshWorkspaceError(error) ? error : null;
@@ -161,10 +168,14 @@ export function sshWorktreeErrorFeedback(
   const message = uncertain
     ? sshWorkspaceErrorCopy.launch_uncertain.replaceAll("<host>", host)
     : authorization
-      ? "This connection cannot copy code and start SSH threads. Your draft was kept."
+      ? source === "thread"
+        ? "This connection cannot copy code and start SSH threads."
+        : "This connection cannot copy code and start SSH threads. Your draft was kept."
       : typed
         ? sshWorkspaceErrorCopy[typed.code].replaceAll("<host>", host)
-        : `Could not send to ${host}. Your draft was kept.`;
+        : source === "thread"
+          ? `Could not continue this thread on ${host}.`
+          : `Could not send to ${host}. Your draft was kept.`;
   const details = typed
     ? `${host} · ${typed.stage} · ${typed.code}${
         typed.code === "secret_candidate" && typed.fileNames
