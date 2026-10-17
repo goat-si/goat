@@ -46,58 +46,58 @@ const isAlive = (pid: number) => {
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime drain replacement",
   () => {
-    for (const activity of ["busy", "unknown"] as const) {
-      for (const confirmed of [false, true]) {
-        it.live(
-          `compatible older ${activity}, confirmed=${confirmed}: ${confirmed ? "force drains" : "stays pending without drain"}`,
-          () =>
-            Effect.gen(function* () {
-              const f = yield* makeProtocolFixture({
-                live: true,
-                kind: "managed",
-                oldVersion: OLDER,
-                drain: true,
-                ...compatible,
-              });
-              yield* f.fs.writeFileString(`${f.test}/activity`, activity);
-              yield* f.fs.writeFileString(`${f.test}/drain`, "cancelled");
-              const before = yield* f.snapshot;
-              const result = yield* f.run("launch", false, {
-                refreshOwnedRuntimeOnFirstConnection: true,
-                confirmReplacement: confirmed,
-              });
-              assert.isTrue(Result.isSuccess(result), describeFailure(result));
-              const log = yield* events(f);
-              if (confirmed) {
-                if (Result.isSuccess(result)) assert.equal(result.success.refresh, "replaced");
-                assert.deepInclude(log, {
-                  type: "drain",
-                  version: OLDER,
-                  status: "drained",
-                  targetVersion: ARCHIVE.archiveVersion,
-                  force: true,
-                  grace: 60,
-                });
-                assert.isFalse(log.some((entry) => entry.type === "activity"));
-                assert.isFalse(isAlive(f.pid));
-              } else {
-                if (Result.isSuccess(result))
-                  assert.equal(result.success.pending?.reason, activity);
-                assert.isFalse(
-                  log.some((entry) =>
-                    ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(
-                      entry.type,
-                    ),
-                  ),
-                );
-                assert.deepEqual(yield* f.snapshot, before);
-                assert.isTrue(isAlive(f.pid));
-              }
-            }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-        );
-      }
+    it.live.each(
+      (["busy", "unknown"] as const).flatMap((activity) =>
+        [false, true].map((confirmed) => ({ activity, confirmed })),
+      ),
+    )(
+      "compatible older $activity, confirmed=$confirmed: force drains only when confirmed",
+      ({ activity, confirmed }) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: OLDER,
+            drain: true,
+            ...compatible,
+          });
+          yield* f.fs.writeFileString(`${f.test}/activity`, activity);
+          yield* f.fs.writeFileString(`${f.test}/drain`, "cancelled");
+          const before = yield* f.snapshot;
+          const result = yield* f.run("launch", false, {
+            refreshOwnedRuntimeOnFirstConnection: true,
+            confirmReplacement: confirmed,
+          });
+          assert.isTrue(Result.isSuccess(result), describeFailure(result));
+          const log = yield* events(f);
+          if (confirmed) {
+            if (Result.isSuccess(result)) assert.equal(result.success.refresh, "replaced");
+            assert.deepInclude(log, {
+              type: "drain",
+              version: OLDER,
+              status: "drained",
+              targetVersion: ARCHIVE.archiveVersion,
+              force: true,
+              grace: 60,
+            });
+            assert.isFalse(log.some((entry) => entry.type === "activity"));
+            assert.isFalse(isAlive(f.pid));
+          } else {
+            if (Result.isSuccess(result)) assert.equal(result.success.pending?.reason, activity);
+            assert.isFalse(
+              log.some((entry) =>
+                ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(entry.type),
+              ),
+            );
+            assert.deepEqual(yield* f.snapshot, before);
+            assert.isTrue(isAlive(f.pid));
+          }
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
 
-      it.live(`the final guard preserves pending when idle becomes ${activity} before drain`, () =>
+    it.live.each(["busy", "unknown"] as const)(
+      "the final guard preserves pending when idle becomes %s before drain",
+      (activity) =>
         Effect.gen(function* () {
           const f = yield* makeProtocolFixture({
             live: true,
@@ -123,55 +123,52 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.deepEqual(yield* f.snapshot, before);
           assert.isTrue(isAlive(f.pid));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      );
-    }
+    );
 
-    for (const refusal of [
+    it.live.each([
       "newer",
       "external",
       "unordered",
       "newer-incompatible",
       "external-incompatible",
-    ] as const) {
-      it.live(`confirmation cannot replace a ${refusal} server`, () =>
-        Effect.gen(function* () {
-          const version = refusal.startsWith("newer")
-            ? "99.0.0"
-            : refusal === "unordered"
-              ? "1.2.3-dev.deadbeef"
-              : OLDER;
-          const incompatible = refusal.endsWith("incompatible");
-          const f = yield* makeProtocolFixture({
-            live: true,
-            kind: refusal.startsWith("external") ? "external" : "managed",
-            oldVersion: version,
-            drain: true,
-            ssh: incompatible ? SSH_RUNTIME_PROTOCOL_VERSION - 1 : SSH_RUNTIME_PROTOCOL_VERSION,
-            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
-          });
-          const before = yield* f.snapshot;
-          yield* f.fs.writeFileString(`${f.test}/activity`, "busy");
-          const result = yield* f.run("launch", false, {
-            refreshOwnedRuntimeOnFirstConnection: true,
-            confirmReplacement: true,
-          });
-          if (incompatible) assert.isTrue(Result.isFailure(result));
-          else {
-            assert.isTrue(Result.isSuccess(result), describeFailure(result));
-            if (Result.isSuccess(result)) assert.equal(result.success.version, version);
-          }
-          const log = yield* events(f);
-          assert.isFalse(
-            log.some((entry) =>
-              ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(entry.type),
-            ),
-          );
-          assert.isTrue(isAlive(f.pid));
-          assert.equal((yield* f.snapshot).runtime, before.runtime);
-          assert.equal((yield* f.snapshot)["run-t3.sh"], before["run-t3.sh"]);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
-      );
-    }
+    ] as const)("confirmation cannot replace a %s server", (refusal) =>
+      Effect.gen(function* () {
+        const version = refusal.startsWith("newer")
+          ? "99.0.0"
+          : refusal === "unordered"
+            ? "1.2.3-dev.deadbeef"
+            : OLDER;
+        const incompatible = refusal.endsWith("incompatible");
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: refusal.startsWith("external") ? "external" : "managed",
+          oldVersion: version,
+          drain: true,
+          ssh: incompatible ? SSH_RUNTIME_PROTOCOL_VERSION - 1 : SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+        });
+        const before = yield* f.snapshot;
+        yield* f.fs.writeFileString(`${f.test}/activity`, "busy");
+        const result = yield* f.run("launch", false, {
+          refreshOwnedRuntimeOnFirstConnection: true,
+          confirmReplacement: true,
+        });
+        if (incompatible) assert.isTrue(Result.isFailure(result));
+        else {
+          assert.isTrue(Result.isSuccess(result), describeFailure(result));
+          if (Result.isSuccess(result)) assert.equal(result.success.version, version);
+        }
+        const log = yield* events(f);
+        assert.isFalse(
+          log.some((entry) =>
+            ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(entry.type),
+          ),
+        );
+        assert.isTrue(isAlive(f.pid));
+        assert.equal((yield* f.snapshot).runtime, before.runtime);
+        assert.equal((yield* f.snapshot)["run-t3.sh"], before["run-t3.sh"]);
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
 
     it.live("drains an idle server and replaces it through the supervisor", () =>
       Effect.gen(function* () {
