@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import { splitStandingInstructions } from "@goat/shared/standingInstructions";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerConfig from "../config.ts";
@@ -1102,6 +1103,33 @@ describe("duplicates and restarts (scenario 2)", () => {
         ).length,
         1,
       );
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("what a channel worker is told", () => {
+  it.effect("starts a worker on this machine with the project's standing instructions", () => {
+    const harness = makeHarness({
+      settingsLayer: ServerSettings.layerTest({
+        textGenerationModelSelection: modelSelection,
+        defaultRuntimeMode: "full-access",
+        standingInstructions: "Open pull requests as drafts.",
+      }),
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("do: tidy the docs", "standing-local"), rpcContext);
+      yield* runtime.drain;
+      assert.strictEqual(harness.world.launches.length, 1);
+      const first = splitStandingInstructions(
+        harness.world.launches[0]?.initialMessage?.text ?? "",
+      );
+      // The same versioned block goat_thread_launch writes, so clients show it collapsed.
+      assert.strictEqual(first.block?.text, "Open pull requests as drafts.");
+      assert.isTrue(first.text.startsWith("tidy the docs\n"));
+      assert.include(first.text, "ask first: show the draft or plan in a waiting_input question.");
     }).pipe(Effect.provide(harness.layer));
   });
 });

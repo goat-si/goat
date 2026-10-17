@@ -51,14 +51,18 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import type * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import * as ServerConfig from "../config.ts";
 import { REPORTING_NOTE } from "../remoteReports/reportFrame.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
   questionIdFor,
@@ -68,6 +72,7 @@ import {
 } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
+import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
@@ -340,6 +345,9 @@ export class ChannelRemoteWorkers extends Context.Service<
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
   const fibers = yield* FiberMap.make<string, void, never>();
   const locks = new Map<string, Semaphore.Semaphore>();
   const lockFor = (taskId: string) => {
@@ -650,19 +658,16 @@ const make = Effect.gen(function* () {
       return { type: "target", target } as const;
     });
 
+  /**
+   * The worker's first message. GOAT Bot's notes and the skills the instruction names exist only
+   * on this machine, so they are read now and travel inside the message.
+   */
   const workerMessage = (task: ChannelLedger.ChannelStoredTask["task"]) =>
-    [
-      task.instruction,
-      "",
-      "---",
-      "This work came in through GOAT as task " +
-        task.taskId +
-        " (generation " +
-        task.generation +
-        ").",
-      "If you need a decision from the person who asked, report needs_input with your question, then stop. When you finish, end with a short summary of the result.",
-      "Before you end, call goat_thread_report_result with your outcome (succeeded, failed, blocked or cancelled) and a short summary; the task settles from that report.",
-    ].join("\n");
+    Effect.gen(function* () {
+      const notes = yield* readChannelBotNotes(fileSystem, botFiles);
+      const skills = yield* readNamedSkills(fileSystem, path, botFiles, task.instruction);
+      return remoteWorkerMessage(task, { notes, skills });
+    });
 
   /** Binds the task to the remote thread the launch (or its recovery) found. */
   const bindWorker = (
@@ -880,6 +885,7 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBot(stored.ownerId);
+      const message = yield* workerMessage(task);
       const launched = yield* ssh
         .launchThread(
           {
@@ -896,7 +902,7 @@ const make = Effect.gen(function* () {
                   }
                 : { type: "cwd" },
             title: task.title,
-            message: workerMessage(task),
+            message,
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.

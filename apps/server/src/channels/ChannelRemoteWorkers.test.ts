@@ -17,15 +17,19 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Logger from "effect/Logger";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
@@ -2054,4 +2058,41 @@ describe("models the other machine offers", () => {
       assert.strictEqual(machine.launches[0]!.cwd, "/Users/jun/developer/goat-si/goat");
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+describe("what a worker on another machine is told", () => {
+  it.effect(
+    "carries this machine's GOAT Bot notes, the named skill, and the same safety rules",
+    () => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+        yield* fs.makeDirectory(files.skills, { recursive: true });
+        yield* fs.writeFileString(files.notes, "- 2026-10-17: open PRs as drafts (asked in x)\n");
+        yield* fs.writeFileString(
+          path.join(files.skills, "deploy-staging.md"),
+          "# Deploy staging\nRun the deploy script, then check the health page.\n",
+        );
+        yield* fs.writeFileString(path.join(files.skills, "unrelated.md"), "# Unrelated\n");
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(
+          slackInput("do@mac-studio: ship it with deploy-staging", "notes-remote"),
+          slackContext,
+        );
+        yield* until("running", (task) => task.status === "running");
+        const message = machine.launches[0]?.message ?? "";
+        assert.include(message, "<goat_bot_notes>\n- 2026-10-17: open PRs as drafts (asked in x)");
+        assert.include(message, '<goat_bot_skill name="deploy-staging">\n# Deploy staging');
+        assert.notInclude(message, "Unrelated");
+        assert.include(message, "ask first: show the draft or plan in a needs_input report.");
+        assert.include(message, "goat_origin_report with status progress");
+        // The home machine's paths mean nothing over there.
+        assert.notInclude(message, files.notes);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 });
