@@ -837,8 +837,9 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   const summaries = [...groups].flatMap(([action, group], index) => {
     if (mergeExplore && exploreGroups.includes(group)) {
       if (group !== exploreGroups[0]) return [];
-      // A command that both lists and reads sits in two exploration groups.
-      const exploreEntries = [...new Set(exploreGroups.flatMap((explore) => explore.entries))];
+      // A command that both lists and reads sits in two exploration groups; count each input once.
+      const exploreMembers = new Set(exploreGroups.flatMap((explore) => explore.entries));
+      const exploreEntries = entries.filter((entry) => exploreMembers.has(entry));
       return [
         {
           index,
@@ -890,7 +891,8 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
       entry.toolSource !== undefined &&
       resolveGoatMcpToolDefinition(workEntryToolName(entry)) === null,
   ).length;
-  const summarizedCount = new Set(selected.flatMap((group) => group.entries)).size;
+  const summarizedMembers = new Set(selected.flatMap((group) => group.entries));
+  const summarizedCount = entries.filter((entry) => summarizedMembers.has(entry)).length;
   const remainingCount = entries.length - sourcedCount - summarizedCount;
   if (remainingCount > 0) {
     labels.push(`Performed ${remainingCount} other ${remainingCount === 1 ? "action" : "actions"}`);
