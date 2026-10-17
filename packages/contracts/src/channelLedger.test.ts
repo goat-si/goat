@@ -56,6 +56,8 @@ const task = {
 
 describe("channel tasks", () => {
   it("round-trips a task with its fixed origin and requester snapshot", () => {
+    expect(roundTrip(ChannelTask, task).briefVersion).toBeUndefined();
+    expect(roundTrip(ChannelTask, { ...task, briefVersion: 2 }).briefVersion).toBe(2);
     expect(roundTrip(ChannelTask, task)).toMatchObject({
       originAddress: task.originAddress,
       requester: { externalActorId: "U123" },
@@ -181,11 +183,11 @@ describe("channel tasks", () => {
     const completed = roundTrip(ChannelTaskEvent, {
       ...base,
       type: "task.completed",
-      payload: { generation: 1, runId: "run-1", summary: "Latency 1.2s" },
+      payload: { generation: 1, runId: "run-1", summary: "Latency 1.2s", briefVersion: 1 },
     });
     expect(completed).toMatchObject({
       type: "task.completed",
-      payload: { summary: "Latency 1.2s" },
+      payload: { summary: "Latency 1.2s", briefVersion: 1 },
     });
     // A payload that belongs to another event type does not decode.
     expect(() =>

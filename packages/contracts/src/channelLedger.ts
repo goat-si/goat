@@ -22,6 +22,7 @@ import {
   ChannelTaskEventId,
   ChannelTaskId,
 } from "./channelCommon.ts";
+import { ChannelTaskBrief } from "./channelBrief.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
@@ -180,6 +181,7 @@ export const ChannelTask = Schema.Struct({
   status: ChannelTaskStatus,
   version: PositiveInt,
   generation: PositiveInt,
+  briefVersion: Schema.optional(PositiveInt),
   projectId: Schema.optional(ProjectId),
   /** The machine the requester asked for, as an SSH alias; the dispatcher checks it. */
   host: Schema.optional(TrimmedNonEmptyString),
@@ -202,6 +204,7 @@ export type ChannelTask = typeof ChannelTask.Type;
 export const ChannelTaskEventType = Schema.Literals([
   "task.created",
   "task.dispatch.claimed",
+  "task.brief.frozen",
   "task.worker.bound",
   "task.progress",
   "task.question.opened",
@@ -262,6 +265,7 @@ export const ChannelTaskEvent = Schema.Union([
     target: ChannelDispatchTarget,
     leaseExpiresAt: IsoDateTime,
   }),
+  taskEvent("task.brief.frozen", { brief: ChannelTaskBrief }),
   taskEvent("task.worker.bound", { worker: ChannelWorkerAssignment }),
   taskEvent("task.progress", { generation: PositiveInt, summary: TrimmedNonEmptyString }),
   taskEvent("task.question.opened", { question: ChannelOpenQuestion }),
@@ -272,17 +276,22 @@ export const ChannelTaskEvent = Schema.Union([
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
   taskEvent("task.completed", {
+    briefVersion: Schema.optional(PositiveInt),
     generation: PositiveInt,
     runId: Schema.optional(RunId),
     summary: Schema.String,
     report: Schema.optional(ChannelTaskCompletionReport),
   }),
   taskEvent("task.failed", {
+    briefVersion: Schema.optional(PositiveInt),
     generation: PositiveInt,
     reason: TrimmedNonEmptyString,
     summary: Schema.optional(Schema.String),
   }),
-  taskEvent("task.cancelled", { reason: Schema.optional(Schema.String) }),
+  taskEvent("task.cancelled", {
+    reason: Schema.optional(Schema.String),
+    briefVersion: Schema.optional(PositiveInt),
+  }),
   taskEvent("task.retry.requested", { generation: PositiveInt }),
   taskEvent("task.worker.observed", {
     generation: PositiveInt,
