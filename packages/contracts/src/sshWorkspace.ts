@@ -13,6 +13,8 @@ export type SshWorkspaceDestination = typeof SshWorkspaceDestination.Type;
 
 export const SshWorkspaceLaunchInput = Schema.Struct({
   sourceProjectId: ProjectId,
+  /** Continue this existing thread on the destination SSH host. */
+  sourceThreadId: Schema.optional(ThreadId),
   destination: SshWorkspaceDestination,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
@@ -63,6 +65,10 @@ export type SshWorkspaceStage = typeof SshWorkspaceStage.Type;
 export const SshWorkspaceCode = Schema.Literals([
   "invalid_target",
   "project_not_found",
+  "thread_not_found",
+  "thread_project_mismatch",
+  "thread_busy",
+  "thread_worktree_invalid",
   "not_git_repository",
   "project_not_repo_root",
   "project_read_failed",

@@ -1191,6 +1191,7 @@ const layerCommandReadiness = HttpRouter.middleware(
 );
 
 const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
+  Layer.provide(layerOrchestrationV2Runtime),
   Layer.provide(GitVcsDriver.layer),
   Layer.provide(RuntimeLayer.layerProjectService),
 );

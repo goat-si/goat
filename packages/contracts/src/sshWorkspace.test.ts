@@ -51,6 +51,7 @@ describe("SSH workspace schemas", () => {
   it("round trips launch and fetchBack through JSON schemas", () => {
     for (const [schema, value] of [
       [SshWorkspaceLaunchInput, launch],
+      [SshWorkspaceLaunchInput, { ...launch, sourceThreadId: "thread" }],
       [SshWorkspaceLaunchResult, launchResult],
       [SshWorkspaceFetchBackInput, fetchBack],
       [SshWorkspaceFetchBackResult, fetchResult],
@@ -93,6 +94,7 @@ describe("SSH workspace schemas", () => {
     for (const value of [
       { ...launch, title: " " },
       { ...launch, sourceProjectId: "" },
+      { ...launch, sourceThreadId: "" },
       { ...launch, runtimeMode: "root" },
       { ...launch, interactionMode: "unknown" },
       { ...launch, destination: { ...launch.destination, expectedEnvironmentId: "" } },

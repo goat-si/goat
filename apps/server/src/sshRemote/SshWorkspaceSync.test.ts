@@ -5,14 +5,25 @@ import * as NodeUtil from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  EventId,
+  ThreadId,
+  RunId,
+  MessageId,
+  OrchestrationV2TurnItem,
+  type OrchestrationV2Run,
   Project,
   ProjectId,
   EnvironmentId,
   SshWorkspaceLaunchInput,
   VcsProcessExitError,
+  GitCommandError,
   type SshWorkspaceError,
   type RuntimeMode,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import { emptyProjection } from "../orchestration-v2/ProjectionStore.ts";
+import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -118,7 +129,90 @@ const fixture = Effect.gen(function* () {
     interactionMode: "default",
     initialMessage: { text: "Implement" },
   });
+  const now = DateTime.makeUnsafe("2026-10-17T00:00:00.000Z");
+  const threadId = ThreadId.make("source-thread");
+  const projection = emptyProjection({
+    type: "thread.created",
+    id: EventId.make("created"),
+    threadId,
+    occurredAt: now,
+    payload: {
+      createdBy: "user",
+      creationSource: "web",
+      id: threadId,
+      projectId: project.id,
+      title: "Existing work",
+      providerInstanceId: input.modelSelection.instanceId,
+      modelSelection: input.modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      sideChatOf: null,
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+    },
+  });
+  const conversationItem = (
+    type: "user_message" | "assistant_message",
+    text: string,
+    ordinal: number,
+    streaming = false,
+  ) =>
+    Schema.decodeUnknownSync(OrchestrationV2TurnItem)({
+      type,
+      text,
+      streaming,
+      id: `item-${ordinal}`,
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal,
+      status: "completed",
+      title: null,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      messageId: `message-${ordinal}`,
+      inputIntent: "turn_start",
+      attachments: [],
+      createdBy: "user",
+      creationSource: "web",
+    });
+  const run = (status: OrchestrationV2Run["status"]): OrchestrationV2Run => ({
+    id: RunId.make("source-run"),
+    threadId,
+    ordinal: 1,
+    providerInstanceId: input.modelSelection.instanceId,
+    modelSelection: input.modelSelection,
+    providerThreadId: null,
+    userMessageId: MessageId.make("input"),
+    rootNodeId: null,
+    activeAttemptId: null,
+    status,
+    requestedAt: now,
+    startedAt: now,
+    completedAt: null,
+    checkpointId: null,
+    contextHandoffId: null,
+  });
   const state = {
+    projection,
+    threadMissing: false,
+    noticeFails: false,
+    notices: [] as Parameters<Threads.ThreadManagementService["Service"]["dispatch"]>[0][],
     projects: [project],
     missing: false,
     projectReadFails: false,
@@ -207,6 +301,34 @@ const fixture = Effect.gen(function* () {
   const layer = Sync.layer.pipe(
     Layer.provide(dispatch),
     Layer.provide(
+      Layer.mock(Threads.ThreadManagementService)({
+        getThreadProjection: (threadId) =>
+          Effect.suspend(() =>
+            state.threadMissing
+              ? Effect.fail(
+                  new Orchestrator.OrchestratorProjectionError({
+                    threadId,
+                    cause: new Error("missing"),
+                  }),
+                )
+              : Effect.succeed(state.projection),
+          ),
+        dispatch: (command) =>
+          Effect.suspend(() => {
+            state.notices.push(command);
+            assert.lengthOf(state.launches, 1);
+            return state.noticeFails
+              ? Effect.fail(
+                  new Orchestrator.OrchestratorProjectionError({
+                    threadId,
+                    cause: new Error("notice failed"),
+                  }),
+                )
+              : Effect.succeed({ sequence: 1, storedEvents: [] });
+          }),
+      }),
+    ),
+    Layer.provide(
       Layer.mock(Projects.ProjectService)({
         getById: () =>
           Effect.suspend(() =>
@@ -292,6 +414,9 @@ const fixture = Effect.gen(function* () {
     unchanged,
     realGit,
     processService,
+    conversationItem,
+    run,
+    handoffInput: { sourceThreadId: threadId, target, expectedEnvironmentId: null },
   };
 });
 const test = <E>(
@@ -864,4 +989,238 @@ test("unborn receiver creates a worktree from the pushed ref without a root chec
       (yield* f.git(["rev-parse", "--verify", "HEAD"], f.remote).pipe(Effect.result))._tag,
       "Failure",
     );
+  }));
+
+test("handoff snapshots the thread worktree and carries history before the continuation", (f) =>
+  Effect.gen(function* () {
+    const worktree = f.path.join(f.parent, "source worktree");
+    yield* f.git(["worktree", "add", "-b", "source-feature", worktree]);
+    f.state.projection = {
+      ...f.state.projection,
+      thread: { ...f.state.projection.thread, worktreePath: worktree },
+      turnItems: [
+        f.conversationItem("user_message", "Keep the existing behavior.", 1),
+        f.conversationItem(
+          "assistant_message",
+          "The implementation is ready for the next step.",
+          2,
+        ),
+        f.conversationItem("assistant_message", "unfinished streaming text", 3, true),
+      ],
+    };
+    yield* f.fs.writeFileString(f.path.join(worktree, "file.txt"), "staged worktree content");
+    yield* f.git(["add", "file.txt"], worktree);
+    yield* f.fs.writeFileString(f.path.join(worktree, "file.txt"), "unstaged worktree content");
+    yield* f.fs.writeFileString(
+      f.path.join(worktree, "untracked.txt"),
+      "untracked worktree content",
+    );
+    const indexPath = (yield* f.git(
+      ["rev-parse", "--path-format=absolute", "--git-path", "index"],
+      worktree,
+    )).stdout.trim();
+    const beforeIndex = yield* f.fs.readFile(indexPath);
+    const beforeRoot = yield* f.unchanged;
+    const beforeHead = (yield* f.git(["rev-parse", "HEAD"], worktree)).stdout;
+    const result = yield* f.sync.handoffThread({
+      ...f.handoffInput,
+      message: "Implement the next step.",
+    });
+    assert.strictEqual(result.remoteRepoPath, f.remote);
+    assert.strictEqual(
+      (yield* f.git(["show", `${result.snapshotRef}:file.txt`])).stdout,
+      "unstaged worktree content",
+    );
+    assert.strictEqual(
+      (yield* f.git(["show", `${result.snapshotRef}:untracked.txt`])).stdout,
+      "untracked worktree content",
+    );
+    assert.deepEqual(yield* f.fs.readFile(indexPath), beforeIndex);
+    assert.deepEqual(yield* f.unchanged, beforeRoot);
+    assert.strictEqual((yield* f.git(["rev-parse", "HEAD"], worktree)).stdout, beforeHead);
+    assert.strictEqual(
+      yield* f.fs.readFileString(f.path.join(worktree, "file.txt")),
+      "unstaged worktree content",
+    );
+    assert.strictEqual(
+      yield* f.fs.readFileString(f.path.join(worktree, "untracked.txt")),
+      "untracked worktree content",
+    );
+    const launch = f.state.launches[0]!;
+    assert.include(launch.message, `GOAT thread ${f.handoffInput.sourceThreadId}`);
+    assert.include(launch.message, "Uncommitted changes were copied");
+    assert.include(launch.message, "User:\nKeep the existing behavior.");
+    assert.include(launch.message, "Assistant:\nThe implementation is ready for the next step.");
+    assert.notInclude(launch.message, "unfinished streaming text");
+    assert.isTrue(launch.message!.endsWith("\n\nImplement the next step."));
+    assert.strictEqual(launch.title, f.state.projection.thread.title);
+    assert.deepEqual(launch.modelSelection, f.state.projection.thread.modelSelection);
+    assert.strictEqual(launch.runtimeMode, "full-access");
+    assert.strictEqual(launch.interactionMode, "plan");
+    assert.lengthOf(f.state.notices, 1);
+    assert.deepInclude(f.state.notices[0], {
+      type: "thread.notice.record",
+      threadId: f.handoffInput.sourceThreadId,
+      recordKey: `ssh-handoff:${result.operationId}`,
+      message: `Continued on buildbox in remote thread rt (branch ${result.branch}).`,
+    });
+  }));
+
+test("RPC handoff uses the supplied modes title and continuation", (f) =>
+  Effect.gen(function* () {
+    yield* f.sync.launch({ ...f.input, sourceThreadId: f.handoffInput.sourceThreadId });
+    const launch = f.state.launches[0]!;
+    assert.strictEqual(launch.title, f.input.title);
+    assert.strictEqual(launch.runtimeMode, f.input.runtimeMode);
+    assert.strictEqual(launch.interactionMode, f.input.interactionMode);
+    assert.isTrue(launch.message!.endsWith(`\n\n${f.input.initialMessage.text}`));
+    assert.lengthOf(f.state.notices, 1);
+  }));
+
+test("handoff default continuation and oversized instructions respect the message limit", (f) =>
+  Effect.gen(function* () {
+    yield* f.sync.handoffThread({ ...f.handoffInput, message: "  " });
+    assert.isTrue(
+      f.state.launches[0]!.message!.endsWith("\n\nContinue where the previous host left off."),
+    );
+    f.state.launches.length = 0;
+    f.state.notices.length = 0;
+    yield* f.sync.handoffThread({ ...f.handoffInput, message: "x".repeat(130_000) });
+    assert.strictEqual(f.state.launches[0]!.message!.length, 120_000);
+  }));
+
+test("handoff push failure preserves source and never launches or records a notice", (f) =>
+  Effect.gen(function* () {
+    yield* f.write("file.txt", "staged");
+    yield* f.git(["add", "file.txt"]);
+    yield* f.write("file.txt", "unstaged");
+    yield* f.write("untracked.txt", "untracked");
+    const before = yield* f.unchanged;
+    f.state.gitHook = (call) =>
+      call.args[0] === "push"
+        ? Effect.fail(
+            new GitCommandError({
+              operation: call.operation,
+              command: "git",
+              cwd: call.cwd,
+              detail: "fixture",
+            }),
+          )
+        : undefined;
+    yield* rejected(f.sync.handoffThread(f.handoffInput), "push", "push_failed");
+    assert.deepEqual(yield* f.unchanged, before);
+    assert.strictEqual(
+      yield* f.fs.readFileString(f.path.join(f.cwd, "untracked.txt")),
+      "untracked",
+    );
+    assert.lengthOf(f.state.launches, 0);
+    assert.lengthOf(f.state.notices, 0);
+  }));
+
+testEach(
+  (["preparing", "queued", "starting", "running", "waiting"] as const).map(
+    (status) => [`handoff rejects ${status} work`, status] as const,
+  ),
+  (status, f) =>
+    Effect.gen(function* () {
+      f.state.projection = { ...f.state.projection, runs: [f.run(status)] };
+      yield* rejected(f.sync.handoffThread(f.handoffInput), "validate", "thread_busy");
+      assert.lengthOf(f.state.preflights, 0);
+      assert.lengthOf(f.state.scripts, 0);
+      assert.lengthOf(f.state.launches, 0);
+      assert.lengthOf(f.state.notices, 0);
+    }),
+);
+
+test("RPC handoff rejects a source project mismatch", (f) =>
+  Effect.gen(function* () {
+    yield* rejected(
+      f.sync.launch({
+        ...f.input,
+        sourceThreadId: f.handoffInput.sourceThreadId,
+        sourceProjectId: ProjectId.make("other"),
+      }),
+      "validate",
+      "thread_project_mismatch",
+    );
+    assert.lengthOf(f.state.preflights, 0);
+    assert.lengthOf(f.state.scripts, 0);
+    assert.lengthOf(f.state.notices, 0);
+  }));
+
+test("handoff rejects a missing thread", (f) =>
+  Effect.gen(function* () {
+    f.state.threadMissing = true;
+    yield* rejected(f.sync.handoffThread(f.handoffInput), "validate", "thread_not_found");
+    assert.lengthOf(f.state.scripts, 0);
+    assert.lengthOf(f.state.notices, 0);
+  }));
+
+testEach(
+  (["missing", "subdirectory", "foreign"] as const).map(
+    (kind) => [`handoff refuses ${kind} worktree`, kind] as const,
+  ),
+  (kind, f) =>
+    Effect.gen(function* () {
+      const worktree = f.path.join(f.parent, "invalid worktree");
+      if (kind === "subdirectory") yield* f.fs.makeDirectory(f.path.join(f.cwd, "subdirectory"));
+      if (kind === "foreign") {
+        yield* f.fs.makeDirectory(worktree);
+        yield* f.git(["init"], worktree);
+      }
+      f.state.projection = {
+        ...f.state.projection,
+        thread: {
+          ...f.state.projection.thread,
+          worktreePath: kind === "subdirectory" ? f.path.join(f.cwd, "subdirectory") : worktree,
+        },
+      };
+      yield* rejected(f.sync.handoffThread(f.handoffInput), "validate", "thread_worktree_invalid");
+      assert.lengthOf(f.state.preflights, 0);
+      assert.lengthOf(f.state.scripts, 0);
+      assert.lengthOf(f.state.notices, 0);
+    }),
+);
+
+test("handoff enforces a supplied environment identity before transfer", (f) =>
+  Effect.gen(function* () {
+    yield* rejected(
+      f.sync.handoffThread({
+        ...f.handoffInput,
+        expectedEnvironmentId: EnvironmentId.make("different"),
+      }),
+      "preflight",
+      "environment_mismatch",
+    );
+    assert.lengthOf(f.state.scripts, 0);
+    assert.lengthOf(f.state.launches, 0);
+    assert.lengthOf(f.state.notices, 0);
+  }));
+
+test("source notice failure does not turn a successful handoff into failure", (f) =>
+  Effect.gen(function* () {
+    f.state.noticeFails = true;
+    const result = yield* f.sync.handoffThread(f.handoffInput);
+    assert.strictEqual(result.remoteThreadId, "rt");
+    assert.lengthOf(f.state.launches, 1);
+    assert.lengthOf(f.state.notices, 1);
+  }));
+
+test("workspace transfer publishes a project-named snapshot without starting a thread", (f) =>
+  Effect.gen(function* () {
+    const result = yield* f.sync.transferWorkspace({
+      target,
+      snapshotCwd: f.cwd,
+      projectRoot: f.project.workspaceRoot,
+      operationId: "12345678",
+    });
+    assert.strictEqual(result.remoteRepoPath, f.remote);
+    assert.strictEqual(result.snapshotRef, "refs/goat/snapshots/12345678");
+    assert.strictEqual(result.pushedRef, "refs/heads/goat/ssh-base/12345678");
+    assert.strictEqual(
+      (yield* f.git(["rev-parse", result.pushedRef], f.remote)).stdout.trim(),
+      result.snapshotOid,
+    );
+    assert.lengthOf(f.state.launches, 0);
+    assert.lengthOf(f.state.notices, 0);
   }));

@@ -315,7 +315,7 @@ it.effect("SSH workspace handlers delegate once and preserve typed errors", () =
     const launches: SshWorkspaceLaunchInput[] = [];
     const fetches: SshWorkspaceFetchBackInput[] = [];
     let failure: SshWorkspaceError | undefined;
-    const sync = Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, {
+    const sync = Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({
       launch: (input) =>
         Effect.suspend(() => {
           launches.push(input);
