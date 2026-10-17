@@ -74,12 +74,14 @@ const PROJECT_FAVICON_VERSION_PREFIX = "v";
 // Clients draw project icons from a 96px thumbnail at most.
 const PROJECT_FAVICON_ICNS_MIN_SIZE = 96;
 const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
-// Extensions a document viewer or audio player may request inline. The extension comes from
+// Extensions a document viewer or media preview may request inline. The extension comes from
 // the attachment id the server assigned, never from the client's mime type.
 const INLINE_PREVIEW_MIME_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   html: "text/html",
   htm: "text/html",
+  heic: "image/heic",
+  heif: "image/heif",
 };
 const inlinePreviewMimeTypeForExtension = (extension: string) =>
   INLINE_PREVIEW_MIME_TYPES[extension] ?? audioMimeTypeFromExtension(`.${extension}`) ?? undefined;

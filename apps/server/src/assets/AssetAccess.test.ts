@@ -1230,6 +1230,58 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("serves HEIC and HEIF previews inline using the stored attachment extension", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      for (const [extension, expectedMimeType] of [
+        ["heic", "image/heic"],
+        ["heif", "image/heif"],
+      ] as const) {
+        const attachmentId = `thread-1-00000000-0000-4000-8000-000000000014-${extension}`;
+        const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.${extension}`);
+        yield* fileSystem.writeFileString(attachmentPath, "image bytes");
+        for (const disposition of ["inline", "attachment"] as const) {
+          const result = yield* issueAssetUrl({
+            resource: {
+              _tag: "attachment",
+              attachmentId,
+              fileName: "misleading.html",
+              mimeType: "application/octet-stream",
+              disposition,
+            },
+          });
+          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          const asset = yield* resolveAsset(
+            suffix.slice(0, separator),
+            suffix.slice(separator + 1),
+          );
+          expect(asset).toEqual({
+            kind: "file",
+            path: attachmentPath,
+            fileName: "misleading.html",
+            mimeType: disposition === "inline" ? expectedMimeType : "application/octet-stream",
+            ...(disposition === "attachment" ? { download: true } : {}),
+          });
+          if (asset?.kind !== "file") throw new Error("Expected attachment file");
+          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset));
+          expect(response.headers.get("content-type")).toBe(
+            disposition === "inline" ? expectedMimeType : "application/octet-stream",
+          );
+          if (disposition === "inline") {
+            expect(response.headers.get("content-disposition")).toBeNull();
+          } else {
+            expect(response.headers.get("content-disposition")).toContain("attachment;");
+          }
+          expect(yield* Effect.promise(() => response.text())).toBe("image bytes");
+        }
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("keeps inline requests for other attachment types as downloads", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
