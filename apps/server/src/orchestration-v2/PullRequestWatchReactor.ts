@@ -14,10 +14,12 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@goat/shared/threadPullRequests";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -31,10 +33,11 @@ import {
   PullRequestProviderError,
 } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { evaluatePullRequestWatch, pullRequestWatchMessage } from "./pullRequestWatch.ts";
+import { evaluatePullRequestWatch, pullRequestWatchOutcome } from "./pullRequestWatch.ts";
 
 /**
  * Minutes between passes. Checks take minutes, so a faster pass mostly spends the host's rate
@@ -206,7 +209,9 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarksThrough === right.remarksThrough &&
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
-    left.wakes === right.wakes
+    left.wakes === right.wakes &&
+    left.automatic === right.automatic &&
+    (left.heldContext ?? []).join("\n") === (right.heldContext ?? []).join("\n")
   );
 }
 
@@ -235,6 +240,7 @@ export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
+  const settingsService = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const bootedAt = yield* Clock.currentTimeMillis;
   const lives = new Map<string, WatchLife>();
@@ -300,13 +306,15 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Records what a pass saw, and wakes the agent with it. The orchestrator applies this only
-   * while the same watch is on, so a stop or restart that lands during the host read wins.
+   * Records what a pass saw, and wakes the agent with it or notes what was kept as context.
+   * The orchestrator applies this only while the same watch is on, so a stop or restart that
+   * lands during the host read wins.
    */
   const record = (
     target: WatchTarget,
     next: ThreadPullRequestWatch | null,
     wake?: { readonly text: string; readonly notification: OrchestrationV2Notification },
+    note?: OrchestrationV2Notification,
   ) =>
     Effect.gen(function* () {
       const uuid = yield* crypto.randomUUIDv4();
@@ -320,6 +328,7 @@ export const make = Effect.gen(function* () {
         ...(wake === undefined
           ? {}
           : { wake: { ...wake, messageId: MessageId.make(`message:pr-watch:${uuid}`) } }),
+        ...(note === undefined ? {} : { note }),
       });
     });
 
@@ -547,25 +556,35 @@ export const make = Effect.gen(function* () {
       status: fingerprint?.status ?? null,
       remarks: fingerprint?.remarks ?? null,
     });
+    // Groups are per project, so one policy covers every thread in the group.
+    const { policy } = yield* settingsService.getSettings.pipe(
+      Effect.map((settings) => ({
+        policy: resolveProjectSettings(settings, group.targets[0]!.thread.projectId).settings
+          .pullRequestWatchPolicy,
+      })),
+    );
     yield* eachTarget(group, (target) => {
-      const report = evaluatePullRequestWatch(target.watch, detail, remarks);
-      if (report.changes.length > 0) {
-        return record(
-          target,
-          report.exhausted ? null : report.next,
-          pullRequestWatchMessage({
-            number: target.link.number,
-            url: target.link.url,
-            baseBranch: detail.baseBranch,
-            headSha: report.next.headSha,
-            report,
-          }),
-        ).pipe(
+      const report = evaluatePullRequestWatch(target.watch, detail, remarks, {
+        policy,
+        threadActiveAt: DateTime.toEpochMillis(target.thread.updatedAt),
+        now,
+      });
+      const outcome = pullRequestWatchOutcome({
+        number: target.link.number,
+        url: target.link.url,
+        baseBranch: detail.baseBranch,
+        report,
+      });
+      if (outcome.wake !== undefined) {
+        return record(target, outcome.next, outcome.wake).pipe(
           Effect.tap(() => woke(target)),
           Effect.tap(() => (report.exhausted ? ended(target, "comment-limit") : Effect.void)),
         );
       }
-      return watchesEqual(report.next, target.watch) ? Effect.void : record(target, report.next);
+      if (outcome.note !== undefined) return record(target, outcome.next, undefined, outcome.note);
+      return outcome.next !== null && watchesEqual(outcome.next, target.watch)
+        ? Effect.void
+        : record(target, outcome.next);
     });
   });
 
