@@ -2,6 +2,8 @@ import * as Schema from "effect/Schema";
 
 import { EnvironmentId, IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+import { MemoryRevisionId } from "./memory.ts";
+
 /** The instruction and resolved destination frozen before one generation's worker starts. */
 export const ChannelTaskBrief = Schema.Struct({
   version: PositiveInt,
@@ -15,6 +17,10 @@ export const ChannelTaskBrief = Schema.Struct({
   verification: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
   context: Schema.Struct({
     notesPath: Schema.optional(Schema.String),
+    /** SHA-256 of the notes file at launch; null means no notes were delivered/available. */
+    notesRevision: Schema.optional(
+      Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
+    ),
     skillsPath: Schema.optional(Schema.String),
     memoryRefs: Schema.optional(Schema.Array(Schema.String)),
     files: Schema.optional(Schema.Array(Schema.String)),
@@ -58,3 +64,10 @@ export const ChannelTaskExportResult = Schema.Struct({
   nextCursor: Schema.optional(Schema.String),
 });
 export type ChannelTaskExportResult = typeof ChannelTaskExportResult.Type;
+
+/** Export-time cumulative thread lineage, including ancestors; non-tracked lists are incomplete. */
+export const ChannelTaskMemoryDelivered = Schema.Struct({
+  state: Schema.Literals(["tracked", "unknown", "overflow"]),
+  revisions: Schema.Array(MemoryRevisionId).check(Schema.isMaxLength(100)),
+});
+export type ChannelTaskMemoryDelivered = typeof ChannelTaskMemoryDelivered.Type;

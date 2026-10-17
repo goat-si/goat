@@ -52,7 +52,7 @@ import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
 import { answerForwardIdsFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
-import { freezeChannelBrief } from "./channelBriefs.ts";
+import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { channelWorkerRules, workerHeader } from "./channelWorkerBrief.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -435,6 +435,12 @@ const make = Effect.gen(function* () {
         prependStandingInstructions(standing, workerInstruction(initial.task, botFiles)).text,
         {
           notesPath: botFiles.notes,
+          notesRevision:
+            initial.task.briefVersion === undefined
+              ? yield* channelNotesRevision(botFiles.notes).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                )
+              : null,
           skillsPath: botFiles.skills,
         },
       );

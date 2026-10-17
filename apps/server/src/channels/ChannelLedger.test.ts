@@ -607,7 +607,7 @@ describe("ChannelLedger brief/outcome pairs", () => {
         terminalState: Schema.String,
         resultSummary: Schema.NullOr(Schema.String),
         evidence: Schema.NullOr(ChannelWorkerAssignment),
-        humanInterventions: Schema.Number,
+        channelAnswers: Schema.Number,
         reruns: Schema.Number,
         generation: Schema.Number,
       }),
@@ -809,7 +809,7 @@ describe("ChannelLedger brief/outcome pairs", () => {
         assert.strictEqual(line.terminalState, "completed");
         assert.strictEqual(line.resultSummary, "Build passed.");
         assert.strictEqual(line.evidence.runId, "run-1");
-        assert.strictEqual(line.humanInterventions, 1);
+        assert.strictEqual(line.channelAnswers, 1);
         assert.strictEqual(line.reruns, 0);
         assert.strictEqual(line.generation, 1);
         assert.isDefined(first.nextCursor);

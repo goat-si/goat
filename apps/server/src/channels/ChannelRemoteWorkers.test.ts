@@ -2405,6 +2405,7 @@ it.effect("freezes a remote brief before the SSH launch accepts the worker", () 
         assert.strictEqual(stored.task.briefVersion, 1);
         assert.strictEqual(brief?.instruction, "inspect the remote build");
         assert.strictEqual(brief?.target.hostId, "mac-studio");
+        assert.isNull(brief?.context.notesRevision);
         assert.strictEqual(brief?.target.environmentId, machine.environmentId);
         assert.strictEqual(brief?.generation, task.generation);
         assert.strictEqual(brief?.deliveredText, launch.message);

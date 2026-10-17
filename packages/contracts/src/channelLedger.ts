@@ -22,7 +22,7 @@ import {
   ChannelTaskEventId,
   ChannelTaskId,
 } from "./channelCommon.ts";
-import { ChannelTaskBrief } from "./channelBrief.ts";
+import { ChannelTaskBrief, ChannelTaskMemoryDelivered } from "./channelBrief.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
@@ -353,3 +353,40 @@ export const ChannelTimelineRecord = Schema.Struct({
   ]),
 });
 export type ChannelTimelineRecord = typeof ChannelTimelineRecord.Type;
+
+const ChannelTaskOutcomeFields = {
+  sequence: NonNegativeInt,
+  taskId: ChannelTaskId,
+  ownerId: TrimmedNonEmptyString,
+  requester: ChannelRequester,
+  conversationId: ChannelConversationId,
+  originBindingId: ChannelBindingId,
+  originAddress: ChannelReplyAddress,
+  originInputId: ChannelInputId,
+  title: TrimmedNonEmptyString,
+  brief: Schema.NullOr(ChannelTaskBrief),
+  terminalState: Schema.Literals(CHANNEL_TASK_TERMINAL_STATUSES),
+  occurredAt: IsoDateTime,
+  resultSummary: Schema.NullOr(Schema.String),
+  evidence: Schema.NullOr(ChannelWorkerAssignment),
+  reruns: NonNegativeInt,
+  generation: PositiveInt,
+};
+
+/** Ledger-only source rows; thread evidence is joined by the channel export service. */
+export const ChannelTaskLedgerExportRow = Schema.Struct({
+  ...ChannelTaskOutcomeFields,
+  channelAnswers: NonNegativeInt,
+});
+export type ChannelTaskLedgerExportRow = typeof ChannelTaskLedgerExportRow.Type;
+
+export const ChannelTaskExportRow = Schema.Struct({
+  ...ChannelTaskOutcomeFields,
+  humanInterventions: Schema.Struct({
+    channelAnswers: NonNegativeInt,
+    /** Local worker's native human answers through the terminal time; null means unknown. */
+    threadAnswers: Schema.NullOr(NonNegativeInt),
+  }),
+  memoryDelivered: ChannelTaskMemoryDelivered,
+});
+export type ChannelTaskExportRow = typeof ChannelTaskExportRow.Type;

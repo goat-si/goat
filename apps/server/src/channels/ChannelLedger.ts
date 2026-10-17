@@ -29,6 +29,7 @@ import {
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
+  ChannelTaskLedgerExportRow,
   type ChannelTaskBrief,
   type ChannelTaskExportInput,
   type ChannelTaskExportResult,
@@ -211,10 +212,18 @@ export class ChannelLedger extends Context.Service<
     readonly latestTaskBrief: (
       taskId: ChannelTaskId,
     ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
-    /** Terminal events paired with the brief they reference, in durable event order. */
+    /** Ledger-only JSONL source rows, in terminal-event order; ChannelTaskExport adds thread evidence. */
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
     ) => Effect.Effect<ChannelTaskExportResult, ChannelLedgerError>;
+    /** Bounded provenance for excluding native replies produced by channel forwarding. */
+    readonly answerEventIdsThrough: (
+      taskId: ChannelTaskId,
+      sequence: number,
+    ) => Effect.Effect<
+      { readonly eventIds: ReadonlyArray<ChannelTaskEventId>; readonly overflow: boolean },
+      ChannelLedgerError
+    >;
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
@@ -405,6 +414,7 @@ const encodeTask = Schema.encodeSync(Schema.fromJsonString(ChannelTask));
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
+const encodeExportRow = Schema.encodeSync(Schema.fromJsonString(ChannelTaskLedgerExportRow));
 const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMessage));
 const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const encodeBot = Schema.encodeSync(Schema.fromJsonString(BotState));
@@ -978,7 +988,8 @@ const make = Effect.gen(function* () {
             bound?.type === "task.worker.bound" && bound.payload.worker.generation === generation
               ? bound.payload.worker
               : undefined;
-          return JSON.stringify({
+          return encodeExportRow({
+            sequence: row.sequence,
             taskId: task.taskId,
             ownerId: row.owner_id,
             requester: task.requester,
@@ -988,7 +999,12 @@ const make = Effect.gen(function* () {
             originInputId: task.originInputId,
             title: task.title,
             brief,
-            terminalState: outcome.type.slice("task.".length),
+            terminalState:
+              outcome.type === "task.completed"
+                ? "completed"
+                : outcome.type === "task.failed"
+                  ? "failed"
+                  : "cancelled",
             occurredAt: outcome.occurredAt,
             resultSummary:
               outcome.type === "task.completed"
@@ -1000,7 +1016,7 @@ const make = Effect.gen(function* () {
                     : null,
             // The ledger stores worker/run pointers and summaries, not transcript evidence.
             evidence: worker ?? null,
-            humanInterventions: row.human_interventions,
+            channelAnswers: row.human_interventions,
             reruns: row.reruns,
             generation,
           });
@@ -1013,6 +1029,19 @@ const make = Effect.gen(function* () {
             : {}),
         };
       }).pipe(Effect.mapError(toLedgerError("exportTasks"))),
+
+    answerEventIdsThrough: (taskId, sequence) =>
+      sql<{ readonly event_id: ChannelTaskEventId }>`
+        SELECT event_id FROM channel_task_events
+        WHERE task_id = ${taskId} AND type = 'task.question.answered' AND sequence < ${sequence}
+        ORDER BY sequence LIMIT 501
+      `.pipe(
+        Effect.map((rows) => ({
+          eventIds: rows.slice(0, 500).map((row) => row.event_id),
+          overflow: rows.length > 500,
+        })),
+        Effect.mapError(toLedgerError("answerEventIdsThrough")),
+      ),
 
     listTasksByStatus: (statuses) =>
       sql<TaskRow>`

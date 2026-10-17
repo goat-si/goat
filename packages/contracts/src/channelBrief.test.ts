@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { ChannelTaskBrief, ChannelTaskExportInput } from "./channelBrief.ts";
+import {
+  ChannelTaskBrief,
+  ChannelTaskExportInput,
+  ChannelTaskMemoryDelivered,
+} from "./channelBrief.ts";
 
 const brief = {
   version: 1,
@@ -27,6 +31,23 @@ describe("ChannelTaskBrief", () => {
     expect(
       decode({ ...brief, target: { ...brief.target, hostId: "mac-studio" } }).target.hostId,
     ).toBe("mac-studio");
+  });
+
+  it("keeps old briefs readable and distinguishes absent notes from a content hash", () => {
+    expect(decode(brief).context.notesRevision).toBeUndefined();
+    expect(decode({ ...brief, context: { notesRevision: null } }).context.notesRevision).toBeNull();
+    expect(
+      decode({ ...brief, context: { notesRevision: "a".repeat(64) } }).context.notesRevision,
+    ).toBe("a".repeat(64));
+    expect(() => decode({ ...brief, context: { notesRevision: "not-a-hash" } })).toThrow();
+    const lineage = Schema.decodeUnknownSync(ChannelTaskMemoryDelivered);
+    expect(lineage({ state: "unknown", revisions: [] }).state).toBe("unknown");
+    expect(() =>
+      lineage({
+        state: "tracked",
+        revisions: Array.from({ length: 101 }, () => "00000000-0000-4000-8000-000000000001"),
+      }),
+    ).toThrow();
   });
 
   it("requires positive integer versions and bounds the one-line intent", () => {

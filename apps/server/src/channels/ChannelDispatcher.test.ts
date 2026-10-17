@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as ServerConfig from "../config.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -20,6 +24,13 @@ it.effect(
     const harness = makeHarness();
     return Effect.gen(function* () {
       yield* setupBot;
+      const fs = yield* FileSystem.FileSystem;
+      const files = channelBotFilesFor(
+        yield* Path.Path,
+        (yield* ServerConfig.ServerConfig).stateDir,
+      );
+      yield* fs.makeDirectory(files.dir, { recursive: true });
+      yield* fs.writeFileString(files.notes, "abc");
       const ledger = yield* ChannelLedger.ChannelLedger;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const reception = yield* ChannelReceptionService.ChannelReceptionService;
@@ -43,6 +54,10 @@ it.effect(
           assert.strictEqual(brief?.instruction, task.instruction);
           assert.strictEqual(brief?.intent, "inspect the build");
           assert.isDefined(brief?.context.notesPath);
+          assert.strictEqual(
+            brief?.context.notesRevision,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          );
           assert.isDefined(brief?.context.skillsPath);
           assert.strictEqual(brief?.target.provider, launch.modelSelection.instanceId);
           assert.strictEqual(brief?.target.model, launch.modelSelection.model);
@@ -54,6 +69,7 @@ it.effect(
         .pipe(Effect.exit);
       assert.strictEqual(interrupted._tag, "Failure");
       const frozen = yield* ledger.latestTaskBrief(task.taskId);
+      yield* fs.writeFileString(files.notes, "changed after the first launch");
       harness.launch.afterAccepted = (launch) =>
         Effect.gen(function* () {
           assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.version, frozenTaskVersion);
