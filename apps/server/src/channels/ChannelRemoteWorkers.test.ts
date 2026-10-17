@@ -2148,10 +2148,10 @@ describe("which account runs work on another machine", () => {
       const gateway = yield* ChannelGateway.ChannelGateway;
       yield* gateway.ingest(goatInput("do@mac-studio: heavy work", "placement-remote"), rpcContext);
       const running = yield* until("running", (task) => task.status === "running");
-      assert.deepStrictEqual(machine.launches[0]?.modelSelection, {
-        instanceId: ProviderInstanceId.make("codex-work"),
-        model: "gpt-6.1-sol",
-      });
+      // Only the account changes; the model and its options go along unchanged.
+      const launched = machine.launches[0]?.modelSelection;
+      assert.strictEqual(launched?.instanceId, ProviderInstanceId.make("codex-work"));
+      assert.strictEqual(launched?.model, "gpt-6.1-sol");
       assert.strictEqual(
         running.target?.placementReason,
         "codex-work · 15% weekly used · codex at usage limit",

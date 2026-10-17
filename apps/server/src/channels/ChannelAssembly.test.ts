@@ -73,6 +73,8 @@ const liveChannels = (sdk: FakeSlackSdk, offered: ReadonlyArray<string> = offere
                     },
                   } as never),
             ),
+          // No other accounts, so placement keeps the configured one.
+          listInstances: Effect.succeed([]),
         }),
       ),
     ),
