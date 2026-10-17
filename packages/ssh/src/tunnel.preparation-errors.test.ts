@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, afterEach, vi } from "@effect/vitest";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
@@ -13,6 +15,7 @@ import { prepareRemoteRuntime } from "./tunnel.ts";
 import { ARCHIVE, makeSuccessfulProcess, uploadTarget } from "./tunnel.fixture.ts";
 
 const ARCHIVE_ADVICE = "Supply the requested runtime archive";
+afterEach(() => vi.unstubAllGlobals());
 
 const makeExitedProcess = (exitCode: number, stderr: string) =>
   ChildProcessSpawner.makeHandle({
@@ -40,6 +43,85 @@ const prepareWithProbe = (probe: () => ChildProcessSpawner.ChildProcessHandle) =
   );
 
 describe("SSH runtime preparation errors", () => {
+  it.effect("records only the bundle branch when its checksum sidecar is missing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const bundle = yield* fs.makeTempDirectoryScoped({ prefix: "goat-bundle-error-" });
+      yield* fs.writeFile(
+        `${bundle}/${cliArchiveFileName(ARCHIVE.archiveVersion, "linux-x64")}`,
+        new Uint8Array(64),
+      );
+      const result = yield* Effect.result(
+        prepareRemoteRuntime(
+          uploadTarget,
+          {},
+          {
+            ...ARCHIVE,
+            bundledArchiveDirectory: bundle,
+            archiveDirectory: `${bundle}/unused-cache`,
+          },
+        ).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.succeed(
+                makeSuccessfulProcess('{"platform":"linux","arch":"x64","ready":false}'),
+              ),
+            ),
+          ),
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshLaunchError);
+        if (result.failure instanceof SshLaunchError) {
+          assert.equal(result.failure.reason, "archive-unavailable");
+          assert.deepEqual(result.failure.acquisition?.sourcesTried, ["bundle"]);
+          assert.equal(result.failure.acquisition?.requestedVersion, ARCHIVE.archiveVersion);
+        }
+      }
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("preserves the executed bundle/cache/HTTPS/gh acquisition chain through wrappers", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("fetch", async () => new Response(null, { status: 404 }));
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-supply-error-" });
+      const result = yield* Effect.result(
+        prepareRemoteRuntime(
+          uploadTarget,
+          {},
+          {
+            ...ARCHIVE,
+            bundledArchiveDirectory: `${root}/bundle`,
+            archiveDirectory: `${root}/cache`,
+          },
+        ).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) =>
+              Effect.succeed(
+                command._tag === "StandardCommand" && command.command === "gh"
+                  ? makeExitedProcess(1, "release not found")
+                  : makeSuccessfulProcess('{"platform":"linux","arch":"x64","ready":false}'),
+              ),
+            ),
+          ),
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result) && result.failure instanceof SshLaunchError) {
+        assert.equal(result.failure.reason, "archive-unavailable");
+        assert.deepEqual(result.failure.acquisition, {
+          requestedVersion: ARCHIVE.archiveVersion,
+          platformKey: "linux-x64",
+          sourcesTried: ["bundle", "cache", "https", "gh"],
+        });
+      } else assert.fail("Expected an archive acquisition failure");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("reports an unreachable host as an SSH connection error", () =>
     Effect.gen(function* () {
       const result = yield* prepareWithProbe(() =>
@@ -83,9 +165,52 @@ describe("SSH runtime preparation errors", () => {
       if (Result.isFailure(result)) {
         assert.instanceOf(result.failure, SshLaunchError);
         assert.equal(result.failure.reason, "archive-unavailable");
+        assert.deepEqual(result.failure.acquisition, {
+          requestedVersion: ARCHIVE.archiveVersion,
+          platformKey: "linux-x64",
+          sourcesTried: [],
+        });
         assert.include(result.failure.message, "no writable user archive cache");
         assert.include(result.failure.message, ARCHIVE_ADVICE);
       }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("retained fallback keeps the failed acquisition alongside the actual selection", () =>
+    Effect.gen(function* () {
+      const selected = yield* prepareRemoteRuntime(uploadTarget, {}, ARCHIVE, "runtime", true).pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeSuccessfulProcess(
+                JSON.stringify({
+                  platform: "linux",
+                  arch: "x64",
+                  ready: false,
+                  liveStatus: "none",
+                  retained: "ready",
+                  retainedVersion: "1.2.2",
+                  retainedRunnerSha256: "a".repeat(64),
+                  retainedSignals: {
+                    serverVersion: "1.2.2",
+                    sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+                    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                  },
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      assert.equal(selected.version, "1.2.2");
+      assert.equal(selected.source, "retained");
+      assert.equal(selected.upgradeFailure?.reason, "archive_unavailable");
+      assert.deepEqual(selected.upgradeFailure?.archive, {
+        requestedVersion: ARCHIVE.archiveVersion,
+        platformKey: "linux-x64",
+        sourcesTried: [],
+      });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

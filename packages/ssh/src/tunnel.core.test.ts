@@ -113,6 +113,7 @@ describe("ssh tunnel scripts", () => {
           for (let variant = 0; variant < 4; variant++) {
             const actual = results[index++]!;
             assert.equal(actual.runner, baseline[key].runner);
+            assert.equal(actual.launch, baseline[key].launch);
             assert.equal(actual.launch, first.launch);
             assert.equal(actual.pairing, first.pairing);
           }

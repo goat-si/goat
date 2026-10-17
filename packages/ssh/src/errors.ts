@@ -21,6 +21,11 @@ export class SshCommandError extends Data.TaggedError("SshCommandError")<{
 export class SshLaunchError extends Data.TaggedError("SshLaunchError")<{
   /** `archive-unavailable`: no source supplied a usable runtime archive for this launch. */
   readonly reason?: "runtime-newer" | "archive-unavailable";
+  readonly acquisition?: {
+    readonly requestedVersion: string;
+    readonly platformKey: string | null;
+    readonly sourcesTried: readonly string[];
+  };
   readonly message: string;
   readonly stdout: string;
   readonly cause?: unknown;

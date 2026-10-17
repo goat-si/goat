@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -46,6 +48,8 @@ const fixture = Effect.gen(function* () {
   let pairingFails = false;
   let forwardFails = false;
   let versionNewer = false;
+  let liveProbe = false;
+  const launchScripts: string[] = [];
   // One-shot: the next alias resolution waits until the test releases it.
   let resolutionGate: {
     entered: Deferred.Deferred<void>;
@@ -82,7 +86,31 @@ const fixture = Effect.gen(function* () {
           ? yield* input.stream.pipe(Stream.decodeText(), Stream.mkString)
           : "";
       if (script.includes("ready=false"))
-        return makeSuccessfulProcess('{"platform":"linux","arch":"x64","ready":true}');
+        return makeSuccessfulProcess(
+          JSON.stringify({
+            platform: "linux",
+            arch: "x64",
+            ready: true,
+            ...(liveProbe
+              ? {
+                  liveStatus: "live",
+                  liveVersion: "1.2.2",
+                  liveOwned: true,
+                  liveDrain: true,
+                  liveSignals: {
+                    serverVersion: "1.2.2",
+                    sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+                    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                  },
+                  liveBinarySignals: {
+                    serverVersion: "1.2.2",
+                    sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+                    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                  },
+                }
+              : {}),
+          }),
+        );
       if (script.includes("auth pairing create")) {
         count.pairings++;
         return pairingFails
@@ -97,6 +125,7 @@ const fixture = Effect.gen(function* () {
         return makeSuccessfulProcess('{"stopped":true}');
       }
       count.launches++;
+      launchScripts.push(script);
       if (versionNewer)
         return {
           ...makeSuccessfulProcess(""),
@@ -164,6 +193,10 @@ const fixture = Effect.gen(function* () {
   return {
     layer,
     count,
+    launchScripts,
+    useLiveProbe: () => {
+      liveProbe = true;
+    },
     forwarded,
     launchEntered,
     releaseLaunch,
@@ -194,6 +227,100 @@ const fixture = Effect.gen(function* () {
 });
 
 describe("SSH pending replacement reconciliation", () => {
+  it.effect(
+    "manual refresh runs after the first connection decision and bypasses pending-forward reuse",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        f.setMode("ready");
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          yield* manager.ensureEnvironment(uploadTarget);
+          yield* manager.ensureEnvironment(uploadTarget);
+          assert.equal(f.count.launches, 1);
+          f.useLiveProbe();
+          f.setMode("ready-pending");
+          yield* manager.ensureEnvironment(uploadTarget, { refreshRuntime: true });
+          assert.equal(f.count.launches, 2);
+          assert.include(f.launchScripts[1]!, "REFRESH_IF_IDLE=1");
+          f.setMode("ready");
+          yield* manager.ensureEnvironment(uploadTarget, {
+            refreshRuntime: true,
+            reuseWhileRefreshPending: true,
+          });
+          assert.equal(f.count.launches, 3);
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
+      }),
+  );
+
+  it.effect(
+    "manual updates serialize per target while status reads preparing without waiting",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        f.setMode("blocked");
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const phases: string[] = [];
+          const first = yield* Effect.forkChild(
+            manager.ensureEnvironment(uploadTarget, {
+              refreshRuntime: true,
+              onPhase: ({ phase }) => {
+                phases.push(phase);
+              },
+            }),
+          );
+          yield* Deferred.await(f.launchEntered);
+          const firstStatus = yield* manager.status(uploadTarget);
+          assert.equal(firstStatus.status?.state, "preparing");
+          assert.equal(firstStatus.status?.phase, "checking");
+          const gate = yield* f.holdNextResolution;
+          const second = yield* Effect.forkChild(
+            manager.ensureEnvironment(uploadTarget, { refreshRuntime: true }),
+          );
+          yield* Deferred.await(gate.entered);
+          yield* Deferred.succeed(gate.release, undefined);
+          assert.equal(f.count.launches, 1);
+          assert.equal((yield* manager.status(uploadTarget)).status?.state, "preparing");
+          f.setMode("ready");
+          yield* Deferred.succeed(f.releaseLaunch, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+          assert.equal(f.count.launches, 2);
+          assert.deepEqual(phases, ["connecting", "checking", "starting"]);
+        }).pipe(Effect.provide(f.layer), Effect.scoped);
+      }),
+  );
+
+  it.effect("a confirmed call never grants force or its observer to the background retry", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const phases: string[] = [];
+        yield* manager.ensureEnvironment(uploadTarget, {
+          refreshRuntime: true,
+          confirmReplacement: true,
+          onPhase: ({ phase }) => {
+            phases.push(phase);
+          },
+        });
+        assert.include(f.launchScripts[0]!, "DRAIN_FORCE=1");
+        assert.equal((yield* manager.status(uploadTarget)).status?.state, "update_waiting");
+        const observed = [...phases];
+        f.setMode("ready");
+        yield* TestClock.adjust("10 minutes");
+        yield* Deferred.await(f.forwarded);
+        // This call waits out the in-flight retry and reuses its successful forward.
+        yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        assert.equal(f.count.launches, 2);
+        assert.include(f.launchScripts[1]!, "DRAIN_FORCE=0");
+        assert.deepEqual(phases, observed);
+        assert.equal(f.count.prompts, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("a disconnect overtaken by a newer reconnect leaves the host connected", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
