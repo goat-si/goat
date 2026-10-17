@@ -3455,8 +3455,9 @@ const OrchestrationV2InternalCommand = Schema.Union([
 
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
-   * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is
-   * rejected on a settled or archived thread, so a read that raced either changes nothing.
+   * `wake` is set, or adds `note` to the timeline without starting a turn. Rejected once the
+   * watch started at `startedAt` has ended, and a wake is rejected on a settled or archived
+   * thread, so a read that raced either changes nothing.
    */
   Schema.Struct({
     type: Schema.Literal("thread.pull-request-watch.sync"),
@@ -3473,6 +3474,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
         notification: OrchestrationV2Notification,
       }),
     ),
+    note: Schema.optional(OrchestrationV2Notification),
   }),
   /** Records that the provider rollback `requestId` failed for good. */
   Schema.Struct({

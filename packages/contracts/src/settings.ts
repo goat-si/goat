@@ -928,6 +928,50 @@ export const SourceControlWritingStyleSettings = Schema.Struct({
 });
 export type SourceControlWritingStyleSettings = typeof SourceControlWritingStyleSettings.Type;
 
+/**
+ * What a watched pull request event does to its thread: `react` wakes the agent, `keep_as_context`
+ * records it on the thread and tells the agent with the next wake, `ignore` drops it.
+ */
+export const PullRequestWatchWakeMode = Schema.Literals(["react", "keep_as_context", "ignore"]);
+export type PullRequestWatchWakeMode = typeof PullRequestWatchWakeMode.Type;
+
+export const MAX_PULL_REQUEST_WATCH_CONFLICT_IDLE_DAYS = 90;
+export const PullRequestWatchConflictIdleDays = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: MAX_PULL_REQUEST_WATCH_CONFLICT_IDLE_DAYS }),
+);
+
+/**
+ * How GOAT watches the pull requests of a thread. `autoWatch` arms a watch when a thread
+ * creates or its agent links a pull request. Bot remarks follow `botRemarks` unless the bot's
+ * login is in `allowedBotLogins`, which makes them human remarks. A conflict wakes only a
+ * thread active within `conflictMaxIdleDays`; null wakes any.
+ */
+export const PullRequestWatchPolicy = Schema.Struct({
+  autoWatch: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  checksFailed: PullRequestWatchWakeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("react" as const)),
+  ),
+  checksPassed: PullRequestWatchWakeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("react" as const)),
+  ),
+  humanRemarks: PullRequestWatchWakeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("react" as const)),
+  ),
+  botRemarks: PullRequestWatchWakeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("ignore" as const)),
+  ),
+  allowedBotLogins: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  conflicts: PullRequestWatchWakeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("react" as const)),
+  ),
+  conflictMaxIdleDays: Schema.NullOr(PullRequestWatchConflictIdleDays).pipe(
+    Schema.withDecodingDefault(Effect.succeed(3)),
+  ),
+});
+export type PullRequestWatchPolicy = typeof PullRequestWatchPolicy.Type;
+
 export const BranchNamingMode = Schema.Literals(["static", "semantic", "custom"]);
 export type BranchNamingMode = typeof BranchNamingMode.Type;
 
@@ -1044,6 +1088,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "branchNamePrefix",
   "branchNameInstructions",
   "pullRequestMergeMethod",
+  "pullRequestWatchPolicy",
   "sidebarAutoSettleOnMerge",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleKeepPullRequests",
@@ -1103,6 +1148,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   branchNamePrefix: Schema.optionalKey(TrimmedString),
   branchNameInstructions: Schema.optionalKey(TrimmedString),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
+  pullRequestWatchPolicy: Schema.optionalKey(PullRequestWatchPolicy),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
@@ -1442,6 +1488,9 @@ export const ServerSettings = Schema.Struct({
   standingInstructions: StandingInstructions.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   removeAgentCreditsOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  pullRequestWatchPolicy: PullRequestWatchPolicy.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
@@ -1848,6 +1897,18 @@ const ServerSettingsPatchFields = Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),
       customInstructions: Schema.optionalKey(TrimmedString),
       followChangeRequestTemplates: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+  pullRequestWatchPolicy: Schema.optionalKey(
+    Schema.Struct({
+      autoWatch: Schema.optionalKey(Schema.Boolean),
+      checksFailed: Schema.optionalKey(PullRequestWatchWakeMode),
+      checksPassed: Schema.optionalKey(PullRequestWatchWakeMode),
+      humanRemarks: Schema.optionalKey(PullRequestWatchWakeMode),
+      botRemarks: Schema.optionalKey(PullRequestWatchWakeMode),
+      allowedBotLogins: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+      conflicts: Schema.optionalKey(PullRequestWatchWakeMode),
+      conflictMaxIdleDays: Schema.optionalKey(Schema.NullOr(PullRequestWatchConflictIdleDays)),
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),

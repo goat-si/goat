@@ -121,6 +121,14 @@ export const ThreadPullRequestWatch = Schema.Struct({
   conflicting: Schema.Boolean,
   /** Comment-only wakes in a row. Watching stops at a limit, so bots cannot loop it. */
   wakes: NonNegativeInt,
+  /**
+   * GOAT armed this watch itself when the thread created or linked the pull request. It wakes
+   * the agent like any watch but does not keep the thread working. Calling watch_pull_request
+   * clears it.
+   */
+  automatic: Schema.optionalKey(Schema.Boolean),
+  /** Updates recorded without a wake, told to the agent with the next wake. */
+  heldContext: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 
