@@ -43,6 +43,11 @@ import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
+import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
+import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
+import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import * as BoatClient from "./cloudMachines/BoatClient.ts";
@@ -1238,9 +1243,8 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     McpHttpServer.layer,
     layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit.pipe(
-      Layer.provide(ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer))),
-    ),
+    McpHttpServer.layerProviderToolkit,
+    HandoffExpiry.layer,
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
@@ -1257,10 +1261,25 @@ const layerMakeRoutes = Layer.mergeAll(
   // One launch-watch store and one dispatch coordinator for the MCP tools, host
   // status, and the remote-launch catalog: they all follow runs and wake launchers.
   // The coordinator re-arms watches after a relayed send, so the store comes after it.
-  Layer.provide(RemoteDispatchCoordinator.layer),
-  Layer.provide(LaunchWatchService.layer),
   Layer.provide(layerSshWorkspace),
   Layer.provide(SshHostSetup.layer),
+  Layer.provide(
+    ProviderDiagnosisRouting.layer.pipe(
+      Layer.provide(ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer))),
+      Layer.provide(
+        HostThreadsMcpService.layer.pipe(
+          Layer.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            ),
+          ),
+          Layer.provide(ThreadResultService.layer),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(RemoteDispatchCoordinator.layer),
+  Layer.provide(LaunchWatchService.layer),
   Layer.provide(SshRemoteDispatch.layer),
   // Guides read through the same pull request service as every other surface.
   Layer.provide(

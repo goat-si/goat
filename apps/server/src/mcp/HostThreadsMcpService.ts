@@ -171,6 +171,7 @@ export interface HostThreadsMcpServiceShape {
       readonly arguments: Readonly<Record<string, unknown>>;
       /** Defaults to the thread-tool deadline. Host status passes a shorter one. */
       readonly timeoutMs?: number;
+      readonly requireReady?: true;
       /** Ask the host for a session that may answer approvals; see SshHostToolCall. */
       readonly approvals?: boolean;
     },
@@ -368,6 +369,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly requireReady?: true;
       readonly approvals?: boolean;
       /** Only goat_thread_send relays through the origin. */
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
@@ -381,6 +383,7 @@ const make = Effect.gen(function* () {
           arguments: input.arguments,
           writes: input.writes,
           timeoutMs: input.timeoutMs ?? REMOTE_TIMEOUT_MS,
+          ...(input.requireReady === true ? { requireReady: true } : {}),
           ...(input.approvals === true ? { approvals: true } : {}),
         },
         authorize(input.writes).pipe(
@@ -407,6 +410,7 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs?: number;
+      readonly requireReady?: true;
       readonly approvals?: boolean;
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
     },

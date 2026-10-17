@@ -1,7 +1,10 @@
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import {
   EnvironmentAuthorizationError,
-  type AuthSessionId,
+  AuthSessionId,
+  SshHostAlias,
+  EnvironmentId,
+  ThreadId,
   type SecretRequestAnswerInput,
   SecretRequestError,
   CommandId,
@@ -29,13 +32,45 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Environment from "../environment/ServerEnvironment.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 
+export const SshProgressBinding = Schema.Struct({
+  host: SshHostAlias,
+  aliasGeneration: Schema.Int,
+  operationId: Schema.String,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+});
+export type SshProgressBinding = typeof SshProgressBinding.Type;
+const ContinuationPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("continuation"),
+  human: HandoffHuman,
+  args: Schema.Record(Schema.String, Schema.Unknown),
+  approvedBySessionId: Schema.optional(AuthSessionId),
+  sshProgress: Schema.optional(SshProgressBinding),
+});
 const PrivatePayload = Schema.fromJsonString(
-  Schema.Struct({ human: HandoffHuman, args: Schema.Record(Schema.String, Schema.Unknown) }),
+  Schema.Union([
+    ContinuationPayload,
+    Schema.Struct({
+      version: Schema.Literal(1),
+      kind: Schema.Literal("progress_only"),
+      sshProgress: SshProgressBinding,
+      retainUntil: Schema.Number,
+    }),
+    // Legacy non-SSH payloads remain readable, but are never resumed as SSH work.
+    Schema.Struct({
+      version: Schema.optional(Schema.Literal(0)),
+      kind: Schema.optional(Schema.Literal("legacy")),
+      human: HandoffHuman,
+      args: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ]),
 );
 const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
 const decodePrivatePayload = Schema.decodeUnknownEffect(PrivatePayload);
@@ -71,6 +106,7 @@ export class Handoffs extends Context.Service<
       readonly human: HandoffHuman;
       readonly args: Readonly<Record<string, unknown>>;
       readonly expiresAt?: DateTime.Utc;
+      readonly sshProgress?: SshProgressBinding;
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** Client-only; caller supplies an authenticated, server-resolved label. */
@@ -89,6 +125,25 @@ export class Handoffs extends Context.Service<
       input: SecretRequestAnswerInput,
       sessionId: AuthSessionId,
     ) => Effect.Effect<void, HandoffError | SecretRequestError | EnvironmentAuthorizationError>;
+    readonly completedSshContinuations: Effect.Effect<
+      ReadonlyArray<{
+        readonly handoff: Handoff;
+        readonly args: Readonly<Record<string, unknown>>;
+        readonly approvedBySessionId: AuthSessionId;
+        readonly sshProgress?: SshProgressBinding;
+      }>,
+      HandoffError
+    >;
+    readonly finishSshContinuation: (input: HandoffReadInput) => Effect.Effect<void, HandoffError>;
+    readonly bindSshContinuation: (
+      input: HandoffReadInput,
+      binding: SshProgressBinding,
+      args: Readonly<Record<string, unknown>>,
+    ) => Effect.Effect<void, HandoffError>;
+    readonly readSshProgressBinding: (
+      input: HandoffReadInput,
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<SshProgressBinding | null, HandoffError | EnvironmentAuthorizationError>;
     readonly sweep: Effect.Effect<void, HandoffError>;
   }
 >()("goat/handoffs/Handoffs") {}
@@ -99,11 +154,45 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
   const sessions = yield* SessionStore.SessionStore;
+  const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
   const secrets = yield* SecretRequests.SecretRequests;
   const key = yield* store
     .getOrCreateRandom("handoff-encryption-key", 32)
     .pipe(Effect.mapError(unavailable));
   const lock = yield* Semaphore.make(1);
+  const loadPrivate = (id: string) =>
+    Effect.gen(function* () {
+      const stored = yield* store.get(storeName(id)).pipe(Effect.mapError(unavailable));
+      if (Option.isNone(stored)) return null;
+      const plain = yield* Effect.try({
+        try: () => {
+          const bytes = Buffer.from(stored.value);
+          const decipher = NodeCrypto.createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
+          decipher.setAuthTag(bytes.subarray(12, 28));
+          return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString(
+            "utf8",
+          );
+        },
+        catch: unavailable,
+      });
+      return yield* decodePrivatePayload(plain).pipe(Effect.mapError(unavailable));
+    });
+  const savePrivate = (id: string, payload: typeof PrivatePayload.Type, replace = false) =>
+    Effect.gen(function* () {
+      const plain = yield* encodePrivatePayload(payload).pipe(Effect.mapError(unavailable));
+      const encrypted = yield* Effect.try({
+        try: () => {
+          const iv = NodeCrypto.randomBytes(12);
+          const cipher = NodeCrypto.createCipheriv("aes-256-gcm", key, iv);
+          const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+          return Buffer.concat([iv, cipher.getAuthTag(), body]);
+        },
+        catch: unavailable,
+      });
+      yield* (
+        replace ? store.set(storeName(id), encrypted) : store.create(storeName(id), encrypted)
+      ).pipe(Effect.mapError(unavailable));
+    });
   const read = Effect.fn("Handoffs.read")(function* (input: HandoffReadInput) {
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
@@ -147,28 +236,52 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
-    const requiredScope = record.target.path.startsWith("provider.")
-      ? ("providers:manage" as const)
-      : ("orchestration:operate" as const);
+    if (record.target.path.startsWith("ssh.")) {
+      if (Option.isNone(environment)) return yield* new HandoffError({ reason: "unavailable" });
+      const origin = yield* environment.value.getEnvironmentId;
+      if (record.target.environmentId !== origin)
+        return yield* new HandoffError({ reason: "invalid_request" });
+    }
+    const targetScope =
+      record.target.path === "ssh.host_add" || record.target.path === "ssh.host_forget"
+        ? ("settings:write" as const)
+        : record.target.path.startsWith("ssh.")
+          ? ("environment:maintain" as const)
+          : record.target.path.startsWith("provider.")
+            ? ("providers:manage" as const)
+            : ("orchestration:operate" as const);
     const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
     const session = active.find((session) => session.sessionId === sessionId);
-    if (!session || !(session.permissions ?? session.scopes).includes(requiredScope))
-      return yield* new EnvironmentAuthorizationError({
-        requiredScope,
-        message: "This client cannot act on this handoff.",
-      });
-    return session.client.label ?? "GOAT client";
+    for (const requiredScope of new Set(["orchestration:operate" as const, targetScope])) {
+      if (!session || !(session.permissions ?? session.scopes).includes(requiredScope))
+        return yield* new EnvironmentAuthorizationError({
+          requiredScope,
+          message: "This client cannot act on this handoff.",
+        });
+    }
+    return session!.client.label ?? "GOAT client";
   });
   const respond = Effect.fn("Handoffs.respond")(function* (
     input: HandoffRespondInput,
     sessionId: AuthSessionId,
   ) {
     const label = yield* clientLabel(input, sessionId);
+    const record = yield* read(input);
+    if (
+      input.action === "completed" &&
+      record.target.path.startsWith("ssh.") &&
+      isHandoffPending(record.state)
+    ) {
+      const payload = yield* loadPrivate(input.handoffId);
+      if (payload === null || !("kind" in payload) || payload.kind !== "continuation")
+        return yield* new HandoffError({ reason: "unavailable" });
+      yield* savePrivate(input.handoffId, { ...payload, approvedBySessionId: sessionId }, true);
+    }
     const result = yield* transition(input, input.action, { type: "client", label });
     if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
     if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
     return result;
-  });
+  }, lock.withPermits(1));
   const open = Effect.fn("Handoffs.open")(function* (
     input: HandoffReadInput,
     sessionId: AuthSessionId,
@@ -178,20 +291,9 @@ const make = Effect.gen(function* () {
     if (!isHandoffPending(existing.state)) return { handoff: existing, human: null };
     const handoff = yield* respond({ ...input, action: "opened" }, sessionId);
     if (handoff.kind === "secret") return { handoff, human: null };
-    const stored = yield* store.get(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
-    if (Option.isNone(stored)) return yield* new HandoffError({ reason: "unavailable" });
-    const plain = yield* Effect.try({
-      try: () => {
-        const bytes = Buffer.from(stored.value);
-        const decipher = NodeCrypto.createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
-        decipher.setAuthTag(bytes.subarray(12, 28));
-        return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString(
-          "utf8",
-        );
-      },
-      catch: unavailable,
-    });
-    const payload = yield* decodePrivatePayload(plain).pipe(Effect.mapError(unavailable));
+    const payload = yield* loadPrivate(input.handoffId);
+    if (payload === null || !("human" in payload))
+      return yield* new HandoffError({ reason: "unavailable" });
     return { handoff, human: payload.human };
   });
   const create: Handoffs["Service"]["create"] = (input) =>
@@ -244,28 +346,19 @@ const make = Effect.gen(function* () {
         dedupeKey,
         state: "pending",
         expiresAt:
-          input.kind === "approval"
+          input.kind === "approval" && !input.target.path.startsWith("ssh.")
             ? null
             : (input.expiresAt ?? DateTime.add(now, { minutes: 15 })),
         createdAt: now,
         actor: { type: "agent", threadId: input.requestedBy.threadId },
       };
-      const plain = yield* encodePrivatePayload({
+      yield* savePrivate(handoff.handoffId, {
+        version: 1,
+        kind: "continuation",
         human: input.human,
         args: input.args,
-      }).pipe(Effect.mapError(unavailable));
-      const encrypted = yield* Effect.try({
-        try: () => {
-          const iv = NodeCrypto.randomBytes(12);
-          const cipher = NodeCrypto.createCipheriv("aes-256-gcm", key, iv);
-          const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-          return Buffer.concat([iv, cipher.getAuthTag(), body]);
-        },
-        catch: unavailable,
+        ...(input.sshProgress === undefined ? {} : { sshProgress: input.sshProgress }),
       });
-      yield* store
-        .create(storeName(handoff.handoffId), encrypted)
-        .pipe(Effect.mapError(unavailable));
       yield* threads
         .dispatch({
           type: "handoff.create",
@@ -303,6 +396,7 @@ const make = Effect.gen(function* () {
         (handoff.expiresAt !== null &&
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
         (handoff.kind === "approval" &&
+          !handoff.target.path.startsWith("ssh.") &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
@@ -313,6 +407,118 @@ const make = Effect.gen(function* () {
       }
     }
   });
+  const completedSshContinuations = Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const rows = yield* sql<{
+      handoff_json: string;
+    }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
+      FROM orchestration_v2_projection_turn_items WHERE type = 'human_handoff' AND status = 'completed'
+      AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    const results: Array<{
+      handoff: Handoff;
+      args: Readonly<Record<string, unknown>>;
+      approvedBySessionId: AuthSessionId;
+      sshProgress?: SshProgressBinding;
+    }> = [];
+    for (const row of rows) {
+      const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
+      if (!handoff.target.path.startsWith("ssh.")) continue;
+      const payload = yield* loadPrivate(handoff.handoffId);
+      if (
+        payload !== null &&
+        "kind" in payload &&
+        payload.kind === "continuation" &&
+        payload.approvedBySessionId !== undefined
+      )
+        results.push({
+          handoff,
+          args: payload.args,
+          approvedBySessionId: payload.approvedBySessionId,
+          ...(payload.sshProgress === undefined ? {} : { sshProgress: payload.sshProgress }),
+        });
+    }
+    return results;
+  });
+  const finishSshContinuation = (input: HandoffReadInput) =>
+    Effect.gen(function* () {
+      const handoff = yield* read(input);
+      if (!handoff.target.path.startsWith("ssh.") || handoff.state !== "completed") return;
+      const payload = yield* loadPrivate(input.handoffId);
+      if (
+        payload !== null &&
+        "kind" in payload &&
+        payload.kind === "continuation" &&
+        payload.sshProgress !== undefined
+      ) {
+        const retainedFrom = handoff.resolvedAt ?? handoff.createdAt;
+        yield* savePrivate(
+          input.handoffId,
+          {
+            version: 1,
+            kind: "progress_only",
+            sshProgress: payload.sshProgress,
+            retainUntil: DateTime.toEpochMillis(DateTime.add(retainedFrom, { hours: 24 })),
+          },
+          true,
+        );
+      } else yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+    }).pipe(lock.withPermits(1));
+  const bindSshContinuation: Handoffs["Service"]["bindSshContinuation"] = (input, binding, args) =>
+    Effect.gen(function* () {
+      const handoff = yield* read(input);
+      if (
+        handoff.state !== "completed" ||
+        !handoff.target.path.startsWith("ssh.") ||
+        binding.threadId !== input.threadId ||
+        binding.environmentId !== handoff.target.environmentId
+      )
+        return yield* new HandoffError({ reason: "invalid_request" });
+      const payload = yield* loadPrivate(input.handoffId);
+      if (payload === null || payload.kind !== "continuation")
+        return yield* new HandoffError({ reason: "unavailable" });
+      yield* savePrivate(input.handoffId, { ...payload, args, sshProgress: binding }, true);
+    }).pipe(lock.withPermits(1));
+  const readSshProgressBinding = (input: HandoffReadInput, sessionId: AuthSessionId) =>
+    Effect.gen(function* () {
+      yield* clientLabel(input, sessionId);
+      const active = yield* sessions.listActive().pipe(Effect.mapError(unavailable));
+      const session = active.find((entry) => entry.sessionId === sessionId);
+      if (!session || !(session.permissions ?? session.scopes).includes("orchestration:read"))
+        return yield* new EnvironmentAuthorizationError({
+          requiredScope: "orchestration:read",
+          message: "This client cannot read this handoff.",
+        });
+      const handoff = yield* read(input);
+      if (
+        !handoff.target.path.startsWith("ssh.") ||
+        !["opened", "completed"].includes(handoff.state)
+      )
+        return null;
+      const payload = yield* loadPrivate(input.handoffId);
+      if (payload === null || !("sshProgress" in payload) || payload.sshProgress === undefined)
+        return null;
+      if (
+        payload.kind === "progress_only" &&
+        payload.retainUntil <= DateTime.toEpochMillis(yield* DateTime.now)
+      )
+        return null;
+      const binding = payload.sshProgress;
+      if (
+        binding.threadId !== input.threadId ||
+        binding.environmentId !== handoff.target.environmentId
+      )
+        return yield* new HandoffError({ reason: "invalid_request" });
+      // Reading the thread through its owning service also verifies it still exists.
+      yield* threads
+        .getThreadRecords(input.threadId, ["turnItems"], {
+          turnItemTypes: ["human_handoff"],
+          messageRoles: [],
+        })
+        .pipe(Effect.mapError(unavailable));
+      return binding;
+    });
   const sweepUnlocked = Effect.gen(function* () {
     yield* expirePending();
     if (store.directory !== undefined) {
@@ -346,6 +552,17 @@ const make = Effect.gen(function* () {
       });
     yield* secrets.answer(input, { type: "client", label: session.client.label ?? "GOAT client" });
   });
-  return Handoffs.of({ create, read, open, respond, sweep, answerSecret });
+  return Handoffs.of({
+    create,
+    read,
+    open,
+    respond,
+    sweep,
+    answerSecret,
+    completedSshContinuations,
+    finishSshContinuation,
+    bindSshContinuation,
+    readSshProgressBinding,
+  });
 });
 export const layer = Layer.effect(Handoffs, make);

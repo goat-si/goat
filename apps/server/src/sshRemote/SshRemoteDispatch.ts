@@ -23,7 +23,7 @@ import {
   type SshLaunchWorkspace,
   type SshHostResult,
 } from "@goat/contracts";
-import * as KeyedLock from "@goat/shared/KeyedLock";
+import * as Semaphore from "effect/Semaphore";
 import * as NetService from "@goat/shared/Net";
 import { targetConnectionKey } from "@goat/ssh/command";
 import * as SshAuth from "@goat/ssh/auth";
@@ -216,6 +216,7 @@ export interface SshHostToolCall {
    * to a session with fewer permissions.
    */
   readonly approvals?: boolean;
+  readonly requireReady?: true;
 }
 
 export class SshRemoteDispatch extends Context.Service<
@@ -224,8 +225,37 @@ export class SshRemoteDispatch extends Context.Service<
     readonly runtimeStatus: (host: string) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly runtimeUpdate: (
       host: string,
-      options: { readonly confirmReplacement: boolean },
+      options: {
+        readonly confirmReplacement: boolean;
+        readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
+        readonly operationId?: string;
+        readonly generation?: number;
+      },
     ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
+    readonly beginSetupOperation: (
+      host: string,
+      options: { readonly operationId: string },
+    ) => Effect.Effect<import("@goat/contracts").SshHostSetupProgress, SshRemoteDispatchError>;
+    readonly prepareRuntime: (
+      host: string,
+      options: {
+        readonly operationId: string;
+        readonly generation: number;
+        readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
+      },
+    ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
+    readonly forgetRuntime: (
+      host: string,
+      options: { readonly stopRuntime: "if_idle" | "no" },
+    ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
+    readonly publishProviderDiagnosis: (
+      host: string,
+      options: {
+        readonly operationId: string;
+        readonly generation: number;
+        readonly providers: import("@goat/contracts").SshHostProviders;
+      },
+    ) => Effect.Effect<boolean, SshRemoteDispatchError>;
     readonly runRemoteScript: (input: {
       readonly target: DesktopSshEnvironmentTarget;
       readonly script: string;
@@ -525,10 +555,12 @@ const make = Effect.gen(function* () {
     string,
     { readonly token: string; readonly expiresAt: number; readonly ceilingApplied: boolean }
   >();
-  const sessionLocks = yield* KeyedLock.make<string>();
+  const sessionLocks = new Map<string, Semaphore.Semaphore>();
   // Cache only optional launch arguments; memory admission always uses a fresh catalog.
   const launchArguments = new Map<string, ReadonlySet<string>>();
   const connected = new Set<string>();
+  // Retain only the target address so status can reach the manager's post-forget snapshot after the alias files are removed.
+  const forgottenTargets = new Map<string, DesktopSshEnvironmentTarget>();
 
   const withRuntime = <A, E>(
     effect: Effect.Effect<A, E, RuntimeServices | SshAuth.SshPasswordPrompt>,
@@ -542,16 +574,17 @@ const make = Effect.gen(function* () {
   // operation. Optional so test layers without it dial every alias as plain SSH.
   const cloudMachines = yield* Effect.serviceOption(CloudMachineService.CloudMachineService);
   /** Forgets everything cached for an alias whose address or host key changed. */
-  const invalidateAlias = (alias: string) =>
+  const invalidateAlias = (alias: string, disconnect = true) =>
     Effect.gen(function* () {
       const prefix = `${alias}\u0000`;
       for (const key of sessions.keys()) if (key.startsWith(prefix)) sessions.delete(key);
       for (const key of launchArguments.keys())
         if (key.startsWith(prefix)) launchArguments.delete(key);
       connected.delete(alias);
-      yield* withRuntime(
-        manager.disconnectEnvironment({ alias, hostname: alias, username: null, port: null }),
-      ).pipe(Effect.ignore({ log: true }));
+      if (disconnect)
+        yield* withRuntime(
+          manager.disconnectEnvironment({ alias, hostname: alias, username: null, port: null }),
+        ).pipe(Effect.ignore({ log: true }));
     });
   if (Option.isSome(cloudMachines)) yield* cloudMachines.value.onAliasInvalidated(invalidateAlias);
   /**
@@ -610,15 +643,28 @@ const make = Effect.gen(function* () {
     );
 
   const runtimeStatus = Effect.fn("SshRemoteDispatch.runtimeStatus")(function* (host: string) {
-    const target = yield* resolveHost(host);
+    const target = forgottenTargets.get(host) ?? (yield* resolveHost(host));
     return yield* withRuntime(manager.status(target)).pipe(sshFailed(target.alias));
   });
 
   const runtimeUpdate = Effect.fn("SshRemoteDispatch.runtimeUpdate")(function* (
     host: string,
-    options: { readonly confirmReplacement: boolean },
+    options: {
+      readonly confirmReplacement: boolean;
+      readonly onPhase?: SshTunnel.SshRuntimeProgressCallback;
+      readonly operationId?: string;
+      readonly generation?: number;
+    },
   ) {
     const target = yield* resolveHost(host);
+    if (options.operationId !== undefined) {
+      const current = yield* withRuntime(manager.status(target)).pipe(sshFailed(host));
+      if (
+        current.status?.setup?.operationId !== options.operationId ||
+        current.status.setup.generation !== options.generation
+      )
+        return yield* failure("caller_changed", "This SSH update was superseded. Ask again.");
+    }
     // The manager records acquisition failures as status, including the archive and human fix.
     const ensured = yield* withRuntime(
       manager.ensureEnvironment(target, {
@@ -626,6 +672,7 @@ const make = Effect.gen(function* () {
         issuePairingToken: false,
         refreshRuntime: true,
         confirmReplacement: options.confirmReplacement,
+        ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
       }),
     ).pipe(Effect.result);
     const result = yield* withRuntime(manager.status(target)).pipe(sshFailed(target.alias));
@@ -641,6 +688,66 @@ const make = Effect.gen(function* () {
     }
     return result;
   });
+
+  const beginSetupOperation: SshRemoteDispatch["Service"]["beginSetupOperation"] = (
+    host,
+    options,
+  ) =>
+    Effect.gen(function* () {
+      const target = yield* resolveHost(host);
+      const operation = yield* withRuntime(
+        manager.beginSetupOperation(target, options.operationId),
+      ).pipe(sshFailed(host));
+      forgottenTargets.delete(host);
+      return operation;
+    });
+  const prepareRuntime: SshRemoteDispatch["Service"]["prepareRuntime"] = (host, options) =>
+    Effect.gen(function* () {
+      const target = yield* resolveHost(host);
+      const current = yield* withRuntime(manager.status(target)).pipe(sshFailed(host));
+      if (
+        current.status?.setup?.operationId !== options.operationId ||
+        current.status.setup.generation !== options.generation
+      )
+        return yield* failure("caller_changed", "This SSH setup was superseded. Ask again.");
+      const ensured = yield* withRuntime(
+        manager.ensureEnvironment(target, {
+          keyOnly: true,
+          issuePairingToken: false,
+          refreshRuntime: false,
+          confirmReplacement: false,
+          ...(options.onPhase === undefined ? {} : { onPhase: options.onPhase }),
+        }),
+      ).pipe(Effect.result);
+      const result = yield* withRuntime(manager.status(target)).pipe(sshFailed(host));
+      if (
+        ensured._tag === "Failure" &&
+        result.kind === "ok" &&
+        (result.status.state === "ready" || result.status.state === "stopped")
+      )
+        return yield* failure("ssh_failed", `SSH to ${host} failed: ${describe(ensured.failure)}`);
+      return result;
+    });
+  const forgetRuntime: SshRemoteDispatch["Service"]["forgetRuntime"] = (host, options) =>
+    Effect.gen(function* () {
+      const target = forgottenTargets.get(host) ?? (yield* resolveHost(host));
+      forgottenTargets.set(host, target);
+      // forgetEnvironment fences its generation before waiting for the installation lock.
+      return yield* withRuntime(manager.forgetEnvironment(target, options)).pipe(
+        Effect.ensuring(invalidateAlias(host, false)),
+        sshFailed(host),
+      );
+    });
+  const publishProviderDiagnosis: SshRemoteDispatch["Service"]["publishProviderDiagnosis"] = (
+    host,
+    options,
+  ) =>
+    Effect.gen(function* () {
+      const target = yield* resolveHost(host);
+      return yield* withRuntime(
+        manager.publishProviderDiagnosis(target, options, options.providers),
+      ).pipe(sshFailed(host));
+    });
 
   const browseTarget = Effect.fn("SshRemoteDispatch.browseTarget")(function* (
     target: DesktopSshEnvironmentTarget,
@@ -694,58 +801,68 @@ const make = Effect.gen(function* () {
     ceiling: RuntimeMode,
     approvals = false,
     memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
+    requireReady?: true,
   ) {
     const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling);
-    return yield* sessionLocks.withLock(
-      key,
-      Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const cached = sessions.get(key);
-        if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now)
-          return cached;
-        // A session that may answer approvals is never swapped for a narrower one.
-        const issued = yield* withRuntime(
-          manager.issueMcpClientSession(target, {
-            label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
-            ttl: SESSION_TTL,
-            runtimeModeCeiling: ceiling,
-            ...(approvals ? { approvals: true } : {}),
-            memoryScopes:
-              memoryGrantCeiling === "none"
-                ? []
-                : memoryGrantCeiling === "read"
-                  ? ["memory:read"]
-                  : ["memory:read", "memory:write"],
-          }),
-        ).pipe(
-          // The remote answered and refused; its message names the runtime and what happens next.
-          Effect.mapError((error) =>
-            error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
-              ? memoryRefusal(error.message)
-              : error,
-          ),
-          approvals
-            ? Effect.mapError((error) =>
-                error instanceof SshRemoteDispatchError
-                  ? error
-                  : failure(
-                      "remote_refused",
-                      `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
-                    ),
-              )
-            : sshFailed(target.alias),
+    const gate = sessionLocks.get(key) ?? Semaphore.makeUnsafe(1);
+    sessionLocks.set(key, gate);
+    const work = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const cached = sessions.get(key);
+      if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
+      // A session that may answer approvals is never swapped for a narrower one.
+      const issued = yield* withRuntime(
+        manager.issueMcpClientSession(target, {
+          ...(requireReady === undefined ? {} : { requireReady }),
+          label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
+          ttl: SESSION_TTL,
+          runtimeModeCeiling: ceiling,
+          ...(approvals ? { approvals: true } : {}),
+          memoryScopes:
+            memoryGrantCeiling === "none"
+              ? []
+              : memoryGrantCeiling === "read"
+                ? ["memory:read"]
+                : ["memory:read", "memory:write"],
+        }),
+      ).pipe(
+        // The remote answered and refused; its message names the runtime and what happens next.
+        Effect.mapError((error) =>
+          error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
+            ? memoryRefusal(error.message)
+            : error,
+        ),
+        approvals
+          ? Effect.mapError((error) =>
+              error instanceof SshRemoteDispatchError
+                ? error
+                : failure(
+                    "remote_refused",
+                    `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
+                  ),
+            )
+          : sshFailed(target.alias),
+      );
+      const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
+      const session = {
+        token: issued.token,
+        expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : now + SESSION_TTL_MS,
+        ceilingApplied: issued.runtimeModeCeilingApplied,
+      };
+      sessions.set(key, session);
+      launchArguments.delete(key);
+      return session;
+    });
+    if (requireReady === true) {
+      const result = yield* work.pipe(gate.withPermitsIfAvailable(1));
+      if (Option.isNone(result))
+        return yield* failure(
+          "host_unavailable",
+          `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry goat_provider_diagnose.`,
         );
-        const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
-        const session = {
-          token: issued.token,
-          expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : now + SESSION_TTL_MS,
-          ceilingApplied: issued.runtimeModeCeilingApplied,
-        };
-        sessions.set(key, session);
-        launchArguments.delete(key);
-        return session;
-      }),
-    );
+      return result.value;
+    }
+    return yield* work.pipe(gate.withPermit);
   });
 
   // A delayed rejection of an older bearer must not evict its replacement.
@@ -1478,10 +1595,21 @@ const make = Effect.gen(function* () {
     authorize: Effect.Effect<RuntimeMode, E, R>,
   ) {
     const target = yield* resolveHost(call.host);
-    yield* readyCloudTarget(target, false);
     const ceiling = yield* authorize;
-    const bootstrap = yield* withRuntime(manager.ensureEnvironment(target, AGENT_CONNECTION)).pipe(
-      unavailable(target.alias),
+    if (call.requireReady !== true) yield* readyCloudTarget(target, false);
+    const bootstrap = yield* withRuntime(
+      call.requireReady
+        ? manager.readyEnvironment(target)
+        : manager.ensureEnvironment(target, AGENT_CONNECTION),
+    ).pipe(
+      call.requireReady === true
+        ? Effect.mapError(() =>
+            failure(
+              "host_unavailable",
+              `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry ${call.tool}.`,
+            ),
+          )
+        : unavailable(target.alias),
     );
     if ("type" in bootstrap)
       return yield* failure(
@@ -1506,9 +1634,14 @@ const make = Effect.gen(function* () {
     let attemptedToken: string | undefined;
     const attempt = (retried: boolean): Effect.Effect<unknown, SshRemoteDispatchError | E, R> =>
       Effect.gen(function* () {
-        const session = yield* sessionFor(target, ceiling, call.approvals === true).pipe(
-          unavailable(target.alias),
-        );
+        yield* stillAuthorized;
+        const session = yield* sessionFor(
+          target,
+          ceiling,
+          call.approvals === true,
+          "none",
+          call.requireReady,
+        ).pipe(unavailable(target.alias));
         attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
           return yield* failure(
@@ -1579,7 +1712,20 @@ const make = Effect.gen(function* () {
           );
         }),
       );
-    return yield* attempt(false);
+    if (call.requireReady !== true) return yield* attempt(false);
+    return yield* attempt(false).pipe(
+      Effect.timeoutOption(call.timeoutMs),
+      Effect.flatMap((answer) =>
+        Option.isSome(answer)
+          ? Effect.succeed(answer.value)
+          : Effect.fail(
+              failure(
+                "host_unavailable",
+                `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry ${call.tool}.`,
+              ),
+            ),
+      ),
+    );
   });
 
   const connectedHosts = Effect.sync(() => [...connected].toSorted());
@@ -1587,6 +1733,10 @@ const make = Effect.gen(function* () {
   return SshRemoteDispatch.of({
     runtimeStatus,
     runtimeUpdate,
+    beginSetupOperation,
+    prepareRuntime,
+    forgetRuntime,
+    publishProviderDiagnosis,
     listHosts,
     browse,
     validateLaunchAttachments,

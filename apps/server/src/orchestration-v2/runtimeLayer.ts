@@ -1,5 +1,4 @@
 import * as Handoffs from "../handoffs/Handoffs.ts";
-import * as HandoffExpiry from "../handoffs/HandoffExpiry.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -386,11 +385,10 @@ export const layerProduction = Layer.mergeAll(
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
   layerHandoffsProvided,
-  HandoffExpiry.layer.pipe(Layer.provide(layerHandoffsProvided)),
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
   ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
-).pipe(Layer.provide(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));
+).pipe(Layer.provideMerge(Scheduler.layer), Layer.provideMerge(layerEventInfrastructure));

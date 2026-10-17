@@ -33,7 +33,7 @@ import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
-import { SshCommandError } from "@goat/ssh/errors";
+import { SshCommandError, SshLaunchError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -3801,3 +3801,65 @@ describe("SSH launcher transport", () => {
     }),
   );
 });
+
+it.effect("ready-only host tools never bootstrap or issue a session on a stopped runtime", () =>
+  Effect.gen(function* () {
+    const host = "ready-only";
+    const target = { alias: host, hostname: host, username: null, port: null };
+    let ensures = 0;
+    let sessions = 0;
+    const discover = vi
+      .spyOn(SshConfig, "discoverSshHosts")
+      .mockReturnValue(Effect.succeed([{ ...target, source: "ssh-config" }]));
+    const manager = vi.spyOn(SshTunnel.SshEnvironmentManager, "layer").mockReturnValue(
+      Layer.mock(SshTunnel.SshEnvironmentManager)({
+        readyEnvironment: () =>
+          Effect.fail(new SshLaunchError({ message: "Runtime is stopped", stdout: "" })),
+        ensureEnvironment: () => {
+          ensures++;
+          return Effect.die("must not bootstrap");
+        },
+        issueMcpClientSession: () => {
+          sessions++;
+          return Effect.die("must not issue");
+        },
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+      const failure = yield* dispatch
+        .callHostTool(
+          {
+            host,
+            tool: "goat_provider_diagnose",
+            arguments: {},
+            timeoutMs: 1000,
+            writes: false,
+            requireReady: true,
+          },
+          Effect.succeed("approval-required"),
+        )
+        .pipe(Effect.result);
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") {
+        expect(failure.failure.reason).toBe("host_unavailable");
+        expect(failure.failure.message).toContain("goat_ssh_host_prepare");
+      }
+      expect([ensures, sessions]).toEqual([0, 0]);
+    }).pipe(
+      Effect.provide(
+        SshRemoteDispatch.layer.pipe(
+          Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ready-only-" })),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          manager.mockRestore();
+          discover.mockRestore();
+        }),
+      ),
+    );
+  }),
+);

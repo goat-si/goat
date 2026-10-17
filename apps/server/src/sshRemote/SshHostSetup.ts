@@ -1,22 +1,57 @@
 import {
-  AuthEnvironmentMaintainScope,
   EnvironmentAuthorizationError,
+  HandoffError,
+  SshHostAddInput,
+  SshHostAlias,
+  buildSshKeyAuthInstructions,
   type AuthSessionId,
+  type Handoff,
+  type HandoffRespondInput,
   type SshHostResult,
   type SshHostStatusInput,
   type SshRuntimeUpdateInput,
+  type SshHostPrepareInput,
+  type SshHostForgetInput,
+  type SshHostTrustInput,
+  type SshHostProbeResult,
+  type SshHandoffProgressInput,
+  type SshHandoffProgressResult,
+  type SshHostSetupProgress,
 } from "@goat/contracts";
+import { discoverSshHosts } from "@goat/ssh/config";
+import { probeHostKey } from "@goat/ssh/hostKey";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- opaque IDs and stable alias hashes, never credentials.
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
+import * as SessionStore from "../auth/SessionStore.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
+import * as Environment from "../environment/ServerEnvironment.ts";
+import * as Diagnosis from "../provider/ProviderDiagnosisRouting.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import {
+  makeManagedSshWriter,
+  definesHostAlias,
+  effectiveSettingsMatch,
+  type ManagedSshEndpoint,
+} from "../cloudMachines/sshConfig.ts";
+import { authorizeSshHost, type SshHostCaller } from "./SshHostAuthorization.ts";
+import * as Dispatch from "./SshRemoteDispatch.ts";
+export type { SshHostCaller } from "./SshHostAuthorization.ts";
 
-import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
-
-export type SshHostCaller =
-  | { readonly kind: "client"; readonly sessionId: AuthSessionId }
-  | { readonly kind: "mcp"; readonly scope: McpInvocationScope };
-
+type Failure = EnvironmentAuthorizationError | HandoffError;
 export class SshHostSetup extends Context.Service<
   SshHostSetup,
   {
@@ -24,11 +59,53 @@ export class SshHostSetup extends Context.Service<
     readonly update: (
       input: SshRuntimeUpdateInput,
       caller: SshHostCaller,
+    ) => Effect.Effect<SshHostResult, Failure>;
+    readonly probe: (
+      input: SshHostAddInput,
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<SshHostProbeResult, Failure>;
+    readonly trust: (
+      input: SshHostTrustInput,
+      sessionId: AuthSessionId,
     ) => Effect.Effect<SshHostResult, EnvironmentAuthorizationError>;
+    readonly add: (
+      input: SshHostAddInput,
+      caller: SshHostCaller,
+    ) => Effect.Effect<SshHostResult, Failure>;
+    readonly prepare: (
+      input: SshHostPrepareInput,
+      caller: SshHostCaller,
+    ) => Effect.Effect<SshHostResult, Failure>;
+    readonly forget: (
+      input: SshHostForgetInput,
+      caller: SshHostCaller,
+    ) => Effect.Effect<SshHostResult, EnvironmentAuthorizationError>;
+    readonly respondHandoff: (
+      input: HandoffRespondInput,
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<Handoff, Failure>;
+    readonly handoffProgress: (
+      input: SshHandoffProgressInput,
+      caller: { readonly kind: "client"; readonly sessionId: AuthSessionId },
+    ) => Effect.Effect<SshHandoffProgressResult, Failure>;
+    readonly resumeContinuations: Effect.Effect<void, HandoffError>;
   }
 >()("goat/sshRemote/SshHostSetup") {}
 
-const dispatchFailure = (error: SshRemoteDispatch.SshRemoteDispatchError): SshHostResult => ({
+const errorResult = (
+  message: string,
+  code:
+    | "operation_failed"
+    | "invalid_request"
+    | "alias_conflict"
+    | "cancelled" = "operation_failed",
+): SshHostResult => ({
+  kind: "error",
+  code,
+  message: message.slice(0, 2000),
+  fix: { actor: "agent", instruction: "Try again" },
+});
+const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
   kind: "error",
   code:
     error.reason === "host_unknown" || error.reason === "invalid_request"
@@ -36,64 +113,925 @@ const dispatchFailure = (error: SshRemoteDispatch.SshRemoteDispatchError): SshHo
       : error.reason === "host_unavailable"
         ? "host_unreachable"
         : "operation_failed",
-  message: Array.from(error.message).slice(0, 2000).join(""),
+  message: error.message.slice(0, 2000),
   fix: { actor: "agent", instruction: "Try again" },
 });
-
-const desktopUpdateInstruction =
-  "Choose Update now in Settings → Connections on the desktop app that owns this connection.";
-
-const make = Effect.gen(function* () {
-  const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-  const status = Effect.fn("SshHostSetup.status")(function* (input: SshHostStatusInput) {
-    return yield* dispatch.runtimeStatus(input.host).pipe(
-      Effect.catchTags({
-        SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
-      }),
-    );
-  });
-  const update = Effect.fn("SshHostSetup.update")(function* (
-    input: SshRuntimeUpdateInput,
-    caller: SshHostCaller,
-  ) {
-    // Server client updates await the alias RPC/approval workflow. Desktop owns its IPC path.
-    if (caller.kind === "client") {
-      return {
-        kind: "error",
-        code: "unsupported",
-        message: `Server client SSH runtime updates are not supported. ${desktopUpdateInstruction}`,
-        fix: { actor: "human", instruction: desktopUpdateInstruction },
-      } satisfies SshHostResult;
-    }
-    const scope = caller.scope;
-    if (
-      scope.readOnly ||
-      scope.client?.access === "read-only" ||
-      !scope.capabilities.has("orchestration") ||
-      !scope.grantedScopes?.includes(AuthEnvironmentMaintainScope) ||
-      scope.reauthorize === undefined
-    ) {
-      return yield* new EnvironmentAuthorizationError({
-        requiredScope: AuthEnvironmentMaintainScope,
-        message: "Updating an SSH runtime needs a live environment:maintain grant.",
-      });
-    }
-    yield* scope.reauthorize([AuthEnvironmentMaintainScope]);
-    if ((input.mode ?? "when_idle") === "now") {
-      return {
-        kind: "error",
-        code: "unsupported",
-        message: `${desktopUpdateInstruction} For an agent update, call again with mode when_idle.`,
-        fix: { actor: "human", instruction: desktopUpdateInstruction },
-      } satisfies SshHostResult;
-    }
-    return yield* dispatch.runtimeUpdate(input.host, { confirmReplacement: false }).pipe(
-      Effect.catchTags({
-        SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
-      }),
-    );
-  });
-  return SshHostSetup.of({ status, update });
+const outsideThread = (instruction: string): SshHostResult => ({
+  kind: "error",
+  code: "unsupported",
+  message: instruction,
+  fix: { actor: "human", instruction },
 });
+const aliasFor = (input: SshHostAddInput) =>
+  input.alias ??
+  `goat-${input.address
+    .toLowerCase()
+    .replace(/[^a-z0-9]/gu, "-")
+    .slice(0, 38)}-${NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([input.address, input.user, input.port ?? 22]))
+    .digest("hex")
+    .slice(0, 8)}`;
+const Endpoint = Schema.Struct({
+  host: Schema.String,
+  port: Schema.Number,
+  user: Schema.String,
+  hostKey: Schema.String,
+  proxyJump: Schema.optionalKey(Schema.String),
+  proxyCommand: Schema.optionalKey(Schema.String),
+});
+const Challenge = Schema.Struct({
+  input: SshHostAddInput,
+  host: SshHostAlias,
+  endpoint: Endpoint,
+  fingerprint: Schema.String,
+  identityFile: Schema.optionalKey(Schema.String),
+  expiresAt: Schema.Number,
+  aliasGeneration: Schema.Int,
+  includeRequired: Schema.Boolean,
+});
+type Challenge = typeof Challenge.Type;
+const Continuation = Schema.Struct({
+  version: Schema.Literal(1),
+  step: Schema.Literals(["runtime_update", "host_trust", "key_auth"]),
+  host: SshHostAlias,
+  operationId: Schema.String,
+  aliasGeneration: Schema.Int,
+  requestedVersion: Schema.optionalKey(Schema.String),
+  aliasRevision: Schema.optionalKey(Schema.String),
+  challenge: Schema.optional(Challenge),
+});
+const decodeContinuation = Schema.decodeUnknownEffect(Continuation);
+const isHandoffError = Schema.is(HandoffError);
+const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
+const decodeAlias = Schema.decodeUnknownEffect(SshHostAlias);
 
-export const layer = Layer.effect(SshHostSetup, make);
+export const make = (options: { readonly home?: string } = {}) =>
+  Effect.gen(function* () {
+    const home = options.home ?? NodeOS.homedir();
+    const dispatch = yield* Dispatch.SshRemoteDispatch;
+    const sessions = yield* SessionStore.SessionStore;
+    const handoffs = yield* Handoffs.Handoffs;
+    const threads = yield* Threads.ThreadManagementService;
+    const environment = yield* Environment.ServerEnvironment;
+    const diagnosis = yield* Diagnosis.ProviderDiagnosisRouting;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const runner = yield* ProcessRunner.ProcessRunner;
+    const serviceScope = yield* Scope.Scope;
+    const runtime = yield* Effect.context<
+      | FileSystem.FileSystem
+      | Path.Path
+      | import("effect/process/ChildProcessSpawner").ChildProcessSpawner
+    >();
+    const writer = yield* makeManagedSshWriter({
+      home,
+      directory: "goat-hosts",
+      isAlias: (alias) =>
+        /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(alias) &&
+        !alias.toLowerCase().startsWith("boat-"),
+    });
+    const directory = path.join(home, ".ssh", "goat-hosts");
+    const challenges = new Map<string, { challenge: Challenge; sessionId: AuthSessionId }>();
+    const aliasGenerations = new Map<string, number>();
+    const jobs = new Map<
+      string,
+      {
+        operation: SshHostSetupProgress;
+        first: Deferred.Deferred<SshHostResult>;
+        fiber: Fiber.Fiber<void, never>;
+      }
+    >();
+    const continuing = new Set<string>();
+    const admission = yield* Semaphore.make(1);
+    const authorize = (caller: SshHostCaller, scope: Parameters<typeof authorizeSshHost>[2]) =>
+      authorizeSshHost(sessions, caller, scope);
+    const status = (input: SshHostStatusInput) =>
+      dispatch.runtimeStatus(input.host).pipe(
+        Effect.catchTags({
+          SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
+        }),
+      );
+    const readOptional = (file: string) =>
+      fs.readFileString(file).pipe(
+        Effect.catchTags({
+          PlatformError: (error) =>
+            error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+        }),
+      );
+    const aliasRevision = (host: string) =>
+      Effect.gen(function* () {
+        const conf = yield* readOptional(path.join(directory, `${host}.conf`));
+        if (conf === null) return undefined;
+        const pin = yield* readOptional(path.join(directory, `${host}.known_hosts`));
+        const metadata = yield* fs.stat(path.join(directory, `${host}.conf`));
+        return NodeCrypto.createHash("sha256")
+          .update(`${conf}\0${pin ?? ""}\0${Option.getOrNull(metadata.mtime)?.getTime() ?? ""}`)
+          .digest("hex");
+      });
+    const collect = (input: SshHostAddInput) =>
+      Effect.gen(function* () {
+        const host = yield* decodeAlias(aliasFor(input));
+        if (
+          host.toLowerCase().startsWith("boat-") ||
+          [input.address, input.user, input.identityFile].some(
+            (v) => v !== undefined && (!v.trim() || v.startsWith("-") || /[\r\n\0]/u.test(v)),
+          )
+        )
+          return yield* new HandoffError({ reason: "invalid_request" });
+        const generation = aliasGenerations.get(host) ?? 0;
+        const pin = yield* readOptional(path.join(directory, `${host}.known_hosts`));
+        const config = yield* readOptional(path.join(home, ".ssh", "config"));
+        if (
+          pin === null &&
+          (definesHostAlias(config ?? "", host) ||
+            (yield* fs.exists(path.join(home, ".ssh", "goat-cloud", `${host}.conf`))))
+        )
+          return yield* new HandoffError({ reason: "conflict" });
+        if (pin === null) {
+          const known = yield* discoverSshHosts({}).pipe(Effect.provide(runtime));
+          if (
+            known.some(
+              (entry) =>
+                entry.source === "ssh-config" && entry.alias.toLowerCase() === host.toLowerCase(),
+            )
+          )
+            return yield* new HandoffError({ reason: "conflict" });
+        }
+        const resolved = yield* runner.run({
+          command: "ssh",
+          args: [
+            "-G",
+            ...(input.user ? ["-l", input.user] : []),
+            ...(input.port ? ["-p", String(input.port)] : []),
+            input.address,
+          ],
+          timeout: "20 seconds",
+        });
+        if (resolved.code !== 0) return yield* new HandoffError({ reason: "unavailable" });
+        const settings = new Map(
+          resolved.stdout.split(/\r?\n/u).map((line) => {
+            const [key = "", ...value] = line.split(/\s+/u);
+            return [key, value.join(" ")] as const;
+          }),
+        );
+        const key = yield* probeHostKey({
+          target: input.address,
+          ...(input.user ? { user: input.user } : {}),
+          ...(input.port ? { port: input.port } : {}),
+        }).pipe(Effect.provide(runtime));
+        const endpoint: ManagedSshEndpoint = {
+          host: settings.get("hostname") ?? input.address,
+          port: Number(settings.get("port") ?? input.port ?? 22),
+          user: settings.get("user") ?? input.user ?? "",
+          hostKey: `${key.algorithm} ${key.key}`,
+          ...(settings.get("proxyjump") && settings.get("proxyjump") !== "none"
+            ? { proxyJump: settings.get("proxyjump")! }
+            : {}),
+          ...(settings.get("proxycommand") && settings.get("proxycommand") !== "none"
+            ? { proxyCommand: settings.get("proxycommand")! }
+            : {}),
+        };
+        if (pin !== null && pin.trim() !== `${host} ${endpoint.hostKey}`)
+          return yield* new HandoffError({
+            reason: "conflict",
+            cause: { reason: "host_key_changed" },
+          });
+        let identityFile = input.identityFile;
+        if (identityFile === undefined) {
+          for (const line of resolved.stdout.split(/\r?\n/u)) {
+            if (!line.startsWith("identityfile ")) continue;
+            const candidate = line.slice(13).replace(/^~(?=\/)/u, home);
+            if (yield* fs.exists(candidate)) {
+              identityFile = candidate;
+              break;
+            }
+          }
+        }
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        if ((aliasGenerations.get(host) ?? 0) !== generation)
+          return yield* new HandoffError({ reason: "expired" });
+        return {
+          input,
+          host,
+          endpoint,
+          fingerprint: key.fingerprint,
+          ...(identityFile ? { identityFile } : {}),
+          expiresAt: now + 24 * 60 * 60 * 1000,
+          aliasGeneration: generation,
+          includeRequired: !/^\s*Include\s+~\/\.ssh\/goat-hosts\/\*\.conf\s*$/imu.test(
+            config ?? "",
+          ),
+        } satisfies Challenge;
+      }).pipe(
+        Effect.mapError((cause) =>
+          isHandoffError(cause) ? cause : new HandoffError({ reason: "unavailable", cause }),
+        ),
+      );
+    const humanFor = (challenge: Challenge) => ({
+      location: `Review ${challenge.host} as ${challenge.endpoint.user}.${challenge.includeRequired ? " Approving also adds Include ~/.ssh/goat-hosts/*.conf to your SSH config." : ""}`,
+      fingerprint: challenge.fingerprint,
+    });
+    const probe: SshHostSetup["Service"]["probe"] = (input, sessionId) =>
+      Effect.gen(function* () {
+        yield* authorize({ kind: "client", sessionId }, "settings:write");
+        const challenge = yield* collect(input);
+        const probeId = NodeCrypto.randomUUID();
+        challenges.set(probeId, { challenge, sessionId });
+        return {
+          probeId,
+          host: challenge.host,
+          human: humanFor(challenge),
+          includeRequired: challenge.includeRequired,
+        };
+      });
+    const trustChallenge = (challenge: Challenge, caller: SshHostCaller) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "settings:write");
+        if (
+          challenge.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now) ||
+          (aliasGenerations.get(challenge.host) ?? 0) !== challenge.aliasGeneration
+        )
+          return errorResult("This SSH trust request expired. Ask again.", "cancelled");
+        const current = yield* collect(challenge.input);
+        if (
+          current.endpoint.hostKey !== challenge.endpoint.hostKey ||
+          Object.entries(challenge.endpoint).some(
+            ([key, value]) => current.endpoint[key as keyof typeof current.endpoint] !== value,
+          )
+        )
+          return {
+            kind: "error",
+            code: "operation_failed",
+            message: "The SSH host key or destination changed. Add this host again to review it.",
+            status: {
+              host: challenge.host,
+              runtimeVersion: null,
+              requestedVersion: "",
+              state: "failed",
+              failure: {
+                reason: "host_key_changed",
+                fix: {
+                  actor: "human",
+                  instruction: "Forget the host, then add it again to review its new fingerprint.",
+                  path: "ssh.host_forget",
+                },
+              },
+            },
+          } satisfies SshHostResult;
+        yield* authorize(caller, "settings:write");
+        if ((aliasGenerations.get(challenge.host) ?? 0) !== challenge.aliasGeneration)
+          return errorResult("This SSH trust request was cancelled by Forget.", "cancelled");
+        let identityFile = challenge.identityFile;
+        if (identityFile === undefined) {
+          const agent = yield* runner
+            .run({ command: "ssh-add", args: ["-l"], timeout: "10 seconds" })
+            .pipe(Effect.result);
+          if (agent._tag === "Failure" || agent.success.code !== 0)
+            identityFile = (yield* writer.ensureKey).identityFile;
+        }
+        if ((aliasGenerations.get(challenge.host) ?? 0) !== challenge.aliasGeneration)
+          return errorResult("This SSH trust request was cancelled by Forget.", "cancelled");
+        yield* writer.writeHost(challenge.host, challenge.endpoint, identityFile);
+        return yield* status({ host: challenge.host });
+      }).pipe(
+        Effect.catch((error) =>
+          isAuthorizationError(error)
+            ? Effect.fail(error)
+            : Effect.succeed(errorResult(error.message)),
+        ),
+      );
+    const trust: SshHostSetup["Service"]["trust"] = (input, sessionId) =>
+      Effect.gen(function* () {
+        yield* authorize({ kind: "client", sessionId }, "settings:write");
+        const entry = challenges.get(input.probeId);
+        if (!entry || entry.sessionId !== sessionId)
+          return errorResult("This SSH trust request expired. Probe again.", "cancelled");
+        challenges.delete(input.probeId);
+        if (!input.accepted)
+          return {
+            kind: "error",
+            code: "declined",
+            message: "SSH host trust was declined.",
+          } satisfies SshHostResult;
+        return yield* trustChallenge(entry.challenge, { kind: "client", sessionId }).pipe(
+          admission.withPermits(1),
+        );
+      });
+    const createHandoff = (
+      caller: SshHostCaller,
+      host: string,
+      operation: SshHostSetupProgress,
+      step: (typeof Continuation.Type)["step"],
+      human: typeof import("@goat/contracts").HandoffHuman.Type,
+      snapshot: SshHostResult,
+      challenge?: Challenge,
+      owner?: Handoff["requestedBy"],
+    ) =>
+      Effect.gen(function* () {
+        if (owner === undefined && (caller.kind !== "mcp" || caller.scope.thread === undefined))
+          return outsideThread(
+            step === "host_trust"
+              ? "Add this host in Settings → Connections."
+              : "Ask from a GOAT thread so you can approve it there.",
+          );
+        const thread = owner ?? (caller.kind === "mcp" ? caller.scope.thread : undefined);
+        if (thread === undefined)
+          return outsideThread("Ask from a GOAT thread so you can approve it there.");
+        const view = yield* threads
+          .getThreadSnapshot(thread.threadId)
+          .pipe(Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })));
+        const run = view.projection.runs.at(-1);
+        if (!run || run.rootNodeId === null)
+          return outsideThread("Ask from a GOAT thread so you can approve it there.");
+        const descriptor = yield* environment.getDescriptor;
+        const target =
+          step === "runtime_update"
+            ? "ssh.runtime_update"
+            : step === "host_trust"
+              ? "ssh.host_add"
+              : "ssh.host_prepare";
+        const revision = yield* aliasRevision(host).pipe(
+          Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })),
+        );
+        const args: typeof Continuation.Type = {
+          version: 1,
+          step,
+          host,
+          operationId: operation.operationId,
+          aliasGeneration: operation.generation,
+          ...(revision === undefined ? {} : { aliasRevision: revision }),
+          ...(step === "runtime_update"
+            ? { requestedVersion: snapshot.status?.requestedVersion ?? "" }
+            : {}),
+          ...(challenge ? { challenge } : {}),
+        };
+        const now = yield* DateTime.now;
+        const handoff = yield* handoffs.create({
+          kind: step === "key_auth" ? "terminal" : "approval",
+          title:
+            step === "runtime_update"
+              ? `Update runtime on ${host}?`
+              : step === "host_trust"
+                ? `Trust ${host}?`
+                : `Set up key authentication on ${host}`,
+          reason:
+            step === "runtime_update"
+              ? "This replaces the GOAT runtime and interrupts its running work. Remote projects and files are kept."
+              : "A person must complete this step before GOAT can prepare the host.",
+          requestedBy: {
+            threadId: thread.threadId,
+            providerInstanceId: thread.providerInstanceId,
+            path: target,
+          },
+          target: { environmentId: descriptor.environmentId, path: target },
+          runId: run.id,
+          nodeId: run.rootNodeId,
+          human,
+          args,
+          expiresAt: DateTime.add(now, { hours: 24 }),
+          sshProgress: {
+            host,
+            operationId: operation.operationId,
+            aliasGeneration: operation.generation,
+            environmentId: descriptor.environmentId,
+            threadId: thread.threadId,
+          },
+        });
+        return {
+          kind: "needs_human",
+          handoff,
+          next: {
+            after: step === "key_auth" ? "terminal" : "approval",
+            call: step === "key_auth" ? "goat_ssh_host_prepare" : "goat_ssh_host_status",
+          },
+          status: snapshot.status ?? {
+            host,
+            state: "untrusted",
+            runtimeVersion: null,
+            requestedVersion: "",
+          },
+        } satisfies SshHostResult;
+      });
+    const managedContext = (host: string) =>
+      Effect.gen(function* () {
+        yield* decodeAlias(host);
+        const config = yield* readOptional(path.join(directory, `${host}.conf`));
+        const pin = yield* readOptional(path.join(directory, `${host}.known_hosts`));
+        if (!config || !pin) return yield* new HandoffError({ reason: "not_found" });
+        const fields = new Map(
+          config.split(/\r?\n/u).flatMap((line) => {
+            const match = /^\s*(\S+)\s+(.+?)\s*$/u.exec(line);
+            return match ? [[match[1]!.toLowerCase(), match[2]!]] : [];
+          }),
+        );
+        const endpoint: ManagedSshEndpoint = {
+          host: fields.get("hostname") ?? "",
+          user: fields.get("user") ?? "",
+          port: Number(fields.get("port")),
+          hostKey: pin.trim().split(/\s+/u).slice(1).join(" "),
+          ...(fields.get("proxyjump") ? { proxyJump: fields.get("proxyjump")! } : {}),
+          ...(fields.get("proxycommand") ? { proxyCommand: fields.get("proxycommand")! } : {}),
+        };
+        const identityFile = fields.get("identityfile")?.replace(/^"|"$/gu, "");
+        const resolved = yield* runner.run({
+          command: "ssh",
+          args: ["-G", host],
+          timeout: "20 seconds",
+        });
+        if (
+          resolved.code !== 0 ||
+          !effectiveSettingsMatch(resolved.stdout, {
+            alias: host,
+            endpoint,
+            knownHostsFile: path.join(directory, `${host}.known_hosts`),
+            ...(identityFile ? { identityFile } : {}),
+          })
+        )
+          return yield* new HandoffError({ reason: "conflict" });
+        return { endpoint, identityFile, pin };
+      });
+    const validateManaged = (host: string) =>
+      Effect.gen(function* () {
+        const context = yield* managedContext(host);
+        // Validate every preparation even when dispatch already has a tunnel for this alias.
+        const key = yield* probeHostKey({ target: host }).pipe(Effect.provide(runtime));
+        if (context.pin.trim() !== `${host} ${key.algorithm} ${key.key}`)
+          return yield* new HandoffError({
+            reason: "conflict",
+            cause: { reason: "host_key_changed" },
+          });
+      }).pipe(
+        Effect.mapError((cause) =>
+          isHandoffError(cause) ? cause : new HandoffError({ reason: "unavailable", cause }),
+        ),
+      );
+    const startJob = (
+      host: string,
+      caller: SshHostCaller,
+      update: boolean,
+      confirmReplacement: boolean,
+      reserved?: SshHostSetupProgress,
+      onFinished?: Effect.Effect<void, HandoffError>,
+      onStarted?: (operation: SshHostSetupProgress) => Effect.Effect<void, HandoffError>,
+      owner?: Handoff["requestedBy"],
+      requestGeneration = aliasGenerations.get(host) ?? 0,
+      beforeRun?: Effect.Effect<void, HandoffError>,
+    ) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "environment:maintain");
+        if ((aliasGenerations.get(host) ?? 0) !== requestGeneration)
+          return yield* new HandoffError({ reason: "expired" });
+        const existing = jobs.get(host);
+        if (existing !== undefined) return existing.first;
+        const operation =
+          reserved ??
+          (yield* dispatch.beginSetupOperation(host, { operationId: NodeCrypto.randomUUID() }));
+        if ((aliasGenerations.get(host) ?? 0) !== requestGeneration) {
+          yield* dispatch.forgetRuntime(host, { stopRuntime: "no" });
+          return yield* new HandoffError({ reason: "expired" });
+        }
+        if (onStarted) yield* onStarted(operation);
+        const first = yield* Deferred.make<SshHostResult>();
+        const onPhase = () => {
+          // The manager publishes before calling its observer. Read that same snapshot.
+          Effect.runFork(
+            status({ host }).pipe(
+              Effect.flatMap((result) => Deferred.succeed(first, result)),
+              Effect.forkIn(serviceScope),
+              Effect.asVoid,
+            ),
+          );
+        };
+        const work = Effect.gen(function* () {
+          yield* authorize(caller, "environment:maintain");
+          if ((aliasGenerations.get(host) ?? 0) !== requestGeneration)
+            return yield* new HandoffError({ reason: "expired" });
+          if (beforeRun) yield* beforeRun;
+          let result = yield* update
+            ? dispatch.runtimeUpdate(host, { confirmReplacement, onPhase, ...operation })
+            : dispatch.prepareRuntime(host, { ...operation, onPhase });
+          if (update || result.status?.state !== "auth_failed")
+            yield* Deferred.succeed(first, result);
+          if (!update && result.status?.state === "ready") {
+            const diagnosed = yield* diagnosis.diagnose({ host }, caller);
+            const providers = {
+              checkedAt: DateTime.formatIso(yield* DateTime.now),
+              ready: diagnosed.diagnoses.every((entry) => entry.ready),
+              fixes: diagnosed.diagnoses.flatMap((entry) =>
+                entry.checks.flatMap((check) => (check.fix ? [check.fix] : [])),
+              ),
+            };
+            yield* dispatch.publishProviderDiagnosis(host, { ...operation, providers });
+          } else if (!update && result.status?.state === "auth_failed") {
+            const origin = yield* environment.getDescriptor;
+            const context = yield* managedContext(host);
+            const instructions = buildSshKeyAuthInstructions({
+              originLabel: origin.label,
+              host,
+              user: context.endpoint.user,
+              port: context.endpoint.port,
+              ...(result.status.publicKey
+                ? {
+                    publicKey: result.status.publicKey,
+                    generatedKey: true,
+                    publicKeyPath: path.join(directory, "id_ed25519.pub"),
+                  }
+                : {}),
+            });
+            if (caller.kind === "client" && owner === undefined) {
+              yield* Deferred.succeed(first, result);
+              return;
+            }
+            result = yield* createHandoff(
+              caller,
+              host,
+              operation,
+              "key_auth",
+              {
+                location: instructions.instruction,
+                ...(instructions.command ? { command: instructions.command } : {}),
+              },
+              result,
+              undefined,
+              owner,
+            );
+            yield* Deferred.succeed(first, result);
+          }
+        }).pipe(
+          Effect.catch((error) =>
+            Deferred.succeed(
+              first,
+              error instanceof Dispatch.SshRemoteDispatchError
+                ? dispatchFailure(error)
+                : errorResult(error.message),
+            ).pipe(Effect.asVoid),
+          ),
+          Effect.ensuring(onFinished?.pipe(Effect.ignore({ log: true })) ?? Effect.void),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (jobs.get(host)?.operation.operationId === operation.operationId)
+                jobs.delete(host);
+            }),
+          ),
+        );
+        const fiber = yield* work.pipe(Effect.forkIn(serviceScope, { startImmediately: false }));
+        jobs.set(host, { operation, first, fiber });
+        return first;
+      }).pipe(
+        admission.withPermits(1),
+        Effect.catchTags({
+          SshRemoteDispatchError: (error) =>
+            Effect.gen(function* () {
+              const first = yield* Deferred.make<SshHostResult>();
+              yield* Deferred.succeed(first, dispatchFailure(error));
+              return first;
+            }),
+        }),
+      );
+    const setupFailure = (host: string, error: HandoffError): SshHostResult => {
+      const changed =
+        error.cause !== null &&
+        typeof error.cause === "object" &&
+        "reason" in error.cause &&
+        error.cause.reason === "host_key_changed";
+      if (changed)
+        return {
+          kind: "error",
+          code: "operation_failed",
+          message: `The SSH host key for ${host} changed.`,
+          status: {
+            host,
+            state: "failed",
+            runtimeVersion: null,
+            requestedVersion: "",
+            failure: {
+              reason: "host_key_changed",
+              fix: {
+                actor: "human",
+                instruction: "Forget the host, then add it again to review its new fingerprint.",
+                path: "ssh.host_forget",
+              },
+            },
+          },
+        };
+      return errorResult(
+        `${host}: ${error.message}`,
+        error.reason === "invalid_request"
+          ? "invalid_request"
+          : error.reason === "conflict"
+            ? "alias_conflict"
+            : error.reason === "expired"
+              ? "cancelled"
+              : "operation_failed",
+      );
+    };
+    const prepare: SshHostSetup["Service"]["prepare"] = (input, caller) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "environment:maintain");
+        const generation = aliasGenerations.get(input.host) ?? 0;
+        yield* validateManaged(input.host);
+        return yield* Deferred.await(
+          yield* startJob(
+            input.host,
+            caller,
+            false,
+            false,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            generation,
+          ),
+        );
+      }).pipe(
+        Effect.catchTags({
+          HandoffError: (error) => Effect.succeed(setupFailure(input.host, error)),
+        }),
+      );
+    const update: SshHostSetup["Service"]["update"] = (input, caller) =>
+      Effect.gen(function* () {
+        if (caller.kind === "client")
+          return outsideThread(
+            "Server client SSH runtime updates are not supported. Choose Update now in Settings → Connections on the desktop app that owns this connection.",
+          );
+        yield* authorize(caller, "environment:maintain");
+        if ((input.mode ?? "when_idle") !== "now")
+          return yield* Deferred.await(yield* startJob(input.host, caller, true, false));
+        if (!caller.scope.thread)
+          return outsideThread("Ask from a GOAT thread so you can approve it there.");
+        const snapshot = yield* status({ host: input.host });
+        if (snapshot.kind !== "ok") return snapshot;
+        const operation = yield* dispatch
+          .beginSetupOperation(input.host, { operationId: NodeCrypto.randomUUID() })
+          .pipe(Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })));
+        return yield* createHandoff(
+          caller,
+          input.host,
+          operation,
+          "runtime_update",
+          {
+            location: `Approve replacing the runtime on ${input.host}, including interrupting its current work.`,
+          },
+          snapshot,
+        );
+      });
+    const add: SshHostSetup["Service"]["add"] = (input, caller) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "settings:write");
+        if (caller.kind !== "mcp" || caller.scope.thread === undefined)
+          return outsideThread("Add this host in Settings → Connections.");
+        const challenge = yield* collect(input);
+        const pin = yield* readOptional(path.join(directory, `${challenge.host}.known_hosts`)).pipe(
+          Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })),
+        );
+        if (pin !== null) return yield* prepare({ host: challenge.host }, caller);
+        return yield* createHandoff(
+          caller,
+          challenge.host,
+          {
+            operationId: NodeCrypto.randomUUID(),
+            generation: challenge.aliasGeneration,
+            stage: "runtime",
+          },
+          "host_trust",
+          humanFor(challenge),
+          {
+            kind: "ok",
+            status: {
+              host: challenge.host,
+              state: "untrusted",
+              runtimeVersion: null,
+              requestedVersion: "",
+            },
+          },
+          challenge,
+        );
+      }).pipe(
+        Effect.catchTags({
+          HandoffError: (error) => Effect.succeed(setupFailure(aliasFor(input), error)),
+        }),
+      );
+    const forget: SshHostSetup["Service"]["forget"] = (input, caller) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "settings:write");
+        aliasGenerations.set(input.host, (aliasGenerations.get(input.host) ?? 0) + 1);
+        for (const [id, entry] of challenges)
+          if (entry.challenge.host === input.host) challenges.delete(id);
+        const job = jobs.get(input.host);
+        jobs.delete(input.host);
+        if (job) {
+          yield* Deferred.succeed(
+            job.first,
+            errorResult("This SSH setup was cancelled by Forget.", "cancelled"),
+          );
+          yield* Fiber.interrupt(job.fiber).pipe(Effect.forkIn(serviceScope));
+        }
+        // This call fences the manager before it waits for the install lock, while config is intact.
+        const result = yield* dispatch
+          .forgetRuntime(input.host, { stopRuntime: input.stopRuntime })
+          .pipe(
+            Effect.catchTags({
+              SshRemoteDispatchError: (error) =>
+                error.reason === "host_unknown"
+                  ? Effect.succeed<SshHostResult>({
+                      kind: "ok",
+                      status: {
+                        host: input.host,
+                        state: "untrusted",
+                        runtimeVersion: null,
+                        requestedVersion: "",
+                      },
+                    })
+                  : Effect.succeed(dispatchFailure(error)),
+            }),
+          );
+        yield* authorize(caller, "settings:write");
+        const removed = yield* writer
+          .removeHost(input.host)
+          .pipe(admission.withPermits(1), Effect.result);
+        return removed._tag === "Failure"
+          ? errorResult("Could not remove the managed SSH files. Try again.")
+          : result;
+      });
+    const resumeContinuations = Effect.gen(function* () {
+      for (const entry of yield* handoffs.completedSshContinuations) {
+        const id = entry.handoff.handoffId;
+        if (continuing.has(id)) continue;
+        continuing.add(id);
+        const work = Effect.gen(function* () {
+          const args = yield* decodeContinuation(entry.args).pipe(
+            Effect.mapError((cause) => new HandoffError({ reason: "invalid_request", cause })),
+          );
+          const caller: SshHostCaller = { kind: "client", sessionId: entry.approvedBySessionId };
+          const address = { threadId: entry.handoff.requestedBy.threadId, handoffId: id };
+          const discard = handoffs.finishSshContinuation(address);
+          const expectedPath =
+            args.step === "runtime_update"
+              ? "ssh.runtime_update"
+              : args.step === "host_trust"
+                ? "ssh.host_add"
+                : "ssh.host_prepare";
+          if (
+            entry.handoff.target.path !== expectedPath ||
+            (entry.sshProgress !== undefined && entry.sshProgress.host !== args.host)
+          )
+            return yield* discard;
+          const now = DateTime.toEpochMillis(yield* DateTime.now);
+          if (
+            entry.handoff.expiresAt !== null &&
+            DateTime.toEpochMillis(entry.handoff.expiresAt) <= now
+          )
+            return yield* discard;
+          if (
+            args.step === "runtime_update" &&
+            (!entry.handoff.resolvedAt ||
+              now - DateTime.toEpochMillis(entry.handoff.resolvedAt) >= 10 * 60 * 1000)
+          )
+            return yield* discard;
+          if ((aliasGenerations.get(args.host) ?? 0) !== (args.challenge?.aliasGeneration ?? 0))
+            return yield* discard;
+          if (
+            args.aliasRevision !== undefined &&
+            args.aliasRevision !== (yield* aliasRevision(args.host))
+          )
+            return yield* discard;
+          yield* authorize(
+            caller,
+            args.step === "host_trust" ? "settings:write" : "environment:maintain",
+          );
+          if (args.step === "host_trust") {
+            if (!args.challenge) return yield* discard;
+            const trusted = yield* trustChallenge(args.challenge, caller).pipe(
+              admission.withPermits(1),
+            );
+            if (trusted.kind === "error") return yield* discard;
+          } else {
+            const current = yield* status({ host: args.host });
+            if (
+              current.status?.setup !== undefined &&
+              (current.status.setup.operationId !== args.operationId ||
+                current.status.setup.generation !== args.aliasGeneration)
+            )
+              return yield* discard;
+            if (
+              args.step === "runtime_update" &&
+              current.status?.requestedVersion !== args.requestedVersion
+            )
+              return yield* discard;
+          }
+          const latest = yield* status({ host: args.host });
+          if (
+            args.step === "runtime_update" &&
+            latest.status?.state === "ready" &&
+            latest.status.runtimeVersion === args.requestedVersion
+          )
+            return yield* discard;
+          const operation =
+            latest.status?.setup?.operationId === args.operationId
+              ? latest.status.setup
+              : yield* dispatch.beginSetupOperation(args.host, { operationId: args.operationId });
+          const ack = handoffs.finishSshContinuation({
+            threadId: entry.handoff.requestedBy.threadId,
+            handoffId: id,
+          });
+          yield* Deferred.await(
+            yield* startJob(
+              args.host,
+              caller,
+              args.step === "runtime_update",
+              args.step === "runtime_update",
+              operation,
+              ack,
+              (current) =>
+                handoffs.bindSshContinuation(
+                  address,
+                  {
+                    host: args.host,
+                    operationId: current.operationId,
+                    aliasGeneration: current.generation,
+                    environmentId: entry.handoff.target.environmentId,
+                    threadId: entry.handoff.requestedBy.threadId,
+                  },
+                  { ...args, aliasGeneration: current.generation },
+                ),
+              entry.handoff.requestedBy,
+              undefined,
+              Effect.gen(function* () {
+                if (args.step !== "runtime_update") return;
+                const startedAt = DateTime.toEpochMillis(yield* DateTime.now);
+                if (
+                  !entry.handoff.resolvedAt ||
+                  startedAt - DateTime.toEpochMillis(entry.handoff.resolvedAt) >= 10 * 60 * 1000
+                )
+                  return yield* new HandoffError({ reason: "expired" });
+              }),
+            ),
+          );
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("SSH continuation did not resume", {
+              handoffId: id,
+              reason: cause._tag,
+            }).pipe(
+              Effect.andThen(
+                handoffs
+                  .finishSshContinuation({
+                    threadId: entry.handoff.requestedBy.threadId,
+                    handoffId: id,
+                  })
+                  .pipe(Effect.ignore),
+              ),
+            ),
+          ),
+          Effect.ensuring(Effect.sync(() => continuing.delete(id))),
+          Effect.asVoid,
+        );
+        yield* work.pipe(Effect.forkIn(serviceScope));
+      }
+    });
+    const respondHandoff: SshHostSetup["Service"]["respondHandoff"] = (input, sessionId) =>
+      handoffs
+        .respond(input, sessionId)
+        .pipe(
+          Effect.tap((result) =>
+            result.state === "completed" && result.target.path.startsWith("ssh.")
+              ? resumeContinuations
+              : Effect.void,
+          ),
+        );
+    const handoffProgress: SshHostSetup["Service"]["handoffProgress"] = (input, caller) =>
+      Effect.gen(function* () {
+        yield* authorize(caller, "orchestration:read");
+        const record = yield* handoffs.read(input);
+        if (!record.target.path.startsWith("ssh."))
+          return { kind: "unavailable", reason: "not_ssh" } as const;
+        const binding = yield* handoffs.readSshProgressBinding(input, caller.sessionId);
+        if (!binding) return { kind: "unavailable", reason: "expired" } as const;
+        const result = yield* status({ host: binding.host });
+        if (
+          result.status?.setup?.operationId !== binding.operationId ||
+          result.status.setup.generation !== binding.aliasGeneration
+        )
+          return { kind: "unavailable", reason: "superseded" } as const;
+        return {
+          kind: "available",
+          host: binding.host,
+          operationId: binding.operationId,
+          generation: binding.aliasGeneration,
+          result,
+        } as const;
+      });
+    return SshHostSetup.of({
+      status,
+      update,
+      probe,
+      trust,
+      add,
+      prepare,
+      forget,
+      respondHandoff,
+      handoffProgress,
+      resumeContinuations,
+    });
+  });
+export const layer = Layer.effect(SshHostSetup, make());

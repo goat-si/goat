@@ -1005,3 +1005,34 @@ it.effect("a cold cache reads a durable relay receipt before the finished-review
     expect(relays).toHaveLength(0);
   }),
 );
+
+it.effect("forwards ready-only reads without changing ordinary host bootstrap policy", () =>
+  runService(
+    {
+      interactionMode: "default",
+      hostCall: () => Effect.succeed({ checkedBy: "server", diagnoses: [] }),
+    },
+    (service) =>
+      Effect.gen(function* () {
+        const decode = (value: unknown) => Effect.succeed({ value });
+        yield* service.readOnHost(
+          scope,
+          { host: "box", tool: "goat_provider_diagnose", arguments: {}, requireReady: true },
+          decode,
+        );
+        yield* service.readOnHost(
+          scope,
+          { host: "box", tool: "goat_project_list", arguments: {} },
+          decode,
+        );
+      }),
+  ).pipe(
+    Effect.tap(({ calls }) =>
+      Effect.sync(() => {
+        expect(calls[0]?.requireReady).toBe(true);
+        expect(calls[1]?.requireReady).toBeUndefined();
+      }),
+    ),
+    Effect.asVoid,
+  ),
+);
