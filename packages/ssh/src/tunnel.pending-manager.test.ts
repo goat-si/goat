@@ -579,6 +579,7 @@ describe("SSH pending replacement reconciliation", () => {
         const busy = yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true });
         if ("type" in busy) throw new Error("Expected ready");
         assert.deepStrictEqual(busy.pendingReplacement, pending);
+        assert.equal((yield* manager.status(uploadTarget)).status?.waitingReason, pending.reason);
         assert.equal(busy.remoteServerVersion, "1.2.2");
 
         f.setMode("ready");

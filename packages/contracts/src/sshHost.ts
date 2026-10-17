@@ -78,6 +78,7 @@ const SshHostStatusShape = Schema.Struct({
   runtimeVersion: Schema.NullOr(Schema.String),
   requestedVersion: Schema.String,
   phase: Schema.optionalKey(SshRuntimePhase),
+  waitingReason: Schema.optionalKey(Schema.Literals(["busy", "unknown", "contended"])),
   detail: Schema.optionalKey(Schema.String),
   failure: Schema.optionalKey(SshHostFailure),
   providers: Schema.optionalKey(SshHostProviders),
@@ -87,6 +88,7 @@ const SshHostStatusShape = Schema.Struct({
 export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
   if ((status.state === "preparing") !== (status.phase !== undefined)) return false;
   if (status.state === "failed" && status.failure === undefined) return false;
+  if (status.waitingReason !== undefined && status.state !== "update_waiting") return false;
   if (
     status.failure !== undefined &&
     (status.failure.reason === "archive_unavailable") !== (status.failure.archive !== undefined)

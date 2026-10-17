@@ -3505,22 +3505,25 @@ function archiveFailure(error: SshLaunchError): SshHostFailure | undefined {
 // Only the final diagnostic line crosses the public boundary, with credentials removed.
 function publicSshDiagnostic(error: SshEnvironmentEffectError) {
   return (
-    getLastNonEmptyOutputLine(error instanceof SshCommandError ? error.stderr : error.message) ||
-    error.message
-  )
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
-    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[redacted]@")
-    .replace(
-      /((?:token|password|secret|credential|authorization|api[_-]?key)[\w-]*[\s"']*[:=][\s"']*)[^\s"'&,;]+/giu,
-      "$1[redacted]",
+    (
+      getLastNonEmptyOutputLine(error instanceof SshCommandError ? error.stderr : error.message) ||
+      error.message
     )
-    .replace(
-      /((?:--)?(?:token|password|secret|credential|api[_-]?key)[\w-]*\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/giu,
-      "$1[redacted]",
-    )
-    .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
-    .replace(/\b(?:sk-|gh[opusr]_|github_pat_)[A-Za-z0-9_-]+/gu, "[redacted]")
-    .slice(0, 500);
+      // oxlint-disable-next-line no-control-regex -- strips ANSI escape sequences
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
+      .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/giu, "$1[redacted]@")
+      .replace(
+        /((?:token|password|secret|credential|authorization|api[_-]?key)[\w-]*[\s"']*[:=][\s"']*)[^\s"'&,;]+/giu,
+        "$1[redacted]",
+      )
+      .replace(
+        /((?:--)?(?:token|password|secret|credential|api[_-]?key)[\w-]*\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/giu,
+        "$1[redacted]",
+      )
+      .replace(/\bBearer\s+\S+/giu, "Bearer [redacted]")
+      .replace(/\b(?:sk-|gh[opusr]_|github_pat_)[A-Za-z0-9_-]+/gu, "[redacted]")
+      .slice(0, 500)
+  );
 }
 
 function runtimeFailureResult(
@@ -3644,7 +3647,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             : pending.reason === "unknown"
               ? `GOAT can't tell whether ${host} is busy. It retries every 10 minutes.`
               : `Update to ${requestedVersion} waits for running work`;
-      snapshot = { ...base, state: "update_waiting", detail };
+      snapshot = { ...base, state: "update_waiting", waitingReason: pending.reason, detail };
     } else if (!("type" in result) && result.selectedRuntime.upgradeFailure !== undefined) {
       snapshot = { ...base, state: "failed", failure: result.selectedRuntime.upgradeFailure };
       acquisitionFailures.set(key, result.selectedRuntime.upgradeFailure);

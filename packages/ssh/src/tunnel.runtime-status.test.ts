@@ -26,6 +26,8 @@ import {
 } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
+const decodeSshHostResult = Schema.decodeEffect(SshHostResult);
+
 const signals = (version: string) => ({
   serverVersion: version,
   sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
@@ -221,7 +223,7 @@ describe("SSH runtime status", () => {
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const result = yield* manager.status(uploadTarget);
-      yield* Schema.decodeEffect(SshHostResult)(result);
+      yield* decodeSshHostResult(result);
       const status = successfulStatus(result);
       assert.equal(status.state, "stopped");
       assert.equal(status.runtimeVersion, version);
@@ -256,7 +258,7 @@ describe("SSH runtime status", () => {
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const result = yield* manager.status(uploadTarget);
-      yield* Schema.decodeEffect(SshHostResult)(result);
+      yield* decodeSshHostResult(result);
       assert.equal(successfulStatus(result).state, expected);
       assert.equal(successfulStatus(result).runtimeVersion, version);
       assert.equal(f.calls.launches, 0);
@@ -293,7 +295,7 @@ describe("SSH runtime status", () => {
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       const result = yield* manager.status(uploadTarget);
-      yield* Schema.decodeEffect(SshHostResult)(result);
+      yield* decodeSshHostResult(result);
       assert.equal(successfulStatus(result).state, state);
       assert.equal(successfulStatus(result).failure?.reason, reason);
       assert.equal(f.calls.prompts, 0);
@@ -356,7 +358,7 @@ describe("SSH runtime status", () => {
           Result.isFailure(yield* Effect.result(manager.ensureEnvironment(uploadTarget))),
         );
         const result = yield* manager.status(uploadTarget);
-        yield* Schema.decodeEffect(SshHostResult)(result);
+        yield* decodeSshHostResult(result);
         assert.equal(successfulStatus(result).failure?.reason, "unsupported_platform");
         assert.equal(f.calls.launches, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
@@ -382,7 +384,7 @@ describe("SSH runtime status", () => {
           liveSignals: signals("1.2.2"),
         });
         const result = yield* manager.status(uploadTarget);
-        yield* Schema.decodeEffect(SshHostResult)(result);
+        yield* decodeSshHostResult(result);
         const status = successfulStatus(result);
         assert.equal(status.state, "failed");
         assert.equal(status.runtimeVersion, "1.2.2");

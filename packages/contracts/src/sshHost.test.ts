@@ -34,8 +34,35 @@ const providers = {
 } as const;
 const decodeStatus = Schema.decodeUnknownSync(SshHostStatus);
 const decodeResult = Schema.decodeUnknownSync(SshHostResult);
+const decodeStatusInput = Schema.decodeUnknownSync(SshHostStatusInput);
+const decodeDesktopStatusInput = Schema.decodeUnknownSync(DesktopSshHostStatusInputSchema);
 
 describe("SSH host contracts", () => {
+  it("keeps waiting reasons exclusive to pending runtime updates", () => {
+    for (const waitingReason of ["busy", "unknown", "contended"] as const) {
+      const waiting = { ...stopped, state: "update_waiting", waitingReason } as const;
+      expect(decodeStatus(waiting).waitingReason).toBe(waitingReason);
+      expect(decodeResult({ kind: "ok", status: waiting }).status?.waitingReason).toBe(
+        waitingReason,
+      );
+      for (const state of SshHostState.literals) {
+        if (state === "update_waiting") continue;
+        const status = {
+          ...stopped,
+          state,
+          waitingReason,
+          ...(state === "preparing" ? { phase: "checking" as const } : {}),
+          ...(state === "failed" ? { failure: { reason: "missing_tools" as const, fix } } : {}),
+          ...(state === "providers_not_ready" ? { providers } : {}),
+        };
+        expect(validateSshHostStatus(status)).toBe(false);
+        expect(() => decodeStatus(status)).toThrow();
+      }
+    }
+    expect(() =>
+      decodeStatus({ ...stopped, state: "update_waiting", waitingReason: "other" }),
+    ).toThrow();
+  });
   it("round-trips stopped and nested result envelopes", () => {
     const codec = Schema.toCodecJson(SshHostResult);
     const results = [
@@ -87,7 +114,7 @@ describe("SSH host contracts", () => {
       const decoded = Schema.decodeUnknownSync(codec)(JSON.parse(JSON.stringify(result)));
       expect(JSON.parse(JSON.stringify(Schema.encodeSync(codec)(decoded)))).toEqual(result);
     }
-    expect(Schema.decodeUnknownSync(SshHostStatusInput)({ host: "vps-1" })).toEqual({
+    expect(decodeStatusInput({ host: "vps-1" })).toEqual({
       host: "vps-1",
     });
   });
@@ -223,7 +250,7 @@ describe("SSH host contracts", () => {
     const decodeDesktopUpdate = Schema.decodeUnknownSync(DesktopSshRuntimeUpdateInputSchema);
     expect(decodeUpdate({ host: "vps-1" })).toEqual({ host: "vps-1" });
     expect(decodeDesktopUpdate({ target })).toEqual({ target });
-    expect(Schema.decodeUnknownSync(DesktopSshHostStatusInputSchema)({ target })).toEqual({
+    expect(decodeDesktopStatusInput({ target })).toEqual({
       target,
     });
     for (const mode of ["when_idle", "now"] as const) {
