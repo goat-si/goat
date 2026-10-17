@@ -33,11 +33,12 @@ const task = Schema.decodeUnknownSync(ChannelTask)({
 });
 const runId = RunId.make("run-1");
 
+const decodeEventJson = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
+const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+
 const replay = (event: ChannelTaskEvent) => {
   // A JSON round trip exercises the persisted event decoder before projection.
-  const decoded = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent))(
-    JSON.stringify(event),
-  );
+  const decoded = decodeEventJson(JSON.stringify(event));
   const transition = applyChannelTaskEvent(task, decoded);
   if (!transition.ok) throw new Error(transition.reason);
   return transition.task;
@@ -105,7 +106,7 @@ describe("completed run outcomes", () => {
   });
 
   it("replays a task.completed event from before reports without manufacturing a marker", () => {
-    const oldEvent = Schema.decodeUnknownSync(ChannelTaskEvent)({
+    const oldEvent = decodeEvent({
       eventId: "old-completion",
       sequence: 12,
       taskId: task.taskId,

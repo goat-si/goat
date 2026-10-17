@@ -83,6 +83,11 @@ import {
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
+const decodeTaskEventJson = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
+const decodeTaskEventJsonEffect = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ChannelTaskEvent),
+);
+
 /** Relink through the real one-time code path, keeping the transport's grants unchanged. */
 const linkMemoryUser = (
   memoryScopes: ReadonlyArray<AuthEnvironmentScope>,
@@ -2003,9 +2008,7 @@ describe("notes require a request in the current input", () => {
           event_json: string;
         }>`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.created'`;
         assert.lengthOf(rows, 1);
-        const created = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
-          rows[0]!.event_json,
-        );
+        const created = yield* decodeTaskEventJsonEffect(rows[0]!.event_json);
         assert.strictEqual(created.type, "task.created");
         if (created.type !== "task.created") return yield* Effect.die("expected task.created");
         const instruction = harness.world.launches[0]!.initialMessage!.text;
@@ -2064,9 +2067,7 @@ describe("completion (scenario 5)", () => {
     const rows = yield* sql<{ event_json: string }>`
       SELECT event_json FROM channel_task_events ORDER BY sequence
     `;
-    return rows.map((row) =>
-      Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent))(row.event_json),
-    );
+    return rows.map((row) => decodeTaskEventJson(row.event_json));
   });
 
   it.effect.each([
