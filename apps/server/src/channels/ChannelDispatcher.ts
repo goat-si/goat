@@ -97,6 +97,15 @@ const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
     "When you finish, end with a short summary of the result.",
   ].join("\n");
 
+const MEMORY_CEILING_RANK = { none: 0, read: 1, read_write: 2 } as const;
+
+/** The narrower of two memory ceilings. */
+const lowerMemoryCeiling = (
+  left: MemoryTaskGrantCeiling,
+  right: MemoryTaskGrantCeiling,
+): MemoryTaskGrantCeiling =>
+  MEMORY_CEILING_RANK[left] <= MEMORY_CEILING_RANK[right] ? left : right;
+
 const toLaunchStrategy = (
   strategy: ChannelDispatchTarget["workspaceStrategy"],
 ): OrchestrationV2ThreadLaunchWorkspaceStrategy =>
@@ -228,10 +237,14 @@ const make = Effect.gen(function* () {
   /**
    * The memory a task's worker may use: what the requester was granted, the same rule MCP and
    * scheduled launches use. A Slack requester is judged by the identity link as it stands now,
-   * so a link narrowed or removed since the message arrived counts.
+   * so a link narrowed or removed since the message arrived counts. A task that already chose a
+   * target never gets more than that target recorded, so choosing again cannot widen it.
    */
   const requesterMemoryCeiling = (task: ChannelTask) =>
     Effect.gen(function* () {
+      const recorded = task.target === undefined ? undefined : task.target.memoryGrantCeiling;
+      const cap = (ceiling: MemoryTaskGrantCeiling): MemoryTaskGrantCeiling =>
+        task.target === undefined ? ceiling : lowerMemoryCeiling(ceiling, recorded ?? "none");
       let scopes = task.requester.grantedScopes;
       if (task.originAddress.kind === "slack") {
         const actor = task.requester.externalActorId;
@@ -244,7 +257,7 @@ const make = Effect.gen(function* () {
         scopes = scopes.filter((scope) => linked.grantedScopes.includes(scope));
       }
       // A read-only destination still narrows this when the thread starts.
-      return captureMemoryGrantCeiling(scopes, false);
+      return cap(captureMemoryGrantCeiling(scopes, false));
     });
 
   /** The launch settings for a task, or the question to ask when they cannot be chosen. */

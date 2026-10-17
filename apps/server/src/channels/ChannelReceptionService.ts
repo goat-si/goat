@@ -482,6 +482,13 @@ const make = Effect.gen(function* () {
       if (decision.remember !== undefined && rememberRefusal !== undefined) {
         yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
+      // Saved before the result commits so a restart re-runs this input and saves it then; the note
+      // names its input, so a second pass for the same input does not add it twice.
+      if (decision.remember !== undefined && rememberRefusal === undefined) {
+        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
+          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
+        );
+      }
 
       let replyText = decision.replyText;
       let finalDecision = decision;
@@ -674,12 +681,6 @@ const make = Effect.gen(function* () {
           inputId,
           receptionId,
         });
-      }
-      // Saved only once this pass's result is the one that counts, linked to the input it came from.
-      if (committed && decision.remember !== undefined && rememberRefusal === undefined) {
-        yield* appendChannelBotNote(fileSystem, botFiles, decision.remember, readAt, inputId).pipe(
-          Effect.catch((cause) => Effect.logWarning("GOAT Bot note was not saved", { cause })),
-        );
       }
       yield* wake.wake;
     });
