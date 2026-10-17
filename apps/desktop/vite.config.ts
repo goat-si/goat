@@ -4,6 +4,7 @@ import "@goat/contracts/adoptLegacyEnv";
 import { defineConfig } from "vite-plus";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
+import { resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoEnv = loadRepoEnv();
@@ -20,6 +21,12 @@ const publicConfigDefine = {
   __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
+};
+// The main process stamps the same commit time as the server archive it ships, so the SSH
+// runner can order that archive against a remote host's runtime (apps/desktop/src/ssh).
+const mainProcessDefine = {
+  ...publicConfigDefine,
+  __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(resolveBuildCommitTime(import.meta.dirname)),
 };
 
 export default defineConfig({
@@ -56,7 +63,7 @@ export default defineConfig({
       dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
-      define: publicConfigDefine,
+      define: mainProcessDefine,
       outputOptions: { codeSplitting: false },
       entry: ["src/main.ts"],
       clean: true,

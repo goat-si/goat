@@ -10,6 +10,10 @@ import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
  *
  * An unpackaged app reports Electron's own version, which names no GOAT
  * release, so it uses the server package version that packaging would stamp.
+ *
+ * `buildCommitTime` is this build's commit time. It lets the remote order the
+ * requested archive against an idle runtime of the same version core, such as an
+ * older dev or nightly build, so that runtime is refreshed instead of reused.
  */
 export const resolveDesktopSshCliRunner = (
   environment: Pick<
@@ -21,6 +25,7 @@ export const resolveDesktopSshCliRunner = (
     "archiveDirectory" | "bundledArchiveDirectory" | "releaseBaseUrl"
   >,
   serverPackage: { readonly version: string; readonly engines: { readonly node: string } },
+  buildCommitTime?: number,
 ): RemoteGoatRunnerOptions => {
   const devRemoteEntryPath = Option.getOrUndefined(environment.devRemoteGoatServerEntryPath);
   if (environment.isDevelopment && devRemoteEntryPath !== undefined) {
@@ -31,6 +36,7 @@ export const resolveDesktopSshCliRunner = (
   }
   return {
     archiveVersion: environment.isPackaged ? environment.appVersion : serverPackage.version,
+    ...(buildCommitTime === undefined ? {} : { archiveCommitTime: buildCommitTime }),
     ...archiveOptions,
     ...(environment.isPackaged ? { refreshOwnedRuntimeOnFirstConnection: true } : {}),
   };

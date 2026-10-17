@@ -1,11 +1,10 @@
 import "vite-plus/test/config";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
-// @effect-diagnostics nodeBuiltinImport:off - The build reads its commit time from git.
-import * as NodeChildProcess from "node:child_process";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
+import { resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -30,22 +29,7 @@ const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version
   ? "nightly"
   : "latest";
 
-// Commit time orders builds whose versions cannot, such as `0.1.0-dev.<sha>`
-// (see `compareRuntimeBuilds`). A build outside a git checkout can pass it in
-// GOAT_BUILD_COMMIT_TIME; without either the build is unstamped.
-const buildCommitTime = (() => {
-  const explicit = process.env.GOAT_BUILD_COMMIT_TIME?.trim();
-  if (explicit) return explicit;
-  try {
-    return NodeChildProcess.execFileSync("git", ["log", "-1", "--format=%ct", "HEAD"], {
-      cwd: import.meta.dirname,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return "";
-  }
-})();
+const buildCommitTime = resolveBuildCommitTime(import.meta.dirname);
 
 // `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
 // step refuses multi-chunk output and counts the sourcemap as a chunk, and the

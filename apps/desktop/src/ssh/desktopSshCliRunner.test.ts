@@ -69,6 +69,48 @@ describe("resolveDesktopSshCliRunner", () => {
       { nodeScriptPath: "/src/goat/apps/server/src/bin.ts", nodeEngineRange: "^24.13.1" },
     );
   });
+
+  it("asks for the archive with this build's commit time so same-core runtimes can be ordered", () => {
+    const commitTime = 1_791_000_000;
+    const packaged = resolveDesktopSshCliRunner(
+      environment({
+        appVersion: "0.1.0-nightly.20261017.1",
+        isPackaged: true,
+        isDevelopment: false,
+      }),
+      archiveOptions,
+      server,
+      commitTime,
+    );
+    assert.equal(packaged.archiveVersion, "0.1.0-nightly.20261017.1");
+    assert.equal(packaged.archiveCommitTime, commitTime);
+
+    const unstamped = resolveDesktopSshCliRunner(
+      environment({
+        appVersion: "0.1.0-nightly.20261017.1",
+        isPackaged: true,
+        isDevelopment: false,
+      }),
+      archiveOptions,
+      server,
+      undefined,
+    );
+    assert.notProperty(unstamped, "archiveCommitTime");
+
+    // A source checkout runs whatever is on disk, so no archive build is ordered.
+    const source = resolveDesktopSshCliRunner(
+      environment({
+        appVersion: "44.4.5",
+        isPackaged: false,
+        isDevelopment: true,
+        devRemoteEntry: "/src/goat/apps/server/src/bin.ts",
+      }),
+      archiveOptions,
+      server,
+      commitTime,
+    );
+    assert.notProperty(source, "archiveCommitTime");
+  });
 });
 
 it("carries read-only packaged resources separately from the writable cache", () => {
