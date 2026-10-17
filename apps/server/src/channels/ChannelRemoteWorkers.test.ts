@@ -2292,6 +2292,14 @@ describe("what a worker on another machine is told", () => {
         assert.include(message, "goat_origin_report with status progress");
         // The home machine's paths mean nothing over there.
         assert.notInclude(message, files.notes);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const brief = yield* ledger.latestTaskBrief((yield* onlyTask).taskId);
+        assert.strictEqual(
+          brief?.context.notesRevision,
+          NodeCrypto.createHash("sha256")
+            .update("- 2026-10-17: open PRs as drafts (asked in x)\n")
+            .digest("hex"),
+        );
       }).pipe(Effect.provide(harness.layer));
     },
   );

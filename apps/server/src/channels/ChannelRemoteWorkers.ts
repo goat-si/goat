@@ -74,7 +74,7 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
-import { freezeChannelBrief } from "./channelBriefs.ts";
+import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement } from "./channelPlacement.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
@@ -1000,7 +1000,14 @@ const make = Effect.gen(function* () {
       const bot = yield* ledger.getBot(stored.ownerId);
       const message = yield* workerMessage(task);
       // SSH's extra reporting note is transport guidance, excluded from deliveredText.
-      const frozen = yield* freezeChannelBrief(ledger, stored, owner, message);
+      // The notes travel inside the message unless they were dropped to fit its limit.
+      const notesRevision =
+        stored.task.briefVersion === undefined && message.includes("<goat_bot_notes>")
+          ? yield* channelNotesRevision(botFiles.notes).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+            )
+          : null;
+      const frozen = yield* freezeChannelBrief(ledger, stored, owner, message, { notesRevision });
       stored = frozen.stored;
       const launched = yield* ssh
         .launchThread(
