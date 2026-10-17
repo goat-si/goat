@@ -55,7 +55,11 @@ function isSource(file) {
   return SOURCE_EXTENSIONS.includes(path.posix.extname(file));
 }
 
-/** Repository-relative files under apps/* and packages/*, skipping build output, dot directories and native projects. */
+/**
+ * Repository-relative files under apps/, packages/ and scripts/ plus the source files at the root
+ * (the root Vite config names the setup file every test loads; scripts/lib feeds the app configs),
+ * skipping build output, dot directories and native projects.
+ */
 function listWorkspaceFiles(root) {
   const files = [];
   const walk = (relative) => {
@@ -76,6 +80,10 @@ function listWorkspaceFiles(root) {
   };
   walk("apps");
   walk("packages");
+  walk("scripts");
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isFile() && isSource(entry.name)) files.push(entry.name);
+  }
   return files;
 }
 
