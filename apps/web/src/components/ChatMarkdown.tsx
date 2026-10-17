@@ -1669,7 +1669,8 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     : props.originalUrl
       ? mediaUrlReference(props.originalUrl)
       : undefined;
-  const relativePath = reference?.kind === "file" ? reference.relativePath : undefined;
+  const panelPath =
+    reference?.kind === "file" ? (reference.relativePath ?? reference.path) : undefined;
   const fallbackSrc = assetUrl._tag === "Failure" ? props.fallbackSrc : undefined;
   const src =
     assetUrl._tag === "Success"
@@ -1697,14 +1698,14 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
       ? { asset: { environmentId: props.environmentId, resource } }
       : {}),
     ...(reference ? { reference } : {}),
-    ...(relativePath && (resource._tag === "media-file" || resource._tag === "workspace-file")
+    ...(panelPath && (resource._tag === "media-file" || resource._tag === "workspace-file")
       ? {
           onOpenFile: () =>
             useRightPanelStore
               .getState()
               .openFile(
                 { environmentId: props.environmentId, threadId: resource.threadId },
-                relativePath,
+                panelPath,
               ),
         }
       : {}),
@@ -2674,8 +2675,8 @@ function useChatMarkdownState({
         mediaMimeTypeFromExtension(
           fileLinkMeta.basename.slice(fileLinkMeta.basename.lastIndexOf(".")),
         ) !== null;
-      // Media outside the workspace keeps the expanded preview; other host
-      // files (a report in a temp dir) open read-only in the files panel.
+      // Media outside the workspace keeps the expanded preview, which can still open it in the
+      // files panel; other host files (a report in a temp dir) open read-only in the panel.
       const panelPath =
         fileLinkMeta.workspaceRelativePath ??
         (!canPreviewMedia && isAbsolutePath(fileLinkMeta.filePath) ? fileLinkMeta.filePath : null);

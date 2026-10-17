@@ -49,7 +49,7 @@ export async function resolveMarkdownMediaPreview(input: {
   cwd?: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
   httpBaseUrl?: string | undefined;
-  onOpenFile?: ((relativePath: string) => void) | undefined;
+  onOpenFile?: ((path: string) => void) | undefined;
   createAssetUrl: (input: {
     environmentId: EnvironmentId;
     input: { resource: AssetResource };
@@ -62,7 +62,9 @@ export async function resolveMarkdownMediaPreview(input: {
   });
   if (media === null) return null;
   const { kind, name, reference } = media;
-  const relativePath = reference?.kind === "file" ? reference.relativePath : undefined;
+  // Media outside the workspace opens in the files panel by its absolute host path.
+  const panelPath =
+    reference?.kind === "file" ? (reference.relativePath ?? reference.path) : undefined;
 
   let src: string;
   let asset: MediaActionSource["asset"];
@@ -98,8 +100,8 @@ export async function resolveMarkdownMediaPreview(input: {
           src,
           ...(reference ? { reference } : {}),
           ...(asset ? { asset } : {}),
-          ...(relativePath && input.onOpenFile
-            ? { onOpenFile: () => input.onOpenFile?.(relativePath) }
+          ...(panelPath && input.onOpenFile
+            ? { onOpenFile: () => input.onOpenFile?.(panelPath) }
             : {}),
         },
       },

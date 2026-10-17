@@ -27,6 +27,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ZoomableImage, type ZoomableImageHandle } from "./ZoomableImage";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import { useRightPanelStore } from "../../rightPanelStore";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -110,7 +111,24 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     name: item?.name ?? "Media",
     src: item?.src ?? null,
   };
-  const openFile = source.onOpenFile;
+  const fileAsset = source.asset;
+  const fileResource = fileAsset?.resource;
+  // Signed host media carries its owning environment and thread even outside the workspace.
+  const openFile =
+    source.onOpenFile ??
+    (fileAsset &&
+    fileResource &&
+    (fileResource._tag === "media-file" || fileResource._tag === "workspace-file")
+      ? () =>
+          useRightPanelStore
+            .getState()
+            .openFile(
+              { environmentId: fileAsset.environmentId, threadId: fileResource.threadId },
+              source.reference?.kind === "file"
+                ? (source.reference.relativePath ?? source.reference.path)
+                : fileResource.path,
+            )
+      : undefined);
   const actionsSource: MediaActionSource = openFile
     ? {
         ...source,

@@ -94,6 +94,9 @@ it("opens host media through server authorization before the client grant loads"
         images: [expect.objectContaining({ src: "https://host.test/api/assets/image.png" })],
       }),
     );
+    // Media outside the workspace can still move into the files panel from the preview.
+    const [preview] = onImageExpand.mock.calls[0]!;
+    expect(preview.images[0].actionsSource.onOpenFile).toBeTypeOf("function");
   } finally {
     await act(async () => renderer?.unmount());
     vi.unstubAllGlobals();

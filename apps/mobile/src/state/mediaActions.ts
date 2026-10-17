@@ -99,6 +99,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
 
   const reference = source?.reference;
   const relativePath = reference?.kind === "file" ? reference.relativePath : undefined;
+  const panelPath = reference?.kind === "file" ? (relativePath ?? reference.path) : undefined;
   const threadId = source && "threadId" in source ? source.threadId : undefined;
   const actions: { id: MediaActionId; title: string; run: () => void; disabled?: boolean }[] =
     source
@@ -130,7 +131,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
                 },
               ]
             : []),
-          ...(relativePath && "environmentId" in source && threadId !== undefined
+          ...(panelPath && "environmentId" in source && threadId !== undefined
             ? [
                 {
                   id: "open-file" as const,
@@ -142,7 +143,7 @@ export function useMediaActions(source: MediaActionsSource | undefined, onOpenFi
                     navigation.navigate("ThreadFile", {
                       environmentId: String(source.environmentId),
                       threadId: String(threadId),
-                      path: relativePath.split("/"),
+                      path: panelPath.split("/"),
                     });
                   },
                 },

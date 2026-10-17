@@ -169,6 +169,33 @@ it.each(["workspace-file", "media-file"] as const)(
   },
 );
 
+it.each(["/tmp/chart.png", "/tmp/recording.mp4", "C:\\Temp\\chart.png", "//host/share/chart.png"])(
+  "opens host media outside the workspace without losing its root: %s",
+  (path) => {
+    state.sessions.set(environmentId, granted);
+    const onOpenFile = vi.fn();
+    const source: MediaActionsSource = {
+      ...hostSource(),
+      reference: { kind: "file", path },
+      environmentId,
+      threadId,
+      resource: { _tag: "media-file", threadId, path },
+    };
+    const media = useMediaActions(source, onOpenFile);
+
+    media.actions.find(({ id }) => id === "open-file")!.run();
+
+    expect(onOpenFile).toHaveBeenCalledOnce();
+    expect(state.navigate).toHaveBeenCalledWith("ThreadFile", {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+      path: path.split("/"),
+    });
+    expect(state.navigate.mock.calls[0]?.[1].path.join("/")).toBe(path);
+    expect(media.actions.some(({ id }) => id === "copy-relative-path")).toBe(false);
+  },
+);
+
 it("rechecks a retained menu action after revocation", async () => {
   state.sessions.set(environmentId, granted);
   const media = useMediaActions(hostSource());
