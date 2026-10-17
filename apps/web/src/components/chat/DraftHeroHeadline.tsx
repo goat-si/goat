@@ -41,6 +41,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { InlineButton } from "../ui/button";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { prefetchGoatProjectFiles } from "~/lib/goatProjectFileDefaults";
 
 // Picker value for the "Add project" row; real entries are keyed by logical
 // project key.
@@ -286,6 +287,9 @@ export function DraftHeroHeadline({
       onOpenChange={(open) => {
         setPickerOpen(open);
         setPickerQuery("");
+        // Read each listed project's checked-in defaults now, so choosing one opens its draft
+        // with the right workspace mode instead of correcting it a moment later.
+        if (open) prefetchGoatProjectFiles(menuEntries.map((entry) => entry.targetProject));
       }}
       value={selectedPickerItem}
       onValueChange={(item) => {
