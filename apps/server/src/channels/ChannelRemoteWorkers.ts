@@ -74,6 +74,7 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
+import { freezeChannelBrief } from "./channelBriefs.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement } from "./channelPlacement.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
@@ -897,7 +898,7 @@ const make = Effect.gen(function* () {
    */
   const launchOnce = (taskId: ChannelTaskId, owner: string) =>
     Effect.gen(function* () {
-      const stored = yield* ledger.getTask(taskId);
+      let stored = yield* ledger.getTask(taskId);
       if (stored === undefined || stored.task.status !== "dispatching") return;
       const task = stored.task;
       const remote = task.target?.remote;
@@ -998,6 +999,9 @@ const make = Effect.gen(function* () {
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBot(stored.ownerId);
       const message = yield* workerMessage(task);
+      // SSH's extra reporting note is transport guidance, excluded from deliveredText.
+      const frozen = yield* freezeChannelBrief(ledger, stored, owner, message);
+      stored = frozen.stored;
       const launched = yield* ssh
         .launchThread(
           {
@@ -1014,7 +1018,7 @@ const make = Effect.gen(function* () {
                   }
                 : { type: "cwd" },
             title: task.title,
-            message,
+            message: frozen.brief.deliveredText,
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.

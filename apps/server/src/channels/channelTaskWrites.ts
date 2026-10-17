@@ -47,7 +47,15 @@ export const makeTaskEvent = (
     occurredAt,
     actor: options.actor ?? "system",
     type: spec.type,
-    payload: spec.payload,
+    payload:
+      spec.type === "task.completed" ||
+      spec.type === "task.failed" ||
+      spec.type === "task.cancelled"
+        ? {
+            ...spec.payload,
+            ...(task.briefVersion === undefined ? {} : { briefVersion: task.briefVersion }),
+          }
+        : spec.payload,
   });
 
 const chipFor = (task: ChannelTask): ChannelTaskChip => ({

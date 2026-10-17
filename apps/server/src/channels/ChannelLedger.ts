@@ -29,6 +29,9 @@ import {
   ChannelRequester,
   ChannelTask,
   ChannelTaskEvent,
+  type ChannelTaskBrief,
+  type ChannelTaskExportInput,
+  type ChannelTaskExportResult,
   type ChannelTaskEventId,
   type ChannelTaskId,
   type ChannelTaskStatus,
@@ -204,6 +207,14 @@ export class ChannelLedger extends Context.Service<
       { readonly tasks: ReadonlyArray<ChannelTask>; readonly nextCursor: string | undefined },
       ChannelLedgerError
     >;
+    /** Most recently frozen brief, including earlier generations for version allocation. */
+    readonly latestTaskBrief: (
+      taskId: ChannelTaskId,
+    ) => Effect.Effect<ChannelTaskBrief | undefined, ChannelLedgerError>;
+    /** Terminal events paired with the brief they reference, in durable event order. */
+    readonly exportTasks: (
+      input: ChannelTaskExportInput & { readonly ownerId: string },
+    ) => Effect.Effect<ChannelTaskExportResult, ChannelLedgerError>;
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
@@ -892,6 +903,116 @@ const make = Effect.gen(function* () {
               : undefined,
         };
       }).pipe(Effect.mapError(toLedgerError("listTasks"))),
+
+    latestTaskBrief: (taskId) =>
+      sql<{ readonly event_json: string }>`
+        SELECT event_json FROM channel_task_events
+        WHERE task_id = ${taskId} AND type = 'task.brief.frozen'
+        ORDER BY sequence DESC LIMIT 1
+      `.pipe(
+        Effect.map((rows) => {
+          const event = rows[0] === undefined ? undefined : decodeEvent(rows[0].event_json);
+          return event?.type === "task.brief.frozen" ? event.payload.brief : undefined;
+        }),
+        Effect.mapError(toLedgerError("latestTaskBrief")),
+      ),
+
+    exportTasks: (input) =>
+      Effect.gen(function* () {
+        const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
+        const after = input.cursor === undefined ? 0 : Number(input.cursor);
+        if (!Number.isSafeInteger(after) || after < 0) {
+          return yield* new ChannelLedgerError({
+            reason: "persistence",
+            detail: "Invalid export cursor.",
+          });
+        }
+        const rows = yield* sql<{
+          readonly sequence: number;
+          readonly owner_id: string;
+          readonly task_json: string;
+          readonly event_json: string;
+          readonly brief_json: string | null;
+          readonly worker_json: string | null;
+          readonly human_interventions: number;
+          readonly reruns: number;
+        }>`
+          SELECT outcome.sequence, task.owner_id, task.task_json, outcome.event_json,
+            (SELECT frozen.event_json FROM channel_task_events AS frozen
+              WHERE frozen.task_id = outcome.task_id AND frozen.type = 'task.brief.frozen'
+                AND frozen.sequence < outcome.sequence
+                AND json_extract(frozen.event_json, '$.payload.brief.version') =
+                  json_extract(outcome.event_json, '$.payload.briefVersion')
+              ORDER BY frozen.sequence DESC LIMIT 1) AS brief_json,
+            (SELECT bound.event_json FROM channel_task_events AS bound
+              WHERE bound.task_id = outcome.task_id AND bound.type = 'task.worker.bound'
+                AND bound.sequence < outcome.sequence
+              ORDER BY bound.sequence DESC LIMIT 1) AS worker_json,
+            (SELECT COUNT(*) FROM channel_task_events AS answer
+              WHERE answer.task_id = outcome.task_id AND answer.type = 'task.question.answered'
+                AND answer.sequence < outcome.sequence) AS human_interventions,
+            (SELECT COUNT(*) FROM channel_task_events AS retry
+              WHERE retry.task_id = outcome.task_id AND retry.type = 'task.retry.requested'
+                AND retry.sequence < outcome.sequence) AS reruns
+          FROM channel_task_events AS outcome
+          JOIN channel_tasks AS task ON task.task_id = outcome.task_id
+          WHERE task.owner_id = ${input.ownerId}
+            AND outcome.type IN ('task.completed', 'task.failed', 'task.cancelled')
+            AND julianday(outcome.occurred_at) >= julianday(${input.from})
+            AND julianday(outcome.occurred_at) < julianday(${input.to})
+            AND outcome.sequence > ${after}
+          ORDER BY outcome.sequence LIMIT ${limit + 1}
+        `;
+        const page = rows.slice(0, limit);
+        const lines = page.map((row) => {
+          const task = decodeTask(row.task_json);
+          const outcome = decodeEvent(row.event_json);
+          const frozen = row.brief_json === null ? undefined : decodeEvent(row.brief_json);
+          const bound = row.worker_json === null ? undefined : decodeEvent(row.worker_json);
+          const brief = frozen?.type === "task.brief.frozen" ? frozen.payload.brief : null;
+          const generation =
+            outcome.type === "task.completed" || outcome.type === "task.failed"
+              ? outcome.payload.generation
+              : row.reruns + 1;
+          const worker =
+            bound?.type === "task.worker.bound" && bound.payload.worker.generation === generation
+              ? bound.payload.worker
+              : undefined;
+          return JSON.stringify({
+            taskId: task.taskId,
+            ownerId: row.owner_id,
+            requester: task.requester,
+            conversationId: task.conversationId,
+            originBindingId: task.originBindingId,
+            originAddress: task.originAddress,
+            originInputId: task.originInputId,
+            title: task.title,
+            brief,
+            terminalState: outcome.type.slice("task.".length),
+            occurredAt: outcome.occurredAt,
+            resultSummary:
+              outcome.type === "task.completed"
+                ? outcome.payload.summary
+                : outcome.type === "task.failed"
+                  ? (outcome.payload.summary ?? outcome.payload.reason)
+                  : outcome.type === "task.cancelled"
+                    ? (outcome.payload.reason ?? null)
+                    : null,
+            // The ledger stores worker/run pointers and summaries, not transcript evidence.
+            evidence: worker ?? null,
+            humanInterventions: row.human_interventions,
+            reruns: row.reruns,
+            generation,
+          });
+        });
+        const last = page.at(-1);
+        return {
+          jsonl: lines.length === 0 ? "" : lines.join("\n") + "\n",
+          ...(rows.length > limit && last !== undefined
+            ? { nextCursor: String(last.sequence) }
+            : {}),
+        };
+      }).pipe(Effect.mapError(toLedgerError("exportTasks"))),
 
     listTasksByStatus: (statuses) =>
       sql<TaskRow>`

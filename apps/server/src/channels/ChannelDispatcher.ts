@@ -52,6 +52,7 @@ import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
 import { answerForwardIdsFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import { freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { channelWorkerRules, workerHeader } from "./channelWorkerBrief.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -418,18 +419,28 @@ const make = Effect.gen(function* () {
       return { type: "target" as const, target };
     });
 
-  const launch = (stored: ChannelLedger.ChannelStoredTask, owner: string) =>
+  const launch = (initial: ChannelLedger.ChannelStoredTask, owner: string) =>
     Effect.gen(function* () {
-      const task = stored.task;
-      const target = task.target;
-      if (target === undefined) return;
-      const ids = workerLaunchIdsFor(task.taskId, task.generation);
+      if (initial.task.target === undefined) return;
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
       // channel worker follows the rules every thread in that project follows.
       const standing = resolveProjectSettings(
         yield* serverSettings.getSettings.pipe(Effect.orDie),
-        target.projectId,
+        initial.task.target.projectId,
       ).settings.standingInstructions;
+      const { stored, brief } = yield* freezeChannelBrief(
+        ledger,
+        initial,
+        owner,
+        prependStandingInstructions(standing, workerInstruction(initial.task, botFiles)).text,
+        {
+          notesPath: botFiles.notes,
+          skillsPath: botFiles.skills,
+        },
+      );
+      const task = stored.task;
+      const target = task.target!;
+      const ids = workerLaunchIdsFor(task.taskId, task.generation);
       const launched = yield* launches
         .launch({
           commandId: ids.commandId,
@@ -443,7 +454,7 @@ const make = Effect.gen(function* () {
           workspaceStrategy: toLaunchStrategy(target.workspaceStrategy),
           initialMessage: {
             messageId: ids.messageId,
-            text: prependStandingInstructions(standing, workerInstruction(task, botFiles)).text,
+            text: brief.deliveredText,
             attachments: [],
             ...(target.memoryGrantCeiling === undefined
               ? {}

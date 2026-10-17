@@ -19,6 +19,7 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -35,9 +36,10 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
-import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { REMOTE_COPY, REMOTE_SETTLE_WAIT_MS } from "./ChannelRemoteWorkers.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -94,6 +96,8 @@ class RemoteMachine {
   readonly launches: Array<SshRemoteDispatch.SshLaunchInput> = [];
   readonly sends: Array<Readonly<Record<string, unknown>>> = [];
   readonly calls: Array<{ readonly tool: string; readonly ceiling: string }> = [];
+  /** A test observes the persisted brief before SSH accepts the launch. */
+  beforeLaunch: ((input: SshRemoteDispatch.SshLaunchInput) => Effect.Effect<void>) | undefined;
   /** While true, every call fails as if SSH could not reach the host. */
   down = false;
   /** While true, only goat_environment_read fails, after the projects were listed. */
@@ -305,6 +309,7 @@ class RemoteMachine {
           Effect.gen(function* () {
             if (machine.down) return yield* machine.unreachable("down");
             yield* beforeLaunch;
+            if (machine.beforeLaunch !== undefined) yield* machine.beforeLaunch(input);
             machine.launches.push(input);
             const report = input.report!;
             if (machine.failBeforeBinding > 0) {
@@ -2373,4 +2378,46 @@ describe("which account runs work on another machine", () => {
       assert.strictEqual(running.target?.placementReason, "codex · 80% weekly used");
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+it.effect("freezes a remote brief before the SSH launch accepts the worker", () => {
+  const { machine, harness } = remoteHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.claimOwnership({ token: "remote-brief-owner", now, staleBefore: now });
+    const input = yield* gateway.ingest(
+      goatInput("do@mac-studio: inspect the remote build", "remote-brief"),
+      rpcContext,
+    );
+    yield* reception.receive(input.inputId, "remote-brief-owner");
+    const task = yield* onlyTask;
+    const accepted = yield* Deferred.make<void>();
+    machine.beforeLaunch = (launch) =>
+      Effect.gen(function* () {
+        const stored = (yield* ledger.getTask(task.taskId))!;
+        const brief = yield* ledger.latestTaskBrief(task.taskId);
+        assert.strictEqual(stored.task.status, "dispatching");
+        assert.strictEqual(stored.task.briefVersion, 1);
+        assert.strictEqual(brief?.instruction, "inspect the remote build");
+        assert.strictEqual(brief?.target.hostId, "mac-studio");
+        assert.strictEqual(brief?.target.environmentId, machine.environmentId);
+        assert.strictEqual(brief?.generation, task.generation);
+        assert.strictEqual(brief?.deliveredText, launch.message);
+        assert.isTrue(brief?.deliveredText.startsWith(task.instruction));
+      }).pipe(
+        Effect.orDie,
+        Effect.onExit((exit) => Deferred.done(accepted, exit)),
+      );
+    yield* dispatcher.dispatch(task.taskId, "remote-brief-owner");
+    yield* Deferred.await(accepted);
+    // The launch records its exact message immediately after the beforeLaunch observation.
+    // Read the frozen record here; the launch itself is intentionally asynchronous.
+    const brief = yield* ledger.latestTaskBrief(task.taskId);
+    assert.strictEqual(brief?.version, 1);
+  }).pipe(Effect.provide(harness.layer));
 });

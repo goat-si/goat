@@ -21,6 +21,7 @@ const settledObservation = (task: ChannelTask): Partial<Pick<ChannelTask, "obser
 const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskStatus>> = {
   "task.created": [],
   "task.dispatch.claimed": ["received"],
+  "task.brief.frozen": ["dispatching"],
   "task.worker.bound": ["dispatching", "running", "waiting_input"],
   "task.progress": ["running"],
   "task.question.opened": ["received", "dispatching", "running"],
@@ -41,6 +42,8 @@ const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
     case "task.failed":
     case "task.worker.observed":
       return event.payload.generation;
+    case "task.brief.frozen":
+      return event.payload.brief.generation;
     case "task.worker.bound":
       return event.payload.worker.generation;
     case "task.completion.proposed":
@@ -87,6 +90,9 @@ export function applyChannelTaskEvent(
           projectId: event.payload.target.projectId,
         },
       };
+    case "task.brief.frozen":
+      if (task.briefVersion !== undefined) return reject("This generation already has a brief.");
+      return { ok: true, task: { ...base, briefVersion: event.payload.brief.version } };
     case "task.worker.bound":
       // A newer run on a waiting worker does not answer its open questions.
       return {
@@ -176,6 +182,7 @@ export function applyChannelTaskEvent(
     case "task.retry.requested": {
       const {
         proposedCompletion: _proposed,
+        briefVersion: _briefVersion,
         worker: _worker,
         completedAt: _completedAt,
         resultSummary: _summary,
