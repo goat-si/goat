@@ -42,6 +42,8 @@ import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexError from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
@@ -2014,16 +2016,30 @@ describe("CodexAdapterV2 session initialize", () => {
 });
 
 describe("CodexAdapterV2 post-settle continuation", () => {
-  const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) {
-          return;
-        }
-        yield* Effect.yieldNow;
-      }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
+  // This notification emits onto the same FIFO as the events under assertion.
+  // Observing its projection proves earlier notifications and their events ran,
+  // including notifications that correctly emit nothing after settlement.
+  const consumerBarrier = (nativeThreadId: string): CodexReplay.CodexAppServerReplayEntry => ({
+    type: "emit_inbound",
+    label: "consumer-barrier",
+    frame: {
+      method: "thread/goal/updated",
+      params: {
+        threadId: nativeThreadId,
+        turnId: null,
+        goal: {
+          threadId: nativeThreadId,
+          objective: "Test event consumer barrier",
+          status: "paused",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1782622440,
+          updatedAt: 1782622450,
+        },
+      },
+    },
+  });
 
   const makeCodexReplayHarness = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
@@ -2032,6 +2048,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    observeSleeps = false,
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2039,6 +2056,43 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const serverConfig = yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie);
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
+      const listeners = new Set<() => void>();
+      const signalChange = () => {
+        for (const listener of listeners) listener();
+      };
+      const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
+        Effect.callback<void>((resume) => {
+          const check = () => {
+            if (!predicate()) return;
+            listeners.delete(check);
+            resume(Effect.void);
+          };
+          // Subscribe before checking so an already-observed event also satisfies
+          // the wait, without a gap in which a new event could be missed.
+          listeners.add(check);
+          check();
+          return Effect.sync(() => {
+            listeners.delete(check);
+          });
+        }).pipe(Effect.withSpan(label));
+      const processedPlanDeltas = new Set<string>();
+      const startedSleeps = new Map<number, number>();
+      const clock = yield* Clock.Clock;
+      const observedClock: Clock.Clock = {
+        ...clock,
+        sleep: (duration) =>
+          Effect.gen(function* () {
+            // Start the real TestClock sleep through its suspension before
+            // acknowledging it; clock advancement cannot race registration.
+            const timer = yield* clock
+              .sleep(duration)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            const millis = Duration.toMillis(duration);
+            startedSleeps.set(millis, (startedSleeps.get(millis) ?? 0) + 1);
+            signalChange();
+            yield* Fiber.join(timer);
+          }),
+      };
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
           Effect.gen(function* () {
@@ -2046,7 +2100,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               transcript,
               beforeEmitInbound ? { beforeEmitInbound } : {},
             );
-            return yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
+            const client = Layer.build(CodexReplay.layerReplayWithDriver(driver));
+            return yield* observeSleeps
+              ? client.pipe(Effect.provideService(Clock.Clock, observedClock))
+              : client;
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -2065,6 +2122,24 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   (client) =>
                     ({
                       ...client,
+                      handleServerNotification: (method, handler) =>
+                        client.handleServerNotification(method, (payload) =>
+                          handler(payload).pipe(
+                            Effect.andThen(
+                              Effect.sync(() => {
+                                if (
+                                  method === "item/plan/delta" &&
+                                  Predicate.isObject(payload) &&
+                                  "delta" in payload &&
+                                  typeof payload.delta === "string"
+                                ) {
+                                  processedPlanDeltas.add(payload.delta);
+                                  signalChange();
+                                }
+                              }),
+                            ),
+                          ),
+                        ),
                       request: (method, params) =>
                         onRequest(method, params).pipe(
                           Effect.andThen(client.request(method, params)),
@@ -2089,6 +2164,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           offer: (request) =>
             Effect.sync(() => {
               continuationRequests.push(request);
+              signalChange();
             }),
         },
       });
@@ -2110,6 +2186,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         Stream.runForEach((event) =>
           Effect.sync(() => {
             events.push(event);
+            signalChange();
           }).pipe(
             Effect.andThen(
               event.type === "turn.terminal"
@@ -2151,6 +2228,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         terminalEvents,
         subagentUpdates,
         hasPendingBackgroundWork,
+        awaitUntil,
+        awaitPlanDelta: (delta: string) =>
+          awaitUntil(() => processedPlanDeltas.has(delta), "plan delta processed"),
+        awaitSleep: (millis: number, count = 1) =>
+          awaitUntil(
+            () => (startedSleeps.get(millis) ?? 0) >= count,
+            `${millis} ms timer registered`,
+          ),
+        consumerBarrier: awaitUntil(
+          () =>
+            events.some(
+              (event) =>
+                event.type === "provider_thread.updated" &&
+                event.providerThread.goal?.objective === "Test event consumer barrier",
+            ),
+          "event consumer barrier",
+        ),
         firstTerminal: Deferred.await(firstTerminal),
       };
     });
@@ -3934,7 +4028,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Open github.com.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "Codex retry recovery");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "Codex retry recovery",
+        );
 
         const retryItems = harness.events.flatMap((event) =>
           event.type === "turn_item.updated" &&
@@ -4051,7 +4148,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Run two commands.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "Codex item start times");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "Codex item start times",
+        );
 
         const startedAtByItem = harness.events.flatMap((event) =>
           event.type === "turn_item.updated" &&
@@ -4247,6 +4347,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const prompt = "Plan the change.";
         // 100 deltas, 20 ms apart: a two second stream.
         const deltas = Array.from({ length: 100 }, (_, index) => `step ${index}\n`);
+        const releaseDeltas = yield* Effect.forEach(deltas, () => Deferred.make<void>());
+        const releaseByLabel = new Map<string, Deferred.Deferred<void>>(
+          releaseDeltas.map((release, index) => [`item/plan/delta/${index}`, release] as const),
+        );
         const transcript = makeCodexReplayTranscript({
           scenario,
           entries: [
@@ -4254,7 +4358,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ...deltas.map((delta, index): CodexReplay.CodexAppServerReplayEntry => ({
               type: "emit_inbound",
               label: `item/plan/delta/${index}`,
-              afterMs: 20,
               frame: {
                 method: "item/plan/delta",
                 params: { threadId: nativeThreadId, turnId: nativeTurnId, itemId: "plan", delta },
@@ -4285,7 +4388,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             },
           ],
         });
-        const harness = yield* makeCodexReplayHarness(transcript);
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          () => Effect.void,
+          undefined,
+          (entry) => {
+            const release = entry.label === undefined ? undefined : releaseByLabel.get(entry.label);
+            return release === undefined ? Effect.void : Deferred.await(release);
+          },
+          true,
+        );
         yield* harness.runtime.startTurn(
           makeCodexTestTurnInput({
             threadId: harness.threadId,
@@ -4295,9 +4408,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        for (let step = 0; step < 200 && harness.terminalEvents().length === 0; step += 1) {
-          yield* Effect.yieldNow;
+        for (const [index, delta] of deltas.entries()) {
           yield* TestClock.adjust("20 millis");
+          yield* Deferred.succeed(releaseDeltas[index]!, undefined);
+          yield* harness.awaitPlanDelta(delta);
+          // Each 400 ms batch arms one flush. Wait for its actual timer before
+          // advancing the next batch, rather than assuming a fork has run.
+          if (index % 20 === 0) {
+            yield* harness.awaitSleep(400, index / 20 + 1);
+          }
         }
         yield* harness.firstTerminal;
 
@@ -4441,7 +4560,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4471,7 +4593,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         yield* Effect.yieldNow;
         yield* TestClock.adjust("50 millis");
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () => assistantTurnItems(harness.events).length === 1,
           "streamed turn item",
         );
@@ -4482,7 +4604,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.deepEqual(assistantMessages(harness.events), []);
 
         yield* TestClock.adjust("50 millis");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
         assert.deepEqual(
           assistantMessages(harness.events).map(({ message }) => ({
             text: message.text,
@@ -4518,7 +4643,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => assistantMessages(harness.events).length === 1, "original answer");
+        yield* harness.awaitUntil(
+          () => assistantMessages(harness.events).length === 1,
+          "original answer",
+        );
         yield* Effect.yieldNow;
         yield* TestClock.adjust("50 millis");
         yield* Effect.yieldNow;
@@ -4529,7 +4657,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
 
         yield* TestClock.adjust("50 millis");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
           ["CODEX_RECOVERY_OK"],
@@ -4648,7 +4779,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(new Set(assistantTurnItems(harness.events).map((item) => item.id)).size, 1);
 
         yield* TestClock.adjust("50 millis");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
         assert.equal(
           new Set(assistantMessages(harness.events).map((event) => event.message.id)).size,
           1,
@@ -4675,7 +4809,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4704,7 +4841,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4733,7 +4873,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4762,7 +4905,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4791,7 +4937,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4820,7 +4969,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: "Reply with the requested recovery marker.",
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
@@ -4936,7 +5088,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               text: BG_PROMPT,
             }),
           );
-          yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+          yield* harness.awaitUntil(
+            () => harness.terminalEvents().length === 1,
+            "root turn terminal",
+          );
           assert.equal(harness.terminalEvents()[0]?.status, "completed");
           assert.isTrue(yield* harness.hasPendingBackgroundWork);
           assert.isTrue(
@@ -4946,7 +5101,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
 
           yield* TestClock.adjust("30 seconds");
-          yield* awaitUntil(
+          yield* harness.awaitUntil(
             () => harness.continuationRequests.length === 1,
             "continuation request",
           );
@@ -4976,7 +5131,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 event.turnItem.output === "CODEX_BG_WAKE_DONE\n" &&
                 event.turnItem.exitCode === 0,
             );
-          yield* awaitUntil(
+          yield* harness.awaitUntil(
             () => lateCommandUpdateIndex() > terminalIndex,
             "post-settle command projection",
           );
@@ -5464,7 +5619,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   it.effect("does not request a continuation for a command that completes before settle", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeCodexReplayHarness(preSettleTranscript);
+        const harness = yield* makeCodexReplayHarness({
+          ...preSettleTranscript,
+          entries: [...preSettleTranscript.entries, consumerBarrier(PRE_SETTLE_NATIVE_THREAD)],
+        });
         const now = yield* DateTime.now;
 
         yield* harness.runtime.startTurn(
@@ -5476,9 +5634,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: BG_PROMPT,
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -5491,9 +5652,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
 
         yield* TestClock.adjust("30 seconds");
-        for (let attempt = 0; attempt < 100; attempt++) {
-          yield* Effect.yieldNow;
-        }
+        yield* harness.consumerBarrier;
         assert.lengthOf(harness.continuationRequests, 0);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
@@ -5665,7 +5824,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   it.effect("contains commands that start before and after the interrupt response", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeCodexReplayHarness(interruptMidCommandTranscript);
+        const harness = yield* makeCodexReplayHarness(
+          {
+            ...interruptMidCommandTranscript,
+            entries: [
+              ...interruptMidCommandTranscript.entries,
+              consumerBarrier(INTERRUPT_NATIVE_THREAD),
+            ],
+          },
+          () => Effect.void,
+          () => Effect.void,
+          undefined,
+          undefined,
+          true,
+        );
         const now = yield* DateTime.now;
 
         yield* harness.runtime.startTurn(
@@ -5678,7 +5850,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         );
 
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -5704,7 +5876,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           providerTurnId,
         });
 
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
 
         const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
@@ -5756,10 +5931,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         // Late provider item/completed after interrupt must not revive the card
         // or request a background-command wake continuation.
+        yield* harness.awaitSleep(30_000);
         yield* TestClock.adjust("30 seconds");
-        for (let attempt = 0; attempt < 100; attempt++) {
-          yield* Effect.yieldNow;
-        }
+        yield* harness.consumerBarrier;
         assert.lengthOf(harness.continuationRequests, 0);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
@@ -5971,7 +6145,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -5997,7 +6171,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           providerTurnId,
         });
 
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted root terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
         const childCommandUpdates = harness.events.filter(
           (
@@ -6070,7 +6247,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6096,7 +6273,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           .pipe(Effect.exit);
 
         assert.equal(interruptExit._tag, "Failure");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted root terminal",
+        );
         assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(layerAdapterTest)),
@@ -6146,7 +6326,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6170,7 +6350,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const interruptFiber = yield* harness.runtime
           .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
           .pipe(Effect.forkScoped);
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6184,7 +6364,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         yield* TestClock.adjust("10 seconds");
         yield* Fiber.join(interruptFiber);
 
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted root terminal",
+        );
         assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(layerAdapterTest)),
@@ -6249,7 +6432,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6273,7 +6456,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const interruptFiber = yield* harness.runtime
           .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
           .pipe(Effect.forkScoped);
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6284,7 +6467,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         yield* Fiber.join(interruptFiber);
 
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted root terminal",
+        );
         const lateChildUpdates = harness.events.filter(
           (
             event,
@@ -6387,7 +6573,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6411,7 +6597,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const interruptFiber = yield* harness.runtime
           .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
           .pipe(Effect.forkScoped);
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6423,7 +6609,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         yield* TestClock.adjust("10 seconds");
         yield* Fiber.join(interruptFiber);
 
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted root terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
 
         const rootTerminalIndex = harness.events.findIndex(
@@ -6626,7 +6815,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   it.effect("bounds interrupt settlement and drops late completion events", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const harness = yield* makeCodexReplayHarness(interruptTimeoutTranscript);
+        const harness = yield* makeCodexReplayHarness(
+          {
+            ...interruptTimeoutTranscript,
+            entries: [
+              ...interruptTimeoutTranscript.entries.slice(0, -1),
+              consumerBarrier(INTERRUPT_NATIVE_THREAD),
+              ...interruptTimeoutTranscript.entries.slice(-1),
+            ],
+          },
+          () => Effect.void,
+          () => Effect.void,
+          undefined,
+          undefined,
+          true,
+        );
         const now = yield* DateTime.now;
 
         yield* harness.runtime.startTurn(
@@ -6638,7 +6841,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.filter(
               (event) =>
@@ -6664,7 +6867,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             providerTurnId,
           })
           .pipe(Effect.forkScoped);
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.filter(
               (event) =>
@@ -6675,9 +6878,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           "post-interrupt running command item",
         );
 
+        yield* harness.awaitSleep(9_999);
         yield* TestClock.adjust("10 seconds");
         yield* Fiber.join(interruptFiber);
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "timeout terminal");
+        yield* harness.awaitUntil(() => harness.terminalEvents().length === 1, "timeout terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
         const terminalProviderTurnsBeforeLateEvents = harness.events.filter(
           (event) =>
@@ -6707,10 +6911,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(lastBoundaryUpdate.turnItem.status, "interrupted");
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
 
+        yield* harness.awaitSleep(20_000);
         yield* TestClock.adjust("20 seconds");
-        for (let attempt = 0; attempt < 100; attempt++) {
-          yield* Effect.yieldNow;
-        }
+        yield* harness.consumerBarrier;
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.lengthOf(
           harness.events.filter(
@@ -6804,7 +7007,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -6832,7 +7035,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           .pipe(Effect.exit);
 
         assert.equal(interruptExit._tag, "Failure");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "interrupted terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(Effect.provide(layerAdapterTest)),
@@ -7486,7 +7692,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: FAILED_PROMPT,
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
+        yield* harness.awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "failed");
 
         const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
@@ -7735,7 +7941,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: MCP_APP_PROMPT,
           }),
         );
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
+        yield* harness.awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "failed");
 
         const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
@@ -8403,7 +8609,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: RESUME_PROMPT,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.subagentUpdates().some((event) => event.subagent.result === "CODEX_FIRST_DONE"),
           "first subagent result",
@@ -8413,7 +8619,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           1,
         );
         yield* TestClock.adjust("100 millis");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        yield* harness.awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "root turn terminal",
+        );
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
         const settledUpdates = harness.subagentUpdates();
         const firstCompletion = settledUpdates[settledUpdates.length - 1];
@@ -8423,7 +8632,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const settledUpdateCount = settledUpdates.length;
 
         yield* TestClock.adjust("30 seconds");
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () => harness.subagentUpdates().length > settledUpdateCount,
           "subagent re-open",
         );
@@ -8434,7 +8643,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
 
         yield* TestClock.adjust("30 seconds");
-        yield* awaitUntil(() => {
+        yield* harness.awaitUntil(() => {
           const updates = harness.subagentUpdates();
           const latest = updates[updates.length - 1];
           return (
@@ -9407,7 +9616,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               ? [event.providerTurn.status]
               : [],
           );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9488,7 +9697,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9579,7 +9788,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9603,7 +9812,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           harness.terminalEvents().map((event) => event.status),
           ["interrupted"],
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9672,7 +9881,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9760,7 +9969,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9782,7 +9991,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           harness.terminalEvents().map((event) => event.status),
           ["interrupted"],
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9878,7 +10087,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9895,7 +10104,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
           requestRuntimeRestart: true,
         });
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () =>
             harness.events.some(
               (event) =>
@@ -9951,7 +10160,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        yield* awaitUntil(
+        yield* harness.awaitUntil(
           () => providerGoals(harness.events).includes("active"),
           "the active goal to reach the provider thread",
         );
