@@ -2669,7 +2669,9 @@ export function ConnectionsSettings() {
         (primaryEnvironmentId === null ||
           !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope))
       ) {
-        setSavedBackendError("Maintain environment permission is required to set up this host.");
+        setSavedBackendError(
+          "This device can't set up hosts on this environment. Ask its owner for full access.",
+        );
         return;
       }
       sshConnectInFlight.current = true;
@@ -2810,7 +2812,9 @@ export function ConnectionsSettings() {
           return;
         }
         if (!readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)) {
-          setSavedBackendError("Maintain environment permission is required to set up this host.");
+          setSavedBackendError(
+            "This device can't set up hosts on this environment. Ask its owner for full access.",
+          );
           return;
         }
         const target = await desktopBridge!.resolveSshHost(probe.host);
@@ -3436,7 +3440,6 @@ export function ConnectionsSettings() {
               human={sshProbe.human}
               busy={isAddingSavedBackend}
               allowed={canWriteSsh && ownsSshConfig}
-              includeRequired={sshProbe.includeRequired}
               approveLabel="Approve"
               onApprove={() => void answerSshTrust(true)}
               onDecline={() => void answerSshTrust(false)}
@@ -4547,13 +4550,12 @@ export function ConnectionsSettings() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={removeForgottenConnection}
               disabled={forgetBusy}
-              onChange={(event) => setRemoveForgottenConnection(event.target.checked)}
+              onCheckedChange={(checked) => setRemoveForgottenConnection(checked === true)}
             />
-            Remove the saved desktop connection too?
+            Also remove this connection from Connections
           </label>
           {forgetError ? (
             <p role="alert" className="text-sm text-destructive">

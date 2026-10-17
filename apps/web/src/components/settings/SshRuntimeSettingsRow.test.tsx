@@ -374,3 +374,75 @@ it("polls a pending Add while the Desktop connection has not published its first
   });
   expect(container.textContent).toContain("Uploading GOAT runtime (about 70 MB)");
 });
+
+describe("SSH runtime recovery actions", () => {
+  async function renderActions(
+    props: Pick<
+      Parameters<typeof SshRuntimeSettingsRow>[0],
+      "onReviewTrust" | "onOpenApproval" | "onRetry"
+    >,
+  ) {
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <SshRuntimeSettingsRow {...input} enabled {...props} />
+        </RegistryContext>,
+      ),
+    );
+    await settle();
+  }
+  it("offers the fingerprint review action without a duplicate recovery sentence", async () => {
+    reply = { kind: "ok", status: { ...base, state: "untrusted" } };
+    const review = vi.fn();
+    await renderActions({ onReviewTrust: review });
+    expect(container.textContent).not.toContain("Add this host again to review its fingerprint.");
+    await click("Review fingerprint");
+    expect(review).toHaveBeenCalledOnce();
+  });
+  it("opens the pending approval through the shared link button", async () => {
+    reply = { kind: "ok", status: { ...base, state: "trust_pending" } };
+    const open = vi.fn();
+    await renderActions({ onOpenApproval: open });
+    expect(container.textContent).not.toContain("Review the request in its original thread.");
+    await click("Open the host approval card");
+    expect(open).toHaveBeenCalledOnce();
+  });
+  it("offers Retry instead of Refresh until key authentication succeeds", async () => {
+    reply = { kind: "ok", status: { ...base, state: "auth_failed" } };
+    const retry = vi.fn(() => {
+      reply = {
+        kind: "ok",
+        status: { ...base, state: "ready", runtimeVersion: base.requestedVersion },
+      };
+    });
+    await renderActions({ onRetry: retry });
+    expect(button("Refresh status")).toBeUndefined();
+    await click("Retry");
+    await settle();
+    expect(retry).toHaveBeenCalledOnce();
+    expect(button("Retry")).toBeUndefined();
+    expect(button("Refresh status")).toBeDefined();
+  });
+  it.each([true, false])("copies exactly one recovery value (public key: %s)", async (withKey) => {
+    const command = "ssh-copy-id ops@vps-1";
+    const publicKey = "ssh-ed25519 public-test-key";
+    reply = {
+      kind: "error",
+      code: "operation_failed",
+      message: "Register the SSH key.",
+      status: { ...base, state: "auth_failed", ...(withKey ? { publicKey } : {}) },
+      fix: { actor: "human", instruction: "Register the key and try again.", command },
+    };
+    const writeText = vi.fn(async (_value: string) => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await renderActions({});
+    const copyButtons = [...container.querySelectorAll("button")].filter((node) =>
+      node.textContent?.startsWith("Copy "),
+    );
+    expect(copyButtons.map((node) => node.textContent)).toEqual([
+      withKey ? "Copy public key" : "Copy setup command",
+    ]);
+    await click(withKey ? "Copy public key" : "Copy setup command");
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(withKey ? publicKey : command);
+  });
+});

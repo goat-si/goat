@@ -11,7 +11,6 @@ export function HandoffReview(props: {
   onDecline?: () => void;
   onCancel?: () => void;
   cancelLabel?: string;
-  includeRequired?: boolean;
 }) {
   const { human } = props;
   return (
@@ -19,13 +18,10 @@ export function HandoffReview(props: {
       <p className="whitespace-pre-wrap text-foreground">{human.location}</p>
       {human.fingerprint ? (
         <>
-          <p>
-            Check this fingerprint against the host key from your server provider before approving.
-          </p>
+          <p>If your server provider shows a host key, check that it matches.</p>
           <code className="select-all break-all font-mono">{human.fingerprint}</code>
         </>
       ) : null}
-      {props.includeRequired ? <p>GOAT will add one Include line to ~/.ssh/config.</p> : null}
       {human.url ? (
         <a
           className="break-all text-primary underline"
@@ -43,14 +39,17 @@ export function HandoffReview(props: {
       ) : null}
       {human.command ? (
         <>
-          <p>Run this on the machine that runs this environment, in your own terminal:</p>
+          <p>
+            Run this in your own terminal on the computer that runs GOAT. If the server asks for a
+            password, enter it there; GOAT never sees it.
+          </p>
           <pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted p-3">
             <code className="select-all">{human.command}</code>
           </pre>
         </>
       ) : null}
       <p className="text-xs text-muted-foreground">
-        These details stay private and are never sent to the agent.
+        Only you see these details. The agent never does.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button disabled={props.busy || !props.allowed} onClick={props.onApprove}>

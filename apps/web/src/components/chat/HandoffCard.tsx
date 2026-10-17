@@ -49,6 +49,19 @@ export function HandoffCard(props: HandoffCardProps) {
 function HandoffCardContent(props: HandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
+  const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
+  const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth;
+  const resolvedLabel = isSsh
+    ? {
+        completed: "Approved",
+        declined: "Declined",
+        cancelled: "Cancelled",
+        expired: "Expired",
+        failed: "Failed",
+        pending: "Pending",
+        opened: "Opened",
+      }[handoff.state]
+    : handoff.state;
   const isRuntimeUpdate =
     handoff.kind === "approval" && handoff.target.path === "ssh.runtime_update";
   const canTarget = useAtomValue(
@@ -122,16 +135,24 @@ function HandoffCardContent(props: HandoffCardProps) {
       <div className="flex min-w-0 flex-col gap-1">
         <h3 className="text-sm font-medium text-foreground">{handoff.title}</h3>
         <p className="text-sm text-muted-foreground">{handoff.reason}</p>
-        <p className="text-xs text-muted-foreground">
-          {handoff.kind.replaceAll("_", " ")} · {handoff.state}
-          {handoff.expiresAt && pending
-            ? ` · Expires ${DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}`
-            : ""}
-        </p>
+        {isSsh ? (
+          pending && handoff.expiresAt ? (
+            <p className="text-xs text-muted-foreground">
+              Expires {DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}
+            </p>
+          ) : null
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {handoff.kind.replaceAll("_", " ")} · {handoff.state}
+            {handoff.expiresAt && pending
+              ? ` · Expires ${DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}`
+              : ""}
+          </p>
+        )}
       </div>
       {!pending ? (
         <p className="text-sm text-muted-foreground">
-          {handoff.resolvedBy ? `${handoff.state} by ${handoff.resolvedBy}` : handoff.state}
+          {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
         </p>
       ) : props.inherited ? (
         <p className="text-sm text-muted-foreground">Review this request in its original thread.</p>
@@ -156,11 +177,13 @@ function HandoffCardContent(props: HandoffCardProps) {
                   ? "Update now"
                   : handoff.kind === "approval"
                     ? "Approve"
-                    : "I've completed this step"
+                    : isKeyAuth
+                      ? "I've added the key"
+                      : "I've completed this step"
               }
               onApprove={() => void act("completed")}
               {...(isRuntimeUpdate ? {} : { onDecline: () => void act("declined") })}
-              onCancel={() => void act("cancelled")}
+              {...(canCancel ? { onCancel: () => void act("cancelled") } : {})}
               cancelLabel={isRuntimeUpdate ? "Cancel" : "Cancel request"}
             />
           )}
@@ -175,18 +198,20 @@ function HandoffCardContent(props: HandoffCardProps) {
                   Decline
                 </Button>
               ) : null}
-              <Button
-                variant="ghost-muted"
-                disabled={busy || !canRespond || (isSsh && !canTarget)}
-                onClick={() => void act("cancelled")}
-              >
-                {isRuntimeUpdate ? "Cancel" : "Cancel request"}
-              </Button>
+              {canCancel ? (
+                <Button
+                  variant="ghost-muted"
+                  disabled={busy || !canRespond || (isSsh && !canTarget)}
+                  onClick={() => void act("cancelled")}
+                >
+                  {isRuntimeUpdate ? "Cancel" : "Cancel request"}
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </>
       )}
-      {isSsh && !props.inherited ? (
+      {isSsh && handoff.state === "completed" && !props.inherited ? (
         <SshHandoffProgress environmentId={props.environmentId} handoff={handoff} />
       ) : null}
       {error ? (
@@ -246,9 +271,8 @@ function VisibleSshHandoffProgress({
       snapshot.state === "stopped");
   const approvalExpired =
     handoff.state === "completed" &&
-    handoff.kind === "approval" &&
-    awaitingResume &&
-    !approvalFresh;
+    ((handoff.kind === "approval" && awaitingResume && !approvalFresh) ||
+      (snapshot?.state === "failed" && snapshot.failure?.reason === "approval_expired"));
   const delay =
     progress?.kind === "available" && !approvalExpired
       ? sshHostPollDelay(progress.result, approvalFresh)
@@ -267,7 +291,11 @@ function VisibleSshHandoffProgress({
       <p role="alert">Could not read host progress. Check your connection and permissions.</p>
     ) : null;
   const text = approvalExpired
-    ? "This approval expired. Ask for a new SSH request."
+    ? progress.kind === "available" && handoff.target.path === "ssh.runtime_update"
+      ? `This approval expired before GOAT could update ${progress.host}. Ask again.`
+      : progress.kind === "available"
+        ? `This approval expired before GOAT could set up ${progress.host}. Ask the agent again.`
+        : null
     : sshHostProgressText(progress);
   const recovery = approvalExpired ? null : sshHostProgressRecovery(progress);
   const publicKey =

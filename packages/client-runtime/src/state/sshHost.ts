@@ -48,7 +48,7 @@ export function sshHostProgressText(progress: SshHandoffProgressResult) {
   if (progress.kind === "unavailable")
     return progress.reason === "not_ssh"
       ? null
-      : "This request expired or was replaced. Ask for a new SSH request.";
+      : "This request expired or was replaced. Ask the agent again.";
   const result = progress.result;
   if (result.kind === "error")
     return result.code === "host_unreachable"

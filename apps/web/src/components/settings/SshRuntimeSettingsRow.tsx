@@ -129,12 +129,17 @@ function SshRuntimeSettingsRowContent({
         })
       : null;
   const recovery =
-    result?.kind === "error" && result.code === "host_unreachable"
+    (result?.kind === "error" && result.code === "host_unreachable") ||
+    (status?.state === "untrusted" && onReviewTrust)
       ? null
       : (authInstructions?.instruction ??
         (status === undefined ? null : sshRuntimeRecoveryText(status)));
   const fix = result?.kind === "error" ? result.fix : status?.failure?.fix;
   const copyCommand = authInstructions?.command ?? fix?.command;
+  const showRetry =
+    onRetry !== undefined &&
+    (status?.state === "auth_failed" || result?.kind === "error" || status?.state === "failed");
+  const copyText = status?.publicKey ?? copyCommand;
   const errorMessage =
     result?.kind === "error"
       ? result.code === "host_unreachable"
@@ -159,9 +164,9 @@ function SshRuntimeSettingsRowContent({
           ) : null}
           {status.state === "trust_pending" ? (
             onOpenApproval ? (
-              <button type="button" className="underline" onClick={onOpenApproval}>
-                Open the host approval card.
-              </button>
+              <Button variant="link" size="xs" onClick={onOpenApproval}>
+                Open the host approval card
+              </Button>
             ) : (
               <p>Review the request in its original thread.</p>
             )
@@ -182,24 +187,7 @@ function SshRuntimeSettingsRowContent({
             Review fingerprint
           </Button>
         ) : null}
-        {status?.state === "auth_failed" && status.publicKey ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={() =>
-              void navigator.clipboard
-                .writeText(status.publicKey!)
-                .catch(() => setCommandError("Could not copy the public key. Try again."))
-            }
-          >
-            Copy public key
-          </Button>
-        ) : null}
-        {onRetry &&
-        (status?.state === "auth_failed" ||
-          result?.kind === "error" ||
-          status?.state === "failed" ||
-          status?.state === "ready") ? (
+        {showRetry ? (
           <Button variant="outline" size="xs" disabled={busy} onClick={onRetry}>
             Retry
           </Button>
@@ -225,25 +213,33 @@ function SshRuntimeSettingsRowContent({
             </Button>
           )
         ) : null}
-        <Button
-          variant="ghost"
-          size="xs"
-          disabled={!enabled || busy}
-          onClick={() => void sshRuntime.refresh.run(registry, input)}
-        >
-          Refresh status
-        </Button>
-        {copyCommand && !(result?.kind === "error" && result.code === "host_unreachable") ? (
+        {!showRetry ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={!enabled || busy}
+            onClick={() => void sshRuntime.refresh.run(registry, input)}
+          >
+            Refresh status
+          </Button>
+        ) : null}
+        {copyText && !(result?.kind === "error" && result.code === "host_unreachable") ? (
           <Button
             variant="ghost"
             size="xs"
             onClick={() =>
               void navigator.clipboard
-                .writeText(copyCommand)
-                .catch(() => setCommandError("Could not copy the command. Try again."))
+                .writeText(copyText)
+                .catch(() =>
+                  setCommandError(
+                    status?.publicKey
+                      ? "Could not copy the public key. Try again."
+                      : "Could not copy the command. Try again.",
+                  ),
+                )
             }
           >
-            {status?.state === "auth_failed" ? "Copy setup command" : "Copy command"}
+            {status?.publicKey ? "Copy public key" : "Copy setup command"}
           </Button>
         ) : null}
       </div>

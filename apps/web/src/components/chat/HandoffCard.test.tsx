@@ -254,3 +254,163 @@ it("refreshes waiting hosts every ten seconds", async () => {
   });
   expect(harness.refresh).toHaveBeenCalledTimes(before + 1);
 });
+
+it.each([
+  { path: "ssh.host_add", kind: "approval", approveLabel: "Approve" },
+  { path: "ssh.host_prepare", kind: "terminal", approveLabel: "I've added the key" },
+] as const)(
+  "keeps one way to finish $path, before and after review",
+  async ({ path, kind, approveLabel }) => {
+    harness.open.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        human: {
+          location:
+            "vps-1 presented this key as ops. GOAT will add one Include line to ~/.ssh/config.",
+          fingerprint: "SHA256:test-host-key",
+          command: "ssh-copy-id ops@vps-1",
+        },
+      },
+    });
+    const expiresAt = DateTime.makeUnsafe("2026-10-18T12:00:00Z");
+    await render({
+      ...handoff,
+      kind,
+      state: "pending",
+      expiresAt,
+      target: { ...handoff.target, path },
+    });
+    expect(container.textContent).toContain(
+      `Expires ${DateTime.toDate(expiresAt).toLocaleTimeString()}`,
+    );
+    expect(container.textContent).not.toContain(`${kind.replaceAll("_", " ")} · pending`);
+    expect(container.textContent).not.toContain("Cancel request");
+    expect(harness.refresh).not.toHaveBeenCalled();
+    await click("Review request");
+    expect(container.textContent).not.toContain("Where:");
+    expect(container.textContent).not.toContain("Cancel request");
+    expect(container.textContent).toContain(
+      "If your server provider shows a host key, check that it matches.",
+    );
+    expect(container.textContent).toContain(
+      "Run this in your own terminal on the computer that runs GOAT. If the server asks for a password, enter it there; GOAT never sees it.",
+    );
+    expect(container.textContent).toContain("Only you see these details. The agent never does.");
+    expect(container.textContent?.match(/Include line/g)).toHaveLength(1);
+    await click(approveLabel);
+    expect(harness.respond).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        threadId: handoff.requestedBy.threadId,
+        handoffId: handoff.handoffId,
+        action: "completed",
+      },
+    });
+    expect(harness.refresh).not.toHaveBeenCalled();
+  },
+);
+it.each([
+  { state: "completed", label: "Approved" },
+  { state: "declined", label: "Declined" },
+  { state: "cancelled", label: "Cancelled" },
+  { state: "expired", label: "Expired" },
+] as const)(
+  "names a resolved $state SSH request without its internal state",
+  async ({ state, label }) => {
+    await render({ ...handoff, state, resolvedBy: "Jun" });
+    expect(container.textContent).toContain(`${label} by Jun`);
+    expect(container.textContent).not.toContain(`approval · ${state}`);
+    expect(container.textContent).not.toContain("Expires");
+    if (state !== "completed") expect(harness.refresh).not.toHaveBeenCalled();
+  },
+);
+it.each([
+  {
+    path: "ssh.runtime_update",
+    message: "This approval expired before GOAT could update vps-1. Ask again.",
+  },
+  {
+    path: "ssh.host_add",
+    message: "This approval expired before GOAT could set up vps-1. Ask the agent again.",
+  },
+])("explains what an expired $path approval did not start", async ({ path, message }) => {
+  await render({
+    ...handoff,
+    resolvedAt: DateTime.makeUnsafe(0),
+    target: { ...handoff.target, path },
+  });
+  await publish({
+    kind: "available",
+    host: "vps-1",
+    operationId: "operation",
+    generation: 2,
+    result: {
+      kind: "ok",
+      status: {
+        ...runtime,
+        state: "trust_pending",
+        setup: { operationId: "operation", generation: 2, stage: "runtime" },
+      },
+    },
+  });
+  expect(container.textContent).toContain(message);
+  expect(container.textContent).not.toContain("GOAT is setting up");
+  expect(container.textContent).not.toContain("GOAT is updating");
+});
+it("preserves the generic terminal completion and cancellation actions", async () => {
+  await render({
+    ...handoff,
+    kind: "terminal",
+    state: "pending",
+    target: { ...handoff.target, path: "provider.sign_in" },
+  });
+  await click("Review request");
+  expect(container.textContent).toContain("I've completed this step");
+  await click("Cancel request");
+  expect(harness.respond.mock.lastCall?.[0].input.action).toBe("cancelled");
+  expect(harness.refresh).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    path: "ssh.runtime_update",
+    kind: "approval",
+    message: "This approval expired before GOAT could update vps-1. Ask again.",
+  },
+  {
+    path: "ssh.host_add",
+    kind: "approval",
+    message: "This approval expired before GOAT could set up vps-1. Ask the agent again.",
+  },
+  {
+    path: "ssh.host_prepare",
+    kind: "terminal",
+    message: "This approval expired before GOAT could set up vps-1. Ask the agent again.",
+  },
+] as const)(
+  "uses the action-specific expiry copy for the server's $path failure",
+  async ({ path, kind, message }) => {
+    await render({ ...handoff, kind, target: { ...handoff.target, path } });
+    await publish({
+      kind: "available",
+      host: "vps-1",
+      operationId: "operation",
+      generation: 2,
+      result: {
+        kind: "ok",
+        status: {
+          ...runtime,
+          state: "failed",
+          setup: { operationId: "operation", generation: 2, stage: "complete" },
+          detail: "This approval expired.",
+          failure: {
+            reason: "approval_expired",
+            fix: { actor: "human", instruction: "Ask the agent again." },
+          },
+        },
+      },
+    });
+    expect(container.textContent).toContain(message);
+    expect(container.textContent).not.toContain("This approval expired.");
+  },
+);

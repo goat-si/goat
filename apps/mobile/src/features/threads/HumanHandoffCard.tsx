@@ -51,6 +51,19 @@ export function HumanHandoffCard(props: HumanHandoffCardProps) {
 function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
+  const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
+  const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth;
+  const resolvedLabel = isSsh
+    ? {
+        completed: "Approved",
+        declined: "Declined",
+        cancelled: "Cancelled",
+        expired: "Expired",
+        failed: "Failed",
+        pending: "Pending",
+        opened: "Opened",
+      }[handoff.state]
+    : handoff.state;
   const isRuntimeUpdate =
     handoff.kind === "approval" && handoff.target.path === "ssh.runtime_update";
   const canTarget = useAtomValue(
@@ -84,6 +97,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     },
     [],
   );
+  const pending = isHandoffPending(handoff.state);
   const act = async (action: "opened" | "completed" | "declined" | "cancelled") => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -115,12 +129,20 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-goat-bold text-base text-foreground">{handoff.title}</Text>
       <Text className="font-sans text-sm text-foreground-muted">{handoff.reason}</Text>
-      <Text className="font-sans text-xs text-foreground-muted">
-        {handoff.kind.replaceAll("_", " ")} · {handoff.state}
-      </Text>
-      {!isHandoffPending(handoff.state) ? (
+      {isSsh ? (
+        pending && handoff.expiresAt ? (
+          <Text className="font-sans text-xs text-foreground-muted">
+            Expires {DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}
+          </Text>
+        ) : null
+      ) : (
+        <Text className="font-sans text-xs text-foreground-muted">
+          {handoff.kind.replaceAll("_", " ")} · {handoff.state}
+        </Text>
+      )}
+      {!pending ? (
         <Text className="font-sans text-sm text-foreground-muted">
-          {handoff.resolvedBy ? `${handoff.state} by ${handoff.resolvedBy}` : handoff.state}
+          {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
         </Text>
       ) : props.inherited ? (
         <Text className="font-sans text-sm text-foreground-muted">
@@ -136,12 +158,11 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             />
           ) : (
             <>
-              <Text className="font-sans text-sm text-foreground">Where: {human.location}</Text>
+              <Text className="font-sans text-sm text-foreground">{human.location}</Text>
               {human.fingerprint ? (
                 <>
                   <Text className="font-sans text-sm text-foreground-muted">
-                    Check this fingerprint against the host key from your server provider before
-                    approving.
+                    If your server provider shows a host key, check that it matches.
                   </Text>
                   <Text selectable className="font-mono text-sm text-foreground">
                     {human.fingerprint}
@@ -166,7 +187,8 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
               {human.command ? (
                 <>
                   <Text className="font-sans text-sm text-foreground-muted">
-                    Run this on the machine that runs this environment, in your own terminal:
+                    Run this in your own terminal on the computer that runs GOAT. If the server asks
+                    for a password, enter it there; GOAT never sees it.
                   </Text>
                   <Text selectable className="font-mono text-sm text-foreground">
                     {human.command}
@@ -174,7 +196,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                 </>
               ) : null}
               <Text className="font-sans text-xs text-foreground-muted">
-                Sign-in details stay private and are never sent to the agent.
+                Only you see these details. The agent never does.
               </Text>
               <RequestActionButton
                 label={
@@ -182,7 +204,9 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                     ? "Update now"
                     : handoff.kind === "approval"
                       ? "Approve"
-                      : "I've completed this step"
+                      : isKeyAuth
+                        ? "I've added the key"
+                        : "I've completed this step"
                 }
                 disabled={busy || !allowed || (isSsh && !canTarget)}
                 onPress={() => void act("completed")}
@@ -196,14 +220,16 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
               onPress={() => void act("declined")}
             />
           ) : null}
-          <RequestActionButton
-            label={isRuntimeUpdate ? "Cancel" : "Cancel request"}
-            disabled={busy || !allowed || (isSsh && !canTarget)}
-            onPress={() => void act("cancelled")}
-          />
+          {canCancel ? (
+            <RequestActionButton
+              label={isRuntimeUpdate ? "Cancel" : "Cancel request"}
+              disabled={busy || !allowed || (isSsh && !canTarget)}
+              onPress={() => void act("cancelled")}
+            />
+          ) : null}
         </>
       )}
-      {isSsh && !props.inherited ? (
+      {isSsh && handoff.state === "completed" && !props.inherited ? (
         <SshHandoffProgress environmentId={props.environmentId} handoff={handoff} />
       ) : null}
       {error ? (
@@ -258,9 +284,8 @@ function VisibleSshHandoffProgress({
       snapshot.state === "stopped");
   const approvalExpired =
     handoff.state === "completed" &&
-    handoff.kind === "approval" &&
-    awaitingResume &&
-    !approvalFresh;
+    ((handoff.kind === "approval" && awaitingResume && !approvalFresh) ||
+      (snapshot?.state === "failed" && snapshot.failure?.reason === "approval_expired"));
   const delay =
     progress?.kind === "available" && !approvalExpired
       ? sshHostPollDelay(progress.result, approvalFresh)
@@ -281,7 +306,11 @@ function VisibleSshHandoffProgress({
       </Text>
     ) : null;
   const text = approvalExpired
-    ? "This approval expired. Ask for a new SSH request."
+    ? progress.kind === "available" && handoff.target.path === "ssh.runtime_update"
+      ? `This approval expired before GOAT could update ${progress.host}. Ask again.`
+      : progress.kind === "available"
+        ? `This approval expired before GOAT could set up ${progress.host}. Ask the agent again.`
+        : null
     : sshHostProgressText(progress);
   const recovery = approvalExpired ? null : sshHostProgressRecovery(progress);
   const publicKey =

@@ -109,6 +109,11 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
             status.detail ??
             `${status.host} is missing required tools. Install them on the host, then try again.`
           );
+        case "approval_expired":
+        case "authorization_revoked":
+        case "diagnosis_failed":
+        case "operation_failed":
+          return status.detail ?? failure.fix.instruction;
         case "unsupported_platform":
           return (
             status.detail ??

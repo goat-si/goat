@@ -169,8 +169,8 @@ describe("SSH origin progress", () => {
     );
     expect(sshHostPollDelay({ kind: "ok", status: { ...base, state: "auth_failed" } })).toBeNull();
     expect(sshHostProgressComplete({ kind: "unavailable", reason: "superseded" })).toBe(false);
-    expect(sshHostProgressText({ kind: "unavailable", reason: "expired" })).toContain(
-      "Ask for a new SSH request",
+    expect(sshHostProgressText({ kind: "unavailable", reason: "expired" })).toBe(
+      "This request expired or was replaced. Ask the agent again.",
     );
   });
   it.live("restores a completed card by thread and handoff ID with no Desktop gateway", () =>

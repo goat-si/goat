@@ -306,3 +306,23 @@ describe("SSH host recovery", () => {
     ).toContain("GOAT created a key for vps-1.");
   });
 });
+
+it.each([
+  "approval_expired",
+  "authorization_revoked",
+  "diagnosis_failed",
+  "operation_failed",
+] as const)("keeps the server's terminal %s explanation and a single recovery line", (reason) => {
+  const status: SshHostStatus = {
+    host: "vps-1",
+    state: "failed",
+    runtimeVersion: "0.4.2",
+    requestedVersion: "0.4.2",
+    failure: { reason, fix: { actor: "human", instruction: "Ask the agent again." } },
+  };
+  expect(sshRuntimeStatusText(status)).toBe("Ask the agent again.");
+  expect(sshRuntimeStatusText({ ...status, detail: "The setup request could not continue." })).toBe(
+    "The setup request could not continue.",
+  );
+  expect(sshRuntimeRecoveryText(status)).toBeNull();
+});
