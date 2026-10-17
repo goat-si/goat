@@ -76,6 +76,10 @@ describe("SSH runtime preparation errors", () => {
         assert.instanceOf(result.failure, SshLaunchError);
         if (result.failure instanceof SshLaunchError) {
           assert.equal(result.failure.reason, "archive-unavailable");
+          assert.include(
+            result.failure.message,
+            "Bundled SSH runtime archive is missing its SHA-256 sidecar",
+          );
           assert.deepEqual(result.failure.acquisition?.sourcesTried, ["bundle"]);
           assert.equal(result.failure.acquisition?.requestedVersion, ARCHIVE.archiveVersion);
         }

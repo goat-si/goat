@@ -2724,10 +2724,14 @@ export const prepareRemoteRuntime = (
       yield* Effect.annotateCurrentSpan("goat.runtime.upload.installComplete", true);
       return { ...exact, requireInstalled: true };
     }).pipe(
+      // Error.message is non-enumerable; adding acquisition context must preserve it explicitly.
       Effect.mapError((error) =>
         error instanceof SshLaunchError && error.reason === "archive-unavailable"
           ? new SshLaunchError({
-              ...error,
+              message: error.message,
+              stdout: error.stdout,
+              reason: error.reason,
+              ...(error.cause === undefined ? {} : { cause: error.cause }),
               acquisition: {
                 requestedVersion: version,
                 platformKey: platformKey ?? `${probe.platform}-${probe.arch}`,

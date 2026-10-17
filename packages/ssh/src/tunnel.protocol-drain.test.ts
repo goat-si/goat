@@ -106,7 +106,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             drain: true,
             ...compatible,
           });
-          yield* f.fs.writeFileString(`${f.test}/activity`, `idle\n${activity}`);
+          yield* f.fs.writeFileString(`${f.test}/activity`, `idle,${activity}`);
           const before = yield* f.snapshot;
           const result = yield* f.run("launch", false, {
             refreshOwnedRuntimeOnFirstConnection: true,
@@ -114,7 +114,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(Result.isSuccess(result), describeFailure(result));
           if (Result.isSuccess(result)) assert.equal(result.success.pending?.reason, activity);
           const log = yield* events(f);
-          assert.isAtLeast(log.filter((entry) => entry.type === "activity").length, 2);
+          assert.deepEqual(
+            log.filter((entry) => entry.type === "activity").map((entry) => entry.value),
+            ["idle", activity],
+          );
           assert.isFalse(
             log.some((entry) =>
               ["drain", "drain-request", "supervise", "self-stop", "stop"].includes(entry.type),
