@@ -3525,6 +3525,14 @@ const OrchestrationV2InternalCommand = Schema.Union([
      */
     stopCascadeFrom: Schema.optional(ThreadId),
   }),
+  /** Records a server notice on an existing thread without starting provider work. */
+  Schema.Struct({
+    type: Schema.Literal("thread.notice.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    recordKey: TrimmedNonEmptyString,
+    message: TrimmedNonEmptyString,
+  }),
   /**
    * Writes one GOAT bot message or task chip without a provider run. Internal so no client
    * can put words in the bot's mouth; the channel gateway sends it after the ledger commits.

@@ -150,6 +150,8 @@ export function existingThreadIdsForCommand(
       return command.parentThreadId === command.targetThreadId
         ? [command.parentThreadId]
         : [command.parentThreadId, command.targetThreadId];
+    case "thread.notice.record":
+      return [command.threadId];
     default:
       return [command.threadId];
   }

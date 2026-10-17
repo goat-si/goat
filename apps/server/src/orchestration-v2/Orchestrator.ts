@@ -67,7 +67,7 @@ import {
   RuntimeMode,
   ThreadLinkedPullRequest,
   ThreadId,
-  type TurnItemId,
+  TurnItemId,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import {
@@ -577,6 +577,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "handoff.create":
     case "handoff.transition":
     case "secret_request.record":
+    case "thread.notice.record":
     case "channel.timeline.record":
       return command.threadId;
     case "thread.fork":
@@ -8089,6 +8090,88 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const dispatchThreadNoticeRecord = Effect.fn("orchestrationV2.dispatch.threadNoticeRecord")(
+    function* (
+      command: Extract<OrchestrationV2InternalCommand, { readonly type: "thread.notice.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is deleted.`,
+        });
+      }
+      // The length-prefixed thread id keeps record keys distinct across threads and channels.
+      const itemId = TurnItemId.make(
+        `thread-notice:${command.threadId.length}:${command.threadId}:${command.recordKey}`,
+      );
+      const existing = yield* projectionStore
+        .getTurnItem({ threadId: command.threadId, itemId })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      // Position allocation orders a runless item before the first run, so attach the notice to
+      // the latest run: it then lands after everything the thread has shown so far.
+      const { runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const latestRun = runs.reduce<(typeof runs)[number] | undefined>(
+        (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
+        undefined,
+      );
+      const ordinal =
+        existing?.ordinal ??
+        (yield* projectionStore
+          .getNextTurnItemOrdinal(command.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          ));
+      const now = yield* DateTime.now;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          id: itemId,
+          threadId: command.threadId,
+          runId: existing?.runId ?? latestRun?.id ?? null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal,
+          status: "completed",
+          title: null,
+          startedAt: existing?.startedAt ?? now,
+          completedAt: existing?.completedAt ?? now,
+          updatedAt: now,
+          type: "system_notice",
+          message: command.message,
+        },
+      });
+    },
+  );
+
   /**
    * One GOAT bot message or task chip, recorded without a run, provider session, or effect.
    * Ids come from the record key, so a redelivered record updates its own item in place.
@@ -12387,6 +12470,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "channel.timeline.record":
         yield* dispatchChannelTimelineRecord(command, events);
+        break;
+      case "thread.notice.record":
+        yield* dispatchThreadNoticeRecord(command, events);
         break;
       default:
         return yield* dispatchUnsupported(command);
