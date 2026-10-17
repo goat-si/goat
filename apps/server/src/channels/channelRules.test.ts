@@ -112,6 +112,61 @@ describe("task transitions", () => {
     );
     assert.isFalse(unknown.ok);
   });
+
+  it("records a worker observation without moving the task, and keeps only pull requests once it ends", () => {
+    const observed = {
+      pullRequests: [
+        {
+          repository: "goat-si/goat",
+          number: 42,
+          url: "https://github.com/goat-si/goat/pull/42",
+          watching: true,
+        },
+      ],
+      needsYou: [{ kind: "approval", since: NOW }],
+      usageLimitResetAt: "2026-10-12T05:00:00.000Z",
+    };
+    const waiting = applyChannelTaskEvent(
+      task({ status: "waiting_input" }),
+      event("task.worker.observed", { generation: 2, observed }),
+    );
+    assert.strictEqual(waiting.ok ? waiting.task.status : undefined, "waiting_input");
+    const recorded = applyChannelTaskEvent(
+      task(),
+      event("task.worker.observed", { generation: 2, observed }),
+    );
+    assert.isTrue(recorded.ok);
+    if (!recorded.ok) return;
+    assert.strictEqual(recorded.task.status, "running");
+    assert.deepStrictEqual(recorded.task.observed?.needsYou, [{ kind: "approval", since: NOW }]);
+
+    const stale = applyChannelTaskEvent(
+      task(),
+      event("task.worker.observed", { generation: 1, observed }),
+    );
+    assert.isFalse(stale.ok);
+
+    const completed = applyChannelTaskEvent(
+      recorded.task,
+      event("task.completed", { generation: 2, summary: "ok" }, 6),
+    );
+    assert.isTrue(completed.ok);
+    if (!completed.ok) return;
+    assert.deepStrictEqual(completed.task.observed, {
+      pullRequests: observed.pullRequests,
+      needsYou: [],
+    });
+    const afterEnd = applyChannelTaskEvent(
+      completed.task,
+      event("task.worker.observed", { generation: 2, observed }, 7),
+    );
+    assert.isFalse(afterEnd.ok);
+    const retried = applyChannelTaskEvent(
+      completed.task,
+      event("task.retry.requested", { generation: 3 }, 7),
+    );
+    assert.isUndefined(retried.ok ? retried.task.observed : "rejected");
+  });
 });
 
 describe("delivery outcomes", () => {
