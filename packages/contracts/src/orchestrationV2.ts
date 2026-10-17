@@ -853,6 +853,50 @@ export const OrchestrationV2TaskRole = Schema.Literals([
 ]);
 export type OrchestrationV2TaskRole = typeof OrchestrationV2TaskRole.Type;
 
+/** Nested timestamps stay strings so projection JSON round-trips preserve them. */
+export const ReviewLedgerDecisionInput = Schema.Struct({
+  kind: Schema.Literal("decision"),
+  findingId: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  severity: Schema.Literals(["critical", "high", "medium", "low", "info"]),
+  cites: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(4_000))),
+  summary: TrimmedNonEmptyString.check(Schema.isMaxLength(4_000)),
+  decision: Schema.Literals(["accepted", "rebutted"]),
+  evidence: Schema.NullOr(
+    Schema.Struct({
+      kind: Schema.Literals(["command", "location", "commit", "test", "other"]),
+      ref: TrimmedNonEmptyString.check(Schema.isMaxLength(4_000)),
+      exitCode: Schema.optional(Schema.Int),
+    }),
+  ),
+});
+export const ReviewLedgerOutcomeInput = Schema.Struct({
+  kind: Schema.Literal("outcome"),
+  findingId: ReviewLedgerDecisionInput.fields.findingId,
+  link: Schema.Struct({
+    kind: Schema.Literals(["commit", "test", "revert", "issue", "other"]),
+    ref: TrimmedNonEmptyString.check(Schema.isMaxLength(4_000)),
+  }),
+});
+export const ReviewLedgerEntryInput = Schema.Union([
+  ReviewLedgerDecisionInput,
+  ReviewLedgerOutcomeInput,
+]);
+export type ReviewLedgerEntryInput = typeof ReviewLedgerEntryInput.Type;
+const ReviewLedgerRecordedFields = {
+  entryId: TrimmedNonEmptyString,
+  recordedAt: IsoDateTime,
+  recordedByRunId: Schema.NullOr(RunId),
+};
+export const ReviewLedgerEntry = Schema.Union([
+  Schema.Struct({ ...ReviewLedgerDecisionInput.fields, ...ReviewLedgerRecordedFields }),
+  Schema.Struct({
+    ...ReviewLedgerOutcomeInput.fields,
+    ...ReviewLedgerRecordedFields,
+    outcome: Schema.Literals(["later_confirmed", "unneeded"]),
+  }),
+]);
+export type ReviewLedgerEntry = typeof ReviewLedgerEntry.Type;
+
 export const OrchestrationV2Subagent = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
@@ -874,6 +918,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   role: Schema.optional(OrchestrationV2TaskRole),
   parentModelSelection: Schema.optional(ModelSelection),
+  reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
   // every terminal (async delegations; queue_after_active sequences it behind
   // a live parent run), "settled_only" offers only when the parent has no
@@ -3375,6 +3420,16 @@ export const OrchestrationV2Command = Schema.Union([
     parentThreadId: ThreadId,
     taskId: NodeId,
     completionWake: Schema.Literals(["always", "settled_only"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("delegated_task.review-ledger.append"),
+    commandId: CommandId,
+    parentThreadId: ThreadId,
+    taskId: NodeId,
+    entries: Schema.Array(ReviewLedgerEntryInput).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(100),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.completion-delivery.acknowledge"),

@@ -2478,14 +2478,39 @@ describe("WP4 task ceiling propagation codecs", () => {
     const legacyTask = decodeOrchestrationV2Subagent(child);
     expect(legacyTask).not.toHaveProperty("role");
     expect(legacyTask).not.toHaveProperty("parentModelSelection");
+    expect(legacyTask).not.toHaveProperty("reviewLedger");
     const metadata = {
       role: "review",
       modelSelection: { instanceId: "reviewer", model: "reviewer-model" },
       parentModelSelection: { instanceId: "author", model: "author-model" },
     };
-    const review = decodeOrchestrationV2Subagent({ ...child, ...metadata });
+    const reviewLedger = [
+      {
+        kind: "decision",
+        entryId: "entry:1",
+        findingId: "finding:1",
+        severity: "high",
+        cites: "a.ts:10",
+        summary: "Verify the guard",
+        decision: "rebutted",
+        evidence: { kind: "test", ref: "guard.test.ts", exitCode: 0 },
+        recordedAt: "2026-10-16T00:00:00.000Z",
+        recordedByRunId: "run",
+      },
+      {
+        kind: "outcome",
+        entryId: "entry:2",
+        findingId: "finding:1",
+        outcome: "later_confirmed",
+        link: { kind: "test", ref: "failure.test.ts" },
+        recordedAt: "2026-10-17T00:00:00.000Z",
+        recordedByRunId: null,
+      },
+    ];
+    const review = decodeOrchestrationV2Subagent({ ...child, ...metadata, reviewLedger });
     const reviewJson = JSON.parse(JSON.stringify(encodeOrchestrationV2SubagentJson(review)));
     expect(decodeOrchestrationV2SubagentJson(reviewJson)).toMatchObject(metadata);
+    expect(decodeOrchestrationV2SubagentJson(reviewJson).reviewLedger).toEqual(reviewLedger);
     expect(() => decodeOrchestrationV2Subagent({ ...child, role: "invalid" })).toThrow();
 
     expect(decodeOrchestrationV2Subagent(child)).not.toHaveProperty("currentMemoryAccess");
@@ -2543,4 +2568,18 @@ it("round-trips usage-limit run ancestry and omits absent ancestry on the wire",
   ).toHaveProperty("currentMemoryAccess", assessment);
   const continuation = { ...legacy, usageLimitContinuationOfRunId: "run-original" };
   expect(encodeMemoryRun(decodeMemoryRun(continuation))).toEqual(continuation);
+});
+
+it("decodes review ledger append commands and refuses empty batches", () => {
+  const command = {
+    type: "delegated_task.review-ledger.append",
+    commandId: "record-review",
+    parentThreadId: "parent",
+    taskId: "review",
+    entries: [
+      { kind: "outcome", findingId: "finding", link: { kind: "test", ref: "failing.test.ts" } },
+    ],
+  };
+  expect(decodeOrchestrationV2Command(command)).toEqual(command);
+  expect(() => decodeOrchestrationV2Command({ ...command, entries: [] })).toThrow();
 });
