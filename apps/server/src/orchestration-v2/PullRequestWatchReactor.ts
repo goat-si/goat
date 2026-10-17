@@ -37,7 +37,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { evaluatePullRequestWatch, pullRequestWatchOutcome } from "./pullRequestWatch.ts";
+import {
+  evaluatePullRequestWatch,
+  pullRequestWatchOutcome,
+  withHeldContext,
+} from "./pullRequestWatch.ts";
 
 /**
  * Minutes between passes. Checks take minutes, so a faster pass mostly spends the host's rate
@@ -336,7 +340,10 @@ export const make = Effect.gen(function* () {
   // "Watching" while it learns nothing.
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
-      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request to watch it again.`,
+      text: withHeldContext(
+        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call watch_pull_request to watch it again.`,
+        target.watch.heldContext,
+      ),
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
@@ -404,7 +411,10 @@ export const make = Effect.gen(function* () {
   // A closed pull request can reopen, but the watch has nothing to report until then.
   const closed = (target: WatchTarget) =>
     record(target, null, {
-      text: `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call watch_pull_request if it reopens.`,
+      text: withHeldContext(
+        `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call watch_pull_request if it reopens.`,
+        target.watch.heldContext,
+      ),
       notification: {
         source: { kind: "monitor" },
         outcome: "updated",
@@ -485,6 +495,12 @@ export const make = Effect.gen(function* () {
     const last = lastReads.get(group.key);
     const plan = planRead(group, last, fingerprint, now);
     if (!plan.detail) return;
+    // Read before anything is recorded: a failed read must leave the pass to run again.
+    // Groups are per project, so one policy covers every thread in the group.
+    const policy = resolveProjectSettings(
+      yield* settingsService.getSettings,
+      group.targets[0]!.thread.projectId,
+    ).settings.pullRequestWatchPolicy;
     const reference = referenceOf(group);
     // The reads are recorded against this fingerprint, so a cached answer older than it must not
     // stand in for them. Clients are not told: this only drops this pull request's cached reads.
@@ -556,13 +572,6 @@ export const make = Effect.gen(function* () {
       status: fingerprint?.status ?? null,
       remarks: fingerprint?.remarks ?? null,
     });
-    // Groups are per project, so one policy covers every thread in the group.
-    const { policy } = yield* settingsService.getSettings.pipe(
-      Effect.map((settings) => ({
-        policy: resolveProjectSettings(settings, group.targets[0]!.thread.projectId).settings
-          .pullRequestWatchPolicy,
-      })),
-    );
     yield* eachTarget(group, (target) => {
       const report = evaluatePullRequestWatch(target.watch, detail, remarks, {
         policy,

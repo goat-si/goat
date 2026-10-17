@@ -238,6 +238,18 @@ const SUMMARY: Record<PullRequestWatchChange["kind"], string> = {
   conflicting: "merge conflict",
 };
 
+/** Adds the updates held as context to a message the agent reads, so a wake or an ending loses none. */
+export function withHeldContext(
+  text: string,
+  heldContext: ReadonlyArray<string> | undefined,
+): string {
+  return heldContext === undefined || heldContext.length === 0
+    ? text
+    : [text, "", "Earlier updates GOAT kept as context without waking you:", ...heldContext].join(
+        "\n",
+      );
+}
+
 /** The wake the agent reads and the timeline notification the user sees. */
 export function pullRequestWatchMessage(input: {
   readonly number: number;
@@ -253,13 +265,14 @@ export function pullRequestWatchMessage(input: {
     baseBranch: input.baseBranch,
     commit: input.headSha === null ? "" : ` on ${input.headSha.slice(0, 7)}`,
   };
-  const heldContext = input.heldContext ?? [];
   const text = [
-    `Update on pull request #${input.number} (${input.url}), which GOAT is watching for you:`,
-    ...changes.flatMap((change) => changeLines(change, context)),
-    ...(heldContext.length === 0
-      ? []
-      : ["", "Earlier updates GOAT kept as context without waking you:", ...heldContext]),
+    withHeldContext(
+      [
+        `Update on pull request #${input.number} (${input.url}), which GOAT is watching for you:`,
+        ...changes.flatMap((change) => changeLines(change, context)),
+      ].join("\n"),
+      input.heldContext,
+    ),
     "",
     exhausted
       ? `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call watch_pull_request to watch it again.`

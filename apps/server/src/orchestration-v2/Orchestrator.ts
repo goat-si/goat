@@ -663,6 +663,15 @@ function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadPullRequ
   return rest;
 }
 
+/** Recorded progress on the current watch, which keeps its own automatic flag. */
+function syncedPullRequestWatch(
+  current: ThreadPullRequestWatch,
+  observed: ThreadPullRequestWatch,
+): ThreadPullRequestWatch {
+  const progress = explicitPullRequestWatch(observed);
+  return current.automatic === true ? { ...progress, automatic: true } : progress;
+}
+
 /** A legacy single-PR link as a link entry. Re-linking a pull request keeps its watch. */
 function legacyPullRequestLink(
   thread: OrchestrationV2AppThread,
@@ -3408,7 +3417,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.type === "thread.pull-request-watch.sync"
               ? // Progress read before a stop or restart must not bring the old watch back.
                 existing.watch?.startedAt === command.startedAt
-                ? (command.watch ?? undefined)
+                ? command.watch === null
+                  ? undefined
+                  : // Whether the watch is automatic is the thread's call, not the reader's: a
+                    // watch_pull_request that landed during the read keeps its watch explicit.
+                    syncedPullRequestWatch(existing.watch, command.watch)
                 : existing.watch
               : !command.watching
                 ? undefined

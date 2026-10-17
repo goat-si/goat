@@ -2983,6 +2983,20 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const explicit = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
       assert.isUndefined(explicit?.automatic);
       assert.deepEqual(explicit, expected);
+
+      // A pass that read the pull request before the explicit watch landed still records its
+      // progress, but cannot make the watch automatic again.
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-auto-watch-explicit-stale"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: { ...recorded, headSha: "def456" },
+      });
+      const afterStale = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isUndefined(afterStale?.automatic);
+      assert.equal(afterStale?.headSha, "def456");
     }),
   );
 
