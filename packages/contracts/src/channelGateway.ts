@@ -303,6 +303,21 @@ export const ChannelListTasksResult = Schema.Struct({
 });
 export type ChannelListTasksResult = typeof ChannelListTasksResult.Type;
 
+export const ChannelTaskMoveInput = Schema.Struct({
+  taskId: ChannelTaskId,
+  host: TrimmedNonEmptyString,
+});
+export type ChannelTaskMoveInput = typeof ChannelTaskMoveInput.Type;
+
+export const ChannelTaskMoveResult = Schema.Struct({
+  taskId: ChannelTaskId,
+  generation: PositiveInt,
+  host: TrimmedNonEmptyString,
+  fromHost: TrimmedNonEmptyString,
+  replicaCapturedAt: IsoDateTime,
+});
+export type ChannelTaskMoveResult = typeof ChannelTaskMoveResult.Type;
+
 export const ChannelGetInputInput = Schema.Struct({ inputId: ChannelInputId });
 export type ChannelGetInputInput = typeof ChannelGetInputInput.Type;
 
@@ -324,4 +339,5 @@ export const CHANNEL_MCP_TOOL_NAMES = {
   taskGet: "channel_task_get",
   taskList: "channel_task_list",
   taskReport: "channel_task_report",
+  taskMove: "channel_task_move",
 } as const;

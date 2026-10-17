@@ -556,6 +556,41 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (action.type === "move_task") {
+        if (
+          requester.originKind === "mcp" ||
+          !requester.grantedScopes.includes("orchestration:operate")
+        ) {
+          replyText = CHANNEL_COPY.agentCannotMoveWork;
+          finalDecision = { replyText, action: { type: "report_only" } };
+        } else {
+          const storedTask = yield* ledger.getTask(action.taskId);
+          if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
+            replyText =
+              "I couldn’t match that to work in this conversation. Which task do you mean?";
+            finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+          } else {
+            finalDecision = yield* remoteWorkers
+              .move({ taskId: action.taskId, host: action.host, actor: "user", owner })
+              .pipe(
+                Effect.map((moved) => ({
+                  // The task's own narration explains the move; the reply only acknowledges it.
+                  replyText: "Moving it to " + moved.host + ".",
+                  action,
+                })),
+                Effect.catchTags({
+                  ChannelTaskMoveError: (error) =>
+                    Effect.succeed({
+                      replyText: error.message,
+                      action: { type: "report_only" as const },
+                    }),
+                }),
+              );
+            replyText = finalDecision.replyText;
+          }
+        }
+      }
+
       if (action.type === "answer_question") {
         // Judge the answerer as they stand now: a Slack link removed or narrowed since the message
         // arrived counts.
@@ -703,6 +738,19 @@ const make = Effect.gen(function* () {
             task.title +
             " — " +
             (event.payload.summary ?? event.payload.reason),
+        };
+      case "task.moved":
+        return {
+          kind: "receipt" as const,
+          text:
+            event.payload.fromHost +
+            " stopped answering, so this continues on " +
+            event.payload.host +
+            " from the copy of its work taken at " +
+            event.payload.replicaCapturedAt +
+            ". Whatever it does on " +
+            event.payload.fromHost +
+            " after that stays there.",
         };
       case "task.cancelled":
         return { kind: "failure" as const, text: "Stopped: " + task.title };

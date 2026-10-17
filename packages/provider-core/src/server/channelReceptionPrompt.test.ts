@@ -21,17 +21,29 @@ const emptyOutput = {
   notesChangeRequested: "",
 } satisfies ChannelReceptionModelOutput;
 
+const decodeModelOutput = Schema.decodeUnknownSync(ChannelReceptionModelOutput);
+
 const convert = (overrides: Partial<ChannelReceptionModelOutput>) =>
   Option.getOrThrow(toChannelReceptionResult({ ...emptyOutput, ...overrides }));
 
 describe("channel reception note request conversion", () => {
+  it("decodes and converts a move with its destination, rejecting missing fields", () => {
+    const output = { ...emptyOutput, action: "move_task", taskId: "task-1", host: " mini " };
+    const decoded = decodeModelOutput(output);
+    expect(Option.getOrThrow(toChannelReceptionResult(decoded))).toEqual({
+      replyText: "Okay.",
+      action: { type: "move_task", taskId: "task-1", host: "mini" },
+    });
+    expect(toChannelReceptionResult({ ...decoded, host: " " })).toEqual(Option.none());
+    expect(toChannelReceptionResult({ ...decoded, taskId: "" })).toEqual(Option.none());
+  });
+
   it("requires both new keys in the flat structured output", () => {
-    const decode = Schema.decodeUnknownSync(ChannelReceptionModelOutput);
-    expect(decode(emptyOutput)).toEqual(emptyOutput);
+    expect(decodeModelOutput(emptyOutput)).toEqual(emptyOutput);
     const { rememberQuote: _quote, ...noQuote } = emptyOutput;
     const { notesChangeRequested: _change, ...noChange } = emptyOutput;
-    expect(() => decode(noQuote)).toThrow();
-    expect(() => decode(noChange)).toThrow();
+    expect(() => decodeModelOutput(noQuote)).toThrow();
+    expect(() => decodeModelOutput(noChange)).toThrow();
   });
 
   it("only attaches a trimmed rememberQuote when there is a note to remember", () => {
@@ -80,11 +92,18 @@ describe("channel reception note request conversion", () => {
       replyText: "Okay.",
       action: { type: "create_task", title: "Build", instruction: "Build it." },
     });
-    for (const action of ["report_only", "status", "answer_question", "clarify"] as const) {
+    for (const action of [
+      "report_only",
+      "status",
+      "answer_question",
+      "clarify",
+      "move_task",
+    ] as const) {
       const result = convert({
         action,
         notesChangeRequested: "forget the Korean note",
         taskId: "task-1",
+        host: "mini",
         questionId: "question-1",
         answer: "staging",
         question: "Which project?",

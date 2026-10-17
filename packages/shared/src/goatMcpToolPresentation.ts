@@ -84,7 +84,8 @@ export type GoatMcpToolSummaryAction =
   | "channel-message"
   | "channel-reply"
   | "channel-task-read"
-  | "channel-task-report";
+  | "channel-task-report"
+  | "channel-task-move";
 
 export interface GoatMcpToolDefinition {
   readonly displayName: string;
@@ -468,6 +469,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   channel_task_export: tool(
     ["Export", "Exporting", "Exported", "GOAT ledger tasks"],
     "channel-task-read",
+  ),
+  channel_task_move: tool(
+    ["Continue", "Continuing", "Continued", "a GOAT task on another machine"],
+    "channel-task-move",
   ),
   channel_task_report: tool(
     ["Report on", "Reporting on", "Reported on", "a GOAT ledger task"],

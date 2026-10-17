@@ -512,6 +512,9 @@ export function summarizeGoatToolCalls(
     case "channel-task-read":
       label = phrase("Checked", "check", `GOAT ledger tasks ${times}`);
       break;
+    case "channel-task-move":
+      label = phrase("Continued", "continue", `GOAT tasks on another machine ${times}`);
+      break;
     case "channel-task-report":
       label = phrase("Reported", "report", `on GOAT ledger tasks ${times}`);
       break;

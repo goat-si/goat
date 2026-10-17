@@ -20,7 +20,14 @@ import { limitSection } from "./textGenerationUtils.ts";
 
 export const ChannelReceptionModelOutput = Schema.Struct({
   replyText: Schema.String,
-  action: Schema.Literals(["create_task", "status", "answer_question", "clarify", "report_only"]),
+  action: Schema.Literals([
+    "create_task",
+    "move_task",
+    "status",
+    "answer_question",
+    "clarify",
+    "report_only",
+  ]),
   title: Schema.String,
   instruction: Schema.String,
   projectId: Schema.String,
@@ -78,6 +85,11 @@ function toActionResult(
             ? {}
             : { notesChangeRequested: output.notesChangeRequested.trim() }),
         },
+      });
+    case "move_task":
+      return decodeResult({
+        replyText,
+        action: { type: "move_task", taskId: output.taskId, host: output.host.trim() },
       });
     case "status":
       return decodeResult({
@@ -184,11 +196,13 @@ export function buildChannelReceptionPrompt(input: ChannelReceptionInput) {
     "- Anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing) needs their approval: tell the agent to show a draft or plan and ask first.",
     "- Never invent facts or results. If something is not below and you did not start work to find out, say you have not checked it.",
     "- Never say work is finished unless the update says it is.",
+    "- When the person asks to continue a task on another machine because its remote machine stopped answering, choose move_task and pick host from allowedHosts (the other machines listed below).",
     "",
     "Style: one to three short sentences, warm and plain, outcome first. No internal ids unless the person needs them.",
     "",
     "Choose exactly one action:",
     "- create_task: work that needs a coding agent. Fill title (short, in the person's language) and instruction (complete and self-contained: the goal, the context from this conversation, relevant standing notes, and what to report back). Set projectId to one listed below whenever one fits. Set host only when the person asks for the work to run on one of the other machines listed below.",
+    "- move_task: continue a listed task whose remote machine stopped answering on another machine at the person’s request. Fill taskId and host; host must be one of allowedHosts listed below.",
     "- status: the person asks about work listed below in this conversation. Set taskId when one task is meant.",
     "- answer_question: the message answers one listed open question. Fill taskId, questionId, answer.",
     "- clarify: only when the message is too unclear to start any work, or it could mean several listed tasks or recent threads equally well. Fill question and put the same question in replyText. When the answer is one of a few concrete choices, such as a task, a recent thread, or a project listed below, put two to four of them in options, recommended first, each worded as the person's short reply. Otherwise leave options empty.",

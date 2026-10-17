@@ -193,6 +193,25 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
+  "channel.task_move": entry({
+    resource: "channel",
+    verb: "task_move",
+    name: "channel_task_move",
+    toolkit: "channel",
+    summary: "Continue a GOAT task on another machine",
+    description:
+      "Continue a remote GOAT ledger task on another known SSH host from its latest copied work. Requires orchestration:operate. Available only after the original host stopped answering and a copy is available. Work on the original machine stays there.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Continue a GOAT task on another machine",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
   "channel.task_report": entry({
     resource: "channel",
     verb: "task_report",

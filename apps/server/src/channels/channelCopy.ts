@@ -14,6 +14,7 @@ export const CHANNEL_COPY = {
   receptionFailed: "I couldn't read that just now. Please send it again.",
   agentCannotCreateWork:
     "Only people can start new work. I can tell you how existing work is going.",
+  agentCannotMoveWork: "Only people with access to run work can move it to another machine.",
   noReceptionModel:
     "No reception model is available. Pick a Codex or Claude model for text generation in GOAT settings.",
   answerForwarded: "Thanks. I passed your answer on.",

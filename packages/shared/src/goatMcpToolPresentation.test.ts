@@ -9,6 +9,14 @@ import {
 } from "./goatMcpToolPresentation.ts";
 
 describe("resolveGoatMcpToolPresentation", () => {
+  it("presents a task move as continuing work on another machine", () => {
+    expect(resolveGoatMcpToolPresentation("mcp__goat__channel_task_move")).toEqual({
+      displayName: "Continue a GOAT task on another machine",
+      logo: "t3-code",
+    });
+    expect(resolveGoatMcpToolSummaryAction("channel_task_move")).toBe("channel-task-move");
+  });
+
   it.each([
     ["t3_attachment_discard", "goat_attachment_discard"],
     ["t3_attachment_prepare_upload", "goat_attachment_prepare_upload"],

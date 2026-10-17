@@ -9,10 +9,13 @@ import * as Effect from "effect/Effect";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
+import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
+import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import { channelOwnerIdFor } from "../../../channels/channelOwner.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { loadCaller } from "../../threadAccess.ts";
 import { ChannelToolkit } from "./tools.ts";
 
 const failureFor = (error: ChannelGatewayError | ChannelLedger.ChannelLedgerError) =>
@@ -147,6 +150,42 @@ export const layer = McpToolAccess.toLayer(
           return yield* exporter
             .exportTasks({ ...input, ownerId: yield* ownerIdOf })
             .pipe(Effect.mapError(failureFor));
+        }),
+      ),
+      channel_task_move: McpToolAccess.writes((input) =>
+        Effect.gen(function* () {
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          if (!scope.grantedScopes?.includes("orchestration:operate")) {
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message: "Moving work to another machine requires orchestration:operate.",
+            });
+          }
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const stored = yield* ledger.getTask(input.taskId).pipe(Effect.mapError(failureFor));
+          if (stored === undefined || stored.ownerId !== channelOwnerIdFor(scope.environmentId)) {
+            return yield* notFound();
+          }
+          const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          return yield* remoteWorkers
+            .move({
+              ...input,
+              actor: "agent",
+              owner: runtime.ownerToken,
+              // A thread caller's own runtime mode; an outside client's access level.
+              callerCeiling: (yield* loadCaller()).limits.runtimeMode,
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                error._tag === "ChannelTaskMoveError"
+                  ? new OrchestratorMcpFailure({
+                      code: error.reason === "task_not_found" ? "task_not_found" : "invalid_request",
+                      message: error.message,
+                    })
+                  : failureFor(error),
+              ),
+            );
         }),
       ),
       channel_task_report: McpToolAccess.writes((input) =>

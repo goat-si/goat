@@ -45,6 +45,8 @@ import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelTaskExport from "../../../channels/ChannelTaskExport.ts";
+import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
+import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
@@ -88,6 +90,8 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ChannelLedger.ChannelLedger)({}),
   Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
+  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
+  Layer.mock(ChannelRuntime.ChannelRuntime)({ ownerToken: "test-owner" }),
 );
 
 const ToolsListPayload = Schema.fromJsonString(

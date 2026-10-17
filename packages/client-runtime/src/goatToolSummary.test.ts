@@ -7,6 +7,13 @@ function completed(input: unknown, output?: unknown): GoatToolSummaryCall {
 }
 
 describe("summarizeGoatToolCalls", () => {
+  it("describes continuing work on another machine", () => {
+    expect(
+      summarizeGoatToolCalls("channel-task-move", [completed({ taskId: "task-1", host: "mini" })])
+        .label,
+    ).toBe("Continued GOAT tasks on another machine 1 time");
+  });
+
   it("counts registered projects, repository destinations, and accepted thread launches", () => {
     expect(
       summarizeGoatToolCalls("project-create", [

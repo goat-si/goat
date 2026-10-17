@@ -5,6 +5,7 @@ import {
   type ChannelIngestInput,
   type ChannelReceptionInput,
   ChannelTaskEvent,
+  ChannelTaskId,
   type ThreadResultReport,
   ChannelGatewayError,
   CommandId,
@@ -1463,6 +1464,54 @@ describe("who may do what (scenario 4)", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("MCP input cannot move work through reception", () => {
+    const harness = makeHarness();
+    harness.script.current = (input) =>
+      input.mode === "input"
+        ? Effect.succeed({
+            replyText: "Moving it.",
+            action: { type: "move_task", taskId: ChannelTaskId.make("task-1"), host: "mini" },
+          })
+        : defaultScript(input);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const receipt = yield* gateway.ingest(
+        {
+          kind: "mcp",
+          connectionId: "mcp",
+          conversationKey: "default",
+          externalMessageId: "move-1",
+          idempotencyKey: "move-1",
+          actor: { senderThreadId: ThreadId.make("thread:some-agent") },
+          replyAddress: {
+            kind: "mcp",
+            connectionId: "mcp",
+            requestNamespace: "move-ns",
+            conversationKey: "default",
+          },
+          text: "continue on mini",
+          attachments: [],
+          receivedAt: "2026-10-12T00:00:00.000Z",
+          intent: "message",
+        },
+        {
+          ...owner,
+          principalId: "mcp:move-ns",
+          grantedScopes: ["orchestration:read", "orchestration:operate"],
+          caller: { type: "mcp", requestNamespace: "move-ns" },
+        },
+      );
+      yield* runtime.drain;
+      const input = yield* ledger.getInput(receipt.inputId);
+      assert.strictEqual(input?.snapshot.reply?.text, CHANNEL_COPY.agentCannotMoveWork);
+      assert.strictEqual((yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.length, 0);
+      assert.strictEqual(harness.world.launches.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect(
     "refuses new work from agents and reports from threads that do not own the task",

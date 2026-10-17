@@ -11,6 +11,8 @@ import {
   ChannelTaskExportResult,
   ChannelTaskId,
   ChannelTaskReportInput,
+  ChannelTaskMoveInput,
+  ChannelTaskMoveResult,
   OrchestratorMcpFailure,
   TrimmedNonEmptyString,
 } from "@goat/contracts";
@@ -19,6 +21,8 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
+import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
+import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -81,6 +85,18 @@ const ChannelTaskReportTool = Tool.make(agentSurfaceRegistry["channel.task_repor
   success: Schema.Struct({}),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_report"]));
 
+const ChannelTaskMoveTool = Tool.make(agentSurfaceRegistry["channel.task_move"].name, {
+  ...shared,
+  dependencies: [
+    ...shared.dependencies,
+    ChannelRemoteWorkers.ChannelRemoteWorkers,
+    ChannelRuntime.ChannelRuntime,
+  ],
+  description: agentSurfaceRegistry["channel.task_move"].description,
+  parameters: ChannelTaskMoveInput,
+  success: ChannelTaskMoveResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_move"]));
+
 export const ChannelToolkit = Toolkit.make(
   ChannelIngestTool,
   ChannelInputGetTool,
@@ -88,4 +104,5 @@ export const ChannelToolkit = Toolkit.make(
   ChannelTaskListTool,
   ChannelTaskExportTool,
   ChannelTaskReportTool,
+  ChannelTaskMoveTool,
 );

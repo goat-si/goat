@@ -11,6 +11,7 @@ describe("reception results", () => {
     for (const action of [
       { type: "create_task", title: "Re-verify", instruction: "Run it again." },
       { type: "status", taskId: "task-1" },
+      { type: "move_task", taskId: "task-1", host: "mini" },
       { type: "answer_question", taskId: "task-1", questionId: "q-1", answer: "Use main." },
       { type: "clarify", question: "Which project?" },
       { type: "report_only" },
@@ -49,6 +50,15 @@ describe("reception results", () => {
         taskId: "task-1",
       }),
     ).toThrow();
+  });
+
+  it("requires a task and a nonempty destination for a move", () => {
+    for (const action of [
+      { type: "move_task", taskId: "task-1" },
+      { type: "move_task", host: "mini" },
+      { type: "move_task", taskId: "task-1", host: "  " },
+    ])
+      expect(() => decodeAction(action)).toThrow();
   });
 
   it("reads a requested host on new work, and inputs with or without host choices", () => {

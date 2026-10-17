@@ -127,6 +127,11 @@ export const ChannelReceptionAction = Schema.Union([
     notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
+    type: Schema.Literal("move_task"),
+    taskId: ChannelTaskId,
+    host: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
     type: Schema.Literal("status"),
     taskId: Schema.optional(ChannelTaskId),
   }),

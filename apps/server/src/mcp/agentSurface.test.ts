@@ -10,6 +10,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as ChannelGateway from "../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
+import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
+import * as ChannelRuntime from "../channels/ChannelRuntime.ts";
 import * as ChannelWorkerReports from "../channels/ChannelWorkerReports.ts";
 import * as ConnectionCatalogBroker from "../connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -111,6 +113,8 @@ const dependencies = Layer.mergeAll(
   Layer.mock(ChannelLedger.ChannelLedger)({}),
   Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
+  Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
+  Layer.mock(ChannelRuntime.ChannelRuntime)({ ownerToken: "test-owner" }),
   Layer.mock(ConnectionCatalogBroker.ConnectionCatalogBroker)({}),
   Layer.mock(DeviceService.DeviceService)({}),
   Path.layer,
@@ -177,7 +181,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(129); // Includes current memory, browser and provider tools.
+  expect(entries).toHaveLength(130); // Includes current memory, browser and provider tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
