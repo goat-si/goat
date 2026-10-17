@@ -51,6 +51,7 @@ import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPre
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
+import { MediaImagePreview } from "~/components/media/MediaImagePreview";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
 import { MorphIcon } from "~/components/MorphIcon";
 import { useRemoteOpenState } from "~/remoteOpen";
@@ -181,7 +182,6 @@ function WorkspaceImagePreview(props: {
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
   const connection = usePreparedConnection(props.environmentId);
   const wasDisconnected = useRef(false);
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [retryId, setRetryId] = useState(0);
   useEffect(() => {
     if (connection._tag === "None") {
@@ -190,7 +190,6 @@ function WorkspaceImagePreview(props: {
       wasDisconnected.current = false;
       void refreshAssetUrl()
         .then(() => {
-          setFailedUrl(null);
           setRetryId((current) => current + 1);
         })
         .catch(() => undefined);
@@ -222,38 +221,20 @@ function WorkspaceImagePreview(props: {
     asset: { environmentId: props.environmentId, resource },
   };
 
-  if (assetUrl._tag === "Failure" || (imageUrl !== null && failedUrl === imageUrl)) {
-    return (
-      <MediaActions source={actionsSource}>
-        <FileSurfaceFailure
-          message="Unable to load workspace image."
-          onRetry={() => {
-            setFailedUrl(null);
+  return (
+    <MediaActions source={actionsSource}>
+      <div className="flex min-h-0 flex-1">
+        <MediaImagePreview
+          src={imageUrl}
+          name={props.alt}
+          sourceFailed={assetUrl._tag === "Failure"}
+          onRetry={async () => {
+            await refreshAssetUrl();
             setRetryId((current) => current + 1);
-            void refreshAssetUrl().catch(() => undefined);
           }}
         />
-      </MediaActions>
-    );
-  }
-
-  return assetUrl._tag === "Success" && imageUrl !== null ? (
-    // oxlint-disable-next-line goat/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <MediaActions source={actionsSource}>
-        <img
-          key={imageUrl}
-          className="max-h-full max-w-full object-contain"
-          src={imageUrl}
-          alt={props.alt}
-          onError={() => setFailedUrl(imageUrl)}
-        />
-      </MediaActions>
-    </div>
-  ) : (
-    <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-      <Spinner size="lg" />
-    </div>
+      </div>
+    </MediaActions>
   );
 }
 

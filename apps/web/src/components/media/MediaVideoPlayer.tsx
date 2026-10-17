@@ -6,6 +6,7 @@ import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 import { Button } from "../ui/button";
 import { OpenMediaLink } from "./OpenMediaLink";
 import { MediaActions, type MediaActionSource } from "./MediaActions";
+import { isMediaSourceAvailable } from "./mediaContent";
 
 interface MediaVideoPlayerProps {
   readonly src: string | null;
@@ -61,6 +62,7 @@ export function MediaVideoPlayer({
   } | null>(null);
   const [failure, setFailure] = useState<{ src: string; format: boolean } | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [availableFormatFailure, setAvailableFormatFailure] = useState(failure);
   const [preloadedSrc, setPreloadedSrc] = useState<string | null>(null);
   const pendingRestore = useRef<PlaybackState | null>(null);
   const autoRefreshUsed = useRef(false);
@@ -74,6 +76,16 @@ export function MediaVideoPlayer({
   useEffect(() => {
     latestSrcRef.current = latestSrc;
   }, [latestSrc]);
+
+  useEffect(() => {
+    if (!failure?.format) return;
+    const controller = new AbortController();
+    const failedSrc = failure.src;
+    void isMediaSourceAvailable(failedSrc, controller.signal).then((available) => {
+      if (!controller.signal.aborted && available) setAvailableFormatFailure(failure);
+    });
+    return () => controller.abort();
+  }, [failure]);
 
   const rememberPlayback = useCallback(() => {
     const video = videoRef.current;
@@ -159,6 +171,7 @@ export function MediaVideoPlayer({
           : null,
       );
       setFailure(null);
+      setAvailableFormatFailure(null);
       autoRefreshUsed.current = false;
       recoveryFrom.current = null;
       recoveryTime.current = null;
@@ -187,7 +200,7 @@ export function MediaVideoPlayer({
         >
           <span className="inline-flex items-center gap-1.5">
             <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
-            {failure?.src === src && failure.format
+            {failure?.src === src && failure.format && availableFormatFailure === failure
               ? "This video format can't be played here"
               : "Video unavailable"}
             {label ? ` · ${label}` : ""}

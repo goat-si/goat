@@ -9,6 +9,7 @@ export function OpenMediaLink(props: {
   readonly originalUrl?: string | undefined;
   readonly src?: string | null | undefined;
   readonly fileName?: string | undefined;
+  readonly kind?: "image" | "video" | undefined;
   readonly className?: string | undefined;
 }) {
   const originalUrl =
@@ -39,7 +40,11 @@ export function OpenMediaLink(props: {
       }
     >
       {isBlob ? <DownloadIcon /> : <ExternalLinkIcon />}
-      {originalUrl ? "Open original" : isBlob ? "Download video" : "Open in browser"}
+      {originalUrl
+        ? "Open original"
+        : isBlob
+          ? `Download ${props.kind ?? "video"}`
+          : "Open in browser"}
     </Button>
   );
 }

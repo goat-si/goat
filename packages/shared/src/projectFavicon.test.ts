@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   getProjectFaviconCacheKey,
   isProjectFaviconFallbackUrl,
+  isProjectFaviconPath,
   PROJECT_FAVICON_FALLBACK_MARKER,
 } from "./projectFavicon.ts";
 
@@ -25,6 +26,14 @@ describe("project favicon", () => {
     expect(getProjectFaviconCacheKey("environment-1", "/workspace", firstUrl)).not.toBe(
       getProjectFaviconCacheKey("environment-2", "/workspace", firstUrl),
     );
+  });
+
+  it("accepts favicon images that every client can render", () => {
+    expect(isProjectFaviconPath("/repo/icon.PNG")).toBe(true);
+    expect(isProjectFaviconPath("/repo/AppIcon.icns")).toBe(true);
+    // HEIC previews in the Files tab, but Chromium cannot draw it as a favicon.
+    expect(isProjectFaviconPath("/repo/icon.heic")).toBe(false);
+    expect(isProjectFaviconPath("/repo/icon.HEIF")).toBe(false);
   });
 
   it("identifies fallback asset URLs by their dedicated filename", () => {

@@ -2,7 +2,13 @@ import { WORKSPACE_IMAGE_PREVIEW_EXTENSIONS } from "./filePreview.ts";
 
 export const PROJECT_FAVICON_FALLBACK_MARKER = "project-favicon-missing";
 
-export const PROJECT_FAVICON_EXTENSIONS = [...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS, ".icns"] as const;
+// Favicons render in every client's <img>, and Chromium cannot decode HEIC/HEIF.
+export const PROJECT_FAVICON_EXTENSIONS = [
+  ...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS.filter(
+    (extension) => extension !== ".heic" && extension !== ".heif",
+  ),
+  ".icns",
+] as const;
 
 export function isProjectFaviconPath(path: string): boolean {
   const literalPath = path.toLowerCase();

@@ -15,6 +15,10 @@ describe("MediaVideoPlayer signed URL recovery", () => {
 
   beforeEach(() => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { headers: { "content-type": "video/mp4" } })),
+    );
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     container = document.createElement("div");
     document.body.append(container);
@@ -136,6 +140,54 @@ describe("MediaVideoPlayer signed URL recovery", () => {
     await dispatch(video, "error");
     expect(onRetry).toHaveBeenCalledOnce();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+  });
+
+  it.each([3, 4])(
+    "keeps a format failure explicit after one signed URL refresh (MediaError %i)",
+    async (code) => {
+      const onRetry = vi.fn().mockResolvedValue(second);
+      const video = await render(first, onRetry);
+      Object.defineProperty(video, "error", { configurable: true, get: () => ({ code }) });
+      await dispatch(video, "error");
+      expect(video.getAttribute("src")).toBe(second);
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
+
+      await dispatch(video, "error");
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "This video format can't be played here",
+      );
+      expect(fetch).toHaveBeenCalledWith(second, expect.objectContaining({ method: "HEAD" }));
+    },
+  );
+
+  it.each([403, 404, 500])(
+    "keeps HTTP %i retryable even when the decoder reports an unsupported source",
+    async (status) => {
+      vi.mocked(fetch).mockResolvedValue(new Response(null, { status }));
+      const video = await render(first);
+      Object.defineProperty(video, "error", { configurable: true, get: () => ({ code: 4 }) });
+      await dispatch(video, "error");
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+      expect(container.textContent).not.toContain("This video format can't be played here");
+
+      const retry = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Retry video"),
+      )!;
+      await act(async () => retry.click());
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(first);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+    },
+  );
+
+  it("keeps a disconnected format probe retryable", async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError("offline"));
+    const video = await render(first);
+    Object.defineProperty(video, "error", { configurable: true, get: () => ({ code: 3 }) });
+    await dispatch(video, "error");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+    expect(container.textContent).not.toContain("This video format can't be played here");
   });
 
   it.each([3, 4])(

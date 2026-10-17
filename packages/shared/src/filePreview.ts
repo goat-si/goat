@@ -97,6 +97,8 @@ export const WORKSPACE_BROWSER_PREVIEW_EXTENSIONS = [".htm", ".html", ".pdf"] as
 export const WORKSPACE_IMAGE_PREVIEW_EXTENSIONS = [
   ".avif",
   ".gif",
+  ".heic",
+  ".heif",
   ".ico",
   ".jpeg",
   ".jpg",
@@ -108,6 +110,8 @@ export const WORKSPACE_IMAGE_PREVIEW_EXTENSIONS = [
 const IMAGE_MIME_TYPE_BY_EXTENSION = new Map([
   [".avif", "image/avif"],
   [".gif", "image/gif"],
+  [".heic", "image/heic"],
+  [".heif", "image/heif"],
   [".ico", "image/x-icon"],
   [".jpeg", "image/jpeg"],
   [".jpg", "image/jpeg"],

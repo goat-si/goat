@@ -80,3 +80,19 @@ export async function readMediaPng(src: string): Promise<Blob> {
     URL.revokeObjectURL(url);
   }
 }
+
+/** Checks a failed decoder's source without downloading the file again. HTTP errors are load failures. */
+export async function isMediaSourceAvailable(src: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const url = resolveProtocolRelativeMediaUrl(src);
+    // Blob URLs only accept GET. Their bytes are already local; inspect headers and cancel the body.
+    const isBlob = url.startsWith("blob:");
+    const response = await fetch(url, { method: isBlob ? "GET" : "HEAD", signal });
+    if (isBlob) await response.body?.cancel();
+    const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    return response.ok && mimeType !== "text/html";
+  } catch {
+    // Missing CORS access and a dead connection cannot establish a format failure.
+    return false;
+  }
+}

@@ -31,6 +31,8 @@ describe("workspace file previews", () => {
     "images#archive/icon.png",
     "texture.webp",
     "image.avif",
+    "photo.HEIC",
+    "photo.heif",
   ])("recognizes image preview path %s", (path) => {
     expect(isWorkspaceImagePreviewPath(path)).toBe(true);
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
@@ -46,8 +48,18 @@ describe("workspace file previews", () => {
     "document.pdf?download=1",
     "report.html#notes.txt",
     "image%2Epng",
+    "image.heic.txt",
+    "image.heif?download=1",
   ])("rejects non-preview path %s", (path) => {
     expect(isWorkspacePreviewEntryPath(path)).toBe(false);
+  });
+
+  it.each([
+    [".HEIC", "image/heic"],
+    [".heif", "image/heif"],
+  ])("serves %s with its native image MIME type", (extension, mimeType) => {
+    expect(hostPreviewMimeTypeFromExtension(extension)).toBe(mimeType);
+    expect(hostPreviewMimeTypeFromExtension(`${extension}.txt`)).toBeNull();
   });
 
   it("serves audio in place from the host like video and browser documents", () => {
@@ -69,6 +81,8 @@ describe("media path parsing", () => {
     ["images/result.png%23secret.txt", null],
     ["images/result.png%3Fsecret.txt", null],
     ["/tmp/100%.png", "image"],
+    ["https://cdn.example/photo.HEIC?download=1", "image"],
+    ["images/photo%2Eheif", "image"],
   ])("classifies the decoded pathname of %s", (source, kind) => {
     expect(mediaKindFromPath(source)).toBe(kind);
   });
@@ -92,6 +106,11 @@ describe("attachment preview classification", () => {
     ["report.pdf", "application/pdf", "pdf"],
     ["page.HTML", "", "html"],
     ["recording.mp3", "", "audio"],
+    ["photo.HEIC", "", "image"],
+    ["photo.heif", "application/octet-stream", "image"],
+    ["photo.heic", "text/plain", "image"],
+    ["photo", "image/heic", "image"],
+    ["photo", "image/heif", "image"],
     ["payload", "application/problem+json", "text"],
     ["archive.zip", "application/zip", "unsupported"],
     ["misleading.json", "application/pdf", "pdf"],
