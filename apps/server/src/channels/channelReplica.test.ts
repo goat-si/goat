@@ -332,6 +332,25 @@ describe("replica scripts with real Git repositories", () => {
     assert.isFalse(NodeFS.existsSync(NodePath.join(f.repo, "deleted.txt")));
   });
 
+  it("leaves out new secret-looking and oversized files the worker staged itself", () => {
+    const f = fixture();
+    NodeFS.writeFileSync(NodePath.join(f.repo, "private.key"), "secret");
+    NodeFS.writeFileSync(NodePath.join(f.repo, "staged-large.bin"), "x".repeat(129));
+    NodeFS.writeFileSync(NodePath.join(f.repo, "staged-small.txt"), "small\n");
+    f.git(f.repo, "add", "private.key", "staged-large.bin", "staged-small.txt");
+    const staged = f.git(f.repo, "diff", "--cached", "--name-only");
+    const result = f.capture({ maxUntrackedFileBytes: 128 });
+    assert.strictEqual(result.type, "ok");
+    if (result.type !== "ok") return;
+    assert.sameMembers(result.excluded, ["private.key", "staged-large.bin"]);
+    const paths = f.git(f.repo, "ls-tree", "-r", "--name-only", "-z", result.commitOid).split("\0");
+    assert.include(paths, "staged-small.txt");
+    assert.notInclude(paths, "private.key");
+    assert.notInclude(paths, "staged-large.bin");
+    // The worker's own index still has everything it staged.
+    assert.strictEqual(f.git(f.repo, "diff", "--cached", "--name-only"), staged);
+  });
+
   it("finds the worker worktree with a newline path and supports root strategy without branch", () => {
     const f = fixture();
     const worker = NodePath.join(f.root, "worker ' space\n");

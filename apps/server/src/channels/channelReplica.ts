@@ -131,6 +131,16 @@ xargs -0 sh -c ${quote(selectUntracked)} sh "$tmp" "$max_untracked" < "$tmp/untr
 if [ -s "$tmp/included" ]; then
   git -c core.splitIndex=false add --pathspec-from-file="$tmp/included" --pathspec-file-nul
 fi
+# New files the worker staged itself get the same rule; only the copy's index loses them.
+mkdir "$tmp/staged"
+: > "$tmp/staged/excluded"
+: > "$tmp/staged/included"
+git diff --cached --name-only --diff-filter=A -z "$head" > "$tmp/added"
+xargs -0 sh -c ${quote(selectUntracked)} sh "$tmp/staged" "$max_untracked" < "$tmp/added"
+if [ -s "$tmp/staged/excluded" ]; then
+  git rm --cached --quiet --pathspec-from-file="$tmp/staged/excluded" --pathspec-file-nul
+  cat "$tmp/staged/excluded" >> "$tmp/excluded"
+fi
 tree=$(git write-tree)
 export GIT_AUTHOR_NAME='GOAT Replica' GIT_COMMITTER_NAME='GOAT Replica'
 export GIT_AUTHOR_EMAIL='replica@goat.invalid' GIT_COMMITTER_EMAIL='replica@goat.invalid'

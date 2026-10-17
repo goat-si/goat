@@ -354,7 +354,7 @@ const resumeNote = (fromHost: string, capturedAt: string) =>
   fromHost +
   ", which stopped answering. Your branch already holds that work's commits and uncommitted changes as copied at " +
   capturedAt +
-  " (as one extra commit on top). Files over 2 MiB and files that look like secrets were not copied. Check git status and git log before you go on.";
+  " (as one extra commit on top). New files over 2 MiB and new files that look like secrets were not copied. Check git status and git log before you go on.";
 
 /** Why a move was refused, written for whoever asked. */
 export const MOVE_COPY = {
@@ -589,10 +589,19 @@ const make = Effect.gen(function* () {
     });
 
   /** One file per task and generation; only the newest copy and a pending resume are kept. */
-  const replicaFileFor = (taskId: ChannelTaskId, generation: number) =>
+  /**
+   * One file per copy, named by its snapshot, so a copy a move pinned is never replaced by a
+   * later turn's copy. Only the newest copy and a pending resume are kept per task.
+   */
+  const replicaFileFor = (taskId: ChannelTaskId, generation: number, commitOid: string) =>
     path.join(
       replicaDir,
-      taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g" + String(generation) + ".bundle",
+      taskId.replace(/[^A-Za-z0-9_-]/gu, "_") +
+        "-g" +
+        String(generation) +
+        "-" +
+        commitOid.slice(0, 16) +
+        ".bundle",
     );
 
   const writeReplicaFile = (file: string, bundleBase64: string) =>
@@ -668,7 +677,7 @@ const make = Effect.gen(function* () {
         }));
         return;
       }
-      const file = replicaFileFor(taskId, generation);
+      const file = replicaFileFor(taskId, generation, parsed.commitOid);
       yield* writeReplicaFile(file, parsed.bundleBase64);
       const saved = yield* writeState(
         owner,
@@ -2099,6 +2108,12 @@ const make = Effect.gen(function* () {
       if (state.forwarded.includes(event.eventId)) {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
+      // An answer to the machine the task left belongs to that attempt; the new worker never
+      // asked it, and the new worker's own questions come after the move.
+      const movedAt = stored.task.movedFrom?.at;
+      if (movedAt !== undefined && Date.parse(event.occurredAt) <= Date.parse(movedAt)) {
+        return yield* ledger.completeForward({ owner, sequence: pending.sequence });
+      }
       const ids = answerForwardIdsFor(event.eventId);
       const sent = yield* callHost(
         {
@@ -2163,7 +2178,7 @@ const make = Effect.gen(function* () {
   const ensure: ChannelRemoteWorkers["Service"]["ensure"] = (owner) =>
     Effect.gen(function* () {
       let started = 0;
-      yield* sweepReplicas;
+      yield* hourly(owner);
       for (const stored of yield* ledger.listTasksByStatus(["running", "waiting_input"])) {
         if (stored.task.worker?.host === undefined) continue;
         const key = observerKey(stored.task.taskId, stored.task.generation);
@@ -2189,20 +2204,49 @@ const make = Effect.gen(function* () {
     });
 
   let lastSweep = 0;
-  /** At most hourly: removes copies nobody rewrote for a week (finished or abandoned tasks). */
-  const sweepReplicas = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis;
-    if (now - lastSweep < REPLICA_SWEEP_EVERY_MS) return;
-    lastSweep = now;
-    const names = yield* fileSystem.readDirectory(replicaDir).pipe(Effect.orElseSucceed(() => []));
-    for (const name of names) {
-      const file = path.join(replicaDir, name);
-      const info = yield* fileSystem.stat(file).pipe(Effect.option);
-      if (info._tag === "None") continue;
-      const modified = info.value.mtime._tag === "Some" ? info.value.mtime.value.getTime() : now;
-      if (now - modified > REPLICA_RETENTION_MS) yield* fileSystem.remove(file).pipe(Effect.ignore);
-    }
-  });
+  /**
+   * At most hourly. Finished tasks that moved still watch the machines they left (after a
+   * restart nothing else would), and copies no unfinished task refers to are removed once
+   * nobody rewrote them for a week.
+   */
+  const hourly = (owner: string) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (now - lastSweep < REPLICA_SWEEP_EVERY_MS) return;
+      lastSweep = now;
+      const keep = new Set<string>();
+      for (const stored of yield* ledger.listTasksByStatus([
+        "received",
+        "dispatching",
+        "running",
+        "waiting_input",
+      ])) {
+        const state = yield* readState(stored.task.taskId);
+        if (state?.replica !== undefined) keep.add(state.replica.file);
+        if (state?.resumeFrom !== undefined) keep.add(state.resumeFrom.file);
+      }
+      for (const stored of yield* ledger.listTasksByStatus(["completed", "failed", "cancelled"])) {
+        if (stored.task.movedFrom === undefined) continue;
+        const key = "fence:" + stored.task.taskId;
+        if (yield* FiberMap.has(fibers, key)) continue;
+        const state = yield* readState(stored.task.taskId);
+        if (!(state?.superseded ?? []).some((entry) => !entry.noticed)) continue;
+        yield* background(key, fence(stored.task.taskId, owner));
+      }
+      const names = yield* fileSystem
+        .readDirectory(replicaDir)
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const name of names) {
+        const file = path.join(replicaDir, name);
+        if (keep.has(file)) continue;
+        const info = yield* fileSystem.stat(file).pipe(Effect.option);
+        if (info._tag === "None") continue;
+        const modified = info.value.mtime._tag === "Some" ? info.value.mtime.value.getTime() : now;
+        if (now - modified > REPLICA_RETENTION_MS) {
+          yield* fileSystem.remove(file).pipe(Effect.ignore);
+        }
+      }
+    });
 
   /**
    * Watches the machines a move left behind. The task never reads their reports again (the
@@ -2236,7 +2280,7 @@ const make = Effect.gen(function* () {
             if (isUnreachable(seen.failure)) continue;
             // The binding or its thread is gone there: nothing is left running to tell about.
           } else if (entry.remoteThreadId !== undefined) {
-            yield* callHost(
+            const stopped = yield* callHost(
               {
                 host: entry.host,
                 tool: "goat_thread_interrupt",
@@ -2249,15 +2293,20 @@ const make = Effect.gen(function* () {
                 timeoutMs: SEND_TIMEOUT_MS,
               },
               authorize,
-            ).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("channel stale worker interrupt failed", {
+            ).pipe(Effect.result);
+            if (stopped._tag === "Failure") {
+              if (stopped.failure instanceof Superseded) return;
+              const code = remoteCode(stopped.failure);
+              // A thread that is gone there has nothing left to stop; anything else is retried.
+              if (code !== "thread_not_found") {
+                yield* Effect.logWarning("channel stale worker interrupt failed; retrying", {
                   taskId,
                   host: entry.host,
-                  failure: causeTag(cause),
-                }),
-              ),
-            );
+                  reason: stopped.failure.reason,
+                });
+                continue;
+              }
+            }
           }
           yield* serialized(taskId)(
             Effect.gen(function* () {
