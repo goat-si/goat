@@ -814,15 +814,22 @@ const handoff = (
     readonly error?: SshWorkspaceError;
     readonly invocation?: McpInvocationContext.McpInvocationScope;
     readonly caller?: OrchestrationV2ThreadShell;
+    readonly callerAfterTransfer?: OrchestrationV2ThreadShell;
   } = {},
 ) =>
   Effect.gen(function* () {
     const inputs: HandoffInput[] = [];
     const probes: boolean[] = [];
     const caller = options.caller ?? liveThreadShell(threadId);
+    let currentCaller = caller;
+    let callerReads = 0;
     const dependencies = Layer.mergeAll(
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        getThreadShell: () => Effect.succeed(caller),
+        getThreadShell: () =>
+          Effect.sync(() => {
+            callerReads++;
+            return currentCaller;
+          }),
       }),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
         listHosts: ({ probe }) =>
@@ -836,6 +843,8 @@ const handoff = (
           Effect.gen(function* () {
             inputs.push(input);
             if (options.error !== undefined) return yield* options.error;
+            currentCaller = options.callerAfterTransfer ?? caller;
+            if (input.beforeRemoteChange !== undefined) yield* input.beforeRemoteChange;
             return {
               operationId: "1234abcd",
               snapshotRef: "refs/goat/ssh/1234abcd",
@@ -872,6 +881,7 @@ const handoff = (
       inputs,
       probes,
       caller,
+      callerReads,
     };
   });
 
@@ -888,6 +898,7 @@ it.effect.each([undefined, threadId])(
           sourceThreadId: threadId,
           target: { alias: "box", hostname: "box", username: null, port: null },
           expectedEnvironmentId: null,
+          beforeRemoteChange: expect.anything(),
           allowRunId: transferred.caller.activeRunId,
         },
       ]);
@@ -941,6 +952,7 @@ it.effect("handoff rejects an unknown alias before transferring files", () =>
 
 it.effect.each([
   { code: "thread_busy", stage: "validate", message: "active or queued run" },
+  { code: "caller_not_authorized", stage: "validate", message: "no longer authorized" },
   { code: "secret_candidate", stage: "snapshot", message: "credential-like files" },
   { code: "push_failed", stage: "push", message: "push_failed" },
 ] as const)("handoff preserves the workspace error code $code", ({ code, stage, message }) =>
@@ -948,6 +960,26 @@ it.effect.each([
     const transferred = yield* handoff({}, { error: new SshWorkspaceError({ code, stage }) });
     expect(transferred.result).toMatchObject({ code, message: expect.stringContaining(message) });
     expect(transferred.inputs).toHaveLength(1);
+  }),
+);
+
+it.effect.each([
+  { runtimeMode: "auto" as const },
+  { interactionMode: "plan" as const },
+  { activeRunId: null },
+])("handoff re-checks caller authority through the supplied callback (%j)", (modes) =>
+  Effect.gen(function* () {
+    const transferred = yield* handoff(
+      {},
+      { callerAfterTransfer: liveThreadShell(threadId, modes) },
+    );
+    expect(transferred.inputs).toHaveLength(1);
+    expect(transferred.inputs[0]?.beforeRemoteChange).toBeDefined();
+    expect(transferred.callerReads).toBeGreaterThan(2);
+    expect(transferred.result).toMatchObject({
+      code: "caller_not_authorized",
+      message: expect.stringContaining("no longer authorized"),
+    });
   }),
 );
 

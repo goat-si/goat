@@ -147,4 +147,15 @@ describe("SSH workspace schemas", () => {
     );
     expect(decoded.message).toContain("repository root");
   });
+  it("round trips an actionable caller authorization refusal", () => {
+    const codec = Schema.toCodecJson(SshWorkspaceError);
+    const decoded = Schema.decodeUnknownSync(codec)(
+      Schema.encodeSync(codec)(
+        new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+      ),
+    );
+    expect(decoded.code).toBe("caller_not_authorized");
+    expect(decoded.message).toContain("no longer authorized");
+    expect(decoded.message).toContain("active run and access modes");
+  });
 });

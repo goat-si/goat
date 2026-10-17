@@ -2,7 +2,7 @@ import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatc
 import {
   OrchestratorMcpFailure,
   RunId,
-  type SshWorkspaceError,
+  SshWorkspaceError,
   type SshLaunchWorkspace,
   ThreadId,
 } from "@goat/contracts";
@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -298,12 +299,23 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
         const target = { alias: host, hostname: host, username: null, port: null };
         const current = yield* check;
+        const callerContext = yield* Effect.context<
+          | McpInvocationContext.McpInvocationContext
+          | ThreadManagementService.ThreadManagementService
+        >();
         const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
         const result = yield* sync
           .handoffThread({
             sourceThreadId,
             target,
             expectedEnvironmentId: null,
+            beforeRemoteChange: check.pipe(
+              Effect.asVoid,
+              Effect.provide(callerContext),
+              Effect.mapError(
+                () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+              ),
+            ),
             ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
               ? { allowRunId: current.caller.activeRunId }
               : {}),

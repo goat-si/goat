@@ -145,6 +145,7 @@ export const sshWorkspaceErrorCopy = {
   source_ambiguous:
     "More than one local source project matches this remote workspace. Resolve the duplicate projects.",
   fetch_failed: "Could not fetch the remote changes. Check the SSH connection and repository.",
+  caller_not_authorized: "You no longer have permission to start work on this SSH host.",
 } satisfies Record<SshWorkspaceCode, string>;
 
 const isSshWorkspaceError = Schema.is(SshWorkspaceError);

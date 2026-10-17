@@ -68,6 +68,7 @@ export const SshWorkspaceCode = Schema.Literals([
   "thread_not_found",
   "thread_project_mismatch",
   "thread_busy",
+  "caller_not_authorized",
   "thread_worktree_invalid",
   "not_git_repository",
   "project_not_repo_root",
@@ -106,6 +107,8 @@ export class SshWorkspaceError extends Schema.TaggedError<SshWorkspaceError>()(
   },
 ) {
   override get message(): string {
+    if (this.code === "caller_not_authorized")
+      return "The caller is no longer authorized to hand off this thread. Check its active run and access modes before trying again.";
     if (this.code === "project_not_repo_root")
       return "Add the repository root as the project before sending this workspace over SSH.";
     if (this.code === "secret_candidate")

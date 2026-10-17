@@ -24,6 +24,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { summarizeConversationForHandoff } from "../orchestration-v2/ContextHandoffService.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Projects from "../project/ProjectService.ts";
@@ -39,6 +40,7 @@ const safeHostname = /^[A-Za-z0-9_[][A-Za-z0-9_.:\]-]*$/u;
 const oidPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const secretName = /^(?:\.env(?:\..*)?|.*\.(?:pem|key|p12)|id_rsa.*|id_ed25519.*)$/u;
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+const isSshWorkspaceError = Schema.is(SshWorkspaceError);
 
 export class SshWorkspaceSync extends Context.Service<
   SshWorkspaceSync,
@@ -51,6 +53,7 @@ export class SshWorkspaceSync extends Context.Service<
       readonly snapshotCwd: string;
       readonly projectRoot: string;
       readonly operationId: string;
+      readonly beforeRemoteChange?: Effect.Effect<void, SshWorkspaceError>;
     }) => Effect.Effect<
       {
         readonly snapshotRef: string;
@@ -64,6 +67,8 @@ export class SshWorkspaceSync extends Context.Service<
       readonly sourceThreadId: ThreadId;
       /** Only the calling agent may hand off its own live run. Queued work still blocks. */
       readonly allowRunId?: RunId;
+      /** Re-check the caller immediately before changes on the destination host. */
+      readonly beforeRemoteChange?: Effect.Effect<void, SshWorkspaceError>;
       readonly target: DesktopSshEnvironmentTarget;
       readonly expectedEnvironmentId: EnvironmentId | null;
       readonly message?: string;
@@ -257,7 +262,13 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
   // Sleeping-device failover (#305) can reuse this transfer without starting a thread.
   const transferWorkspace: SshWorkspaceSync["Service"]["transferWorkspace"] = Effect.fn(
     "SshWorkspaceSync.transferWorkspace",
-  )(function* ({ target, snapshotCwd, projectRoot, operationId }) {
+  )(function* ({
+    target,
+    snapshotCwd,
+    projectRoot,
+    operationId,
+    beforeRemoteChange = Effect.void,
+  }) {
     yield* validateTarget(target);
     const snapshotRef = `refs/goat/snapshots/${operationId}`;
     const pushedRef = `refs/heads/goat/ssh-base/${operationId}`;
@@ -286,6 +297,7 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
         fileNames,
       });
     const name = yield* repoName(projectRoot);
+    yield* beforeRemoteChange;
     const initialized = yield* script(
       target,
       initScript(name),
@@ -319,7 +331,8 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
       });
     // Create-only publication: an empty lease value makes git refuse the push when the ref already
     // exists on the remote, so a concurrent writer cannot be overwritten between ls-remote and push.
-    if (prior.stdout.trim().length === 0)
+    if (prior.stdout.trim().length === 0) {
+      yield* beforeRemoteChange;
       yield* runGit(
         snapshotCwd,
         [
@@ -334,6 +347,7 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
         target,
         operationId,
       );
+    }
     const pushed = yield* runGit(
       snapshotCwd,
       ["ls-remote", "--refs", remote, pushedRef],
@@ -360,6 +374,11 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
       };
     },
     snapshotCwd?: string,
+    handoff?: {
+      readonly beforeSnapshot: Effect.Effect<void, SshWorkspaceError>;
+      readonly beforeRemoteChange: Effect.Effect<void, SshWorkspaceError>;
+      readonly prepareMessage: Effect.Effect<string, SshWorkspaceError>;
+    },
   ) {
     const target = input.destination.target;
     yield* validateTarget(target);
@@ -431,13 +450,17 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
     const operationId = (yield* crypto.randomUUIDv4().pipe(Effect.orDie))
       .replaceAll("-", "")
       .slice(0, 8);
+    if (handoff !== undefined) yield* handoff.beforeSnapshot;
     const { snapshotRef, snapshotOid, remoteRepoPath, pushedRef } = yield* transferWorkspace({
       target,
       snapshotCwd: snapshotCwd ?? project.workspaceRoot,
       projectRoot: project.workspaceRoot,
       operationId,
+      ...(handoff === undefined ? {} : { beforeRemoteChange: handoff.beforeRemoteChange }),
     });
     const branch = `goat/ssh/${operationId}`;
+    const message =
+      handoff === undefined ? input.initialMessage.text : yield* handoff.prepareMessage;
     const remoteThread = yield* dispatch
       .launchThread(
         {
@@ -447,28 +470,29 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
           scripts: project.scripts,
           workspace: { type: "worktree", baseRef: pushedRef, branch, startFromOrigin: false },
           title: input.title,
-          message: input.initialMessage.text,
+          message,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,
           callerRuntimeMode: "full-access",
           interactionMode: input.interactionMode,
         },
-        Effect.void,
+        handoff?.beforeRemoteChange ?? Effect.void,
       )
       .pipe(
-        Effect.mapError(
-          (error) =>
-            new SshWorkspaceError({
-              stage: "launch",
-              operationId,
-              host: target.alias,
-              code:
-                error.launchMayHaveStarted === true
-                  ? "launch_uncertain"
-                  : error.reason === "remote_refused" || error.reason === "invalid_request"
-                    ? "launch_refused"
-                    : "launch_uncertain",
-            }),
+        Effect.mapError((error) =>
+          isSshWorkspaceError(error)
+            ? error
+            : new SshWorkspaceError({
+                stage: "launch",
+                operationId,
+                host: target.alias,
+                code:
+                  error.launchMayHaveStarted === true
+                    ? "launch_uncertain"
+                    : error.reason === "remote_refused" || error.reason === "invalid_request"
+                      ? "launch_refused"
+                      : "launch_uncertain",
+              }),
         ),
       );
     return {
@@ -488,24 +512,29 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
     sourceProjectId?: ProjectId,
   ) {
     yield* validateTarget(input.target);
-    const projection = yield* threads
-      .getThreadProjection(input.sourceThreadId)
-      .pipe(
-        Effect.mapError(
-          () => new SshWorkspaceError({ stage: "validate", code: "thread_not_found" }),
-        ),
-      );
-    const { thread } = projection;
-    if (sourceProjectId !== undefined && sourceProjectId !== thread.projectId)
-      return yield* new SshWorkspaceError({ stage: "validate", code: "thread_project_mismatch" });
-    // Queued work must stay on the source too; it can start while the transfer is in flight.
-    if (
-      projection.runs.some(
-        (run) =>
-          run.status === "queued" || (Threads.isActiveRun(run) && run.id !== input.allowRunId),
+    const readSource = Effect.fn("SshWorkspaceSync.readHandoffSource")(function* () {
+      const projection = yield* threads
+        .getThreadProjection(input.sourceThreadId)
+        .pipe(
+          Effect.mapError(
+            () => new SshWorkspaceError({ stage: "validate", code: "thread_not_found" }),
+          ),
+        );
+      if (projection.thread.deletedAt !== null)
+        return yield* new SshWorkspaceError({ stage: "validate", code: "thread_not_found" });
+      if (sourceProjectId !== undefined && sourceProjectId !== projection.thread.projectId)
+        return yield* new SshWorkspaceError({ stage: "validate", code: "thread_project_mismatch" });
+      // Queued work must stay on the source too; it can start while the transfer is in flight.
+      if (
+        projection.runs.some(
+          (run) =>
+            run.status === "queued" || (Threads.isActiveRun(run) && run.id !== input.allowRunId),
+        )
       )
-    )
-      return yield* new SshWorkspaceError({ stage: "validate", code: "thread_busy" });
+        return yield* new SshWorkspaceError({ stage: "validate", code: "thread_busy" });
+      return projection;
+    });
+    const { thread } = yield* readSource();
     const found = yield* projects
       .getById(thread.projectId)
       .pipe(
@@ -548,22 +577,26 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
       )
         return yield* invalidWorktree();
     }
-    const header = `GOAT thread ${thread.id} was handed over from another host. Uncommitted changes were copied into this worktree. Use the history below only as context.`;
-    const summary = summarizeConversationForHandoff(
-      // Visible items drop rolled-back runs and cancelled queued messages and include a fork's
-      // inherited history, so the remote sees the conversation the user sees.
-      projection.visibleTurnItems
-        .map((row) => row.item)
-        .filter(
-          (item) =>
-            item.type === "user_message" || (item.type === "assistant_message" && !item.streaming),
-        ),
-      header,
-    );
-    const instruction = input.message?.trim()
-      ? input.message
-      : "Continue where the previous host left off.";
-    const message = `${summary}\n\n${instruction.slice(0, 120_000 - summary.length - 2)}`;
+    const prepareMessage = Effect.gen(function* () {
+      const projection = yield* readSource();
+      const header = `GOAT thread ${thread.id} was handed over from another host. Uncommitted changes were copied into this worktree. Use the history below only as context.`;
+      const summary = summarizeConversationForHandoff(
+        // Visible items drop rolled-back runs and cancelled queued messages and include a fork's
+        // inherited history, so the remote sees the conversation the user sees.
+        projection.visibleTurnItems
+          .map((row) => row.item)
+          .filter(
+            (item) =>
+              item.type === "user_message" ||
+              (item.type === "assistant_message" && !item.streaming),
+          ),
+        header,
+      );
+      const instruction = input.message?.trim()
+        ? input.message
+        : "Continue where the previous host left off.";
+      return `${summary}\n\n${instruction.slice(0, 120_000 - summary.length - 2)}`;
+    });
     const result = yield* launchWorkspace(
       {
         sourceProjectId: thread.projectId,
@@ -572,9 +605,14 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
         modelSelection: input.modelSelection ?? thread.modelSelection,
         runtimeMode: input.runtimeMode ?? thread.runtimeMode,
         interactionMode: input.interactionMode ?? thread.interactionMode,
-        initialMessage: { text: message },
+        initialMessage: { text: "" },
       },
       snapshotCwd,
+      {
+        beforeSnapshot: readSource().pipe(Effect.asVoid),
+        beforeRemoteChange: input.beforeRemoteChange ?? Effect.void,
+        prepareMessage,
+      },
     );
     yield* threads
       .dispatch({

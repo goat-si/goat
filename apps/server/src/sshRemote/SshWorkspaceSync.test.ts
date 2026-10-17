@@ -17,7 +17,7 @@ import {
   SshWorkspaceLaunchInput,
   VcsProcessExitError,
   GitCommandError,
-  type SshWorkspaceError,
+  SshWorkspaceError,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -211,6 +211,8 @@ const fixture = Effect.gen(function* () {
   });
   const state = {
     projection,
+    projections: [] as (typeof projection)[],
+    projectionReads: 0,
     threadMissing: false,
     noticeFails: false,
     notices: [] as Parameters<Threads.ThreadManagementService["Service"]["dispatch"]>[0][],
@@ -304,16 +306,17 @@ const fixture = Effect.gen(function* () {
     Layer.provide(
       Layer.mock(Threads.ThreadManagementService)({
         getThreadProjection: (threadId) =>
-          Effect.suspend(() =>
-            state.threadMissing
+          Effect.suspend(() => {
+            const projection = state.projections[state.projectionReads++] ?? state.projection;
+            return state.threadMissing
               ? Effect.fail(
                   new Orchestrator.OrchestratorProjectionError({
                     threadId,
                     cause: new Error("missing"),
                   }),
                 )
-              : Effect.succeed(state.projection),
-          ),
+              : Effect.succeed(projection);
+          }),
         dispatch: (command) =>
           Effect.suspend(() => {
             state.notices.push(command);
@@ -1250,6 +1253,113 @@ test("handoff rejects a missing thread", (f) =>
     assert.lengthOf(f.state.scripts, 0);
     assert.lengthOf(f.state.notices, 0);
   }));
+
+testEach(
+  ([1, 2, 3] as const).map(
+    (check) => [`handoff rejects a deleted thread at check ${check}`, check] as const,
+  ),
+  (check, f) =>
+    Effect.gen(function* () {
+      const deleted = {
+        ...f.state.projection,
+        thread: {
+          ...f.state.projection.thread,
+          deletedAt: DateTime.makeUnsafe("2026-10-17T01:00:00.000Z"),
+        },
+      };
+      f.state.projections = [
+        ...Array.from({ length: check - 1 }, () => f.state.projection),
+        deleted,
+      ];
+      yield* rejected(f.sync.handoffThread(f.handoffInput), "validate", "thread_not_found");
+      assert.strictEqual(f.state.projectionReads, check);
+      assert.lengthOf(f.state.launches, 0);
+      assert.lengthOf(f.state.notices, 0);
+      if (check < 3) assert.lengthOf(f.state.scripts, 0);
+    }),
+);
+
+testEach(
+  (["queued", "running"] as const).flatMap((status) =>
+    ([2, 3] as const).map(
+      (check) =>
+        [`handoff rejects new ${status} work at check ${check}`, { status, check }] as const,
+    ),
+  ),
+  ({ status, check }, f) =>
+    Effect.gen(function* () {
+      const ownRun = f.run("running");
+      const initial = { ...f.state.projection, runs: [ownRun] };
+      f.state.projections = [
+        ...Array.from({ length: check - 1 }, () => initial),
+        { ...initial, runs: [ownRun, { ...f.run(status), id: RunId.make("new-run"), ordinal: 2 }] },
+      ];
+      yield* rejected(
+        f.sync.handoffThread({ ...f.handoffInput, allowRunId: ownRun.id }),
+        "validate",
+        "thread_busy",
+      );
+      assert.strictEqual(f.state.projectionReads, check);
+      assert.lengthOf(f.state.launches, 0);
+      assert.lengthOf(f.state.notices, 0);
+      if (check === 2) assert.lengthOf(f.state.scripts, 0);
+      else assert.isTrue(f.state.gitCalls.some((call) => call.args[0] === "push"));
+    }),
+);
+
+test("handoff summarizes the projection re-read after transfer", (f) =>
+  Effect.gen(function* () {
+    const item = f.conversationItem("assistant_message", "Completed during transfer", 1);
+    f.state.projections = [
+      f.state.projection,
+      f.state.projection,
+      {
+        ...f.state.projection,
+        visibleTurnItems: [
+          {
+            item,
+            position: 0,
+            sourceThreadId: item.threadId,
+            sourceItemId: item.id,
+            visibility: "local",
+          },
+        ],
+      },
+    ];
+    yield* f.sync.handoffThread(f.handoffInput);
+    assert.strictEqual(f.state.projectionReads, 3);
+    assert.include(f.state.launches[0]?.message ?? "", "Completed during transfer");
+  }));
+
+testEach(
+  ([1, 2, 3] as const).map(
+    (check) => [`handoff re-checks caller authority before remote change ${check}`, check] as const,
+  ),
+  (check, f) =>
+    Effect.gen(function* () {
+      let checks = 0;
+      yield* rejected(
+        f.sync.handoffThread({
+          ...f.handoffInput,
+          beforeRemoteChange: Effect.suspend(() =>
+            ++checks === check
+              ? Effect.fail(
+                  new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+                )
+              : Effect.void,
+          ),
+        }),
+        "validate",
+        "caller_not_authorized",
+      );
+      assert.strictEqual(checks, check);
+      assert.lengthOf(f.state.launches, 0);
+      assert.lengthOf(f.state.notices, 0);
+      if (check === 1) assert.lengthOf(f.state.scripts, 0);
+      if (check < 3) assert.isFalse(f.state.gitCalls.some((call) => call.args[0] === "push"));
+      else assert.isTrue(f.state.gitCalls.some((call) => call.args[0] === "push"));
+    }),
+);
 
 testEach(
   (["missing", "subdirectory", "foreign"] as const).map(
