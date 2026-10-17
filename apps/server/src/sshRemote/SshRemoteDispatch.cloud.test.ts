@@ -44,6 +44,7 @@ const withDispatch = <A, E>(
         ),
       readyEnvironment: () => Effect.die("Unexpected ready environment"),
       beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+      publishSetupOutcome: () => Effect.succeed(true),
       publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: (target) =>

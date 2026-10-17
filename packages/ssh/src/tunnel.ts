@@ -19,6 +19,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
+  buildSshKeyAuthInstructions,
 } from "@goat/contracts";
 import {
   compareRuntimeProtocols,
@@ -362,6 +363,20 @@ function notifyRuntimePhase(
   }
 }
 
+/** Publications never resolve aliases or acquire installation locks; stale operations are ignored. */
+export type SshSetupOutcome =
+  | { readonly kind: "complete" }
+  | {
+      readonly kind: "error";
+      readonly reason:
+        | "diagnosis_failed"
+        | "approval_expired"
+        | "authorization_revoked"
+        | "operation_failed";
+      readonly message: string;
+      readonly fix: SshHostFailure["fix"];
+    };
+
 export interface SshEnvironmentManagerShape {
   readonly readyEnvironment: (
     target: DesktopSshEnvironmentTarget,
@@ -375,6 +390,11 @@ export interface SshEnvironmentManagerShape {
     target: DesktopSshEnvironmentTarget,
     operationId: string,
   ) => Effect.Effect<SshHostSetupProgress, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  readonly publishSetupOutcome: (
+    target: DesktopSshEnvironmentTarget,
+    operation: Pick<SshHostSetupProgress, "generation" | "operationId">,
+    outcome: SshSetupOutcome,
+  ) => Effect.Effect<boolean>;
   readonly publishProviderDiagnosis: (
     target: DesktopSshEnvironmentTarget,
     operation: Pick<SshHostSetupProgress, "generation" | "operationId">,
@@ -3644,14 +3664,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const resolvedTargets = new Map<string, DesktopSshEnvironmentTarget>();
   const statuses = new Map<string, SshHostResult>();
   const acquisitionFailures = new Map<string, SshHostFailure>();
-  const setupOperations = new Map<string, SshHostSetupProgress>();
+  const setupOperations = new Map<
+    string,
+    SshHostSetupProgress & { readonly diagnosisRequired?: boolean }
+  >();
   const forgotten = new Set<string>();
   const setupFields = (key: string, stage?: SshHostSetupProgress["stage"]) => {
     const previous = setupOperations.get(key);
     if (previous === undefined) return {};
     const setup = { ...previous, stage: stage ?? previous.stage };
     setupOperations.set(key, setup);
-    return { setup };
+    return {
+      setup: { operationId: setup.operationId, generation: setup.generation, stage: setup.stage },
+    };
   };
   const managedAliases = new Set<string>();
   const observedPins = new Map<string, string>();
@@ -3837,21 +3862,78 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const conf = yield* fs
         .readFileString(path.join(dir, `${target.alias}.conf`))
         .pipe(Effect.orElseSucceed(() => ""));
-      const identity = path.join(dir, "id_ed25519");
-      if (!conf.includes(`IdentityFile "${identity}"`)) continue;
-      const linked = yield* fs.readLink(`${identity}.pub`).pipe(
+      const identity = /^\s*IdentityFile\s+"?(.+?)"?\s*$/imu.exec(conf)?.[1];
+      if (identity === undefined) continue;
+      const expandedIdentity = identity.replace(
+        /^~(?=[/\\])/u,
+        path.dirname(path.dirname(directory)),
+      );
+      const publicPath = expandedIdentity.endsWith(".pub")
+        ? expandedIdentity
+        : `${expandedIdentity}.pub`;
+      const linked = yield* fs.readLink(publicPath).pipe(
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );
       if (linked) continue;
-      const publicKey = (yield* fs
-        .readFileString(`${identity}.pub`)
+      const key = (yield* fs
+        .readFileString(publicPath)
         .pipe(Effect.orElseSucceed(() => ""))).trim();
-      if (/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( .*)?$/u.test(publicKey))
-        return { ...result, status: { ...result.status, publicKey } };
+      if (
+        !/^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,2}( .*)?$/u.test(
+          key,
+        )
+      )
+        continue;
+      const generatedKey = expandedIdentity === path.join(dir, "id_ed25519");
+      const known = resolvedTargets.get(targetConnectionKey(target)) ?? target;
+      const resolved =
+        known.username === null
+          ? yield* resolveSshTarget(target.alias).pipe(Effect.option)
+          : Option.none();
+      const user =
+        /^\s*User\s+(.+?)\s*$/imu.exec(conf)?.[1] ??
+        known.username ??
+        (Option.isSome(resolved) ? resolved.value.username : null);
+      const port = Number(
+        /^\s*Port\s+(\d+)\s*$/imu.exec(conf)?.[1] ??
+          known.port ??
+          (Option.isSome(resolved) ? resolved.value.port : null) ??
+          22,
+      );
+      if (user === null) {
+        if (generatedKey) return { ...result, status: { ...result.status, publicKey: key } };
+        continue;
+      }
+      const keyAuth = buildSshKeyAuthInstructions({
+        originLabel: "the computer that owns this SSH connection",
+        host: target.alias,
+        user,
+        port,
+        publicKeyPath: publicPath,
+        generatedKey,
+        ...(generatedKey ? { publicKey: key } : {}),
+      });
+      return {
+        ...result,
+        status: { ...result.status, ...(generatedKey ? { publicKey: key } : {}), keyAuth },
+      };
     }
     return result;
   });
+  const setupTerminalFailure = (key: string) => {
+    const current = statuses.get(key)?.status;
+    return (
+      current?.setup?.stage === "complete" &&
+      current.state === "failed" &&
+      [
+        "diagnosis_failed",
+        "approval_expired",
+        "authorization_revoked",
+        "operation_failed",
+      ].includes(current.failure?.reason ?? "")
+    );
+  };
   const publishPhase = (
     key: string,
     target: DesktopSshEnvironmentTarget,
@@ -3859,6 +3941,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     phase: SshRuntimePhase,
     onPhase?: SshRuntimeProgressCallback,
   ) => {
+    if (setupTerminalFailure(key)) return;
     const previous = statuses.get(key);
     statuses.set(key, {
       kind: "ok",
@@ -3879,6 +3962,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     result: SshTunnelEntry | DesktopSshRuntimePendingResult,
     runner?: RemoteGoatRunnerOptions,
   ) => {
+    if (setupTerminalFailure(key)) return;
     const pending = "type" in result ? result.pending : pendingReplacements.get(key)?.pending;
     const host = target.alias || target.hostname;
     const runtimeVersion =
@@ -3917,7 +4001,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...snapshot,
       ...setupFields(
         key,
-        snapshot.state === "ready" && setup?.stage !== "complete" ? "diagnosis" : "complete",
+        snapshot.state === "ready" &&
+          setup?.stage !== "complete" &&
+          setup?.diagnosisRequired !== false
+          ? "diagnosis"
+          : "complete",
       ),
     };
     statuses.set(key, { kind: "ok", status: snapshot });
@@ -4945,6 +5033,17 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const knownKey = targetConnectionKey(knownTarget);
     const active = statuses.get(knownKey);
     if (forgotten.has(knownKey) && active !== undefined) return active;
+    if (
+      active?.status?.setup?.stage === "complete" &&
+      active.status.state === "failed" &&
+      [
+        "diagnosis_failed",
+        "approval_expired",
+        "authorization_revoked",
+        "operation_failed",
+      ].includes(active.status.failure?.reason ?? "")
+    )
+      return active;
     if (active?.status?.state === "preparing" || active?.status?.state === "update_waiting")
       return active;
     const runner =
@@ -5273,6 +5372,73 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     });
     return setup;
   });
+  const publishSetupOutcome: SshEnvironmentManagerShape["publishSetupOutcome"] = (
+    target,
+    operation,
+    outcome,
+  ) =>
+    Effect.sync(() => {
+      const known = resolvedTargets.get(targetConnectionKey(target)) ?? target;
+      const key = targetConnectionKey(known);
+      const setup = setupOperations.get(key);
+      const previous = statuses.get(key);
+      const snapshot =
+        previous?.status ??
+        (previous?.kind === "error"
+          ? {
+              host: target.alias || target.hostname,
+              requestedVersion: "",
+              runtimeVersion: null,
+              state: "failed" as const,
+              failure: {
+                reason: "operation_failed" as const,
+                fix: previous.fix ?? { actor: "agent" as const, instruction: "Try again" },
+              },
+              detail: previous.message,
+            }
+          : undefined);
+      if (
+        closed ||
+        setup?.operationId !== operation.operationId ||
+        setup.generation !== operation.generation ||
+        (generations.get(key) ?? 0) !== operation.generation ||
+        snapshot === undefined
+      )
+        return false;
+      // Failed runtime acquisition and replacement waits keep their own recovery.
+      // Expired/revoked key-auth approvals instead become one terminal setup failure.
+      const keepRecovery = [
+        "failed",
+        "update_waiting",
+        "update_blocked",
+        "providers_not_ready",
+      ].includes(snapshot.state);
+      if (outcome.kind === "complete" || keepRecovery) {
+        if (outcome.kind === "complete" && snapshot.state === "preparing") return false;
+        setupOperations.set(key, { ...setup, diagnosisRequired: false });
+        statuses.set(key, { kind: "ok", status: { ...snapshot, ...setupFields(key, "complete") } });
+      } else {
+        const {
+          phase: _phase,
+          waitingReason: _waiting,
+          publicKey: _publicKey,
+          keyAuth: _keyAuth,
+          failure: _failure,
+          ...base
+        } = snapshot;
+        statuses.set(key, {
+          kind: "ok",
+          status: {
+            ...base,
+            state: "failed",
+            detail: outcome.message,
+            failure: { reason: outcome.reason, fix: outcome.fix },
+            ...setupFields(key, "complete"),
+          },
+        });
+      }
+      return true;
+    });
   const publishProviderDiagnosis: SshEnvironmentManagerShape["publishProviderDiagnosis"] = (
     target,
     operation,
@@ -5370,6 +5536,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     readyEnvironment,
     beginSetupOperation,
     publishProviderDiagnosis,
+    publishSetupOutcome,
     forgetEnvironment,
     ensureEnvironment,
     disconnectEnvironment,

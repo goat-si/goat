@@ -2,6 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
+  OrchestratorMcpFailure,
+  handoffSummary,
+  buildSshKeyAuthInstructions,
   AuthSessionId,
   TurnItemId,
   type Handoff,
@@ -18,7 +21,7 @@ import { ExitCode } from "effect/process/ChildProcessSpawner";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Diagnosis from "../provider/ProviderDiagnosisRouting.ts";
 import * as SshConfig from "@goat/ssh/config";
-import { SshLaunchError } from "@goat/ssh/errors";
+import { SshLaunchError, SshHostKeyProbeError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as DateTime from "effect/DateTime";
 import * as Handoffs from "../handoffs/Handoffs.ts";
@@ -58,6 +61,7 @@ const fixture = Effect.gen(function* () {
   const events: string[] = [];
   const updates: { host: string; confirmReplacement: boolean }[] = [];
   const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+    publishSetupOutcome: () => Effect.succeed(true),
     runtimeStatus: () => Effect.sync(() => snapshot),
     beginSetupOperation: (_host, { operationId }) =>
       Effect.succeed({ operationId, generation: 1, stage: "runtime" }),
@@ -193,6 +197,7 @@ it.effect.each(["host_unknown", "invalid_request", "ssh_failed"] as const)(
             Layer.provide(dependencies),
             Layer.provide(
               Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+                publishSetupOutcome: () => Effect.succeed(true),
                 runtimeStatus: () =>
                   Effect.fail(
                     new SshRemoteDispatch.SshRemoteDispatchError({ reason, message: "box failed" }),
@@ -223,6 +228,7 @@ it.effect("shares the dispatch manager", () =>
           snapshot = { kind: "ok", status: { ...stopped, setup } };
           return setup;
         }),
+      publishSetupOutcome: () => Effect.succeed(true),
       publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       status: () =>
@@ -290,7 +296,7 @@ it.effect("shares the dispatch manager", () =>
         expect(yield* dispatch.runtimeStatus("box")).toEqual(result);
         expect(yield* setup.status({ host: "box" })).toEqual(result);
         expect(ensures).toBe(1);
-        expect(statusReads).toBe(5);
+        expect(statusReads).toBe(6);
         expect(
           yield* setup.update({ host: "unknown" }, { kind: "mcp", scope: invocation }),
         ).toMatchObject({ kind: "error", code: "host_unknown" });
@@ -320,6 +326,7 @@ it.effect("when_idle returns the first published phase while installation is gat
     let snapshot: SshHostResult = { kind: "ok", status: stopped };
     let installs = 0;
     const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+      publishSetupOutcome: () => Effect.succeed(true),
       runtimeStatus: () => Effect.sync(() => snapshot),
       beginSetupOperation: (_host, { operationId }) =>
         Effect.succeed({ operationId, generation: 1, stage: "runtime" }),
@@ -351,9 +358,9 @@ it.effect("when_idle returns the first published phase while installation is gat
   }),
 );
 
-it.effect(
-  "prepare returns before upload and keeps ready+diagnosis until the current diagnosis publishes",
-  () =>
+it.effect.each(["not_ready", "transport_failure", "schema_failure"] as const)(
+  "prepare returns before upload and exits diagnosis after %s",
+  (diagnosisOutcome) =>
     Effect.gen(function* () {
       const upload = yield* Deferred.make<void>();
       const diagnose = yield* Deferred.make<void>();
@@ -371,6 +378,23 @@ it.effect(
           Effect.succeed({ algorithm: "ssh-ed25519", key: "AAAA", fingerprint: "SHA256:test" }),
         );
       const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+        publishSetupOutcome: (_host, _operation, outcome) =>
+          Effect.gen(function* () {
+            if (outcome.kind === "error") {
+              snapshot = {
+                kind: "ok",
+                status: {
+                  ...stopped,
+                  state: "failed",
+                  failure: { reason: outcome.reason, fix: outcome.fix },
+                  setup: { ...operation, stage: "complete" },
+                  detail: outcome.message,
+                },
+              };
+              yield* Deferred.succeed(published, undefined);
+            }
+            return true;
+          }),
         runtimeStatus: () => Effect.sync(() => snapshot),
         beginSetupOperation: () =>
           Effect.sync(() => {
@@ -445,6 +469,11 @@ it.effect(
                   Effect.gen(function* () {
                     yield* Deferred.succeed(diagnosisStarted, undefined);
                     yield* Deferred.await(diagnose);
+                    if (diagnosisOutcome !== "not_ready")
+                      return yield* new OrchestratorMcpFailure({
+                        code: "orchestration_error",
+                        message: diagnosisOutcome,
+                      });
                     return {
                       checkedBy: "server",
                       host: "box",
@@ -486,18 +515,30 @@ it.effect(
         expect(yield* Deferred.isDone(published)).toBe(false);
         yield* Deferred.succeed(diagnose, undefined);
         yield* Deferred.await(published);
-        expect(yield* setup.status({ host: "box" })).toMatchObject({
-          status: {
-            state: "providers_not_ready",
-            setup: { stage: "complete" },
-            providers: { ready: false },
-          },
-        });
+        const result = yield* setup.status({ host: "box" });
+        expect(result).toMatchObject(
+          diagnosisOutcome === "not_ready"
+            ? {
+                status: {
+                  state: "providers_not_ready",
+                  setup: { stage: "complete" },
+                  providers: { ready: false },
+                },
+              }
+            : {
+                status: {
+                  state: "failed",
+                  setup: { stage: "complete" },
+                  failure: { reason: "diagnosis_failed" },
+                },
+              },
+        );
+        if (diagnosisOutcome !== "not_ready") expect(result.status?.providers).toBeUndefined();
       }).pipe(Effect.ensuring(Effect.sync(() => key.mockRestore())));
     }),
 );
 
-it.effect.each([599999, 600000, null])(
+it.effect.each([599999, 600000, null, "revoked"] as const)(
   "resumes an approved runtime update only within ten minutes (age=%s)",
   (age) =>
     Effect.gen(function* () {
@@ -526,7 +567,11 @@ it.effect.each([599999, 600000, null])(
         expiresAt: DateTime.add(now, { hours: 23 }),
         ...(age === null
           ? {}
-          : { resolvedAt: DateTime.makeUnsafe(DateTime.toEpochMillis(now) - age) }),
+          : {
+              resolvedAt: DateTime.makeUnsafe(
+                DateTime.toEpochMillis(now) - (age === "revoked" ? 1000 : age),
+              ),
+            }),
         actor: { type: "client", label: "Reviewer" },
       };
       const sessionId = AuthSessionId.make("reviewer");
@@ -536,28 +581,40 @@ it.effect.each([599999, 600000, null])(
             cookieName: "test",
             legacyCookieName: undefined,
             listActive: () =>
-              Effect.succeed([
-                {
-                  sessionId,
-                  subject: "reviewer",
-                  method: "browser-session-cookie",
-                  scopes: ["environment:maintain", "orchestration:read"],
-                  client: { label: "Reviewer", deviceType: "unknown" },
-                  issuedAt: now,
-                  expiresAt: DateTime.add(now, { hours: 1 }),
-                  lastConnectedAt: now,
-                  connected: true,
-                  current: true,
-                },
-              ]),
+              Effect.succeed(
+                age === "revoked"
+                  ? []
+                  : [
+                      {
+                        sessionId,
+                        subject: "reviewer",
+                        method: "browser-session-cookie",
+                        scopes: ["environment:maintain", "orchestration:read"],
+                        client: { label: "Reviewer", deviceType: "unknown" },
+                        issuedAt: now,
+                        expiresAt: DateTime.add(now, { hours: 1 }),
+                        lastConnectedAt: now,
+                        connected: true,
+                        current: true,
+                      },
+                    ],
+              ),
           }),
         ),
         Layer.provide(
           Layer.mock(Handoffs.Handoffs)({
+            resolvedSshOutcomes: Effect.succeed([]),
             completedSshContinuations: Effect.succeed([
               {
                 handoff,
                 approvedBySessionId: sessionId,
+                sshProgress: {
+                  host: "box",
+                  operationId: operation.operationId,
+                  aliasGeneration: operation.generation,
+                  environmentId: EnvironmentId.make("owner"),
+                  threadId: ThreadId.make("caller"),
+                },
                 args: {
                   version: 1,
                   step: "runtime_update",
@@ -578,6 +635,21 @@ it.effect.each([599999, 600000, null])(
         ),
         Layer.provide(
           Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            publishSetupOutcome: (_host, _operation, outcome) =>
+              Effect.sync(() => {
+                if (outcome.kind === "error")
+                  snapshot = {
+                    kind: "ok",
+                    status: {
+                      ...stopped,
+                      state: "failed",
+                      setup: { ...operation, stage: "complete" },
+                      failure: { reason: outcome.reason, fix: outcome.fix },
+                      detail: outcome.message,
+                    },
+                  };
+                return true;
+              }),
             runtimeStatus: () => Effect.sync(() => snapshot),
             runtimeUpdate: (_host, options) =>
               Effect.gen(function* () {
@@ -616,6 +688,14 @@ it.effect.each([599999, 600000, null])(
       yield* Deferred.await(completed);
       expect(updates).toBe(age === 599999 ? 1 : 0);
       expect(acknowledgements).toBe(1);
+      if (age !== 599999)
+        expect(yield* setup.status({ host: "box" })).toMatchObject({
+          status: {
+            state: "failed",
+            setup: { stage: "complete" },
+            failure: { reason: age === "revoked" ? "authorization_revoked" : "approval_expired" },
+          },
+        });
     }),
 );
 
@@ -631,6 +711,7 @@ it.effect(
       const operation = { operationId: "forget-op", generation: 1, stage: "runtime" as const };
       const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
         beginSetupOperation: () => Effect.succeed(operation),
+        publishSetupOutcome: () => Effect.succeed(true),
         runtimeStatus: () => Effect.sync(() => snapshot),
         runtimeUpdate: (_host, options) =>
           Effect.gen(function* () {
@@ -692,4 +773,256 @@ it.effect(
         status: { state: "untrusted" },
       });
     }),
+);
+
+const probeSessionId = AuthSessionId.make("probe-reviewer");
+const probeClient = Layer.mock(SessionStore.SessionStore)({
+  cookieName: "test",
+  legacyCookieName: undefined,
+  listActive: () =>
+    Effect.succeed([
+      {
+        sessionId: probeSessionId,
+        subject: "reviewer",
+        method: "browser-session-cookie",
+        scopes: ["settings:write"],
+        client: { label: "Reviewer", deviceType: "unknown" },
+        issuedAt: DateTime.makeUnsafe(0),
+        expiresAt: DateTime.makeUnsafe(9999999999999),
+        lastConnectedAt: null,
+        connected: true,
+        current: true,
+      },
+    ]),
+});
+const processOutput = (stdout: string, stderr = "", code = 0) => ({
+  stdout,
+  stderr,
+  code: ExitCode(code),
+  timedOut: false,
+  stdoutTruncated: false,
+  stderrTruncated: false,
+  stdoutInvalidUtf8: false,
+  stderrInvalidUtf8: false,
+});
+it.effect.each([
+  {
+    stderr: "connect to host box port 22: Connection refused",
+    reason: "connection_refused",
+    message: "box refused the connection.",
+  },
+  {
+    stderr: "connect to host box port 22: No route to host",
+    reason: "unreachable",
+    message: "Can't reach box.",
+  },
+  {
+    stderr: "Could not resolve hostname box: nodename nor servname provided",
+    reason: "unreachable",
+    message: "Can't reach box.",
+  },
+  {
+    stderr: "Key exchange did not return a destination key",
+    reason: "operation_failed",
+    message: "Could not check this SSH host. Try again.",
+  },
+] as const)("typed probe failure: $reason", ({ stderr, reason, message }) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-probe-test-" });
+    const paths: string[] = [];
+    const key = vi
+      .spyOn(HostKey, "probeHostKey")
+      .mockReturnValue(
+        Effect.fail(
+          new SshHostKeyProbeError({ message: "Expected one negotiated destination host key." }),
+        ),
+      );
+    const discover = vi.spyOn(SshConfig, "discoverSshHosts").mockReturnValue(Effect.succeed([]));
+    yield* Effect.gen(function* () {
+      const setup = Context.get(
+        yield* Layer.build(
+          Layer.effect(SshHostSetup.SshHostSetup, SshHostSetup.make({ home })).pipe(
+            Layer.provide(probeClient),
+            Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
+            Layer.provide(
+              Layer.mock(ProcessRunner.ProcessRunner)({
+                run: (input) =>
+                  Effect.sync(() => {
+                    if (input.args.includes("-G"))
+                      return processOutput("hostname box\nuser root\nport 22\n");
+                    expect(input.args).toContain("PreferredAuthentications=none");
+                    expect(input.args).toContain("UpdateHostKeys=no");
+                    const destination = input.args.find((arg) =>
+                      arg.startsWith("UserKnownHostsFile="),
+                    )!;
+                    const file = destination.slice('UserKnownHostsFile="'.length, -1);
+                    paths.push(file);
+                    expect(file).not.toBe(`${home}/.ssh/known_hosts`);
+                    return processOutput("", stderr, 255);
+                  }),
+              }),
+            ),
+            Layer.provide(dependencies),
+          ),
+        ),
+        SshHostSetup.SshHostSetup,
+      );
+      const error = yield* setup.probe({ address: "box" }, probeSessionId).pipe(Effect.flip);
+      expect(error._tag).toBe("SshHostProbeError");
+      if (error._tag === "SshHostProbeError")
+        expect({ reason: error.reason, message: error.message }).toEqual({ reason, message });
+      expect(paths).toHaveLength(1);
+      for (const path of paths) expect(yield* fs.exists(path)).toBe(false);
+      expect(yield* fs.exists(`${home}/.ssh/config`)).toBe(false);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          key.mockRestore();
+          discover.mockRestore();
+        }),
+      ),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "approval copy names the server, negotiated algorithm, account and each next action",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-copy-test-" });
+      const created: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
+      const key = vi
+        .spyOn(HostKey, "probeHostKey")
+        .mockReturnValue(
+          Effect.succeed({ algorithm: "ssh-ed25519", key: "AAAA", fingerprint: "SHA256:review" }),
+        );
+      const discover = vi.spyOn(SshConfig, "discoverSshHosts").mockReturnValue(Effect.succeed([]));
+      const directory = `${home}/.ssh/goat-hosts`;
+      const keyAuth = buildSshKeyAuthInstructions({
+        originLabel: "Origin",
+        host: "box",
+        user: "root",
+        port: 2222,
+        generatedKey: true,
+        publicKey: "ssh-ed25519 AAAA",
+        publicKeyPath: `${directory}/id_ed25519.pub`,
+      });
+      let snapshot: SshHostResult = { kind: "ok", status: stopped };
+      yield* Effect.gen(function* () {
+        const serviceLayer = Layer.effect(
+          SshHostSetup.SshHostSetup,
+          SshHostSetup.make({ home }),
+        ).pipe(
+          Layer.provide(probeClient),
+          Layer.provide(
+            Layer.mock(Handoffs.Handoffs)({
+              create: (input) =>
+                Effect.gen(function* () {
+                  created.push(input);
+                  return handoffSummary({
+                    handoffId: TurnItemId.make(`copy-${created.length}`),
+                    kind: input.kind,
+                    title: input.title,
+                    reason: input.reason,
+                    requestedBy: input.requestedBy,
+                    target: input.target,
+                    dedupeKey: "copy",
+                    state: "pending",
+                    expiresAt: input.expiresAt ?? null,
+                    createdAt: yield* DateTime.now,
+                    actor: { type: "agent", threadId: input.requestedBy.threadId },
+                  });
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(ProcessRunner.ProcessRunner)({
+              run: () =>
+                Effect.succeed(
+                  processOutput(
+                    `hostname box\nuser root\nport 2222\nhostkeyalias box\nuserknownhostsfile ${directory}/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
+                  ),
+                ),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+              runtimeStatus: () => Effect.sync(() => snapshot),
+              beginSetupOperation: (_host, { operationId }) =>
+                Effect.sync(() => {
+                  const operation = { operationId, generation: 1, stage: "runtime" as const };
+                  snapshot = { kind: "ok", status: { ...stopped, setup: operation } };
+                  return operation;
+                }),
+              prepareRuntime: () =>
+                Effect.sync(() => {
+                  snapshot = {
+                    kind: "ok",
+                    status: {
+                      ...stopped,
+                      state: "auth_failed",
+                      publicKey: "ssh-ed25519 AAAA",
+                      keyAuth,
+                    },
+                  };
+                  return snapshot;
+                }),
+            }),
+          ),
+          Layer.provide(dependencies),
+        );
+        const setup = Context.get(yield* Layer.build(serviceLayer), SshHostSetup.SshHostSetup);
+        const input = { address: "box", alias: "box" };
+        const probe = yield* setup.probe(input, probeSessionId);
+        expect(probe.human.location).toBe(
+          "box presented this key. GOAT will connect as root. Approving also adds one Include line to ~/.ssh/config.",
+        );
+        expect(probe.human.fingerprint).toBe("SHA256:review (ssh-ed25519)");
+        expect(yield* fs.exists(`${home}/.ssh/config`)).toBe(false);
+        const caller: SshHostSetup.SshHostCaller = {
+          kind: "mcp",
+          scope: {
+            ...invocation,
+            client: undefined,
+            thread: {
+              threadId: ThreadId.make("caller"),
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              providerSessionId: "session",
+            },
+            grantedScopes: ["settings:write", "environment:maintain"],
+          },
+        };
+        yield* setup.add(input, caller);
+        expect(created[0]?.reason).toBe(
+          "Check that box is the server you meant before GOAT connects to it.",
+        );
+        const challenge = created[0]?.args.challenge;
+        expect(challenge).toMatchObject({ algorithm: "ssh-ed25519" });
+        yield* setup.update({ host: "box", mode: "now" }, caller);
+        expect(created[1]?.reason).toBe(
+          "Running agent work gets up to a minute to finish, then continues on the new version.",
+        );
+        expect(created[1]?.human.location).toBe("Update GOAT on box now.");
+        yield* fs.makeDirectory(directory, { recursive: true });
+        yield* fs.writeFileString(
+          `${directory}/box.conf`,
+          "Host box\n HostName box\n User root\n Port 2222\n",
+        );
+        yield* fs.writeFileString(`${directory}/box.known_hosts`, "box ssh-ed25519 AAAA\n");
+        const result = yield* setup.prepare({ host: "box" }, caller);
+        expect(result.kind).toBe("needs_human");
+        expect(created[2]?.reason).toBe("box needs your public key before GOAT can sign in.");
+        expect(created[2]?.human.command).toBe(keyAuth.command);
+        expect(result.status?.keyAuth?.command).toBe(keyAuth.command);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            key.mockRestore();
+            discover.mockRestore();
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
 );

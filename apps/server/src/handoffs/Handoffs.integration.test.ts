@@ -618,6 +618,29 @@ it.effect(
             assert.deepEqual(yield* restarted.readSshProgressBinding(input, sessionId), binding);
             assert.lengthOf(yield* restarted.completedSshContinuations, 0);
           }).pipe(Effect.provide(Handoffs.layer.pipe(Layer.provide(domainDependencies))));
+          const expired = yield* service.create({
+            kind: "approval",
+            title: "Update box?",
+            reason: "Update",
+            requestedBy: { threadId, providerInstanceId: instanceId, path: "ssh.runtime_update" },
+            target: { environmentId, path: "ssh.runtime_update" },
+            runId: run.id,
+            nodeId: run.rootNodeId!,
+            human: { location: "box" },
+            args: { version: 1, request: "expires" },
+            expiresAt: DateTime.add(now, { minutes: 1 }),
+            sshProgress: binding,
+          });
+          yield* TestClock.adjust("1 minute");
+          yield* service.sweep;
+          const outcomes = yield* service.resolvedSshOutcomes;
+          assert.lengthOf(outcomes, 1);
+          assert.equal(outcomes[0]?.handoff.state, "expired");
+          assert.deepEqual(outcomes[0]?.sshProgress, binding);
+          assert.notProperty(outcomes[0], "args");
+          yield* service.finishSshContinuation({ threadId, handoffId: expired.handoffId });
+          assert.lengthOf(yield* service.resolvedSshOutcomes, 0);
+          assert.lengthOf(yield* service.completedSshContinuations, 0);
           yield* TestClock.adjust("24 hours");
           assert.isNull(yield* service.readSshProgressBinding(input, sessionId));
         }).pipe(Effect.provide(Handoffs.layer.pipe(Layer.provide(domainDependencies))));

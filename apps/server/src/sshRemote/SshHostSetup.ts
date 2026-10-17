@@ -1,5 +1,6 @@
 import {
   EnvironmentAuthorizationError,
+  SshHostProbeError,
   HandoffError,
   SshHostAddInput,
   SshHostAlias,
@@ -63,7 +64,7 @@ export class SshHostSetup extends Context.Service<
     readonly probe: (
       input: SshHostAddInput,
       sessionId: AuthSessionId,
-    ) => Effect.Effect<SshHostProbeResult, Failure>;
+    ) => Effect.Effect<SshHostProbeResult, EnvironmentAuthorizationError | SshHostProbeError>;
     readonly trust: (
       input: SshHostTrustInput,
       sessionId: AuthSessionId,
@@ -144,6 +145,7 @@ const Challenge = Schema.Struct({
   host: SshHostAlias,
   endpoint: Endpoint,
   fingerprint: Schema.String,
+  algorithm: Schema.optionalKey(Schema.String),
   identityFile: Schema.optionalKey(Schema.String),
   expiresAt: Schema.Number,
   aliasGeneration: Schema.Int,
@@ -161,6 +163,7 @@ const Continuation = Schema.Struct({
   challenge: Schema.optional(Challenge),
 });
 const decodeContinuation = Schema.decodeUnknownEffect(Continuation);
+const isProbeError = Schema.is(SshHostProbeError);
 const isHandoffError = Schema.is(HandoffError);
 const isAuthorizationError = Schema.is(EnvironmentAuthorizationError);
 const decodeAlias = Schema.decodeUnknownEffect(SshHostAlias);
@@ -210,6 +213,26 @@ export const make = (options: { readonly home?: string } = {}) =>
         Effect.catchTags({
           SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
         }),
+        Effect.flatMap((result) => {
+          if (result.status?.keyAuth === undefined) return Effect.succeed(result);
+          const snapshot = result.status;
+          return environment.getDescriptor.pipe(
+            Effect.map((origin) => ({
+              ...result,
+              status: {
+                ...snapshot,
+                keyAuth: {
+                  ...snapshot.keyAuth!,
+                  originLabel: origin.label,
+                  instruction: snapshot.keyAuth!.instruction.replace(
+                    `Run this on ${snapshot.keyAuth!.originLabel}.`,
+                    `Run this on ${origin.label}.`,
+                  ),
+                },
+              },
+            })),
+          );
+        }),
       );
     const readOptional = (file: string) =>
       fs.readFileString(file).pipe(
@@ -228,6 +251,68 @@ export const make = (options: { readonly home?: string } = {}) =>
           .update(`${conf}\0${pin ?? ""}\0${Option.getOrNull(metadata.mtime)?.getTime() ?? ""}`)
           .digest("hex");
       });
+    const probeFailure = (input: SshHostAddInput, reason: SshHostProbeError["reason"]) =>
+      new SshHostProbeError({
+        host: input.alias ?? input.address,
+        reason,
+        message:
+          reason === "unreachable"
+            ? `Can't reach ${input.alias ?? input.address}.`
+            : reason === "connection_refused"
+              ? `${input.alias ?? input.address} refused the connection.`
+              : reason === "invalid_request"
+                ? "Check the SSH address, user, port and alias."
+                : reason === "alias_conflict"
+                  ? "This SSH alias is already in use or its key changed."
+                  : "Could not check this SSH host. Try again.",
+      });
+    // hostKey intentionally returns no raw SSH stderr. On failure only, collect a bounded,
+    // authentication-free diagnostic using disposable known_hosts, preserving jump routing.
+    const classifyProbeFailure = (input: SshHostAddInput) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "goat-probe-error-" });
+          yield* fs.chmod(temporary, 0o700);
+          const knownHosts = path.join(temporary, "known_hosts");
+          yield* fs.writeFileString(knownHosts, "", { mode: 0o600, flag: "wx" });
+          const output = yield* runner.run({
+            command: "ssh",
+            args: [
+              ...(input.user ? ["-l", input.user] : []),
+              ...(input.port ? ["-p", String(input.port)] : []),
+              "-o",
+              "BatchMode=yes",
+              "-o",
+              "PreferredAuthentications=none",
+              "-o",
+              "StrictHostKeyChecking=accept-new",
+              "-o",
+              "UpdateHostKeys=no",
+              "-o",
+              `UserKnownHostsFile="${knownHosts.replaceAll("\\", "/").replaceAll('"', '\\"')}"`,
+              "-o",
+              "GlobalKnownHostsFile=/dev/null",
+              "-o",
+              "ConnectTimeout=10",
+              input.address,
+            ],
+            timeout: "20 seconds",
+            timeoutBehavior: "timedOutResult",
+          });
+          const evidence = output.stderr;
+          return probeFailure(
+            input,
+            /connection refused/iu.test(evidence)
+              ? "connection_refused"
+              : output.timedOut ||
+                  /timed out|no route to host|network is unreachable|could not resolve hostname|name or service not known|nodename nor servname/iu.test(
+                    evidence,
+                  )
+                ? "unreachable"
+                : "operation_failed",
+          );
+        }),
+      ).pipe(Effect.orElseSucceed(() => probeFailure(input, "operation_failed")));
     const collect = (input: SshHostAddInput) =>
       Effect.gen(function* () {
         const host = yield* decodeAlias(aliasFor(input));
@@ -278,7 +363,10 @@ export const make = (options: { readonly home?: string } = {}) =>
           target: input.address,
           ...(input.user ? { user: input.user } : {}),
           ...(input.port ? { port: input.port } : {}),
-        }).pipe(Effect.provide(runtime));
+        }).pipe(
+          Effect.provide(runtime),
+          Effect.catch(() => classifyProbeFailure(input).pipe(Effect.flatMap(Effect.fail))),
+        );
         const endpoint: ManagedSshEndpoint = {
           host: settings.get("hostname") ?? input.address,
           port: Number(settings.get("port") ?? input.port ?? 22),
@@ -315,6 +403,7 @@ export const make = (options: { readonly home?: string } = {}) =>
           host,
           endpoint,
           fingerprint: key.fingerprint,
+          algorithm: key.algorithm,
           ...(identityFile ? { identityFile } : {}),
           expiresAt: now + 24 * 60 * 60 * 1000,
           aliasGeneration: generation,
@@ -327,10 +416,16 @@ export const make = (options: { readonly home?: string } = {}) =>
           isHandoffError(cause) ? cause : new HandoffError({ reason: "unavailable", cause }),
         ),
       );
-    const humanFor = (challenge: Challenge) => ({
-      location: `Review ${challenge.host} as ${challenge.endpoint.user}.${challenge.includeRequired ? " Approving also adds Include ~/.ssh/goat-hosts/*.conf to your SSH config." : ""}`,
-      fingerprint: challenge.fingerprint,
-    });
+    const humanFor = (input: Challenge) => {
+      const challenge = {
+        ...input,
+        algorithm: input.algorithm ?? input.endpoint.hostKey.split(" ")[0],
+      };
+      return {
+        location: `${challenge.host} presented this key. GOAT will connect as ${challenge.endpoint.user}.${challenge.includeRequired ? " Approving also adds one Include line to ~/.ssh/config." : ""}`,
+        fingerprint: `${challenge.fingerprint} (${challenge.algorithm})`,
+      };
+    };
     const probe: SshHostSetup["Service"]["probe"] = (input, sessionId) =>
       Effect.gen(function* () {
         yield* authorize({ kind: "client", sessionId }, "settings:write");
@@ -343,7 +438,23 @@ export const make = (options: { readonly home?: string } = {}) =>
           human: humanFor(challenge),
           includeRequired: challenge.includeRequired,
         };
-      });
+      }).pipe(
+        Effect.catchTags({
+          HandoffError: (error) =>
+            Effect.fail(
+              isProbeError(error.cause)
+                ? error.cause
+                : probeFailure(
+                    input,
+                    error.reason === "invalid_request"
+                      ? "invalid_request"
+                      : error.reason === "conflict"
+                        ? "alias_conflict"
+                        : "operation_failed",
+                  ),
+            ),
+        }),
+      );
     const trustChallenge = (challenge: Challenge, caller: SshHostCaller) =>
       Effect.gen(function* () {
         yield* authorize(caller, "settings:write");
@@ -476,8 +587,10 @@ export const make = (options: { readonly home?: string } = {}) =>
                 : `Set up key authentication on ${host}`,
           reason:
             step === "runtime_update"
-              ? "This replaces the GOAT runtime and interrupts its running work. Remote projects and files are kept."
-              : "A person must complete this step before GOAT can prepare the host.",
+              ? "Running agent work gets up to a minute to finish, then continues on the new version."
+              : step === "host_trust"
+                ? `Check that ${host} is the server you meant before GOAT connects to it.`
+                : `${host} needs your public key before GOAT can sign in.`,
           requestedBy: {
             threadId: thread.threadId,
             providerInstanceId: thread.providerInstanceId,
@@ -602,6 +715,7 @@ export const make = (options: { readonly home?: string } = {}) =>
             ),
           );
         };
+        let diagnosing = false;
         const work = Effect.gen(function* () {
           yield* authorize(caller, "environment:maintain");
           if ((aliasGenerations.get(host) ?? 0) !== requestGeneration)
@@ -610,9 +724,17 @@ export const make = (options: { readonly home?: string } = {}) =>
           let result = yield* update
             ? dispatch.runtimeUpdate(host, { confirmReplacement, onPhase, ...operation })
             : dispatch.prepareRuntime(host, { ...operation, onPhase });
+          if (
+            update ||
+            (result.status?.state !== "ready" && result.status?.state !== "auth_failed")
+          ) {
+            yield* dispatch.publishSetupOutcome(host, operation, { kind: "complete" });
+            result = yield* status({ host });
+          }
           if (update || result.status?.state !== "auth_failed")
             yield* Deferred.succeed(first, result);
           if (!update && result.status?.state === "ready") {
+            diagnosing = true;
             const diagnosed = yield* diagnosis.diagnose({ host }, caller);
             const providers = {
               checkedAt: DateTime.formatIso(yield* DateTime.now),
@@ -625,19 +747,21 @@ export const make = (options: { readonly home?: string } = {}) =>
           } else if (!update && result.status?.state === "auth_failed") {
             const origin = yield* environment.getDescriptor;
             const context = yield* managedContext(host);
-            const instructions = buildSshKeyAuthInstructions({
-              originLabel: origin.label,
-              host,
-              user: context.endpoint.user,
-              port: context.endpoint.port,
-              ...(result.status.publicKey
-                ? {
-                    publicKey: result.status.publicKey,
-                    generatedKey: true,
-                    publicKeyPath: path.join(directory, "id_ed25519.pub"),
-                  }
-                : {}),
-            });
+            const instructions =
+              result.status.keyAuth ??
+              buildSshKeyAuthInstructions({
+                originLabel: origin.label,
+                host,
+                user: context.endpoint.user,
+                port: context.endpoint.port,
+                ...(result.status.publicKey
+                  ? {
+                      publicKey: result.status.publicKey,
+                      generatedKey: true,
+                      publicKeyPath: path.join(directory, "id_ed25519.pub"),
+                    }
+                  : {}),
+              });
             if (caller.kind === "client" && owner === undefined) {
               yield* Deferred.succeed(first, result);
               return;
@@ -659,12 +783,37 @@ export const make = (options: { readonly home?: string } = {}) =>
           }
         }).pipe(
           Effect.catch((error) =>
-            Deferred.succeed(
-              first,
-              error instanceof Dispatch.SshRemoteDispatchError
-                ? dispatchFailure(error)
-                : errorResult(error.message),
-            ).pipe(Effect.asVoid),
+            Effect.gen(function* () {
+              const revoked = isAuthorizationError(error);
+              const expired = isHandoffError(error) && error.reason === "expired";
+              const reason = revoked
+                ? "authorization_revoked"
+                : expired
+                  ? "approval_expired"
+                  : diagnosing
+                    ? "diagnosis_failed"
+                    : "operation_failed";
+              const message = revoked
+                ? "The approving session no longer has permission. Ask again."
+                : expired
+                  ? `This approval expired before GOAT could update ${host}. Ask again.`
+                  : diagnosing
+                    ? `Provider diagnosis on ${host} failed. Try again.`
+                    : `SSH setup on ${host} failed. Try again.`;
+              yield* dispatch.publishSetupOutcome(host, operation, {
+                kind: "error",
+                reason,
+                message,
+                fix: {
+                  actor: revoked || expired ? "human" : "agent",
+                  instruction:
+                    revoked || expired
+                      ? "Ask again and approve with a client that has permission."
+                      : `Call goat_ssh_host_prepare for ${host} to retry setup and diagnosis.`,
+                },
+              });
+              yield* Deferred.succeed(first, yield* status({ host }));
+            }),
           ),
           Effect.ensuring(onFinished?.pipe(Effect.ignore({ log: true })) ?? Effect.void),
           Effect.ensuring(
@@ -689,6 +838,16 @@ export const make = (options: { readonly home?: string } = {}) =>
         }),
       );
     const setupFailure = (host: string, error: HandoffError): SshHostResult => {
+      if (isProbeError(error.cause))
+        return {
+          kind: "error",
+          code:
+            error.cause.reason === "unreachable" || error.cause.reason === "connection_refused"
+              ? "host_unreachable"
+              : "operation_failed",
+          message: error.cause.message,
+          fix: { actor: "agent", instruction: "Check the SSH host and try again." },
+        };
       const changed =
         error.cause !== null &&
         typeof error.cause === "object" &&
@@ -770,7 +929,7 @@ export const make = (options: { readonly home?: string } = {}) =>
           operation,
           "runtime_update",
           {
-            location: `Approve replacing the runtime on ${input.host}, including interrupting its current work.`,
+            location: `Update GOAT on ${input.host} now.`,
           },
           snapshot,
         );
@@ -854,6 +1013,25 @@ export const make = (options: { readonly home?: string } = {}) =>
           : result;
       });
     const resumeContinuations = Effect.gen(function* () {
+      for (const { handoff, sshProgress } of yield* handoffs.resolvedSshOutcomes) {
+        yield* dispatch.publishSetupOutcome(
+          sshProgress.host,
+          { operationId: sshProgress.operationId, generation: sshProgress.aliasGeneration },
+          {
+            kind: "error",
+            reason: handoff.state === "expired" ? "approval_expired" : "operation_failed",
+            message:
+              handoff.state === "expired"
+                ? `This approval expired before GOAT could update ${sshProgress.host}. Ask again.`
+                : `SSH setup for ${sshProgress.host} was ${handoff.state}.`,
+            fix: { actor: "human", instruction: "Ask again to review and approve this SSH setup." },
+          },
+        );
+        yield* handoffs.finishSshContinuation({
+          threadId: handoff.requestedBy.threadId,
+          handoffId: handoff.handoffId,
+        });
+      }
       for (const entry of yield* handoffs.completedSshContinuations) {
         const id = entry.handoff.handoffId;
         if (continuing.has(id)) continue;
@@ -865,6 +1043,30 @@ export const make = (options: { readonly home?: string } = {}) =>
           const caller: SshHostCaller = { kind: "client", sessionId: entry.approvedBySessionId };
           const address = { threadId: entry.handoff.requestedBy.threadId, handoffId: id };
           const discard = handoffs.finishSshContinuation(address);
+          const reject = (
+            reason: "approval_expired" | "authorization_revoked" | "operation_failed",
+            message: string,
+          ) =>
+            Effect.gen(function* () {
+              if (entry.sshProgress !== undefined)
+                yield* dispatch.publishSetupOutcome(
+                  entry.sshProgress.host,
+                  {
+                    operationId: entry.sshProgress.operationId,
+                    generation: entry.sshProgress.aliasGeneration,
+                  },
+                  {
+                    kind: "error",
+                    reason,
+                    message,
+                    fix: {
+                      actor: "human",
+                      instruction: "Ask again and approve with a client that has permission.",
+                    },
+                  },
+                );
+              yield* discard;
+            });
           const expectedPath =
             args.step === "runtime_update"
               ? "ssh.runtime_update"
@@ -881,13 +1083,19 @@ export const make = (options: { readonly home?: string } = {}) =>
             entry.handoff.expiresAt !== null &&
             DateTime.toEpochMillis(entry.handoff.expiresAt) <= now
           )
-            return yield* discard;
+            return yield* reject(
+              "approval_expired",
+              `This approval expired before GOAT could update ${args.host}. Ask again.`,
+            );
           if (
             args.step === "runtime_update" &&
             (!entry.handoff.resolvedAt ||
               now - DateTime.toEpochMillis(entry.handoff.resolvedAt) >= 10 * 60 * 1000)
           )
-            return yield* discard;
+            return yield* reject(
+              "approval_expired",
+              `This approval expired before GOAT could update ${args.host}. Ask again.`,
+            );
           if ((aliasGenerations.get(args.host) ?? 0) !== (args.challenge?.aliasGeneration ?? 0))
             return yield* discard;
           if (
@@ -924,8 +1132,13 @@ export const make = (options: { readonly home?: string } = {}) =>
             args.step === "runtime_update" &&
             latest.status?.state === "ready" &&
             latest.status.runtimeVersion === args.requestedVersion
-          )
+          ) {
+            if (latest.status.setup !== undefined)
+              yield* dispatch.publishSetupOutcome(args.host, latest.status.setup, {
+                kind: "complete",
+              });
             return yield* discard;
+          }
           const operation =
             latest.status?.setup?.operationId === args.operationId
               ? latest.status.setup
@@ -969,10 +1182,33 @@ export const make = (options: { readonly home?: string } = {}) =>
           );
         }).pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("SSH continuation did not resume", {
-              handoffId: id,
-              reason: cause._tag,
+            Effect.gen(function* () {
+              const binding = entry.sshProgress;
+              if (binding)
+                yield* dispatch.publishSetupOutcome(
+                  binding.host,
+                  { operationId: binding.operationId, generation: binding.aliasGeneration },
+                  {
+                    kind: "error",
+                    reason: isAuthorizationError(cause)
+                      ? "authorization_revoked"
+                      : "operation_failed",
+                    message: isAuthorizationError(cause)
+                      ? "The approving session no longer has permission. Ask again."
+                      : "This SSH approval could not continue. Ask again.",
+                    fix: {
+                      actor: "human",
+                      instruction: "Ask again and approve with a client that has permission.",
+                    },
+                  },
+                );
             }).pipe(
+              Effect.andThen(
+                Effect.logWarning("SSH continuation did not resume", {
+                  handoffId: id,
+                  reason: cause._tag,
+                }),
+              ),
               Effect.andThen(
                 handoffs
                   .finishSshContinuation({
@@ -994,7 +1230,9 @@ export const make = (options: { readonly home?: string } = {}) =>
         .respond(input, sessionId)
         .pipe(
           Effect.tap((result) =>
-            result.state === "completed" && result.target.path.startsWith("ssh.")
+            result.state !== "pending" &&
+            result.state !== "opened" &&
+            result.target.path.startsWith("ssh.")
               ? resumeContinuations
               : Effect.void,
           ),

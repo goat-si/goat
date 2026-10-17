@@ -248,6 +248,11 @@ export class SshRemoteDispatch extends Context.Service<
       host: string,
       options: { readonly stopRuntime: "if_idle" | "no" },
     ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
+    readonly publishSetupOutcome: (
+      host: string,
+      operation: Pick<import("@goat/contracts").SshHostSetupProgress, "operationId" | "generation">,
+      outcome: SshTunnel.SshSetupOutcome,
+    ) => Effect.Effect<boolean>;
     readonly publishProviderDiagnosis: (
       host: string,
       options: {
@@ -738,6 +743,16 @@ const make = Effect.gen(function* () {
         sshFailed(host),
       );
     });
+  const publishSetupOutcome: SshRemoteDispatch["Service"]["publishSetupOutcome"] = (
+    host,
+    operation,
+    outcome,
+  ) =>
+    manager.publishSetupOutcome(
+      { alias: host, hostname: host, username: null, port: null },
+      operation,
+      outcome,
+    );
   const publishProviderDiagnosis: SshRemoteDispatch["Service"]["publishProviderDiagnosis"] = (
     host,
     options,
@@ -1737,6 +1752,7 @@ const make = Effect.gen(function* () {
     prepareRuntime,
     forgetRuntime,
     publishProviderDiagnosis,
+    publishSetupOutcome,
     listHosts,
     browse,
     validateLaunchAttachments,

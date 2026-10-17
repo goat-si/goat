@@ -9,6 +9,7 @@ import {
   SshHostForgetInput,
   SshHostPrepareInput,
   SshHostProbeResult,
+  SshHostProbeError,
   SshHostSetupProgress,
   SshHostTrustInput,
   SshHandoffProgressInput,
@@ -289,7 +290,9 @@ describe("SSH key-auth instructions", () => {
 
   it("guides existing-key or agent-only authentication without inventing a key or command", () => {
     const result = buildSshKeyAuthInstructions(context);
-    expect(result.instruction).toContain("existing public key");
+    expect(result.instruction).toBe(
+      "vps-1 refused the SSH key. Add your public key to the server, then try again. Run this on Home Mac.",
+    );
     expect(result.instruction).toContain("Run this on Home Mac");
     expect(result.instruction).not.toContain("GOAT created");
     expect(result).not.toHaveProperty("publicKey");
@@ -524,4 +527,45 @@ describe("SSH host contracts", () => {
     expect(() => decodeDesktopUpdate({ host: "vps-1" })).toThrow();
     expect(() => decodeDesktopUpdate({ target: { alias: "vps-1" } })).toThrow();
   });
+});
+
+const decodeProbeError = Schema.decodeUnknownSync(SshHostProbeError);
+it("exposes typed probe failures without changing the successful probe shape", () => {
+  for (const reason of [
+    "unreachable",
+    "connection_refused",
+    "invalid_request",
+    "alias_conflict",
+    "operation_failed",
+  ] as const) {
+    expect(
+      decodeProbeError({ _tag: "SshHostProbeError", host: "box", reason, message: "Try again." })
+        .reason,
+    ).toBe(reason);
+  }
+  expect(() =>
+    decodeProbeError({
+      _tag: "SshHostProbeError",
+      host: "box",
+      reason: "unknown",
+      message: "Try again.",
+    }),
+  ).toThrow();
+});
+it("key-auth commands are restricted to auth_failed and match any exposed generated public key", () => {
+  const keyAuth = buildSshKeyAuthInstructions({
+    originLabel: "Origin",
+    host: "box",
+    user: "root",
+    port: 2222,
+    generatedKey: true,
+    publicKey: "ssh-ed25519 AAAA",
+    publicKeyPath: "/origin/key.pub",
+  });
+  const status = { ...stopped, state: "auth_failed", publicKey: "ssh-ed25519 AAAA", keyAuth };
+  expect(decodeStatus(status).keyAuth?.command).toBe(
+    "ssh-copy-id -i '/origin/key.pub' -p '2222' 'root@box'",
+  );
+  expect(() => decodeStatus({ ...status, state: "ready" })).toThrow();
+  expect(() => decodeStatus({ ...status, publicKey: "another key" })).toThrow();
 });

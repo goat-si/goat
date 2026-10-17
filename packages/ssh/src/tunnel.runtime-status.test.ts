@@ -255,6 +255,12 @@ describe("SSH runtime status", () => {
             result.status?.publicKey,
             managed ? "ssh-ed25519 AAAAGOATKEY goat-cloud" : undefined,
           );
+          assert.equal(
+            result.status?.keyAuth?.command,
+            managed
+              ? `ssh-copy-id -i '${dir}/id_ed25519.pub' -p '2222' 'julius@devbox'`
+              : undefined,
+          );
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
@@ -596,3 +602,113 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("read-only stat
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });
+
+it.effect(
+  "plain runtime completion ends diagnosis without manufacturing provider readiness",
+  () => {
+    const f = fixture({
+      ...stopped,
+      ready: true,
+      liveStatus: "live",
+      liveVersion: ARCHIVE.archiveVersion,
+      liveOwned: true,
+      liveDrain: true,
+      liveSignals: signals(ARCHIVE.archiveVersion),
+    });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const operation = yield* manager.beginSetupOperation(uploadTarget, "plain-update");
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      assert.equal((yield* manager.status(uploadTarget)).status?.setup?.stage, "diagnosis");
+      assert.isTrue(
+        yield* manager.publishSetupOutcome(uploadTarget, operation, { kind: "complete" }),
+      );
+      const result = yield* manager.status(uploadTarget);
+      yield* decodeSshHostResult(result);
+      assert.equal(result.status?.setup?.stage, "complete");
+      assert.isUndefined(result.status?.providers);
+      const next = yield* manager.beginSetupOperation(uploadTarget, "next-update");
+      assert.isFalse(
+        yield* manager.publishSetupOutcome(uploadTarget, operation, { kind: "complete" }),
+      );
+      yield* manager.forgetEnvironment(uploadTarget, { stopRuntime: "no" });
+      assert.isFalse(yield* manager.publishSetupOutcome(uploadTarget, next, { kind: "complete" }));
+      assert.equal((yield* manager.status(uploadTarget)).status?.state, "untrusted");
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  },
+);
+it.effect.each([
+  "diagnosis_failed",
+  "approval_expired",
+  "authorization_revoked",
+  "operation_failed",
+] as const)("publishes %s as one guarded terminal recovery and retains it on refresh", (reason) => {
+  const f = fixture({
+    ...stopped,
+    ready: true,
+    liveStatus: "live",
+    liveVersion: ARCHIVE.archiveVersion,
+    liveOwned: true,
+    liveDrain: true,
+    liveSignals: signals(ARCHIVE.archiveVersion),
+  });
+  return Effect.gen(function* () {
+    const manager = yield* SshTunnel.SshEnvironmentManager;
+    const operation = yield* manager.beginSetupOperation(uploadTarget, "failed-setup");
+    yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+    const fix = { actor: "human" as const, instruction: "Ask again." };
+    assert.isTrue(
+      yield* manager.publishSetupOutcome(uploadTarget, operation, {
+        kind: "error",
+        reason,
+        message: "This operation could not continue.",
+        fix,
+      }),
+    );
+    const before = { ...f.calls };
+    const result = yield* manager.status(uploadTarget);
+    yield* decodeSshHostResult(result);
+    assert.equal(result.status?.state, "failed");
+    assert.equal(result.status?.setup?.stage, "complete");
+    assert.equal(result.status?.failure?.reason, reason);
+    assert.deepEqual(result.status?.failure?.fix, fix);
+    assert.isUndefined(result.status?.providers);
+    assert.deepEqual(f.calls, before);
+    assert.isFalse(
+      yield* manager.publishProviderDiagnosis(uploadTarget, operation, {
+        checkedAt: "2026-10-18T00:00:00Z",
+        ready: true,
+        fixes: [],
+      }),
+    );
+  }).pipe(Effect.provide(f.layer), Effect.scoped);
+});
+
+it.effect(
+  "an expired key-auth approval replaces authentication recovery with one terminal failure",
+  () => {
+    const f = fixture(stopped);
+    f.failProbe("Permission denied (publickey).");
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const operation = yield* manager.beginSetupOperation(uploadTarget, "expired-key-auth");
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true }).pipe(Effect.result);
+      assert.equal((yield* manager.status(uploadTarget)).status?.state, "auth_failed");
+      assert.isTrue(
+        yield* manager.publishSetupOutcome(uploadTarget, operation, {
+          kind: "error",
+          reason: "approval_expired",
+          message: "This approval expired. Ask again.",
+          fix: { actor: "human", instruction: "Ask again to review this setup." },
+        }),
+      );
+      const result = yield* manager.status(uploadTarget);
+      yield* decodeSshHostResult(result);
+      assert.equal(result.status?.state, "failed");
+      assert.equal(result.status?.failure?.reason, "approval_expired");
+      assert.equal(result.status?.setup?.stage, "complete");
+      assert.isUndefined(result.status?.keyAuth);
+      assert.isUndefined(result.status?.publicKey);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  },
+);

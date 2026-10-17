@@ -73,6 +73,7 @@ export const dependencies = Layer.mergeAll(
   }),
   Layer.mock(Handoffs.Handoffs)({
     completedSshContinuations: Effect.succeed([]),
+    resolvedSshOutcomes: Effect.succeed([]),
     create: (input) =>
       Effect.succeed(
         handoffSummary({

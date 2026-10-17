@@ -9,6 +9,7 @@ import * as Memory from "./memory.ts";
 import {
   SshHostAddInput,
   SshHostProbeResult,
+  SshHostProbeError,
   SshHostTrustInput,
   SshHostPrepareInput,
   SshHostForgetInput,
@@ -1579,7 +1580,7 @@ const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
 export const WsSshHostProbeRpc = Rpc.make(WS_METHODS.sshHostProbe, {
   payload: SshHostAddInput,
   success: SshHostProbeResult,
-  error: Schema.Union([HandoffError, EnvironmentAuthorizationError]),
+  error: Schema.Union([SshHostProbeError, HandoffError, EnvironmentAuthorizationError]),
 });
 export const WsSshHostTrustRpc = Rpc.make(WS_METHODS.sshHostTrust, {
   payload: SshHostTrustInput,

@@ -125,6 +125,10 @@ export class Handoffs extends Context.Service<
       input: SecretRequestAnswerInput,
       sessionId: AuthSessionId,
     ) => Effect.Effect<void, HandoffError | SecretRequestError | EnvironmentAuthorizationError>;
+    readonly resolvedSshOutcomes: Effect.Effect<
+      ReadonlyArray<{ readonly handoff: Handoff; readonly sshProgress: SshProgressBinding }>,
+      HandoffError
+    >;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -227,7 +231,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(unavailable));
     const handoff = yield* read(input);
     // Completed payloads retain continuation arguments until the next rollout consumes them.
-    if (!isHandoffPending(handoff.state) && handoff.state !== "completed")
+    if (
+      !isHandoffPending(handoff.state) &&
+      handoff.state !== "completed" &&
+      !handoff.target.path.startsWith("ssh.")
+    )
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     return handoff;
   });
@@ -441,10 +449,32 @@ const make = Effect.gen(function* () {
     }
     return results;
   });
+  const resolvedSshOutcomes = Effect.gen(function* () {
+    const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }));
+    const rows = yield* sql<{
+      handoff_json: string;
+    }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
+      FROM orchestration_v2_projection_turn_items WHERE type = 'human_handoff'
+      AND status <> 'waiting' AND updated_at > ${since}`.pipe(Effect.mapError(unavailable));
+    const results: Array<{ handoff: Handoff; sshProgress: SshProgressBinding }> = [];
+    for (const row of rows) {
+      const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
+      if (
+        !handoff.target.path.startsWith("ssh.") ||
+        handoff.state === "completed" ||
+        isHandoffPending(handoff.state)
+      )
+        continue;
+      const payload = yield* loadPrivate(handoff.handoffId);
+      if (payload?.kind === "continuation" && payload.sshProgress !== undefined)
+        results.push({ handoff, sshProgress: payload.sshProgress });
+    }
+    return results;
+  });
   const finishSshContinuation = (input: HandoffReadInput) =>
     Effect.gen(function* () {
       const handoff = yield* read(input);
-      if (!handoff.target.path.startsWith("ssh.") || handoff.state !== "completed") return;
+      if (!handoff.target.path.startsWith("ssh.") || isHandoffPending(handoff.state)) return;
       const payload = yield* loadPrivate(input.handoffId);
       if (
         payload !== null &&
@@ -526,7 +556,7 @@ const make = Effect.gen(function* () {
       // keeps a sweep from removing an in-flight create's unpublished payload.
       const retained = yield* sql<{
         turn_item_id: string;
-      }>`SELECT turn_item_id FROM orchestration_v2_projection_turn_items WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff' AND (status = 'waiting' OR (status = 'completed' AND updated_at > ${DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }))}))`.pipe(
+      }>`SELECT turn_item_id FROM orchestration_v2_projection_turn_items WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff' AND (status = 'waiting' OR (status <> 'waiting' AND updated_at > ${DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }))}))`.pipe(
         Effect.mapError(unavailable),
       );
       const keep = new Set(retained.map((row) => `${storeName(row.turn_item_id)}.bin`));
@@ -560,6 +590,7 @@ const make = Effect.gen(function* () {
     sweep,
     answerSecret,
     completedSshContinuations,
+    resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,
     readSshProgressBinding,

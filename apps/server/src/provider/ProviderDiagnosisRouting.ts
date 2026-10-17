@@ -63,7 +63,9 @@ export const layer = Layer.effect(
             },
             decode,
           );
-        // Client sessions cannot confer an agent runtime mode. Use the narrowest ceiling.
+        // SessionStore.listActive exposes current permissions, but not a verified runtime-mode ceiling.
+        // Approval does not confer an agent mode: client and resumed handoff calls deliberately
+        // use approval-required, reloading the real session before issuance and transmission.
         const authorize = authorizeSshHost(sessions, caller, "orchestration:read").pipe(
           Effect.as("approval-required" as const),
         );

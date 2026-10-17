@@ -186,6 +186,7 @@ describe("SSH runtime IPC", () => {
         readyEnvironment: () => Effect.die("Unexpected ready environment"),
         beginSetupOperation: () => Effect.die("Unexpected setup operation"),
         publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        publishSetupOutcome: () => Effect.die("Unexpected setup outcome"),
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,

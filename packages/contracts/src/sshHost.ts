@@ -29,6 +29,10 @@ export const SshHostFailureReason = Schema.Literals([
   "start_timeout",
   "missing_tools",
   "unsupported_platform",
+  "diagnosis_failed",
+  "approval_expired",
+  "authorization_revoked",
+  "operation_failed",
 ]);
 export type SshHostFailureReason = typeof SshHostFailureReason.Type;
 
@@ -82,6 +86,15 @@ export const SshHostSetupProgress = Schema.Struct({
 });
 export type SshHostSetupProgress = typeof SshHostSetupProgress.Type;
 
+/** Public key-auth recovery, produced by buildSshKeyAuthInstructions on the SSH owner. */
+export const SshKeyAuthInstructions = Schema.Struct({
+  originLabel: TrimmedNonEmptyString,
+  instruction: TrimmedNonEmptyString,
+  command: Schema.optionalKey(TrimmedNonEmptyString),
+  publicKey: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type SshKeyAuthInstructions = typeof SshKeyAuthInstructions.Type;
+
 const SshHostStatusShape = Schema.Struct({
   host: Schema.String,
   state: SshHostState,
@@ -93,6 +106,7 @@ const SshHostStatusShape = Schema.Struct({
   failure: Schema.optionalKey(SshHostFailure),
   providers: Schema.optionalKey(SshHostProviders),
   publicKey: Schema.optionalKey(Schema.String),
+  keyAuth: Schema.optionalKey(SshKeyAuthInstructions),
   setup: Schema.optionalKey(SshHostSetupProgress),
 });
 
@@ -101,7 +115,13 @@ export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
   if ((status.state === "preparing") !== (status.phase !== undefined)) return false;
   if (status.state === "failed" && status.failure === undefined) return false;
   if (status.waitingReason !== undefined && status.state !== "update_waiting") return false;
-  if (status.publicKey !== undefined && status.state !== "auth_failed") return false;
+  if (
+    (status.publicKey !== undefined || status.keyAuth !== undefined) &&
+    status.state !== "auth_failed"
+  )
+    return false;
+  if (status.keyAuth?.publicKey !== undefined && status.keyAuth.publicKey !== status.publicKey)
+    return false;
   if (
     status.failure !== undefined &&
     (status.failure.reason === "archive_unavailable") !== (status.failure.archive !== undefined)
@@ -151,6 +171,22 @@ export const SshHostTrustInput = Schema.Struct({
   accepted: Schema.Boolean,
 });
 export type SshHostTrustInput = typeof SshHostTrustInput.Type;
+
+/** Client probe errors distinguish transport failures without exposing SSH diagnostics or keys. */
+export class SshHostProbeError extends Schema.TaggedError<SshHostProbeError>()(
+  "SshHostProbeError",
+  {
+    host: Schema.String,
+    reason: Schema.Literals([
+      "unreachable",
+      "connection_refused",
+      "invalid_request",
+      "alias_conflict",
+      "operation_failed",
+    ]),
+    message: TrimmedNonEmptyString,
+  },
+) {}
 
 /** Private client response; never use as an MCP result schema. */
 export const SshHostProbeResult = Schema.Struct({
@@ -256,7 +292,7 @@ export function buildSshKeyAuthInstructions(context: {
   const introduction =
     context.generatedKey && context.publicKey !== undefined
       ? `GOAT created a key for ${context.host}. Add this public key to the server. Most providers ask for it when you create a server.`
-      : "Add your existing public key to the server, then retry key authentication.";
+      : `${context.host} refused the SSH key. Add your public key to the server, then try again.`;
   const command =
     context.publicKeyPath === undefined
       ? undefined

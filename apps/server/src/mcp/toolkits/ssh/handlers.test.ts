@@ -1164,6 +1164,7 @@ const runtimeFixture = (
       getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
     }),
     Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+      publishSetupOutcome: () => Effect.succeed(true),
       beginSetupOperation: (_host, { operationId }) =>
         Effect.succeed({ operationId, generation: 1, stage: "runtime" }),
       runtimeStatus: () =>

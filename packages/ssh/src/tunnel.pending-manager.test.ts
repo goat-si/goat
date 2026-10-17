@@ -298,11 +298,22 @@ describe("SSH pending replacement reconciliation", () => {
             Effect.result(manager.ensureEnvironment(uploadTarget)),
           );
           yield* Deferred.await(f.launchEntered);
+          assert.isFalse(
+            yield* manager.publishSetupOutcome(uploadTarget, operation, { kind: "complete" }),
+          );
           const forget = yield* Effect.forkChild(
             manager.forgetEnvironment(uploadTarget, { stopRuntime }),
           );
           yield* TestClock.adjust(0);
           assert.equal((yield* manager.status(uploadTarget)).status?.state, "untrusted");
+          assert.isFalse(
+            yield* manager.publishSetupOutcome(uploadTarget, operation, {
+              kind: "error",
+              reason: "diagnosis_failed",
+              message: "Old result",
+              fix: { actor: "agent", instruction: "Try again" },
+            }),
+          );
           assert.isFalse(
             yield* manager.publishProviderDiagnosis(uploadTarget, operation, {
               checkedAt: operationDate,
