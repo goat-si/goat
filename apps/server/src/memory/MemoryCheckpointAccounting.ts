@@ -20,28 +20,43 @@ export class CheckpointAccountingError extends Schema.TaggedError<CheckpointAcco
   { stage: Schema.String },
 ) {}
 
+/** Check only addressed lifecycle rows; an absent triple still permits first initialization. */
+const validateCheckpointLifecycles = Effect.fnUntraced(function* (spaces: Iterable<string>) {
+  const sql = yield* SqlClient.SqlClient;
+  for (const space of spaces) {
+    const totals = yield* sql<{
+      dimension: string;
+      value: number;
+    }>`SELECT dimension,value FROM memory_quota_counters WHERE space=${space} AND scope_key='' AND dimension IN ('checkpoint_initialized','hub_snapshot_bytes','hub_snapshot_rows')`;
+    if (
+      totals.length > 0 &&
+      (totals.length !== 3 ||
+        totals.find((row) => row.dimension === "checkpoint_initialized")?.value !== 1)
+    )
+      return yield* new CheckpointAccountingError({ stage: "missing-total" });
+  }
+});
+
 /** Synchronous counter-cache invalidations, never asynchronous work or a corpus index.
  * The reserved space is the existing counters' PK prefix, so reading touched keys
  * does not scan the corpus or all cached counters. Refresh and delta commit together.
  */
 export const refreshCheckpointAccounting = Effect.fnUntraced(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // Any lifecycle address requires marker=1 and both totals, even without dirty keys.
-  // DISTINCT walks three bounded index entries per healthy space; validation uses
-  // three counter PK probes per space, never corpus/cache rows.
-  const missing = yield* sql`SELECT i.space FROM (
-    SELECT DISTINCT space FROM memory_quota_counters
-    WHERE (dimension='hub_snapshot_rows' OR dimension='checkpoint_initialized' OR dimension='hub_snapshot_bytes') AND scope_key=''
-  ) i WHERE
-    NOT EXISTS(SELECT 1 FROM memory_quota_counters m WHERE m.space=i.space AND m.dimension='checkpoint_initialized' AND m.scope_key='' AND m.value=1)
-    OR NOT EXISTS(SELECT 1 FROM memory_quota_counters b WHERE b.space=i.space AND b.dimension='hub_snapshot_bytes' AND b.scope_key='')
-    OR NOT EXISTS(SELECT 1 FROM memory_quota_counters n WHERE n.space=i.space AND n.dimension='hub_snapshot_rows' AND n.scope_key='') LIMIT 1`;
-  if (missing.length) return yield* new CheckpointAccountingError({ stage: "missing-total" });
-  const now = yield* Clock.currentTimeMillis;
+  const pendingLifecycle = sql<{
+    dimension: string;
+  }>`SELECT dimension FROM memory_quota_counters WHERE space='_checkpoint_lifecycle' AND scope_key=''`;
+  const pending = yield* pendingLifecycle;
   const dirty = yield* sql<{
     dimension: string;
     scope_key: string;
   }>`SELECT dimension,scope_key FROM memory_quota_counters WHERE space='_checkpoint_dirty'`;
+  // Validate before initialization or deltas can obscure a missing marker/total.
+  // Migration 083 seeds the baseline once; its triggers retain later lifecycle changes.
+  yield* validateCheckpointLifecycles(
+    new Set([...pending.map((row) => row.dimension), ...dirty.map((key) => key.dimension)]),
+  );
+  const now = yield* Clock.currentTimeMillis;
   for (const key of dirty) {
     const memory = key.scope_key.startsWith("m:");
     const id = key.scope_key.slice(2);
@@ -120,6 +135,11 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* () {
       );
     yield* sql`DELETE FROM memory_quota_counters WHERE space='_checkpoint_dirty' AND dimension=${space} AND scope_key=${key.scope_key}`;
   }
+  // First writes create lifecycle addresses during the loop. Validate those and
+  // drain only after every candidate passed; a failed transaction retains its evidence.
+  const remaining = yield* pendingLifecycle;
+  yield* validateCheckpointLifecycles(remaining.map((row) => row.dimension));
+  yield* sql`DELETE FROM memory_quota_counters WHERE space='_checkpoint_lifecycle' AND scope_key=''`;
   // Marker and recalculated counters become visible together on migration commit.
   const initialized = yield* sql<{
     value: number;
