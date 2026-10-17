@@ -47,8 +47,10 @@ upstream이 생기면 `20`을 쓴다. 카드 번호는 축 안에서 단조 증�
    데이터나 사용자 계약을 바꾸는 선택은 카드로 만들고 `⛔ needs decision`으로 둔다.
 4. 텍스트 충돌이 없어도 `scan.sh`의 마이그레이션 id, `t3_*` 이름 누수, workflow 변경을 확인한다.
    이 셋은 깨끗하게 머지되고도 GOAT를 깨뜨린다.
-5. 검증 정본은 머지 head에서 도는 goat-ci(EPYC)의 check, typecheck, test, build다. 로컬은 충돌
-   파일의 focused test와 해당 패키지 typecheck까지만 한다.
+5. 검증 정본은 머지 head에서 손으로 돌린 goat-ci(EPYC) 전체 실행
+   (`gh workflow run goat-ci.yml --ref <branch>`)의 check, typecheck, test, build다. PR run은 바뀐
+   경로가 닿는 task만 돌고, push로는 돌지 않는다. 로컬은 충돌 파일의 focused test와 해당 패키지
+   typecheck까지만 한다.
 6. dev에 랜딩한 뒤 [000](./000_baseline.md)의 기준선과 사이클 로그를 갱신하고, 닫힌 카드를
    `_fin/10/`으로 옮긴다.
 

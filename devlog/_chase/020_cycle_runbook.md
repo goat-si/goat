@@ -52,7 +52,7 @@ git merge --no-ff "$UP" -m "chase(t3): merge upstream main $(git rev-parse --sho
 ## 5. 검증
 
 - 로컬: 충돌 파일의 focused test (`vp test run <files>`)와 바뀐 패키지 typecheck.
-- 정본: 머지 head에서 goat-ci의 check, typecheck, test, build가 모두 green. cancelled는 pass가 아니다.
+- 정본: 머지 head에서 손으로 돌린 goat-ci 전체 실행(`gh workflow run goat-ci.yml --ref <branch>`)의 check, typecheck, test, build가 모두 green. cancelled는 pass가 아니다.
 
 ## 6. 랜딩
 

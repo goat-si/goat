@@ -17,7 +17,7 @@ Each release carries the same set of files on both channels:
 
 |                  | Nightly                                                 | Stable                             |
 | ---------------- | ------------------------------------------------------- | ---------------------------------- |
-| Starts from      | a successful goat-ci run of a dev push, or a manual run | a manual run with `channel=stable` |
+| Starts from      | a successful manual goat-ci run on dev, or a manual run | a manual run with `channel=stable` |
 | Version          | `X.Y.Z-nightly.YYYYMMDD.N`                              | `X.Y.Z`                            |
 | GitHub release   | prerelease, never latest                                | full release, marked latest        |
 | Update manifests | `nightly*.yml`                                          | `latest*.yml`                      |
@@ -38,7 +38,9 @@ After a stable `vX.Y.Z` is published, bump the release manifests to the next ver
 
 Building and publishing are separate decisions:
 
-- With the repository variable `GOAT_RELEASES_PUBLISH` unset, dev pushes start nothing, and a manual run builds, signs and verifies everything, then stops. The verified files remain on the run as the `release-assets` artifact, which is how to dry-run a channel.
-- With `GOAT_RELEASES_PUBLISH=true`, every successful dev push publishes a nightly, and a manual run publishes when its `publish` input is checked.
+goat-ci does not run when commits land on dev. A maintainer starts it by hand (`gh workflow run goat-ci.yml --ref dev`), and that full run is what can start a nightly.
+
+- With the repository variable `GOAT_RELEASES_PUBLISH` unset, a goat-ci run on dev starts nothing, and a manual run of the nightly workflow builds, signs and verifies everything, then stops. The verified files remain on the run as the `release-assets` artifact, which is how to dry-run a channel.
+- With `GOAT_RELEASES_PUBLISH=true`, every successful manual goat-ci run on dev publishes a nightly, and a manual run of the nightly workflow publishes when its `publish` input is checked.
 
 Only the hosted publish job reads the goat-releases App credentials. Publishing is idempotent per tag: identical bytes count as already published, and different bytes fail the run rather than replacing a release that users may already have.
