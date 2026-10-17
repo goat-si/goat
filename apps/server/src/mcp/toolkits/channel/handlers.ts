@@ -180,7 +180,8 @@ export const layer = McpToolAccess.toLayer(
               Effect.mapError((error) =>
                 error._tag === "ChannelTaskMoveError"
                   ? new OrchestratorMcpFailure({
-                      code: error.reason === "task_not_found" ? "task_not_found" : "invalid_request",
+                      code:
+                        error.reason === "task_not_found" ? "task_not_found" : "invalid_request",
                       message: error.message,
                     })
                   : failureFor(error),

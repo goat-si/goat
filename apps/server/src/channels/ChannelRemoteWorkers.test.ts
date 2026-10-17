@@ -711,6 +711,8 @@ const readState = (taskId: ChannelTask["taskId"]) =>
     return JSON.parse(json ?? "{}") as RemoteWorkerState;
   });
 
+const decodeTaskEventJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent));
+
 /** How many times the task said a machine it left is back; the notice lives on its progress line. */
 const staleNotices = (host: string) =>
   Effect.gen(function* () {
@@ -722,9 +724,7 @@ const staleNotices = (host: string) =>
     `;
     let count = 0;
     for (const row of rows) {
-      const event = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
-        row.event_json,
-      );
+      const event = yield* decodeTaskEventJson(row.event_json);
       if (
         event.type === "task.progress" &&
         event.payload.summary === REMOTE_COPY.staleMachineBack(host)
@@ -745,9 +745,7 @@ const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
       ORDER BY sequence DESC LIMIT 1
     `;
     assert.lengthOf(rows, 1);
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
-      rows[0]!.event_json,
-    );
+    return yield* decodeTaskEventJson(rows[0]!.event_json);
   });
 
 /** Observes committed SQLite writes without replacing their behavior or polling the ledger. */
