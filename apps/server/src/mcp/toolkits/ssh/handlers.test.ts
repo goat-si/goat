@@ -15,6 +15,7 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  SshWorkspaceError,
   ThreadId,
   type ChatFileAttachment,
   type OrchestrationV2ThreadShell,
@@ -28,6 +29,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import { newLaunchWatch } from "../../launchWatch.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -120,6 +122,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(caller),
       }),
+      Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
         validateLaunchAttachments: (requested) => Effect.succeed(requested),
         launchThread: (input, beforeLaunch) => {
@@ -503,6 +506,7 @@ const fixture = (sourceFault?: "missing" | "size") =>
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadShell: () => Ref.get(shell),
           }),
+          Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
           Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
             validateLaunchAttachments: localDispatch.validateLaunchAttachments,
             launchThread: (input, check) =>
@@ -773,6 +777,7 @@ it.effect.each([undefined, 2])("passes the SSH report limit to the coordinator (
     const dependencies = Layer.mergeAll(
       Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
+      Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
@@ -795,5 +800,191 @@ it.effect.each([undefined, 2])("passes the SSH report limit to the coordinator (
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     expect(responses.at(-1)?.result).toEqual({ dispatches: [] });
     expect(limits).toEqual([limit ?? 50]);
+  }),
+);
+
+type HandoffInput = Parameters<SshWorkspaceSync.SshWorkspaceSync["Service"]["handoffThread"]>[0];
+type HandoffParameters = Partial<
+  Pick<HandoffInput, "message" | "modelSelection" | "runtimeMode" | "interactionMode">
+> & { readonly threadId?: ThreadId; readonly host?: string };
+
+const handoff = (
+  parameters: HandoffParameters = {},
+  options: {
+    readonly error?: SshWorkspaceError;
+    readonly invocation?: McpInvocationContext.McpInvocationScope;
+    readonly caller?: OrchestrationV2ThreadShell;
+  } = {},
+) =>
+  Effect.gen(function* () {
+    const inputs: HandoffInput[] = [];
+    const probes: boolean[] = [];
+    const caller = options.caller ?? liveThreadShell(threadId);
+    const dependencies = Layer.mergeAll(
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+      }),
+      Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+        listHosts: ({ probe }) =>
+          Effect.sync(() => {
+            probes.push(probe);
+            return [{ alias: "box", source: "ssh-config" as const }];
+          }),
+      }),
+      Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({
+        handoffThread: (input) =>
+          Effect.gen(function* () {
+            inputs.push(input);
+            if (options.error !== undefined) return yield* options.error;
+            return {
+              operationId: "1234abcd",
+              snapshotRef: "refs/goat/ssh/1234abcd",
+              snapshotOid: "a".repeat(40),
+              remoteEnvironmentId: EnvironmentId.make("remote-environment"),
+              remoteProjectId: ProjectId.make("remote-project"),
+              remoteThreadId: ThreadId.make("remote-thread"),
+              remoteRepoPath: "/remote/.goat/repos/project",
+              branch: "goat/ssh/1234abcd",
+            };
+          }),
+      }),
+      Layer.mock(LaunchWatchService.LaunchWatchService)({}),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+    );
+    const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
+      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provide(dependencies),
+    );
+    const response = yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      return yield* server.callTool({
+        name: "goat_ssh_thread_handoff",
+        arguments: { host: "box", ...parameters },
+      });
+    }).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, options.invocation ?? scope),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(registered),
+    );
+    return {
+      result: response.isError ? declaredFailure(response) : response.structuredContent,
+      inputs,
+      probes,
+      caller,
+    };
+  });
+
+it.effect.each([undefined, threadId])(
+  "handoff resolves a known alias and permits only the caller's own run (threadId=%s)",
+  (sourceThreadId) =>
+    Effect.gen(function* () {
+      const transferred = yield* handoff(
+        sourceThreadId === undefined ? {} : { threadId: sourceThreadId },
+      );
+      expect(transferred.probes).toEqual([false]);
+      expect(transferred.inputs).toEqual([
+        {
+          sourceThreadId: threadId,
+          target: { alias: "box", hostname: "box", username: null, port: null },
+          expectedEnvironmentId: null,
+          allowRunId: transferred.caller.activeRunId,
+        },
+      ]);
+      expect(transferred.result).toMatchObject({
+        host: "box",
+        operationId: "1234abcd",
+        remoteThreadId: "remote-thread",
+        remoteProjectId: "remote-project",
+        remoteRepoPath: "/remote/.goat/repos/project",
+        branch: "goat/ssh/1234abcd",
+        notes: [
+          expect.stringContaining("goat_thread_read"),
+          expect.stringContaining("Fetch branch"),
+        ],
+      });
+    }),
+);
+
+it.effect("handoff forwards overrides for another thread without exempting the caller's run", () =>
+  Effect.gen(function* () {
+    const parameters = {
+      threadId: ThreadId.make("other-thread"),
+      message: "Continue the implementation",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      runtimeMode: "auto" as const,
+      interactionMode: "plan" as const,
+    };
+    const transferred = yield* handoff(parameters);
+    expect(transferred.inputs).toHaveLength(1);
+    expect(transferred.inputs[0]).toMatchObject({
+      sourceThreadId: parameters.threadId,
+      message: parameters.message,
+      modelSelection: parameters.modelSelection,
+      runtimeMode: parameters.runtimeMode,
+      interactionMode: parameters.interactionMode,
+    });
+    expect(transferred.inputs[0]?.allowRunId).toBeUndefined();
+  }),
+);
+
+it.effect("handoff rejects an unknown alias before transferring files", () =>
+  Effect.gen(function* () {
+    const transferred = yield* handoff({ host: "unknown-host" });
+    expect(transferred.result).toMatchObject({
+      code: "invalid_request",
+      message: expect.stringContaining("goat_ssh_host_list"),
+    });
+    expect(transferred.inputs).toEqual([]);
+  }),
+);
+
+it.effect.each([
+  { code: "thread_busy", stage: "validate", message: "active or queued run" },
+  { code: "secret_candidate", stage: "snapshot", message: "credential-like files" },
+  { code: "push_failed", stage: "push", message: "push_failed" },
+] as const)("handoff preserves the workspace error code $code", ({ code, stage, message }) =>
+  Effect.gen(function* () {
+    const transferred = yield* handoff({}, { error: new SshWorkspaceError({ code, stage }) });
+    expect(transferred.result).toMatchObject({ code, message: expect.stringContaining(message) });
+    expect(transferred.inputs).toHaveLength(1);
+  }),
+);
+
+it.effect.each(["auto", "read-only"] as const)(
+  "handoff refuses a client approved for %s before host resolution",
+  (access) =>
+    Effect.gen(function* () {
+      const transferred = yield* handoff({ threadId }, { invocation: clientScope(access) });
+      expect(transferred.result).toMatchObject({ code: "capability_denied" });
+      expect(transferred.inputs).toEqual([]);
+      expect(transferred.probes).toEqual([]);
+    }),
+);
+
+it.effect.each([
+  { runtimeMode: "auto" as const },
+  { interactionMode: "plan" as const },
+  { activeRunId: null },
+])("handoff refuses a caller whose modes or run do not authorize it (%j)", (modes) =>
+  Effect.gen(function* () {
+    const transferred = yield* handoff({}, { caller: liveThreadShell(threadId, modes) });
+    expect(transferred.result).toMatchObject({
+      code: modes.activeRunId === null ? "parent_not_active" : "capability_denied",
+    });
+    expect(transferred.inputs).toEqual([]);
+    expect(transferred.probes).toEqual([]);
+  }),
+);
+
+it.effect("an outside full-access client must name a thread and cannot exempt an active run", () =>
+  Effect.gen(function* () {
+    const invocation = clientScope("full-access");
+    const missing = yield* handoff({}, { invocation });
+    expect(missing.result).toMatchObject({ code: "target_required" });
+    expect(missing.inputs).toEqual([]);
+    const transferred = yield* handoff({ threadId }, { invocation });
+    expect(transferred.inputs).toHaveLength(1);
+    expect(transferred.inputs[0]?.allowRunId).toBeUndefined();
   }),
 );

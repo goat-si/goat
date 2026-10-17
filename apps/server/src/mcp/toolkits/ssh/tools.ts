@@ -4,12 +4,15 @@ import { RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   ModelSelection,
+  ProjectId,
+  ThreadId,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   OrchestratorMcpFailure,
   ProviderInteractionMode,
   RuntimeMode,
   TrimmedNonEmptyString,
   SshLaunchWorkspace,
+  SshWorkspaceCode,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -17,6 +20,7 @@ import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -162,6 +166,38 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 
+/** Keeps workspace refusal codes intact when the MCP tool returns a declared failure. */
+export class SshThreadHandoffFailure extends Schema.TaggedError<SshThreadHandoffFailure>()(
+  "SshThreadHandoffFailure",
+  { code: SshWorkspaceCode, message: Schema.String },
+) {}
+
+const SshThreadHandoffTool = Tool.make(agentSurfaceRegistry["ssh.thread_handoff"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, SshWorkspaceSync.SshWorkspaceSync],
+  failure: Schema.Union([OrchestratorMcpFailure, SshThreadHandoffFailure]),
+  description: agentSurfaceRegistry["ssh.thread_handoff"].description,
+  parameters: Schema.Struct({
+    host: HostAlias,
+    threadId: Schema.optional(
+      ThreadId.annotate({ description: "Defaults to the calling thread." }),
+    ),
+    message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
+    modelSelection: Schema.optional(ModelSelection),
+    runtimeMode: Schema.optional(RuntimeMode),
+    interactionMode: Schema.optional(ProviderInteractionMode),
+  }),
+  success: Schema.Struct({
+    host: Schema.String,
+    operationId: Schema.String,
+    remoteThreadId: ThreadId,
+    remoteProjectId: ProjectId,
+    remoteRepoPath: Schema.String,
+    branch: Schema.String,
+    notes: Schema.Array(Schema.String),
+  }),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_handoff"]));
+
 const SshReportsTool = Tool.make(agentSurfaceRegistry["ssh.reports"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.reports"].description,
@@ -174,5 +210,6 @@ export const SshToolkit = Toolkit.make(
   SshHostListTool,
   SshBrowseTool,
   SshThreadLaunchTool,
+  SshThreadHandoffTool,
   SshReportsTool,
 );

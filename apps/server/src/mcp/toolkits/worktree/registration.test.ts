@@ -1,4 +1,5 @@
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";
 import Migration0062 from "../../../persistence/Migrations/064_RemoteReports.ts";
 import Migration0063 from "../../../persistence/Migrations/065_RemoteDispatches.ts";
@@ -52,6 +53,7 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 const layerStubServices = Layer.mergeAll(
   Layer.mock(CloudSource.CloudTaskSourceService)({}),
   Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+  Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   // Coordinator recovery runs before serving MCP requests.
   Layer.effectDiscard(
     Effect.andThen(Migration0062, Effect.andThen(Migration0063, Migration0065)),
@@ -180,6 +182,7 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       expect(toolNames).toContain("goat_connection_list");
       expect(toolNames).toContain("goat_connection_add_ssh");
       expect(toolNames).toContain("goat_connection_remove");
+      expect(toolNames).toContain("goat_ssh_thread_handoff");
 
       // The handoff tool mutates thread state, reaches the network (origin
       // fetch), and runs project setup scripts, so its MCP hints must not

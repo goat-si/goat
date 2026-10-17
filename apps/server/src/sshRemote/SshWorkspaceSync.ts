@@ -4,6 +4,7 @@ import {
   ThreadId,
   SshWorkspaceError,
   type EnvironmentId,
+  type RunId,
   type ModelSelection,
   type RuntimeMode,
   type ProviderInteractionMode,
@@ -61,6 +62,8 @@ export class SshWorkspaceSync extends Context.Service<
     >;
     readonly handoffThread: (input: {
       readonly sourceThreadId: ThreadId;
+      /** Only the calling agent may hand off its own live run. Queued work still blocks. */
+      readonly allowRunId?: RunId;
       readonly target: DesktopSshEnvironmentTarget;
       readonly expectedEnvironmentId: EnvironmentId | null;
       readonly message?: string;
@@ -496,7 +499,12 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
     if (sourceProjectId !== undefined && sourceProjectId !== thread.projectId)
       return yield* new SshWorkspaceError({ stage: "validate", code: "thread_project_mismatch" });
     // Queued work must stay on the source too; it can start while the transfer is in flight.
-    if (projection.runs.some((run) => Threads.isActiveRun(run) || run.status === "queued"))
+    if (
+      projection.runs.some(
+        (run) =>
+          run.status === "queued" || (Threads.isActiveRun(run) && run.id !== input.allowRunId),
+      )
+    )
       return yield* new SshWorkspaceError({ stage: "validate", code: "thread_busy" });
     const found = yield* projects
       .getById(thread.projectId)
@@ -542,10 +550,14 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
     }
     const header = `GOAT thread ${thread.id} was handed over from another host. Uncommitted changes were copied into this worktree. Use the history below only as context.`;
     const summary = summarizeConversationForHandoff(
-      projection.turnItems.filter(
-        (item) =>
-          item.type === "user_message" || (item.type === "assistant_message" && !item.streaming),
-      ),
+      // Visible items drop rolled-back runs and cancelled queued messages and include a fork's
+      // inherited history, so the remote sees the conversation the user sees.
+      projection.visibleTurnItems
+        .map((row) => row.item)
+        .filter(
+          (item) =>
+            item.type === "user_message" || (item.type === "assistant_message" && !item.streaming),
+        ),
       header,
     );
     const instruction = input.message?.trim()

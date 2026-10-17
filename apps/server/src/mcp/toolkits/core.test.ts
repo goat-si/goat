@@ -55,6 +55,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as ThreadResultService from "../../threadResults/ThreadResultService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import * as SshWorkspaceSync from "../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../LaunchWatchService.ts";
 import { newLaunchWatch } from "../launchWatch.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
@@ -198,6 +199,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_ssh_browse",
     "goat_ssh_host_list",
     "goat_ssh_reports",
+    "goat_ssh_thread_handoff",
     "goat_ssh_thread_launch",
     "goat_thread_configuration",
     "goat_thread_configure",
@@ -234,7 +236,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_list",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(111);
+  expect(names.size).toBe(112);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -1441,6 +1443,7 @@ it.effect.each([false, true])(
               });
             }),
         }),
+        Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
           validateLaunchAttachments: (attachments) => Effect.succeed(attachments),
           launchThread: (input, check) =>

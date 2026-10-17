@@ -1744,6 +1744,25 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
+  "ssh.thread_handoff": entry({
+    resource: "ssh",
+    verb: "thread_handoff",
+    name: "goat_ssh_thread_handoff",
+    toolkit: "ssh",
+    summary: "Continue a thread on another machine",
+    description:
+      "Continue this thread (or threadId) on another machine, including uncommitted changes and conversation context. Pick host from goat_ssh_host_list. Omitted modelSelection, runtimeMode and interactionMode keep the source thread's values. Needs a full-access caller. The source must have no active or queued runs, except the calling thread's own current run. Ignored files such as .env are not copied; untracked secret-candidate files refuse the handoff. Make this call the last action of the turn: changes made on this host after the call are not transferred. Read the returned remoteThreadId with goat_thread_read using the same host; bring results back with Git actions → Fetch branch.",
+    effect: "destructive",
+    hostRoutable: true,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: ["secret", "approval"],
+    annotations: {
+      title: "Continue a thread on another machine",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
   "ssh.reports": entry({
     resource: "ssh",
     verb: "reports",

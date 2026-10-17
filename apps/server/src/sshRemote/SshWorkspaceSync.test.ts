@@ -43,6 +43,7 @@ import * as Sync from "./SshWorkspaceSync.ts";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const decodeProject = Schema.decodeUnknownSync(Project);
 const decodeInput = Schema.decodeUnknownSync(SshWorkspaceLaunchInput);
+const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const target = { alias: "buildbox", hostname: "host.test", username: "runner", port: 2222 };
 const baseLayer = Git.layer.pipe(
   Layer.provideMerge(VcsProcess.layer),
@@ -167,7 +168,7 @@ const fixture = Effect.gen(function* () {
     ordinal: number,
     streaming = false,
   ) =>
-    Schema.decodeUnknownSync(OrchestrationV2TurnItem)({
+    decodeTurnItem({
       type,
       text,
       streaming,
@@ -1008,6 +1009,16 @@ test("handoff snapshots the thread worktree and carries history before the conti
         f.conversationItem("assistant_message", "unfinished streaming text", 3, true),
       ],
     };
+    f.state.projection = {
+      ...f.state.projection,
+      visibleTurnItems: f.state.projection.turnItems.map((item, position) => ({
+        position,
+        visibility: "local" as const,
+        sourceThreadId: item.threadId,
+        sourceItemId: item.id,
+        item,
+      })),
+    };
     yield* f.fs.writeFileString(f.path.join(worktree, "file.txt"), "staged worktree content");
     yield* f.git(["add", "file.txt"], worktree);
     yield* f.fs.writeFileString(f.path.join(worktree, "file.txt"), "unstaged worktree content");
@@ -1064,6 +1075,35 @@ test("handoff snapshots the thread worktree and carries history before the conti
       recordKey: `ssh-handoff:${result.operationId}`,
       message: `Continued on buildbox in remote thread rt (branch ${result.branch}).`,
     });
+  }));
+
+test("handoff carries visible conversation and excludes a rolled-back user message", (f) =>
+  Effect.gen(function* () {
+    const rolledBackRun = f.run("rolled_back");
+    const hidden = {
+      ...f.conversationItem("user_message", "Discarded instruction from rolled-back run", 1),
+      runId: rolledBackRun.id,
+    };
+    const visible = f.conversationItem("user_message", "Keep this visible instruction", 2);
+    f.state.projection = {
+      ...f.state.projection,
+      runs: [rolledBackRun],
+      turnItems: [hidden, visible],
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "local",
+          sourceThreadId: visible.threadId,
+          sourceItemId: visible.id,
+          item: visible,
+        },
+      ],
+    };
+    yield* f.sync.handoffThread(f.handoffInput);
+    assert.lengthOf(f.state.launches, 1);
+    const message = f.state.launches[0]!.message;
+    assert.include(message, "User:\nKeep this visible instruction");
+    assert.notInclude(message, "Discarded instruction from rolled-back run");
   }));
 
 test("RPC handoff uses the supplied modes title and continuation", (f) =>
@@ -1131,6 +1171,61 @@ testEach(
       assert.lengthOf(f.state.notices, 0);
     }),
 );
+
+test("handoff allows the caller's sole active run and still snapshots uncommitted files", (f) =>
+  Effect.gen(function* () {
+    const run = f.run("running");
+    f.state.projection = { ...f.state.projection, runs: [run] };
+    yield* f.write("file.txt", "current turn changes");
+    const result = yield* f.sync.handoffThread({ ...f.handoffInput, allowRunId: run.id });
+    assert.strictEqual(
+      (yield* f.git(["show", `${result.snapshotRef}:file.txt`])).stdout,
+      "current turn changes",
+    );
+    assert.lengthOf(f.state.launches, 1);
+    assert.lengthOf(f.state.notices, 1);
+  }));
+
+testEach(
+  (["queued", "running"] as const).map(
+    (status) =>
+      [`handoff rejects another ${status} run even with the caller's run allowed`, status] as const,
+  ),
+  (status, f) =>
+    Effect.gen(function* () {
+      const ownRun = f.run("running");
+      f.state.projection = {
+        ...f.state.projection,
+        runs: [ownRun, { ...f.run(status), id: RunId.make("another-run"), ordinal: 2 }],
+      };
+      yield* rejected(
+        f.sync.handoffThread({ ...f.handoffInput, allowRunId: ownRun.id }),
+        "validate",
+        "thread_busy",
+      );
+      assert.lengthOf(f.state.preflights, 0);
+      assert.lengthOf(f.state.scripts, 0);
+      assert.lengthOf(f.state.launches, 0);
+    }),
+);
+
+test("handoff does not exempt a mismatched or queued run", (f) =>
+  Effect.gen(function* () {
+    for (const status of ["running", "queued"] as const) {
+      const run = f.run(status);
+      f.state.projection = { ...f.state.projection, runs: [run] };
+      yield* rejected(
+        f.sync.handoffThread({
+          ...f.handoffInput,
+          allowRunId: status === "queued" ? run.id : RunId.make("different-run"),
+        }),
+        "validate",
+        "thread_busy",
+      );
+    }
+    assert.lengthOf(f.state.preflights, 0);
+    assert.lengthOf(f.state.launches, 0);
+  }));
 
 test("RPC handoff rejects a source project mismatch", (f) =>
   Effect.gen(function* () {
