@@ -194,7 +194,15 @@ const setup = Effect.gen(function* () {
   const context = yield* Layer.build(RemoteReportService.layer.pipe(Layer.provide(fake)));
   const service = Context.get(context, RemoteReportService.RemoteReportService);
   yield* service.bind(threadId, binding);
-  return { service, sql, state, events, changes, creations, subscribed };
+  const lifetime = yield* Effect.scope;
+  const recreate = Layer.buildWithScope(
+    RemoteReportService.layer.pipe(Layer.provide(fake)),
+    lifetime,
+  ).pipe(
+    Effect.map((context) => Context.get(context, RemoteReportService.RemoteReportService)),
+    Effect.provideService(SqlClient.SqlClient, sql),
+  );
+  return { service, sql, state, events, changes, creations, subscribed, recreate };
 });
 type Fixture = Effect.Success<typeof setup>;
 const withFixture = <A, E, R>(body: (fixture: Fixture) => Effect.Effect<A, E, R>) =>
@@ -861,4 +869,37 @@ test("deadline reread sees a durable change even without a signal", ({
       timedOut: false,
       observedRun: { runId: runA, status: "completed" },
     });
+  }));
+
+test("relay receipts survive collection and service recreation and remain scoped to the binding", ({
+  service,
+  sql,
+  recreate,
+}) =>
+  Effect.gen(function* () {
+    const relaying = ThreadId.make("receipt-thread");
+    yield* service.bind(relaying, {
+      ...binding,
+      correlationId: "receipt-correlation",
+      relaySend: true,
+    });
+    const input = {
+      host: "box",
+      threadId: ThreadId.make("review-child"),
+      message: "Steer once",
+      clientRequestId: "durable-request",
+    };
+    const first = yield* service.relay(relaying, input);
+    // Collection prunes the report payload, while the request identity stays.
+    yield* sql`DELETE FROM remote_reports WHERE correlation_id = 'receipt-correlation'`;
+    const restarted = yield* recreate;
+    expect(yield* restarted.relayReceipt(relaying, input.clientRequestId)).toEqual({
+      sequence: first.sequence,
+      originLabel: binding.originLabel,
+    });
+    expect(yield* restarted.relay(relaying, input)).toEqual(first);
+    expect(yield* restarted.relayReceipt(threadId, input.clientRequestId)).toBeNull();
+    expect(yield* restarted.relayReceipt(relaying, "new-request")).toBeNull();
+    yield* restarted.unbind(relaying);
+    expect(yield* restarted.relayReceipt(relaying, input.clientRequestId)).toBeNull();
   }));

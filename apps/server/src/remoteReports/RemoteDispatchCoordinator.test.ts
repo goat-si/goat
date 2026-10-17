@@ -1947,7 +1947,19 @@ it.effect.each([
       yield* f.launch(c, "wake");
       yield* Queue.take(f.calls);
       yield* f.sql.unsafe(update);
-      yield* f.replyLatest(Effect.succeed(answer([relayReport(1, sibling)])));
+      // A restarted coordinator has no request cache. Its durable attempt
+      // watermark must win even when the target's review has since finished.
+      const owner = ThreadId.make("restart-review-owner");
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* f.sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, remote_thread_id, read_key, delivery, state, task_id, parent_run_id, created_at, updated_at)
+        VALUES ('restart-review-target', 'task', ${owner}, ${sibling.host}, ${sibling.threadId}, 'key', 'wake', 'settled', 'review-task', 'review-run', ${now}, ${now})`;
+      f.refusedReviews.set(sibling.threadId, owner);
+      yield* f.replyLatest(
+        Effect.succeed(
+          answer([relayReport(1, { ...sibling, clientRequestId: "persisted-request" })]),
+        ),
+      );
       const notice = yield* Queue.take(f.notifications);
       if (notice.type === "message.dispatch") {
         assert.include(notice.text, status);

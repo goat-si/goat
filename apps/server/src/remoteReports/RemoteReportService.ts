@@ -143,6 +143,14 @@ export class RemoteReportService extends Context.Service<
       input: RemoteOriginReportInput,
     ) => Effect.Effect<RemoteOriginReportResult, RemoteReportError>;
     /** Asks the origin to deliver a goat_thread_send; only for a binding with relaySend. */
+    /** A relay request's durable sequence, retained after its report is collected. */
+    readonly relayReceipt: (
+      threadId: ThreadId,
+      clientRequestId: string,
+    ) => Effect.Effect<
+      { readonly sequence: number; readonly originLabel: string } | null,
+      RemoteReportError
+    >;
     readonly relay: (
       threadId: ThreadId,
       input: RemoteRelaySend,
@@ -516,6 +524,18 @@ const make = Effect.gen(function* () {
           relaySend: binding.relaySend === 1,
         };
   });
-  return RemoteReportService.of({ bind, unbind, origin, report, relay, wait });
+  const relayReceipt = Effect.fn("RemoteReportService.relayReceipt")(function* (
+    threadId: ThreadId,
+    clientRequestId: string,
+  ) {
+    const rows = yield* sql<{ sequence: number; originLabel: string }>`
+      SELECT request.sequence, binding.origin_label AS "originLabel"
+      FROM remote_report_bindings AS binding
+      JOIN remote_relay_requests AS request ON request.correlation_id = binding.correlation_id
+      WHERE binding.thread_id = ${threadId} AND request.client_request_id = ${clientRequestId}
+    `.pipe(Effect.mapError(storage));
+    return rows[0] ?? null;
+  });
+  return RemoteReportService.of({ bind, unbind, origin, report, relay, relayReceipt, wait });
 });
 export const layer = Layer.effect(RemoteReportService, make);

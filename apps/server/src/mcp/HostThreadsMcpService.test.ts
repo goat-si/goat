@@ -111,6 +111,11 @@ const runService = <A, E>(
     readonly interactionMode: "default" | "plan";
     readonly taskThread?: boolean;
     readonly reviewFinished?: boolean | (() => boolean);
+    readonly relayReceipt?: {
+      readonly clientRequestId: string;
+      readonly sequence: number;
+      readonly originLabel: string;
+    };
     readonly taskOwner?: ThreadId;
     readonly onResume?: (host: string, id: string) => void;
     readonly hosts?: ReadonlyArray<string>;
@@ -152,6 +157,15 @@ const runService = <A, E>(
                   originThreadId: ThreadId.make("origin"),
                   relaySend: options.relaySend ?? false,
                 },
+          ),
+        relayReceipt: (_threadId, clientRequestId) =>
+          Effect.succeed(
+            options.relayReceipt?.clientRequestId === clientRequestId
+              ? {
+                  sequence: options.relayReceipt.sequence,
+                  originLabel: options.relayReceipt.originLabel,
+                }
+              : null,
           ),
         relay: (_threadId, input) =>
           Effect.sync(() => {
@@ -952,5 +966,42 @@ it.effect("reuses a successful remote send before the finished-review precheck o
     );
     expect(result._tag).toBe("Success");
     expect(calls).toHaveLength(1);
+  }),
+);
+
+it.effect("a cold cache reads a durable relay receipt before the finished-review guard", () =>
+  Effect.gen(function* () {
+    const target = ThreadId.make("review-durable-retry");
+    const { result, calls, relays } = yield* runService(
+      {
+        interactionMode: "default",
+        reviewFinished: true,
+        relayReceipt: { clientRequestId: "persisted-relay", sequence: 7, originLabel: "launcher" },
+        hostCall: () => Effect.die("A recorded handoff must not reach SSH"),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const input = {
+            host: "box",
+            threadId: target,
+            message: "Already handed off",
+            clientRequestId: "persisted-relay",
+          };
+          expect(yield* service.sendToThread(scope, input)).toEqual({
+            host: "box",
+            threadId: target,
+            delivery: "relayed",
+            via: "launcher",
+          });
+          const refused = yield* service
+            .sendToThread(scope, { ...input, clientRequestId: "new-request" })
+            .pipe(Effect.result);
+          expect(refused._tag).toBe("Failure");
+          if (refused._tag === "Failure") expect(refused.failure.code).toBe("thread_not_sendable");
+        }),
+    );
+    expect(result._tag).toBe("Success");
+    expect(calls).toHaveLength(0);
+    expect(relays).toHaveLength(0);
   }),
 );

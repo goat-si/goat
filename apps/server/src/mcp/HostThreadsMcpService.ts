@@ -626,7 +626,9 @@ const make = Effect.gen(function* () {
 
   // The caller may lose a successful response and retry after the review
   // finishes. Reuse that response before applying new-send lifecycle checks.
-  // Retries arrive soon after the lost response, so the oldest entries are dropped.
+  // Direct SSH sends have no local durable request receipt. After eviction or
+  // restart they still pass the new-send checks; relay handoffs can recover
+  // their receipt from RemoteReportService below.
   const sentRequests = new Map<string, OrchestratorMcpThreadSendResult>();
   const rememberSentRequest = (key: string, result: OrchestratorMcpThreadSendResult) => {
     sentRequests.set(key, result);
@@ -683,6 +685,32 @@ const make = Effect.gen(function* () {
                 .join(":");
         const delivered = requestKey === undefined ? undefined : sentRequests.get(requestKey);
         if (delivered !== undefined) return delivered;
+        // Relay requests survive report collection, cache eviction and restarts.
+        // A receipt acknowledges the earlier handoff; it does not enqueue a send.
+        if (
+          host !== undefined &&
+          input.clientRequestId !== undefined &&
+          scope.thread !== undefined &&
+          Option.isSome(reports)
+        ) {
+          const receipt = yield* reports.value
+            .relayReceipt(scope.thread.threadId, input.clientRequestId)
+            .pipe(
+              Effect.mapError(() =>
+                failure("orchestration_error", "Unable to read the remote relay receipt."),
+              ),
+            );
+          if (receipt !== null) {
+            const result = {
+              host,
+              threadId: input.threadId,
+              delivery: "relayed",
+              via: receipt.originLabel,
+            } satisfies OrchestratorMcpThreadSendResult;
+            if (requestKey !== undefined) rememberSentRequest(requestKey, result);
+            return result;
+          }
+        }
         const result = yield* (
           host === undefined
             ? local
