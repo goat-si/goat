@@ -27,6 +27,7 @@ import {
   type OrchestrationV2Run,
   type ThreadId,
 } from "@goat/contracts";
+import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -178,9 +179,8 @@ const make = Effect.gen(function* () {
 
       // A follow-up queued behind a usage-limited run cannot start until the limit is resumed, so
       // the limit belongs to the newest run the worker thread executed, even once the task is bound
-      // to the queued run.
-      const limitedRun =
-        current.status === "queued" ? runs.findLast((run) => run.status !== "queued") : current;
+      // to the queued run. Runs cancelled before they started never executed.
+      const limitedRun = current.status === "queued" ? latestExecutedRun(runs) : current;
       const limitRead =
         limitedRun?.status === "failed"
           ? yield* workerUsageLimit(worker.threadId, limitedRun)

@@ -2405,7 +2405,7 @@ describe("completion (scenario 5)", () => {
   });
 
   it.effect(
-    "arms recovery for a usage-limited run even when a follow-up is queued behind it",
+    "arms recovery for a usage-limited run even when follow-ups were queued or cancelled behind it",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
@@ -2415,6 +2415,9 @@ describe("completion (scenario 5)", () => {
         const resetAt = "2026-10-12T01:00:00.000Z";
         const limitedRunId = task.worker!.runId!;
         harness.world.setStatus(threadId, 1, "failed");
+        // A follow-up cancelled before it started never ran, so it does not hide the limit.
+        const skipped = harness.world.addRun(threadId, MessageId.make("cancelled-follow-up"));
+        harness.world.setStatus(threadId, skipped.ordinal, "cancelled");
         const queued = harness.world.addRun(threadId, MessageId.make("queued-follow-up"));
         harness.world.setStatus(threadId, queued.ordinal, "queued");
         // The shell names the run that blocks the queue, as the projection does.
