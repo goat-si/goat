@@ -228,6 +228,15 @@ export class SshRemoteDispatch extends Context.Service<
       { readonly stdout: string; readonly stderr: string },
       SshRemoteDispatchError
     >;
+    /** Runs a POSIX sh script on a known SSH host alias, the way runRemoteScript does. */
+    readonly runHostScript: (input: {
+      readonly host: string;
+      readonly script: string;
+      readonly timeoutMs: number;
+    }) => Effect.Effect<
+      { readonly stdout: string; readonly stderr: string },
+      SshRemoteDispatchError
+    >;
     readonly preflightTarget: (input: {
       readonly target: DesktopSshEnvironmentTarget;
       readonly runtimeMode: RuntimeMode;
@@ -1079,6 +1088,14 @@ const make = Effect.gen(function* () {
       }),
     ).pipe(sshFailed(input.target.alias));
   });
+  const runHostScript = Effect.fn("SshRemoteDispatch.runHostScript")(function* (input: {
+    readonly host: string;
+    readonly script: string;
+    readonly timeoutMs: number;
+  }) {
+    const target = yield* resolveHost(input.host);
+    return yield* runRemoteScript({ target, script: input.script, timeoutMs: input.timeoutMs });
+  });
   const preflightTarget = Effect.fn("SshRemoteDispatch.preflightTarget")(function* (input: {
     readonly target: DesktopSshEnvironmentTarget;
     readonly runtimeMode: RuntimeMode;
@@ -1536,6 +1553,7 @@ const make = Effect.gen(function* () {
     callHostTool,
     connectedHosts,
     runRemoteScript,
+    runHostScript,
     preflightTarget,
   });
 });
