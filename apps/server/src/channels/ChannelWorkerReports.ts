@@ -101,14 +101,16 @@ const make = Effect.gen(function* () {
    * Whether `run` stopped on a usage limit, and how it continues. A reset ahead with no choice
    * made for this run arms automatic resume for the worker thread, the same recovery a person turns
    * on for a thread, so channel work continues after the limit without anyone watching.
+   * `"unknown"` means the thread could not be read; the caller decides nothing this pass.
    */
   const workerUsageLimit = (threadId: ThreadId, run: OrchestrationV2Run) =>
-    Effect.gen(function* () {
-      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
-      const wait = usageLimitWait(shell, run, yield* DateTime.now);
+    Effect.gen(function* (): Effect.fn.Return<UsageLimitWait | "unknown" | undefined> {
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.option);
+      if (shell._tag === "None") return "unknown";
+      const wait = usageLimitWait(shell.value, run, yield* DateTime.now);
       if (wait?.arm === undefined) return wait;
       const { resetAt, resetMs } = wait.arm;
-      yield* threads
+      const armed = yield* threads
         .dispatch({
           type: "thread.metadata.update",
           commandId: CommandId.make(`channel-limit-arm:${threadId}:${run.id}:${resetMs}`),
@@ -116,12 +118,18 @@ const make = Effect.gen(function* () {
           limitRecovery: { runId: run.id, resetAt, autoResume: true, snooze: false },
         })
         .pipe(
+          Effect.as(true),
           Effect.catchCause((cause) =>
-            Effect.logWarning("channels.worker.limit-recovery-arm-failed", { threadId, cause }),
+            Effect.logWarning("channels.worker.limit-recovery-arm-failed", {
+              threadId,
+              cause,
+            }).pipe(Effect.as(false)),
           ),
         );
-      // A failed arm is retried next pass with the same command id.
-      return { resetAt } satisfies UsageLimitWait;
+      // A refused arm leaves the limit to a person; the next pass tries again with the same id.
+      return armed
+        ? { resetAt }
+        : { resetAt, ...(wait.needsYou === undefined ? {} : { needsYou: wait.needsYou }) };
     });
 
   /** One task against its worker's current runs. True when the ledger changed. */
@@ -168,8 +176,17 @@ const make = Effect.gen(function* () {
         latest = reread;
       }
 
-      const limit =
-        current.status === "failed" ? yield* workerUsageLimit(worker.threadId, current) : undefined;
+      // A follow-up queued behind a usage-limited run cannot start until the limit is resumed, so
+      // the limit belongs to the newest run the worker thread executed, even once the task is bound
+      // to the queued run.
+      const limitedRun =
+        current.status === "queued" ? runs.findLast((run) => run.status !== "queued") : current;
+      const limitRead =
+        limitedRun?.status === "failed"
+          ? yield* workerUsageLimit(worker.threadId, limitedRun)
+          : undefined;
+      if (limitRead === "unknown") return latest !== stored;
+      const limit = limitRead;
       const observed = observeWorker({
         pullRequests: pullRequestsFromLinks(pullRequestLinks),
         needsYou: [
