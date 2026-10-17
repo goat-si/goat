@@ -26,7 +26,8 @@ export const sandboxParentFor = (
   inherited: string,
   resolveTmp: () => string,
 ): string => {
-  if (platform !== "darwin" || !/^(\/private)?\/var\/folders\//.test(inherited)) return inherited;
+  if (platform !== "darwin" || !/^(\/private)?\/var\/folders\/[^/]+\/[^/]+\/T\/?$/.test(inherited))
+    return inherited;
   try {
     return resolveTmp();
   } catch {

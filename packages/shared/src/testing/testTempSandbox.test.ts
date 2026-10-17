@@ -11,7 +11,11 @@ import { enterTestTempSandbox, sandboxParentFor } from "./testTempSandbox.ts";
 it("moves only macOS's long per-user temp directory under /tmp", () => {
   const tmp = () => "/private/tmp";
   expect(sandboxParentFor("darwin", "/private/var/folders/ab/cd/T", tmp)).toBe("/private/tmp");
-  expect(sandboxParentFor("darwin", "/var/folders/ab/cd/T", tmp)).toBe("/private/tmp");
+  expect(sandboxParentFor("darwin", "/var/folders/ab/cd/T/", tmp)).toBe("/private/tmp");
+  // A directory a caller made inside the default is its choice too.
+  expect(sandboxParentFor("darwin", "/private/var/folders/ab/cd/T/goat-ci-x", tmp)).toBe(
+    "/private/var/folders/ab/cd/T/goat-ci-x",
+  );
   // A TMPDIR the job chose stays, so its cleanup and leak check see the sandbox.
   expect(sandboxParentFor("darwin", "/Users/runner/work/_temp/goat-ci-x", tmp)).toBe(
     "/Users/runner/work/_temp/goat-ci-x",
