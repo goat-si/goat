@@ -289,6 +289,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
     try: () =>
       bridge.ensureSshEnvironment(target, {
         ...options,
+        ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
         issuePairingToken: true,
       }),
     catch: sshPreparationError,
@@ -333,6 +334,7 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
     const bootstrap = yield* Effect.tryPromise({
       try: () =>
         bridge.ensureSshEnvironment(target, {
+          ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
           issuePairingToken: true,
         }),
       catch: sshPreparationError,
@@ -354,6 +356,30 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
     };
   },
 );
+
+/** New trust files must be written by the native primary backend on this Desktop's OS user. */
+export function desktopOwnsSshHostConfig(
+  bridge: Pick<DesktopBridge, "getLocalEnvironmentBootstraps"> | undefined,
+  primaryHttpBaseUrl: string | null,
+) {
+  if (bridge === undefined || primaryHttpBaseUrl === null) return false;
+  try {
+    const primary = bridge
+      .getLocalEnvironmentBootstraps()
+      .find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
+    return (
+      primary !== undefined &&
+      !primary.runningDistro &&
+      typeof primary.bootstrapToken === "string" &&
+      primary.bootstrapToken.length > 0 &&
+      primary.httpBaseUrl === primaryHttpBaseUrl
+    );
+  } catch {
+    return false;
+  }
+}
+
+const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
 
 /** Decode owner IPC at the renderer boundary, including bridges from older desktop builds. */
 export const readDesktopSshRuntime = Effect.fn("web.connectionPlatform.ssh.runtime")(function* (
@@ -378,7 +404,7 @@ export const readDesktopSshRuntime = Effect.fn("web.connectionPlatform.ssh.runti
       mode === undefined ? bridge.getSshHostStatus(target) : bridge.updateSshRuntime(target, mode),
     catch: sshPreparationError,
   }).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(SshHostResult)),
+    Effect.flatMap(decodeSshHostResult),
     Effect.catch(() =>
       Effect.succeed({
         kind: "error",

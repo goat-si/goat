@@ -291,3 +291,18 @@ describe("Desktop SSH runtime state", () => {
     ).toBe("GOAT 1.2.3 for Linux (x64) isn't available to install.");
   });
 });
+
+describe("SSH host recovery", () => {
+  it("offers a fresh review for untrusted hosts and exposes only public-key registration guidance", () => {
+    const base = { host: "vps-1", runtimeVersion: null, requestedVersion: "0.4.2" };
+    expect(sshRuntimeRecoveryText({ ...base, state: "untrusted" })).toBe(
+      "Add this host again to review its fingerprint.",
+    );
+    expect(sshRuntimeRecoveryText({ ...base, state: "auth_failed" })).toBe(
+      "Register your public SSH key on the host, then try again.",
+    );
+    expect(
+      sshRuntimeRecoveryText({ ...base, state: "auth_failed", publicKey: "ssh-ed25519 public" }),
+    ).toContain("GOAT created a key for vps-1.");
+  });
+});

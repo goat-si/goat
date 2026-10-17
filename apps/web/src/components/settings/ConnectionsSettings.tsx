@@ -1,3 +1,6 @@
+import * as Schema from "effect/Schema";
+import { HandoffReview } from "../chat/HandoffReview";
+import { desktopOwnsSshHostConfig } from "~/connection/platform";
 import { SshRuntimeSettingsRow } from "./SshRuntimeSettingsRow";
 import { sshRuntime } from "~/state/sshRuntime";
 import { sshRuntimeStatusText } from "@goat/client-runtime/state/sshRuntime";
@@ -28,6 +31,9 @@ import {
 } from "react";
 import {
   AuthAccessReadScope,
+  SshHostAlias,
+  type SshHostProbeResult,
+  type SshHostResult,
   AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
@@ -395,6 +401,16 @@ function formatDesktopSshConnectionError(error: unknown): string {
   );
   const withoutTaggedErrorPrefix = withoutIpcPrefix.replace(/^Ssh[A-Za-z]+Error:\s*/u, "");
   return withoutTaggedErrorPrefix.trim() || fallback;
+}
+
+const isSshHostAlias = Schema.is(SshHostAlias);
+
+function sshSetupError(result: SshHostResult, host: string) {
+  return result.kind === "error"
+    ? result.code === "host_unreachable"
+      ? `Can't reach ${host}. Check that it's running and reachable, then try again.`
+      : result.message
+    : null;
 }
 
 const ENDPOINT_ROW_CLASSNAME = "first:rounded-t-xl last:rounded-b-xl px-3 py-2.5 sm:px-4";
@@ -1465,6 +1481,8 @@ type SavedBackendListRowProps = {
   onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
   onRemove: (environment: EnvironmentPresentation) => void;
   onAddRoute: (environment: EnvironmentPresentation) => void;
+  onForget: ((environment: EnvironmentPresentation) => void) | undefined;
+  onReviewTrust: (environment: EnvironmentPresentation) => void;
 };
 
 /**
@@ -1515,6 +1533,8 @@ function SavedBackendListRow({
   onSetEnabled,
   onRemove,
   onAddRoute,
+  onForget,
+  onReviewTrust,
 }: SavedBackendListRowProps) {
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
@@ -1731,6 +1751,7 @@ function SavedBackendListRow({
             environmentId={environmentId}
             target={savedSshTarget}
             enabled={environment.entry.enabled && !isRemoving}
+            onReviewTrust={() => onReviewTrust(environment)}
           />
         ) : serverUpdateState.status !== "idle" ? (
           <div className="mt-1 max-w-md">
@@ -1832,6 +1853,11 @@ function SavedBackendListRow({
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
           ) : null}
           <MenuSeparator />
+          {savedSshTarget && isSshHostAlias(savedSshTarget.alias) && onForget ? (
+            <MenuItem variant="destructive" onClick={() => onForget(environment)}>
+              Forget host…
+            </MenuItem>
+          ) : null}
           <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
             {isRemoving ? "Removing…" : "Remove from this device…"}
           </MenuItem>
@@ -2109,6 +2135,9 @@ export function ConnectionsSettings() {
   const connectSshEnvironment = useAtomCommand(connectSshEnvironmentAtom, {
     reportFailure: false,
   });
+  const probeSshHost = useAtomCommand(serverEnvironment.probeSshHost, { reportFailure: false });
+  const trustSshHost = useAtomCommand(serverEnvironment.trustSshHost, { reportFailure: false });
+  const forgetSshHost = useAtomCommand(serverEnvironment.forgetSshHost, { reportFailure: false });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
   const registerEnvironment = useAtomCommand(environmentCatalog.register, {
     reportFailure: false,
@@ -2249,6 +2278,25 @@ export function ConnectionsSettings() {
   const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = useState(false);
   // Tracks the arrow-key/hover highlight so Enter selects it instead of submitting the typed text.
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
+  const [sshProbe, setSshProbe] = useState<SshHostProbeResult | null>(null);
+  const [pendingSshTarget, setPendingSshTarget] = useState<DesktopSshEnvironmentTarget | null>(
+    null,
+  );
+  const sshAddInFlight = useRef(false);
+  const sshConnectInFlight = useRef(false);
+  const sshReviewGeneration = useRef(0);
+  const [pendingForget, setPendingForget] = useState<EnvironmentPresentation | null>(null);
+  const [removeForgottenConnection, setRemoveForgottenConnection] = useState(false);
+  const [forgetBusy, setForgetBusy] = useState(false);
+  const [forgetError, setForgetError] = useState<string | null>(null);
+  const canWriteSsh = useAtomValue(
+    serverEnvironment.trustSshHost.permissionAtom(primaryEnvironmentId),
+  );
+  const primaryHttpBaseUrl =
+    primaryEnvironment?.entry.target._tag === "PrimaryConnectionTarget"
+      ? primaryEnvironment.entry.target.httpBaseUrl
+      : null;
+  const ownsSshConfig = desktopOwnsSshHostConfig(desktopBridge, primaryHttpBaseUrl);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
@@ -2615,21 +2663,48 @@ export function ConnectionsSettings() {
   // Shared by manual SSH submission and discovered-host selection.
   const connectSavedBackendSshTarget = useCallback(
     async (target: DesktopSshEnvironmentTarget) => {
+      if (sshConnectInFlight.current) return;
+      if (
+        target.alias.startsWith("goat-") &&
+        (primaryEnvironmentId === null ||
+          !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope))
+      ) {
+        setSavedBackendError("Maintain environment permission is required to set up this host.");
+        return;
+      }
+      sshConnectInFlight.current = true;
+      setPendingSshTarget(target);
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
       const result = await connectSshEnvironment({
         target,
         label: "",
+        ...(target.alias.startsWith("goat-") ? { keyOnly: true } : {}),
         ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
       });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
-          setSavedBackendError(formatDesktopSshConnectionError(squashAtomCommandFailure(result)));
+          const message = formatDesktopSshConnectionError(squashAtomCommandFailure(result));
+          const current =
+            primaryEnvironmentId === null
+              ? null
+              : await sshRuntime.refresh.run(appAtomRegistry, {
+                  environmentId: primaryEnvironmentId,
+                  target,
+                });
+          setSavedBackendError(
+            current?._tag === "Success" && current.value?.status?.state === "ready"
+              ? `GOAT is ready on ${target.alias}, but the connection couldn't be saved. ${message}`
+              : message,
+          );
         }
+        sshConnectInFlight.current = false;
         setIsAddingSavedBackend(false);
         return;
       }
 
+      sshConnectInFlight.current = false;
+      setPendingSshTarget(null);
       setSavedBackendHost("");
       setSavedBackendPairingCode("");
       setSavedBackendSshHost("");
@@ -2645,7 +2720,117 @@ export function ConnectionsSettings() {
       });
       setIsAddingSavedBackend(false);
     },
-    [connectSshEnvironment, routeTarget],
+    [connectSshEnvironment, routeTarget, primaryEnvironmentId],
+  );
+
+  const reviewSavedBackendSshTarget = useCallback(
+    async (target: DesktopSshEnvironmentTarget, knownAlias = false) => {
+      if (sshAddInFlight.current || sshProbe !== null) return;
+      if (knownAlias) {
+        await connectSavedBackendSshTarget(target);
+        return;
+      }
+      if (
+        !desktopOwnsSshHostConfig(desktopBridge, primaryHttpBaseUrl) ||
+        primaryEnvironmentId === null
+      ) {
+        setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+        return;
+      }
+      if (!canWriteSsh) {
+        setSavedBackendError("Manage settings permission is required to add an SSH host.");
+        return;
+      }
+      sshAddInFlight.current = true;
+      const generation = ++sshReviewGeneration.current;
+      setIsAddingSavedBackend(true);
+      setSavedBackendError(null);
+      setPendingSshTarget(null);
+      try {
+        const result = await probeSshHost({
+          environmentId: primaryEnvironmentId,
+          input: {
+            address: target.hostname,
+            ...(target.username ? { user: target.username } : {}),
+            ...(target.port !== null ? { port: target.port } : {}),
+          },
+        });
+        if (generation !== sshReviewGeneration.current) return;
+        if (result._tag === "Success") setSshProbe(result.value);
+        else {
+          const error = squashAtomCommandFailure(result);
+          setSavedBackendError(
+            error instanceof Error
+              ? error.message
+              : `Can't reach ${target.hostname}. Check that it's running and reachable, then try again.`,
+          );
+        }
+      } finally {
+        sshAddInFlight.current = false;
+        setIsAddingSavedBackend(false);
+      }
+    },
+    [
+      sshProbe,
+      connectSavedBackendSshTarget,
+      desktopBridge,
+      primaryHttpBaseUrl,
+      primaryEnvironmentId,
+      canWriteSsh,
+    ],
+  );
+
+  const answerSshTrust = useCallback(
+    async (accepted: boolean) => {
+      if (sshProbe === null || primaryEnvironmentId === null || sshAddInFlight.current) return;
+      if (!desktopOwnsSshHostConfig(desktopBridge, primaryHttpBaseUrl)) {
+        setSshProbe(null);
+        setSavedBackendError("Add new SSH hosts from the machine that runs this environment.");
+        return;
+      }
+      const probe = sshProbe;
+      const generation = sshReviewGeneration.current;
+      sshAddInFlight.current = true;
+      setIsAddingSavedBackend(true);
+      try {
+        const result = await trustSshHost({
+          environmentId: primaryEnvironmentId,
+          input: { probeId: probe.probeId, accepted },
+        });
+        if (generation !== sshReviewGeneration.current) return;
+        setSshProbe(null);
+        if (!accepted) return;
+        if (result._tag === "Failure") {
+          setSavedBackendError("Could not approve this host. Try adding it again.");
+          return;
+        }
+        const message = sshSetupError(result.value, probe.host);
+        if (message) {
+          setSavedBackendError(message);
+          return;
+        }
+        if (!readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope)) {
+          setSavedBackendError("Maintain environment permission is required to set up this host.");
+          return;
+        }
+        const target = await desktopBridge!.resolveSshHost(probe.host);
+        if (generation !== sshReviewGeneration.current) return;
+        await connectSavedBackendSshTarget(target);
+      } catch (error) {
+        setSavedBackendError(formatDesktopSshConnectionError(error));
+      } finally {
+        sshAddInFlight.current = false;
+        setIsAddingSavedBackend(false);
+      }
+    },
+    [
+      sshProbe,
+      primaryEnvironmentId,
+      desktopBridge,
+      primaryHttpBaseUrl,
+      trustSshHost,
+      connectSavedBackendSshTarget,
+    ],
   );
 
   const handleAddSavedBackend = useCallback(async () => {
@@ -2662,7 +2847,16 @@ export function ConnectionsSettings() {
         return;
       }
 
-      await connectSavedBackendSshTarget(target);
+      const known = discoveredSshHosts.find((host) => host.alias === savedBackendSshHost.trim());
+      if (known && desktopBridge) {
+        try {
+          target = await desktopBridge.resolveSshHost(known.alias);
+        } catch (error) {
+          setSavedBackendError(formatDesktopSshConnectionError(error));
+          return;
+        }
+      }
+      await reviewSavedBackendSshTarget(target, known !== undefined);
       return;
     }
 
@@ -2732,7 +2926,9 @@ export function ConnectionsSettings() {
   }, [
     routeTarget,
     connectPairing,
-    connectSavedBackendSshTarget,
+    reviewSavedBackendSshTarget,
+    discoveredSshHosts,
+    desktopBridge,
     savedBackendHost,
     savedBackendMode,
     savedBackendPairingCode,
@@ -2770,9 +2966,10 @@ export function ConnectionsSettings() {
       }
       setSavedBackendSshUsername(resolved.username ?? "");
       setSavedBackendSshPort(resolved.port === null ? "" : String(resolved.port));
-      await connectSavedBackendSshTarget(resolved);
+      setIsAddingSavedBackend(false);
+      await reviewSavedBackendSshTarget(resolved, true);
     },
-    [connectSavedBackendSshTarget, desktopBridge, isAddingSavedBackend],
+    [reviewSavedBackendSshTarget, desktopBridge, isAddingSavedBackend],
   );
 
   const handleSavedBackendSshHostKeyDown = useCallback(
@@ -2897,6 +3094,40 @@ export function ConnectionsSettings() {
     [removeSavedBackend],
   );
 
+  const confirmForgetSshHost = async () => {
+    const environment = pendingForget;
+    const target = environment && savedDesktopSshTarget(environment);
+    if (
+      !target ||
+      primaryEnvironmentId === null ||
+      forgetBusy ||
+      !desktopOwnsSshHostConfig(desktopBridge, primaryHttpBaseUrl)
+    )
+      return;
+    setForgetBusy(true);
+    setForgetError(null);
+    try {
+      const result = await forgetSshHost({
+        environmentId: primaryEnvironmentId,
+        input: { host: target.alias, stopRuntime: "if_idle" },
+      });
+      if (result._tag === "Failure") {
+        setForgetError("Could not forget this host. Check your permissions and try again.");
+        return;
+      }
+      const message = sshSetupError(result.value, target.alias);
+      if (message) {
+        setForgetError(message);
+        return;
+      }
+      sshRuntime.forget(appAtomRegistry, { environmentId: environment.environmentId, target });
+      if (removeForgottenConnection) await removeSavedBackend(environment);
+      setPendingForget(null);
+    } finally {
+      setForgetBusy(false);
+    }
+  };
+
   const visibleDesktopPairingLinks = desktopPairingLinks;
   const tailscaleHttpsEndpoint = useMemo(
     () => desktopAdvertisedEndpoints.find(isTailscaleHttpsEndpoint) ?? null,
@@ -2966,6 +3197,8 @@ export function ConnectionsSettings() {
         )}
         disabled={isAddingSavedBackend}
         onClick={() => {
+          if (sshProbe !== null) void answerSshTrust(false);
+          setPendingSshTarget(null);
           setSavedBackendMode(input.mode);
         }}
       >
@@ -3191,6 +3424,38 @@ export function ConnectionsSettings() {
             />
           </label>
         </div>
+        {!ownsSshConfig ? (
+          <p className="text-sm text-muted-foreground">
+            Add new SSH hosts from the machine that runs this environment.
+          </p>
+        ) : null}
+        {sshProbe ? (
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium">Trust this SSH host?</h4>
+            <HandoffReview
+              human={sshProbe.human}
+              busy={isAddingSavedBackend}
+              allowed={canWriteSsh && ownsSshConfig}
+              includeRequired={sshProbe.includeRequired}
+              approveLabel="Approve"
+              onApprove={() => void answerSshTrust(true)}
+              onDecline={() => void answerSshTrust(false)}
+            />
+          </div>
+        ) : null}
+        {pendingSshTarget && primaryEnvironmentId !== null ? (
+          <SshRuntimeSettingsRow
+            environmentId={primaryEnvironmentId}
+            target={pendingSshTarget}
+            enabled={addBackendDialogOpen}
+            pendingAdd
+            connecting={isAddingSavedBackend}
+            originLabel={primaryEnvironment?.label ?? "this machine"}
+            {...(isAddingSavedBackend
+              ? {}
+              : { onRetry: () => void connectSavedBackendSshTarget(pendingSshTarget) })}
+          />
+        ) : null}
         {savedBackendError || discoveredSshHostsError ? (
           <Alert variant="error">
             <AlertDescription>{savedBackendError ?? discoveredSshHostsError}</AlertDescription>
@@ -3199,7 +3464,7 @@ export function ConnectionsSettings() {
         <Button
           variant="outline"
           className="w-full"
-          disabled={isAddingSavedBackend}
+          disabled={isAddingSavedBackend || sshProbe !== null}
           onClick={() => void handleAddSavedBackend()}
         >
           <PlusIcon className="size-3.5" />
@@ -4147,6 +4412,12 @@ export function ConnectionsSettings() {
             <Dialog
               open={addBackendDialogOpen}
               onOpenChange={(open) => {
+                if (!open && isAddingSavedBackend) return;
+                if (!open) {
+                  if (sshProbe !== null) void answerSshTrust(false);
+                  else sshReviewGeneration.current += 1;
+                  setPendingSshTarget(null);
+                }
                 setAddBackendDialogOpen(open);
                 if (open) {
                   setRouteTarget(null);
@@ -4217,6 +4488,25 @@ export function ConnectionsSettings() {
             removingEnvironmentId={removingSavedEnvironmentId}
             onSetEnabled={handleSetSavedBackendEnabled}
             onRemove={handleRemoveSavedBackend}
+            onForget={
+              ownsSshConfig && canWriteSsh
+                ? (target) => {
+                    setPendingForget(target);
+                    setRemoveForgottenConnection(false);
+                    setForgetError(null);
+                  }
+                : undefined
+            }
+            onReviewTrust={(target) => {
+              const sshTarget = savedDesktopSshTarget(target);
+              if (!sshTarget) return;
+              setRouteTarget(null);
+              setSavedBackendMode("ssh");
+              setSavedBackendSshHost(sshTarget.hostname);
+              setSavedBackendSshUsername(sshTarget.username ?? "");
+              setSavedBackendSshPort(sshTarget.port === null ? "" : String(sshTarget.port));
+              setAddBackendDialogOpen(true);
+            }}
             onAddRoute={(target) => {
               setRouteTarget(target);
               setSavedBackendError(null);
@@ -4240,6 +4530,50 @@ export function ConnectionsSettings() {
           }}
         />
       ) : null}
+      <AlertDialog
+        open={pendingForget !== null}
+        onOpenChange={(open) => {
+          if (!open && !forgetBusy) setPendingForget(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Forget {pendingForget ? savedDesktopSshTarget(pendingForget)?.alias : "host"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              GOAT removes its SSH entry and stops its server there when no work is running.
+              Projects and files on the host stay.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={removeForgottenConnection}
+              disabled={forgetBusy}
+              onChange={(event) => setRemoveForgottenConnection(event.target.checked)}
+            />
+            Remove the saved desktop connection too?
+          </label>
+          {forgetError ? (
+            <p role="alert" className="text-sm text-destructive">
+              {forgetError}
+            </p>
+          ) : null}
+          <AlertDialogFooter>
+            <Button variant="outline" disabled={forgetBusy} onClick={() => setPendingForget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={forgetBusy || !canWriteSsh || !ownsSshConfig}
+              onClick={() => void confirmForgetSshHost()}
+            >
+              {forgetBusy ? "Forgetting…" : "Forget host"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
       <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
         {primaryEnvironmentId !== null ? (
           <HostsSettings

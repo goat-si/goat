@@ -141,11 +141,13 @@ export function sshRuntimeRecoveryText(status: SshHostStatus) {
           ? `Another computer is updating ${status.host}. GOAT will retry.`
           : null;
     case "untrusted":
-      return "Approve the host fingerprint before connecting.";
+      return "Add this host again to review its fingerprint.";
     case "trust_pending":
       return "Open the host approval card.";
     case "auth_failed":
-      return "Register your public SSH key on the host, then try again.";
+      return status.publicKey
+        ? `GOAT created a key for ${status.host}. Add this public key to the server. Most providers ask for it when you create a server.`
+        : "Register your public SSH key on the host, then try again.";
     case "providers_not_ready":
       return status.providers?.fixes[0]?.instruction ?? null;
     case "ready":

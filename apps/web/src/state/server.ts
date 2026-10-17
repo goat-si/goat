@@ -1,3 +1,4 @@
+import { createSshHostState } from "@goat/client-runtime/state/sshHost";
 import {
   DEFAULT_SERVER_SETTINGS,
   type EditorId,
@@ -29,6 +30,8 @@ import { environmentSession } from "./session";
 // gating on "primary right now" would leave a newly promoted environment with
 // no themes until it reconnected. The set is capped server-side and stripped
 // before caching, so following all of them costs a few KB per environment.
+export const sshHost = createSshHostState(connectionAtomRuntime);
+
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
   environmentThemes: true,

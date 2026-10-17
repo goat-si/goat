@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import { ConnectionBlockedError, ConnectionTransientError } from "@goat/client-runtime/connection";
 
 import {
+  desktopOwnsSshHostConfig,
+  readDesktopSshRuntime,
   canRetainCachedPlatformRegistrationAfterRefreshFailure,
   canReuseCachedPlatformRegistration,
   isRejectedBootstrapCredentialError,
@@ -388,6 +390,88 @@ describe("cloud machine SSH preflight", () => {
       const calls: string[] = [];
       yield* prepareDesktopSshEnvironment(makeBridge(calls), TARGET, ready(calls));
       expect(calls).toEqual(["ensure", "token"]);
+    }),
+  );
+});
+
+describe("managed SSH host trust boundary", () => {
+  it("only allows the native primary backend belonging to this Desktop", () => {
+    const primary = {
+      id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+      label: "This machine",
+      httpBaseUrl: "http://127.0.0.1:3000",
+      wsBaseUrl: "ws://127.0.0.1:3000",
+      bootstrapToken: "local-bootstrap",
+    };
+    const bridge = { getLocalEnvironmentBootstraps: () => [primary] };
+    expect(desktopOwnsSshHostConfig(bridge, primary.httpBaseUrl)).toBe(true);
+    expect(desktopOwnsSshHostConfig(undefined, primary.httpBaseUrl)).toBe(false);
+    expect(desktopOwnsSshHostConfig(bridge, "https://remote.test")).toBe(false);
+    expect(
+      desktopOwnsSshHostConfig(
+        { getLocalEnvironmentBootstraps: () => [{ ...primary, runningDistro: "Ubuntu" }] },
+        primary.httpBaseUrl,
+      ),
+    ).toBe(false);
+    expect(
+      desktopOwnsSshHostConfig(
+        { getLocalEnvironmentBootstraps: () => [{ ...primary, bootstrapToken: "" }] },
+        primary.httpBaseUrl,
+      ),
+    ).toBe(false);
+  });
+  it.effect(
+    "enforces key-only for managed hosts even when a caller requests password prompts",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const bridge = makeBridge(calls);
+        const ensure = bridge.ensureSshEnvironment;
+        let options: Parameters<DesktopBridge["ensureSshEnvironment"]>[1];
+        bridge.ensureSshEnvironment = (target, input) => {
+          options = input;
+          return ensure(target, input);
+        };
+        yield* provisionDesktopSshEnvironment(bridge, { ...TARGET, alias: "goat-box" }, undefined, {
+          keyOnly: false,
+        });
+        expect(options).toEqual({ issuePairingToken: true, keyOnly: true });
+      }),
+  );
+  it.effect.each(["2001:db8::1", "host-" + "a".repeat(100)])(
+    "decodes the Desktop owner's unrestricted hostname %s",
+    (hostname) =>
+      Effect.gen(function* () {
+        const status = {
+          host: hostname,
+          state: "auth_failed" as const,
+          runtimeVersion: null,
+          requestedVersion: "0.4.2",
+          publicKey: "ssh-ed25519 public-test-key",
+        };
+        const result = yield* readDesktopSshRuntime(
+          {
+            getSshHostStatus: async () => ({ kind: "ok", status }),
+            updateSshRuntime: async () => ({ kind: "ok", status }),
+          },
+          { ...TARGET, hostname, alias: hostname },
+        );
+        if (result.kind !== "ok") throw new Error("Expected decoded owner status");
+        expect(result.status.host).toBe(hostname);
+        expect(result.status.publicKey).toBe(status.publicKey);
+      }),
+  );
+  it.effect("rejects malformed IPC success envelopes with a useful retry instruction", () =>
+    Effect.gen(function* () {
+      const malformed = {
+        getSshHostStatus: async () => ({ kind: "ok", status: { host: "box", state: "preparing" } }),
+      } as unknown as Pick<DesktopBridge, "getSshHostStatus" | "updateSshRuntime">;
+      expect(yield* readDesktopSshRuntime(malformed, TARGET)).toEqual({
+        kind: "error",
+        code: "operation_failed",
+        message: "Could not read or update GOAT on devbox. Try again.",
+        fix: { actor: "human", instruction: "Try again" },
+      });
     }),
   );
 });

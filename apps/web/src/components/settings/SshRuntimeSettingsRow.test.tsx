@@ -322,3 +322,55 @@ describe("saved SSH runtime row", () => {
     expect(owner.update).not.toHaveBeenCalled();
   });
 });
+
+describe("pending SSH host setup", () => {
+  it("keeps the public key and origin instructions visible before the connection is saved", async () => {
+    const publicKey = "ssh-ed25519 public-test-key goat";
+    reply = { kind: "ok", status: { ...base, state: "auth_failed", publicKey } };
+    const writeText = vi.fn(async (_value: string) => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <SshRuntimeSettingsRow
+            {...input}
+            enabled
+            pendingAdd
+            originLabel="My Mac"
+            onRetry={() => {
+              reply = { kind: "ok", status: { ...base, state: "preparing", phase: "checking" } };
+            }}
+          />
+        </RegistryContext>,
+      ),
+    );
+    await settle();
+    expect(container.textContent).toContain("GOAT created a key for vps-1");
+    expect(container.textContent).toContain("Run this on My Mac");
+    expect(container.textContent).toContain("GOAT connects with SSH keys only.");
+    await click("Copy public key");
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(publicKey);
+    await click("Retry");
+    await settle();
+    expect(container.textContent).toContain("Checking GOAT runtime");
+    expect(button("Copy public key")).toBeUndefined();
+  });
+});
+
+it("polls a pending Add while the Desktop connection has not published its first phase", async () => {
+  reply = { kind: "ok", status: { ...base, state: "stopped" } };
+  await act(async () =>
+    root.render(
+      <RegistryContext value={registry}>
+        <SshRuntimeSettingsRow {...input} enabled pendingAdd connecting />
+      </RegistryContext>,
+    ),
+  );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await settle();
+  reply = { kind: "ok", status: { ...base, state: "preparing", phase: "uploading" } };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(container.textContent).toContain("Uploading GOAT runtime (about 70 MB)");
+});

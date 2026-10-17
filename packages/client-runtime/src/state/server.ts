@@ -1420,6 +1420,23 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    // Waiting on an SSH host must not occupy the settings config lane.
+    probeSshHost: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ssh:probeSshHost",
+      tag: WS_METHODS.sshHostProbe,
+    }),
+    trustSshHost: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ssh:trustSshHost",
+      tag: WS_METHODS.sshHostTrust,
+    }),
+    prepareSshHost: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ssh:prepareSshHost",
+      tag: WS_METHODS.sshHostPrepare,
+    }),
+    forgetSshHost: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ssh:forgetSshHost",
+      tag: WS_METHODS.sshHostForget,
+    }),
     // Off the config lane: answering a card must not queue behind settings
     // edits. One answer per card at a time.
     openHandoff: createEnvironmentRpcCommand(runtime, {
