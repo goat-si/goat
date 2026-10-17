@@ -25,6 +25,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
 
 /**
  * The channel ledger: conversations keyed by their channel, the work requested in them, and
@@ -188,6 +189,8 @@ export const ChannelTask = Schema.Struct({
   notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
   openQuestions: Schema.Array(ChannelOpenQuestion),
+  /** The worker thread's pull requests, pending native requests and usage-limit wait. */
+  observed: Schema.optional(ChannelWorkerObservation),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   completedAt: Schema.optional(IsoDateTime),
@@ -206,6 +209,7 @@ export const ChannelTaskEventType = Schema.Literals([
   "task.failed",
   "task.cancelled",
   "task.retry.requested",
+  "task.worker.observed",
 ]);
 export type ChannelTaskEventType = typeof ChannelTaskEventType.Type;
 
@@ -278,6 +282,10 @@ export const ChannelTaskEvent = Schema.Union([
   }),
   taskEvent("task.cancelled", { reason: Schema.optional(Schema.String) }),
   taskEvent("task.retry.requested", { generation: PositiveInt }),
+  taskEvent("task.worker.observed", {
+    generation: PositiveInt,
+    observed: ChannelWorkerObservation,
+  }),
 ]);
 export type ChannelTaskEvent = typeof ChannelTaskEvent.Type;
 
@@ -300,6 +308,7 @@ export const ChannelTaskChip = Schema.Struct({
   summary: Schema.optional(Schema.String),
   openQuestionCount: NonNegativeInt,
   completionReport: Schema.optional(ChannelTaskCompletionReport),
+  observed: Schema.optional(ChannelWorkerObservation),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 

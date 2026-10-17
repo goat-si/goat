@@ -9,6 +9,7 @@ import {
 } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ThreadResultOutcome } from "./threadResult.ts";
+import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
 
 export const REMOTE_REPORT_SUMMARY_MAX_CHARS = 4000;
 export const RemoteReportKind = Schema.Literals(["progress", "completed", "failed", "needs_input"]);
@@ -83,6 +84,11 @@ export const RemoteObservedRun = Schema.Struct({
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   holds: Schema.optional(RemoteRunHolds),
   reported: Schema.optional(RemoteReportedOutcome),
+  /**
+   * The worker thread's pull requests, pending native requests and usage-limit wait, read the
+   * way the origin reads a local worker. An older GOAT omits it.
+   */
+  observation: Schema.optional(ChannelWorkerObservation),
 });
 export type RemoteObservedRun = typeof RemoteObservedRun.Type;
 /**
@@ -94,6 +100,7 @@ export const RemoteKnownRun = Schema.Struct({
   status: Schema.String,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   holds: Schema.optional(RemoteRunHolds),
+  observation: Schema.optional(ChannelWorkerObservation),
 });
 export type RemoteKnownRun = typeof RemoteKnownRun.Type;
 export const RemoteOriginReportsWaitInput = Schema.Struct({
