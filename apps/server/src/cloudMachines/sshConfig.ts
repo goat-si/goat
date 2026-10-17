@@ -27,25 +27,41 @@ export function insertCloudInclude(source: string): string {
   return source.length === 0 ? CLOUD_SSH_INCLUDE + newline : CLOUD_SSH_INCLUDE + newline + source;
 }
 
+/** Resolution paths collected by the caller's ssh -G probe and retained by the approved alias. */
+export type ManagedSshEndpoint = BoatSshEndpoint & {
+  readonly proxyJump?: string;
+  readonly proxyCommand?: string;
+};
+
 const quote = (value: string) => `"${value.replaceAll('"', "")}"`;
 
 export function renderCloudHost(input: {
   readonly alias: string;
-  readonly endpoint: BoatSshEndpoint;
-  readonly identityFile: string;
+  readonly endpoint: ManagedSshEndpoint;
+  readonly identityFile?: string;
   readonly knownHostsFile: string;
 }): string {
-  if (!isCloudMachineAlias(input.alias)) throw new Error("Invalid cloud machine alias");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(input.alias)) throw new Error("Invalid SSH alias");
   return [
     `Host ${input.alias}`,
     `  HostName ${input.endpoint.host}`,
     `  Port ${input.endpoint.port}`,
     `  User ${input.endpoint.user}`,
-    `  IdentityFile ${quote(input.identityFile)}`,
-    "  IdentitiesOnly yes",
+    ...(input.endpoint.proxyJump === undefined || input.endpoint.proxyJump === "none"
+      ? []
+      : [`  ProxyJump ${input.endpoint.proxyJump}`]),
+    ...(input.endpoint.proxyCommand === undefined || input.endpoint.proxyCommand === "none"
+      ? []
+      : [`  ProxyCommand ${input.endpoint.proxyCommand}`]),
+    ...(input.identityFile === undefined
+      ? []
+      : [`  IdentityFile ${quote(input.identityFile)}`, "  IdentitiesOnly yes"]),
     `  HostKeyAlias ${input.alias}`,
     `  UserKnownHostsFile ${quote(input.knownHostsFile)}`,
+    "  GlobalKnownHostsFile /dev/null",
     "  StrictHostKeyChecking yes",
+    "  UpdateHostKeys no",
+    `  HostKeyAlgorithms ${input.endpoint.hostKey.startsWith("ssh-rsa ") ? "rsa-sha2-512,rsa-sha2-256" : input.endpoint.hostKey.split(" ")[0]}`,
     "",
   ].join("\n");
 }
@@ -58,9 +74,9 @@ export function effectiveSettingsMatch(
   output: string,
   expected: {
     readonly alias: string;
-    readonly endpoint: BoatSshEndpoint;
+    readonly endpoint: ManagedSshEndpoint;
     readonly knownHostsFile: string;
-    readonly identityFile: string;
+    readonly identityFile?: string;
   },
 ): boolean {
   const values = new Map<string, string>();
@@ -72,22 +88,38 @@ export function effectiveSettingsMatch(
   const strict = values.get("stricthostkeychecking");
   return (
     (strict === "true" || strict === "yes") &&
-    values.get("identitiesonly") === "yes" &&
+    (expected.identityFile === undefined ||
+      ["yes", "true"].includes(values.get("identitiesonly") ?? "")) &&
     values.get("hostkeyalias") === expected.alias &&
-    values.get("userknownhostsfile")?.split(" ")[0] === expected.knownHostsFile &&
+    values.get("userknownhostsfile") === expected.knownHostsFile &&
+    values.get("globalknownhostsfile") === "/dev/null" &&
+    ["no", "false"].includes(values.get("updatehostkeys") ?? "") &&
+    values.get("user") === expected.endpoint.user &&
+    values.get("hostkeyalgorithms") ===
+      (expected.endpoint.hostKey.startsWith("ssh-rsa ")
+        ? "rsa-sha2-512,rsa-sha2-256"
+        : expected.endpoint.hostKey.split(" ")[0]) &&
+    (expected.endpoint.proxyJump === undefined ||
+      values.get("proxyjump") === expected.endpoint.proxyJump) &&
+    (expected.endpoint.proxyCommand === undefined ||
+      values.get("proxycommand") === expected.endpoint.proxyCommand) &&
     values.get("hostname") === expected.endpoint.host &&
     values.get("port") === String(expected.endpoint.port) &&
-    values.get("identityfile") === expected.identityFile
+    (expected.identityFile === undefined || values.get("identityfile") === expected.identityFile)
   );
 }
 
 /** Whether the user's own config already names this alias in a Host line. */
 export function definesHostAlias(config: string, alias: string): boolean {
-  return config
-    .split(/\r?\n/u)
-    .some(
-      (line) => /^\s*Host\s/iu.test(line) && line.trim().split(/\s+/u).slice(1).includes(alias),
-    );
+  return config.split(/\r?\n/u).some(
+    (line) =>
+      /^\s*Host(?:\s|=)/iu.test(line) &&
+      line
+        .split("#")[0]!
+        .replace(/^\s*Host\s*=?\s*/iu, "")
+        .split(/\s+/u)
+        .some((value) => value.replace(/^["']|["']$/gu, "").toLowerCase() === alias.toLowerCase()),
+  );
 }
 
 export class CloudMachineSsh extends Context.Service<
@@ -115,7 +147,11 @@ export class CloudMachineSsh extends Context.Service<
 
 const failed = () => new CloudMachineError({ reason: "ssh_config_failed" });
 
-export const make = (options: { readonly home: string }) =>
+export const makeManagedSshWriter = (options: {
+  readonly home: string;
+  readonly directory: "goat-cloud" | "goat-hosts";
+  readonly isAlias: (alias: string) => boolean;
+}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -124,7 +160,7 @@ export const make = (options: { readonly home: string }) =>
     const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
 
     const sshDir = path.join(options.home, ".ssh");
-    const cloudDir = path.join(sshDir, "goat-cloud");
+    const cloudDir = path.join(sshDir, options.directory);
     const configPath = path.join(sshDir, "config");
     const keyPath = path.join(cloudDir, "id_ed25519");
     const confPath = (alias: string) => path.join(cloudDir, `${alias}.conf`);
@@ -176,7 +212,14 @@ export const make = (options: { readonly home: string }) =>
     const installInclude = Effect.gen(function* () {
       yield* ensureDirectory(sshDir);
       const existing = yield* readOptional(configPath);
-      const next = insertCloudInclude(existing ?? "");
+      const include = `Include ~/.ssh/${options.directory}/*.conf`;
+      const source = existing ?? "";
+      const present = source
+        .split(/\r?\n/u)
+        .some((line) => line.trim().replace(/\s+/gu, " ").toLowerCase() === include.toLowerCase());
+      const next = present
+        ? source
+        : `${include}${source.includes("\r\n") ? "\r\n" : "\n"}${source}`;
       if (next === existing) return;
       const mode = existing === null ? 0o600 : (yield* fs.stat(configPath)).mode & 0o777;
       // Resolves a symlinked config (dotfile managers) and rewrites its target in place.
@@ -187,6 +230,8 @@ export const make = (options: { readonly home: string }) =>
     }).pipe(Effect.mapError(failed));
 
     const ensureKey = Effect.gen(function* () {
+      if (yield* isSymlink(sshDir)) return yield* failed();
+      yield* ensureDirectory(sshDir).pipe(Effect.mapError(failed));
       yield* ensureCloudDirectory;
       const publicPath = `${keyPath}.pub`;
       // GOAT's key lives only here; a link could point SSH at some other identity.
@@ -202,7 +247,7 @@ export const make = (options: { readonly home: string }) =>
           "-N",
           "",
           "-C",
-          "goat-cloud",
+          options.directory,
           "-f",
           keyPath,
         ]);
@@ -211,68 +256,162 @@ export const make = (options: { readonly home: string }) =>
       return { identityFile: keyPath, publicKey };
     }).pipe(Effect.mapError(failed));
 
-    // The Include comes first, so a host the user already named this way would be shadowed.
+    // Follow Includes before writing: only this writer's exact conf is exempt from conflicts.
     const refuseShadowedHost = (alias: string) =>
-      readOptional(configPath).pipe(
-        Effect.mapError(failed),
-        Effect.flatMap((config) =>
-          definesHostAlias(config ?? "", alias)
-            ? Effect.fail(new CloudMachineError({ reason: "alias_conflict" }))
-            : Effect.void,
-        ),
-      );
-
-    const writeHost = (alias: string, endpoint: BoatSshEndpoint) =>
-      refuseShadowedHost(alias).pipe(
-        Effect.andThen(
+      Effect.gen(function* () {
+        const visited = new Set<string>();
+        const inspect = (file: string): Effect.Effect<void, CloudMachineError> =>
           Effect.gen(function* () {
-            if (!isCloudMachineAlias(alias)) return yield* failed();
-            yield* ensureCloudDirectory;
-            const knownHostsFile = knownHostsPath(alias);
-            const conf = renderCloudHost({
+            const resolved = path.resolve(file);
+            if (visited.has(resolved) || resolved === confPath(alias)) return;
+            visited.add(resolved);
+            const config = yield* readOptional(resolved).pipe(Effect.mapError(failed));
+            if (config === null) return;
+            if (definesHostAlias(config, alias))
+              return yield* new CloudMachineError({ reason: "alias_conflict" });
+            for (const line of config.split(/\r?\n/u)) {
+              const match = /^\s*Include\s*=?\s+(.+)$/iu.exec(line.split("#")[0]!);
+              if (match === null) continue;
+              for (const token of match[1]!.match(/"[^"]*"|'[^']*'|\S+/gu) ?? []) {
+                const raw = token.replace(/^["']|["']$/gu, "").replace(/^~(?=\/|$)/u, options.home);
+                const pattern = path.isAbsolute(raw) ? raw : path.join(sshDir, raw);
+                const expand = (
+                  parts: string[],
+                  current: string,
+                ): Effect.Effect<void, CloudMachineError> =>
+                  Effect.gen(function* () {
+                    const [part, ...rest] = parts;
+                    if (part === undefined) return yield* inspect(current);
+                    if (!/[?*]/u.test(part)) return yield* expand(rest, path.join(current, part));
+                    if (!(yield* fs.exists(current).pipe(Effect.mapError(failed)))) return;
+                    const regex = new RegExp(
+                      `^${part
+                        .replace(/[.+^${}()|[\]\\]/gu, "\\$&")
+                        .replaceAll("*", ".*")
+                        .replaceAll("?", ".")}$`,
+                      "u",
+                    );
+                    for (const entry of yield* fs
+                      .readDirectory(current)
+                      .pipe(Effect.mapError(failed)))
+                      if (regex.test(entry)) yield* expand(rest, path.join(current, entry));
+                  });
+                const root = path.parse(pattern).root;
+                yield* expand(pattern.slice(root.length).split(path.sep), root);
+              }
+            }
+          });
+        yield* inspect(configPath);
+        // A missing Include does not make an existing Boat alias available to generic hosts.
+        if (options.directory === "goat-hosts") {
+          const boat = yield* readOptional(path.join(sshDir, "goat-cloud", `${alias}.conf`)).pipe(
+            Effect.mapError(failed),
+          );
+          if (boat !== null) return yield* new CloudMachineError({ reason: "alias_conflict" });
+        }
+      });
+
+    const writeHost = (alias: string, endpoint: ManagedSshEndpoint, identityFile?: string) =>
+      Effect.gen(function* () {
+        if (!options.isAlias(alias) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(alias))
+          return yield* failed();
+        if (
+          [endpoint.host, endpoint.user, identityFile ?? "", endpoint.proxyJump ?? ""].some(
+            (value) => /[\r\n\0"]/u.test(value),
+          ) ||
+          /[\r\n\0]/u.test(endpoint.proxyCommand ?? "") ||
+          !/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)) [A-Za-z0-9+/]+={0,3}$/u.test(
+            endpoint.hostKey,
+          )
+        )
+          return yield* failed();
+        yield* refuseShadowedHost(alias);
+        // Check the parent too: chmod must never follow an SSH directory symlink.
+        if (yield* isSymlink(sshDir)) return yield* failed();
+        yield* ensureDirectory(sshDir).pipe(Effect.mapError(failed));
+        yield* ensureCloudDirectory;
+        const knownHostsFile = knownHostsPath(alias);
+        for (const file of [confPath(alias), knownHostsFile])
+          if (yield* isSymlink(file)) return yield* failed();
+        const conf = renderCloudHost({
+          alias,
+          endpoint,
+          ...(identityFile === undefined ? {} : { identityFile }),
+          knownHostsFile,
+        });
+        const knownHosts = `${alias} ${endpoint.hostKey}\n`;
+        const oldConf = yield* readOptional(confPath(alias)).pipe(Effect.mapError(failed));
+        const oldPin = yield* readOptional(knownHostsFile).pipe(Effect.mapError(failed));
+        const changed = oldConf !== conf || oldPin !== knownHosts;
+        if (options.directory === "goat-hosts" && changed && (oldConf !== null || oldPin !== null))
+          return yield* new CloudMachineError({ reason: "alias_conflict" });
+        return yield* Effect.gen(function* () {
+          yield* writePrivate(knownHostsFile, knownHosts).pipe(Effect.mapError(failed));
+          yield* writePrivate(confPath(alias), conf).pipe(Effect.mapError(failed));
+          if (options.directory === "goat-hosts") yield* installInclude;
+          const output = yield* run("ssh", ["-G", alias]);
+          if (
+            !effectiveSettingsMatch(output, {
               alias,
               endpoint,
-              identityFile: keyPath,
               knownHostsFile,
-            });
-            const knownHosts = `${alias} ${endpoint.hostKey}\n`;
-            const changed =
-              (yield* readOptional(confPath(alias))) !== conf ||
-              (yield* readOptional(knownHostsFile)) !== knownHosts;
-            // A crash between the two writes pairs an address with the other key, and SSH refuses it.
-            yield* writePrivate(knownHostsFile, knownHosts);
-            yield* writePrivate(confPath(alias), conf);
-            return changed;
-          }).pipe(
-            Effect.mapError(failed),
-            Effect.flatMap((changed) =>
-              run("ssh", ["-G", alias]).pipe(
-                Effect.flatMap((output) =>
-                  effectiveSettingsMatch(output, {
-                    alias,
-                    endpoint,
-                    knownHostsFile: knownHostsPath(alias),
-                    identityFile: keyPath,
-                  })
-                    ? Effect.succeed({ changed })
-                    : Effect.fail(new CloudMachineError({ reason: "ssh_config_overridden" })),
-                ),
-              ),
-            ),
+              ...(identityFile === undefined ? {} : { identityFile }),
+            })
+          )
+            return yield* new CloudMachineError({ reason: "ssh_config_overridden" });
+          return { changed };
+        }).pipe(
+          Effect.onError(() =>
+            Effect.all([
+              oldConf === null
+                ? fs.readFileString(confPath(alias)).pipe(
+                    Effect.flatMap((current) =>
+                      current === conf ? fs.remove(confPath(alias), { force: true }) : Effect.void,
+                    ),
+                    Effect.ignore,
+                  )
+                : Effect.void,
+              oldPin === null
+                ? fs.readFileString(knownHostsFile).pipe(
+                    Effect.flatMap((current) =>
+                      current === knownHosts
+                        ? fs.remove(knownHostsFile, { force: true })
+                        : Effect.void,
+                    ),
+                    Effect.ignore,
+                  )
+                : Effect.void,
+            ]),
           ),
-        ),
-      );
+        );
+      });
 
     const removeHost = (alias: string) =>
-      isCloudMachineAlias(alias)
-        ? Effect.all([
-            fs.remove(confPath(alias), { force: true }),
-            fs.remove(knownHostsPath(alias), { force: true }),
-          ]).pipe(Effect.asVoid, Effect.mapError(failed))
-        : Effect.fail(failed());
+      Effect.gen(function* () {
+        if (!options.isAlias(alias) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(alias))
+          return yield* failed();
+        if ((yield* isSymlink(sshDir)) || (yield* isSymlink(cloudDir))) return yield* failed();
+        yield* fs.remove(confPath(alias), { force: true }).pipe(Effect.mapError(failed));
+        yield* fs.remove(knownHostsPath(alias), { force: true }).pipe(Effect.mapError(failed));
+      });
 
-    return CloudMachineSsh.of({ installInclude, ensureKey, writeHost, removeHost });
+    return { installInclude, ensureKey, writeHost, removeHost };
   });
+
+export const make = (options: { readonly home: string }) =>
+  makeManagedSshWriter({
+    ...options,
+    directory: "goat-cloud",
+    isAlias: isCloudMachineAlias,
+  }).pipe(
+    Effect.map((writer) =>
+      CloudMachineSsh.of({
+        ...writer,
+        writeHost: (alias, endpoint) =>
+          writer.writeHost(alias, endpoint, `${options.home}/.ssh/goat-cloud/id_ed25519`),
+      }),
+    ),
+  );
 
 export const layer = (options: { readonly home?: string } = {}) =>
   Layer.effect(CloudMachineSsh, make({ home: options.home ?? NodeOS.homedir() }));
