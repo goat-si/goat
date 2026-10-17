@@ -255,4 +255,60 @@ describe("SSH stale forwards", () => {
       }).pipe(Effect.provide(layer), Effect.scoped);
     }),
   );
+
+  it.effect("replaces a forward whose ssh process exited even though the port still answers", () =>
+    Effect.gen(function* () {
+      // The local port can be taken over or answered by something else after the ssh child
+      // dies; only the child's own state says the forward is gone.
+      let exited = false;
+      let forwards = 0;
+      let stops = 0;
+      const spawner = makeProtocolTestSpawner((command) =>
+        Effect.sync(() => {
+          const args = commandArgs(command);
+          if (args.includes("-N")) {
+            forwards += 1;
+            exited = false;
+            return {
+              ...makeRunningProcess(() => undefined),
+              isRunning: Effect.sync(() => !exited),
+            };
+          }
+          if (args.includes("--"))
+            return makeSuccessfulProcess(
+              '{"status":"ready","selectedVersion":"1.2.3-preview.20260911.4","remotePort":3773,"serverKind":"managed"}\n',
+            );
+          if (args.includes("sh")) stops += 1;
+          return makeSuccessfulProcess("");
+        }),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(FileSystem.FileSystem, askpassFileSystem),
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
+          ),
+        ),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({
+          resolveCliRunner: Effect.succeed(PROTOCOL_ARCHIVE),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        yield* manager.ensureEnvironment(target);
+        yield* manager.ensureEnvironment(target);
+        assert.equal(forwards, 1);
+        exited = true;
+        yield* manager.ensureEnvironment(target);
+        assert.equal(forwards, 2);
+        assert.equal(stops, 0);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
 });

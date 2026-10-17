@@ -110,6 +110,19 @@ export function baseSshArgs(
   ];
 }
 
+/**
+ * Liveness probes for every SSH session GOAT opens to a remote host. Without them a half-open
+ * link (sleep, roaming, a dropped NAT entry) is only noticed when a command's own timeout
+ * expires, up to 15 minutes for an archive install. Three missed 15 s probes end the session.
+ * Kept out of `baseSshArgs`, which also builds GIT_SSH_COMMAND for git operations.
+ */
+export const SSH_KEEPALIVE_ARGS = [
+  "-o",
+  "ServerAliveInterval=15",
+  "-o",
+  "ServerAliveCountMax=3",
+] as const;
+
 export function getLastNonEmptyOutputLine(stdout: string): string | null {
   return (
     stdout
@@ -244,6 +257,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     ...baseSshArgs(target, {
       batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
     }),
+    ...SSH_KEEPALIVE_ARGS,
     ...(input.preHostArgs ?? []),
     hostSpec,
     ...(input.remoteCommandArgs ?? []),
