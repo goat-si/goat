@@ -202,7 +202,13 @@ it.effect.each(["missing_scope", "read_scope", "other_owner", "success", "refuse
         return;
       }
       assert.deepStrictEqual(calls, [
-        { taskId: task.taskId, host: "mini", actor: "agent", owner: runtime.ownerToken },
+        {
+          taskId: task.taskId,
+          host: "mini",
+          actor: "agent",
+          owner: runtime.ownerToken,
+          callerCeiling: "full-access",
+        },
       ]);
       if (scenario === "refused") {
         assert.isTrue("code" in result);

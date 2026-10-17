@@ -556,66 +556,69 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // The person as they stand now: a Slack link removed or narrowed since the message
+      // arrived counts.
+      const judgedNow = Effect.gen(function* () {
+        if (message.kind !== "slack") return requester;
+        const linked =
+          requester.externalActorId === undefined
+            ? undefined
+            : yield* ledger.findIdentity({
+                connectionId: message.connectionId,
+                externalActorId: requester.externalActorId,
+              });
+        if (linked === undefined) return undefined;
+        return {
+          ...requester,
+          runtimeModeCeiling: lowerRuntimeMode(
+            requester.runtimeModeCeiling,
+            linked.runtimeModeCeiling,
+          ),
+          grantedScopes: requester.grantedScopes.filter((scope) =>
+            linked.grantedScopes.includes(scope),
+          ),
+        };
+      });
+
       if (action.type === "move_task") {
-        if (
-          requester.originKind === "mcp" ||
-          !requester.grantedScopes.includes("orchestration:operate")
-        ) {
+        const storedTask = yield* ledger.getTask(action.taskId);
+        // Moving restarts work under the asker's ceiling, so the mover needs what an answerer needs.
+        const mover = requester.originKind === "mcp" ? undefined : yield* judgedNow;
+        if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
+          replyText = "I couldn’t match that to work in this conversation. Which task do you mean?";
+          finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+        } else if (mover === undefined || !mayAnswerFor(mover, storedTask.task.requester)) {
           replyText = CHANNEL_COPY.agentCannotMoveWork;
           finalDecision = { replyText, action: { type: "report_only" } };
         } else {
-          const storedTask = yield* ledger.getTask(action.taskId);
-          if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
-            replyText =
-              "I couldn’t match that to work in this conversation. Which task do you mean?";
-            finalDecision = { replyText, action: { type: "clarify", question: replyText } };
-          } else {
-            finalDecision = yield* remoteWorkers
-              .move({ taskId: action.taskId, host: action.host, actor: "user", owner })
-              .pipe(
-                Effect.map((moved) => ({
-                  // The task's own narration explains the move; the reply only acknowledges it.
-                  replyText: "Moving it to " + moved.host + ".",
-                  action,
-                })),
-                Effect.catchTags({
-                  ChannelTaskMoveError: (error) =>
-                    Effect.succeed({
-                      replyText: error.message,
-                      action: { type: "report_only" as const },
-                    }),
-                }),
-              );
-            replyText = finalDecision.replyText;
-          }
+          finalDecision = yield* remoteWorkers
+            .move({
+              taskId: action.taskId,
+              host: action.host,
+              actor: "user",
+              owner,
+              callerCeiling: mover.runtimeModeCeiling,
+            })
+            .pipe(
+              Effect.map((moved) => ({
+                // The task's own narration explains the move; the reply only acknowledges it.
+                replyText: "Moving it to " + moved.host + ".",
+                action,
+              })),
+              Effect.catchTags({
+                ChannelTaskMoveError: (error) =>
+                  Effect.succeed({
+                    replyText: error.message,
+                    action: { type: "report_only" as const },
+                  }),
+              }),
+            );
+          replyText = finalDecision.replyText;
         }
       }
 
       if (action.type === "answer_question") {
-        // Judge the answerer as they stand now: a Slack link removed or narrowed since the message
-        // arrived counts.
-        const linked =
-          message.kind === "slack" && requester.externalActorId !== undefined
-            ? yield* ledger.findIdentity({
-                connectionId: message.connectionId,
-                externalActorId: requester.externalActorId,
-              })
-            : undefined;
-        const answerer =
-          message.kind !== "slack"
-            ? requester
-            : linked === undefined
-              ? undefined
-              : {
-                  ...requester,
-                  runtimeModeCeiling: lowerRuntimeMode(
-                    requester.runtimeModeCeiling,
-                    linked.runtimeModeCeiling,
-                  ),
-                  grantedScopes: requester.grantedScopes.filter((scope) =>
-                    linked.grantedScopes.includes(scope),
-                  ),
-                };
+        const answerer = yield* judgedNow;
         const stored = yield* ledger.getTask(action.taskId);
         const open =
           stored !== undefined &&

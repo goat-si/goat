@@ -67,6 +67,7 @@ import * as ServerConfig from "../config.ts";
 import { REPORTING_NOTE } from "../remoteReports/reportFrame.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
@@ -360,6 +361,8 @@ export const MOVE_COPY = {
   taskNotFound: "I can't find that task.",
   notRemote: "That task runs on this machine, so there is nothing to move.",
   notRunning: "That task isn't running anymore.",
+  notAllowed:
+    "Only someone allowed to run this work as far as the person who asked can move it to another machine.",
   sameHost: (host: string) => "That task already runs on " + host + ".",
   unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
     "I can't send work to " +
@@ -500,6 +503,8 @@ export class ChannelRemoteWorkers extends Context.Service<
       readonly host: string;
       readonly actor: "user" | "agent";
       readonly owner: string;
+      /** The runtime-mode ceiling of whoever asked; it must reach the task's own ceiling. */
+      readonly callerCeiling: RuntimeMode;
     }) => Effect.Effect<ChannelTaskMoved, ChannelTaskMoveError | ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelRemoteWorkers") {}
@@ -517,6 +522,7 @@ export type ChannelTaskMoveRefusal =
   | "task_not_found"
   | "not_remote"
   | "not_running"
+  | "not_allowed"
   | "same_host"
   | "unknown_host"
   | "host_reachable"
@@ -2306,7 +2312,13 @@ const make = Effect.gen(function* () {
       return moved ? state.host : undefined;
     });
 
-  const move: ChannelRemoteWorkers["Service"]["move"] = ({ taskId, host, actor, owner }) =>
+  const move: ChannelRemoteWorkers["Service"]["move"] = ({
+    taskId,
+    host,
+    actor,
+    owner,
+    callerCeiling,
+  }) =>
     serialized(taskId)(
       Effect.gen(function* () {
         const refuse = (reason: ChannelTaskMoveRefusal, message: string) =>
@@ -2323,6 +2335,13 @@ const make = Effect.gen(function* () {
           task.status !== "dispatching"
         ) {
           return yield* refuse("not_running", MOVE_COPY.notRunning);
+        }
+        // The new worker runs under the task's ceiling, so the mover must reach it.
+        if (
+          lowerRuntimeMode(callerCeiling, task.requester.runtimeModeCeiling) !==
+          task.requester.runtimeModeCeiling
+        ) {
+          return yield* refuse("not_allowed", MOVE_COPY.notAllowed);
         }
         const state = yield* readState(taskId);
         if (state === undefined || state.generation !== task.generation) {
