@@ -40,6 +40,8 @@ import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
   OrchestrationV2Actor,
   OrchestrationV2TaskRole,
+  ReviewLedgerEntry,
+  ReviewLedgerEntryInput,
   OrchestrationV2CloudTask,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
@@ -287,6 +289,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   role: Schema.optional(OrchestratorMcpTaskRole),
   modelSelection: Schema.optional(ModelSelection),
   parentModelSelection: Schema.optional(ModelSelection),
+  reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
@@ -296,6 +299,43 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   }),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
+
+export const OrchestratorMcpReviewFindingsRecordInput = Schema.Struct({
+  taskId: NodeId,
+  entries: Schema.Array(ReviewLedgerEntryInput).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(100),
+  ),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+});
+export type OrchestratorMcpReviewFindingsRecordInput =
+  typeof OrchestratorMcpReviewFindingsRecordInput.Type;
+export const OrchestratorMcpReviewFindingsRecordResult = Schema.Struct({
+  taskId: NodeId,
+  reviewLedger: Schema.Array(ReviewLedgerEntry),
+  findings: Schema.Array(
+    Schema.Struct({
+      decision: ReviewLedgerEntry.members[0],
+      latestOutcome: Schema.NullOr(ReviewLedgerEntry.members[1]),
+    }),
+  ),
+});
+export type OrchestratorMcpReviewFindingsRecordResult =
+  typeof OrchestratorMcpReviewFindingsRecordResult.Type;
+export const OrchestratorMcpReviewFindingsExportInput = Schema.Struct({
+  from: IsoDateTime,
+  to: IsoDateTime,
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(1_000))),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_000))),
+});
+export type OrchestratorMcpReviewFindingsExportInput =
+  typeof OrchestratorMcpReviewFindingsExportInput.Type;
+export const OrchestratorMcpReviewFindingsExportResult = Schema.Struct({
+  jsonl: Schema.String,
+  nextCursor: Schema.optional(Schema.String),
+});
+export type OrchestratorMcpReviewFindingsExportResult =
+  typeof OrchestratorMcpReviewFindingsExportResult.Type;
 
 export const OrchestratorMcpTaskStatusInput = Schema.Struct({
   taskId: NodeId,

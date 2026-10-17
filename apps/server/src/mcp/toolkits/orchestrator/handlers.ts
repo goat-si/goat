@@ -60,6 +60,20 @@ const handlers = {
       return yield* service.taskStatus(scope, taskId);
     }),
   ),
+  goat_review_findings_record: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.recordReviewFindings(scope, input);
+    }),
+  ),
+  goat_review_findings_export: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.exportReviewFindings(scope, input);
+    }),
+  ),
   task_cancel: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) =>
       Effect.gen(function* () {

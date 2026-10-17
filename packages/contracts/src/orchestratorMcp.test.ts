@@ -11,6 +11,9 @@ import {
   OrchestratorMcpThreadWaitResult,
   OrchestratorMcpDelegateTaskInput,
   OrchestratorMcpDelegateTaskResult,
+  OrchestratorMcpReviewFindingsRecordInput,
+  OrchestratorMcpReviewFindingsRecordResult,
+  OrchestratorMcpReviewFindingsExportInput,
   OrchestratorMcpThreadInterruptInput,
   OrchestratorMcpThreadListInput,
   OrchestratorMcpThreadReadInput,
@@ -34,6 +37,12 @@ const decodeLaunchedQuestionsResult = Schema.decodeUnknownSync(
   OrchestratorMcpLaunchedQuestionsResult,
 );
 const decodeThreadWaitResult = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitResult);
+const decodeReviewFindingsRecordResult = Schema.decodeUnknownSync(
+  OrchestratorMcpReviewFindingsRecordResult,
+);
+const decodeReviewFindingsExportInput = Schema.decodeUnknownSync(
+  OrchestratorMcpReviewFindingsExportInput,
+);
 const decodeCreateThreadsInput = Schema.decodeUnknownSync(OrchestratorMcpCreateThreadsInput);
 const decodeStrictCreateThreadsInput = Schema.decodeUnknownSync(OrchestratorMcpCreateThreadsInput, {
   onExcessProperty: "error",
@@ -258,6 +267,24 @@ describe("orchestrator MCP contracts", () => {
       waitTimedOut: false,
     });
     expect(result.childThreadId).toBeNull();
+    expect(result.reviewLedger).toBeUndefined();
+    const reviewLedger = [
+      {
+        kind: "decision",
+        entryId: "entry",
+        findingId: "finding",
+        severity: "low",
+        cites: null,
+        summary: "Review finding",
+        decision: "accepted",
+        evidence: null,
+        recordedAt: "2026-10-17T00:00:00.000Z",
+        recordedByRunId: null,
+      },
+    ];
+    expect(decodeDelegateTaskResult({ ...result, reviewLedger }).reviewLedger).toEqual(
+      reviewLedger,
+    );
     expect(() =>
       decodeDelegateTaskInput({
         task: "Inspect",
@@ -418,4 +445,54 @@ it("decodes optional question wait IDs without changing run status", () => {
     decode({ threadId: "thread", runId: "run", status: "completed", timedOut: false })
       .pendingRequestIds,
   ).toBeUndefined();
+});
+
+it("decodes review history without accepting server-owned outcome fields as input", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpReviewFindingsRecordInput, {
+    onExcessProperty: "error",
+  });
+  const decision = {
+    kind: "decision",
+    findingId: "finding",
+    severity: "critical",
+    cites: "a.ts:1",
+    summary: "Guard the edge",
+    decision: "accepted",
+    evidence: null,
+  };
+  expect(decode({ taskId: "review", entries: [decision] }).entries).toEqual([decision]);
+  expect(() => decode({ taskId: "review", entries: [] })).toThrow();
+  expect(() =>
+    decode({ taskId: "review", entries: [{ ...decision, entryId: "forged" }] }),
+  ).toThrow();
+  const outcome = {
+    kind: "outcome",
+    findingId: "finding",
+    link: { kind: "test", ref: "failure.test.ts" },
+  };
+  expect(decode({ taskId: "review", entries: [outcome] }).entries).toEqual([outcome]);
+  expect(() =>
+    decode({ taskId: "review", entries: [{ ...outcome, outcome: "unneeded" }] }),
+  ).toThrow();
+  const recorded = {
+    ...decision,
+    entryId: "entry",
+    recordedAt: "2026-10-17T00:00:00.000Z",
+    recordedByRunId: null,
+  };
+  expect(
+    decodeReviewFindingsRecordResult({
+      taskId: "review",
+      reviewLedger: [recorded],
+      findings: [{ decision: recorded, latestOutcome: null }],
+    }).reviewLedger,
+  ).toEqual([recorded]);
+  const exportInput = decodeReviewFindingsExportInput;
+  expect(
+    exportInput({ from: "2026-10-16T00:00:00.000Z", to: "2026-10-17T00:00:00.000Z", limit: 1 })
+      .limit,
+  ).toBe(1);
+  expect(() =>
+    exportInput({ from: "2026-10-16T00:00:00.000Z", to: "2026-10-17T00:00:00.000Z", limit: 1_001 }),
+  ).toThrow();
 });

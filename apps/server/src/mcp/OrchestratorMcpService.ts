@@ -12,7 +12,7 @@ import {
   type RunId,
   isProviderAvailable,
   MessageId,
-  type ModelSelection,
+  ModelSelection,
   NodeId,
   TurnItemId,
   type OrchestrationV2Run,
@@ -28,6 +28,14 @@ import {
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskResult,
+  type OrchestratorMcpReviewFindingsRecordInput,
+  type OrchestratorMcpReviewFindingsRecordResult,
+  type OrchestratorMcpReviewFindingsExportInput,
+  type OrchestratorMcpReviewFindingsExportResult,
+  ReviewLedgerEntry,
+  OrchestrationV2TaskRole,
+  IsoDateTime,
+  NonNegativeInt,
   type OrchestratorMcpInteractionMode,
   type OrchestratorMcpDeleteScheduledTaskInput,
   type OrchestratorMcpRequestSecretInput,
@@ -116,6 +124,51 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
+const ReviewExportCursor = Schema.fromJsonString(
+  Schema.Struct({
+    from: IsoDateTime,
+    to: IsoDateTime,
+    taskId: NodeId,
+    index: NonNegativeInt,
+  }),
+);
+const decodeReviewExportCursor = Schema.decodeUnknownEffect(ReviewExportCursor);
+const encodeReviewExportCursor = Schema.encodeEffect(ReviewExportCursor);
+const ReviewExportFields = {
+  taskId: NodeId,
+  threadId: ThreadId,
+  role: Schema.optional(OrchestrationV2TaskRole),
+  reviewerModel: Schema.NullOr(ModelSelection),
+  authorModel: Schema.NullOr(ModelSelection),
+};
+const encodeReviewExportEntry = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Union([
+      Schema.Struct({
+        ...ReviewLedgerEntry.members[0].fields,
+        ...ReviewExportFields,
+        latestOutcome: Schema.NullOr(ReviewLedgerEntry.members[1]),
+      }),
+      Schema.Struct({ ...ReviewLedgerEntry.members[1].fields, ...ReviewExportFields }),
+    ]),
+  ),
+);
+
+/** Latest decisions and any outcome recorded after that decision. */
+function reviewFindings(reviewLedger: ReadonlyArray<ReviewLedgerEntry>) {
+  const findings = new Map<string, OrchestratorMcpReviewFindingsRecordResult["findings"][number]>();
+  for (const entry of reviewLedger) {
+    if (entry.kind === "decision")
+      findings.set(entry.findingId, { decision: entry, latestOutcome: null });
+    else {
+      const finding = findings.get(entry.findingId);
+      if (finding !== undefined)
+        findings.set(entry.findingId, { ...finding, latestOutcome: entry });
+    }
+  }
+  return [...findings.values()];
+}
+
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
 // Events that can make a delegated task terminal: the parent's task record,
@@ -157,6 +210,14 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     taskId: NodeId,
   ) => Effect.Effect<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure>;
+  readonly recordReviewFindings: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpReviewFindingsRecordInput,
+  ) => Effect.Effect<OrchestratorMcpReviewFindingsRecordResult, OrchestratorMcpFailure>;
+  readonly exportReviewFindings: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpReviewFindingsExportInput,
+  ) => Effect.Effect<OrchestratorMcpReviewFindingsExportResult, OrchestratorMcpFailure>;
   readonly cancelTask: (
     scope: McpInvocationScope,
     input: OrchestratorMcpTaskCancelInput,
@@ -1707,6 +1768,7 @@ const make = Effect.gen(function* () {
           providerInstanceId: task.providerInstanceId,
           model: task.model,
           ...(task.role === undefined ? {} : { role: task.role }),
+          ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
           ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
           ...(task.parentModelSelection === undefined
             ? {}
@@ -1872,6 +1934,7 @@ const make = Effect.gen(function* () {
         providerInstanceId: task.providerInstanceId,
         model: task.model,
         ...(task.role === undefined ? {} : { role: task.role }),
+        ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
         ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
         ...(task.parentModelSelection === undefined
           ? {}
@@ -2854,6 +2917,119 @@ const make = Effect.gen(function* () {
         return {
           ...status,
           ...(cloudTask === undefined ? {} : { cloudTask }),
+        };
+      }),
+    recordReviewFindings: (callerScope, input) =>
+      Effect.gen(function* () {
+        const { scope, parent } = yield* loadThreadCaller(
+          callerScope,
+          "goat_review_findings_record",
+        );
+        const key = yield* requestKey(input.clientRequestId);
+        yield* threadManagement
+          .dispatch({
+            type: "delegated_task.review-ledger.append",
+            commandId: stableCommandId({
+              scope,
+              requestKey: key,
+              operation: "review-findings-record",
+            }),
+            parentThreadId: parent.thread.id,
+            taskId: input.taskId,
+            entries: input.entries,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                error._tag === "OrchestratorReviewLedgerError" ||
+                  error._tag === "OrchestratorCommandPreviouslyRejectedError"
+                  ? "invalid_request"
+                  : "orchestration_error",
+                errorMessage(error),
+              ),
+            ),
+          );
+        const updated = yield* loadProjection(parent.thread.id);
+        const reviewLedger =
+          updated.subagents.find((task) => task.id === input.taskId)?.reviewLedger ?? [];
+        return { taskId: input.taskId, reviewLedger, findings: reviewFindings(reviewLedger) };
+      }),
+    exportReviewFindings: (scope, input) =>
+      Effect.gen(function* () {
+        // Like goat_thread_read, orchestration credentials may read any available
+        // thread in this environment. Include archived parents, exclude deleted ones.
+        yield* loadCaller(scope);
+        if (!(Date.parse(input.from) < Date.parse(input.to)))
+          return yield* failure("invalid_request", "from must precede to.");
+        const cursor =
+          input.cursor === undefined
+            ? undefined
+            : yield* decodeReviewExportCursor(input.cursor).pipe(
+                Effect.mapError(() =>
+                  failure("invalid_request", "Invalid review findings cursor."),
+                ),
+              );
+        if (cursor !== undefined && (cursor.from !== input.from || cursor.to !== input.to))
+          return yield* failure("invalid_request", "Use the cursor with the same date range.");
+        const limit = input.limit ?? 100;
+        const rows = yield* threadManagement
+          .getReviewLedgerEntries({
+            from: input.from,
+            to: input.to,
+            limit: limit + 1,
+            ...(cursor === undefined
+              ? {}
+              : { cursor: { taskId: cursor.taskId, index: cursor.index } }),
+          })
+          .pipe(Effect.mapError(threadManagementFailure));
+        const page = rows.slice(0, limit);
+        const lines = yield* Effect.forEach(page, ({ task, index }) => {
+          const entry = task.reviewLedger![index]!;
+          const latestOutcome =
+            entry.kind === "decision"
+              ? task.reviewLedger?.findLast(
+                  (candidate) =>
+                    candidate.kind === "outcome" && candidate.findingId === entry.findingId,
+                )
+              : undefined;
+          const metadata = {
+            taskId: task.id,
+            threadId: task.threadId,
+            role: task.role,
+            reviewerModel: task.modelSelection ?? null,
+            authorModel: task.parentModelSelection ?? null,
+          };
+          return encodeReviewExportEntry(
+            entry.kind === "decision"
+              ? {
+                  ...entry,
+                  ...metadata,
+                  latestOutcome: latestOutcome?.kind === "outcome" ? latestOutcome : null,
+                }
+              : { ...entry, ...metadata },
+          ).pipe(
+            Effect.mapError(() =>
+              failure("orchestration_error", "Unable to encode review findings."),
+            ),
+          );
+        });
+        const last = page.at(-1);
+        return {
+          jsonl: lines.length === 0 ? "" : `${lines.join("\n")}\n`,
+          ...(rows.length <= limit || last === undefined
+            ? {}
+            : {
+                nextCursor: yield* encodeReviewExportCursor({
+                  from: input.from,
+                  to: input.to,
+                  taskId: last.task.id,
+                  index: last.index,
+                }).pipe(
+                  Effect.mapError(() =>
+                    failure("orchestration_error", "Unable to encode review findings cursor."),
+                  ),
+                ),
+              }),
         };
       }),
     cancelTask: (callerScope, input) =>

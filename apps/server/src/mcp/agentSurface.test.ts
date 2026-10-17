@@ -175,7 +175,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(126); // Includes current memory, browser and provider tools.
+  expect(entries).toHaveLength(128); // Includes current memory, browser and provider tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
@@ -226,6 +226,8 @@ it.effect(
       expect(hints("goat_thread_read")?.readOnlyHint).toBe(true);
       expect(hints("preview_snapshot")?.readOnlyHint).toBe(true);
       expect(hints("task_status")?.readOnlyHint).toBe(false);
+      expect(hints("goat_review_findings_record")?.readOnlyHint).toBe(false);
+      expect(hints("goat_review_findings_export")?.readOnlyHint).toBe(true);
       expect(hints("goat_worktree_cleanup")?.destructiveHint).toBe(true);
     }).pipe(Effect.provide(registered)),
 );

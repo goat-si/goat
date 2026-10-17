@@ -20,6 +20,10 @@ import {
   OrchestratorMcpTaskCancelResult,
   OrchestratorMcpUpdateScheduledTaskInput,
   OrchestratorMcpTaskStatusInput,
+  OrchestratorMcpReviewFindingsRecordInput,
+  OrchestratorMcpReviewFindingsRecordResult,
+  OrchestratorMcpReviewFindingsExportInput,
+  OrchestratorMcpReviewFindingsExportResult,
   OrchestratorMcpThreadInterruptInput,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadListInput,
@@ -97,6 +101,24 @@ const TaskStatusTool = Tool.make(agentSurfaceRegistry["task.read"].name, {
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["task.read"]));
+
+const ReviewFindingsRecordTool = Tool.make(agentSurfaceRegistry["review_findings.record"].name, {
+  description: agentSurfaceRegistry["review_findings.record"].description,
+  parameters: OrchestratorMcpReviewFindingsRecordInput,
+  success: OrchestratorMcpReviewFindingsRecordResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["review_findings.record"]));
+
+const ReviewFindingsExportTool = Tool.make(agentSurfaceRegistry["review_findings.export"].name, {
+  description: agentSurfaceRegistry["review_findings.export"].description,
+  parameters: OrchestratorMcpReviewFindingsExportInput,
+  success: OrchestratorMcpReviewFindingsExportResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["review_findings.export"]));
 
 const TaskCancelTool = Tool.make(agentSurfaceRegistry["task.cancel"].name, {
   description: agentSurfaceRegistry["task.cancel"].description,
@@ -268,6 +290,8 @@ export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
   TaskStatusTool,
+  ReviewFindingsRecordTool,
+  ReviewFindingsExportTool,
   TaskCancelTool,
   WorkflowStopTool,
   ScheduleTaskTool,
