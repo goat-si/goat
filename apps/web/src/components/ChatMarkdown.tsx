@@ -1427,6 +1427,7 @@ const CHAT_MARKDOWN_IMAGE_FRAME_CLASS_NAME = cn(
 function ChatMarkdownImage(props: {
   /** Null while the URL is being resolved; the last decoded image stays up. */
   readonly src: string | null;
+  readonly srcFragment?: string | undefined;
   readonly sourceFailed?: boolean | undefined;
   /** Why the source failed, when the cause is known. */
   readonly unavailableDetail?: string | undefined;
@@ -1462,9 +1463,10 @@ function ChatMarkdownImage(props: {
         name: props.alt.trim() || "image",
         actionsSource: props.actionsSource,
         ...(props.originalUrl ? { originalUrl: props.originalUrl } : {}),
+        ...(props.srcFragment ? { srcFragment: props.srcFragment } : {}),
       });
     },
-    [props.actionsSource, props.alt, props.originalUrl, src],
+    [props.actionsSource, props.alt, props.originalUrl, props.srcFragment, src],
   );
   const imageEvents = (loadingSrc: string) => ({
     onLoad: () => {
@@ -1731,6 +1733,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
     <ChatMarkdownImage
       key={JSON.stringify([props.environmentId, props.resource, props.srcFragment])}
       src={src}
+      srcFragment={props.srcFragment}
       sourceFailed={assetUrl._tag === "Failure" && fallbackSrc === undefined}
       unavailableDetail={
         assetUrl._tag === "Failure" &&
