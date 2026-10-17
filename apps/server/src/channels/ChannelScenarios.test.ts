@@ -3,6 +3,8 @@ import {
   CHANNEL_HOST_WORKSPACE_LABEL,
   type ChannelIngestInput,
   type ChannelReceptionInput,
+  ChannelTaskEvent,
+  type ThreadResultReport,
   ChannelGatewayError,
   CommandId,
   EnvironmentId,
@@ -19,9 +21,12 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -1578,6 +1583,179 @@ describe("completion (scenario 5)", () => {
       const task = yield* onlyTask;
       return { task, threadId: task.worker!.threadId, runtime };
     });
+
+  // WorkerWorld scripts runs, but result reports use the harness's migrated database,
+  // the same row goat_thread_report_result writes through ThreadResultService.report.
+  const storeReport = (harness: ReturnType<typeof makeHarness>, report: ThreadResultReport) =>
+    Effect.gen(function* () {
+      const task = yield* onlyTask;
+      const threadId = task.worker!.threadId;
+      const run = harness.world.latestRun(threadId)!;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+        VALUES (${threadId}, ${run.id}, ${JSON.stringify(report)}, ${"2026-10-12T00:00:00.000Z"})
+      `;
+    });
+
+  const taskEvents = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ event_json: string }>`
+      SELECT event_json FROM channel_task_events ORDER BY sequence
+    `;
+    return rows.map((row) =>
+      Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent))(row.event_json),
+    );
+  });
+
+  it.effect.each([
+    { outcome: "failed", reason: "reported_outcome" },
+    { outcome: "cancelled", reason: "reported_cancelled" },
+  ] as const)("fails a cleanly completed run reported as $outcome", ({ outcome, reason }) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { threadId, runtime } = yield* startTask();
+      yield* storeReport(harness, { outcome, summary: "  Could not deploy.  " });
+      // A report alone is not a terminal run.
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "running");
+      harness.world.setStatus(threadId, 1, "completed", "Everything worked.");
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "failed");
+      assert.strictEqual((yield* onlyTask).resultSummary, "Could not deploy.");
+      const failures = (yield* taskEvents).filter((event) => event.type === "task.failed");
+      assert.strictEqual(failures.length, 1);
+      assert.strictEqual(failures[0]!.payload.reason, reason);
+      assert.isFalse(
+        (yield* taskEvents).some(
+          (event) => event.type === "task.completed" || event.type === "task.cancelled",
+        ),
+      );
+      assert.strictEqual(resultsTo(harness.slackSent, "failure").length, 1);
+      assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
+
+  it.effect.each([
+    { summary: "  Which deployment target?  ", question: "Which deployment target?" },
+    {
+      summary: undefined,
+      question:
+        "The worker reported that it is blocked without giving a reason. How should it continue?",
+    },
+  ])(
+    "asks about a blocked result and resumes the same task ($summary)",
+    ({ summary, question }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { task, threadId, runtime } = yield* startTask();
+        yield* storeReport(harness, {
+          outcome: "blocked",
+          ...(summary === undefined ? {} : { summary }),
+        });
+        harness.world.setStatus(threadId, 1, "completed", "Done.");
+        yield* runtime.drain;
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.strictEqual(waiting.openQuestions.length, 1);
+        assert.strictEqual(waiting.openQuestions[0]!.text, question);
+        assert.strictEqual(resultsTo(harness.slackSent, "question")[0]?.message.text, question);
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 0);
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(
+          {
+            ...slackInput("staging", "reported-blocked-answer"),
+            intent: "answer",
+            taskId: task.taskId,
+            questionId: waiting.openQuestions[0]!.questionId,
+          },
+          slackContext,
+        );
+        yield* runtime.drain;
+        const resumed = yield* onlyTask;
+        const nextRun = harness.world.latestRun(threadId)!;
+        assert.strictEqual(resumed.taskId, task.taskId);
+        assert.strictEqual(resumed.generation, task.generation);
+        assert.strictEqual(resumed.status, "running");
+        assert.deepStrictEqual(resumed.openQuestions, []);
+        assert.strictEqual(resumed.worker?.threadId, threadId);
+        assert.strictEqual(resumed.worker?.runId, nextRun.id);
+        assert.strictEqual(nextRun.ordinal, 2);
+        assert.strictEqual(harness.world.launches.length, 1);
+        assert.strictEqual(harness.world.sends.length, 1);
+        harness.world.setStatus(threadId, 2, "completed", "Deployed to staging.");
+        yield* runtime.drain;
+        const done = yield* onlyTask;
+        assert.strictEqual(done.status, "completed");
+        assert.strictEqual(done.resultSummary, "Deployed to staging.");
+        assert.strictEqual(done.completionReport, "missing");
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect.each(["present", "missing"] as const)(
+    "records completion report %s in the event, task and bot chip",
+    (report) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { task, threadId, runtime } = yield* startTask();
+        if (report === "present")
+          yield* storeReport(harness, {
+            outcome: "succeeded",
+            summary: "  Deployment verified.  ",
+          });
+        harness.world.setStatus(threadId, 1, "completed", "Last assistant message.");
+        yield* runtime.drain;
+        yield* runtime.drain;
+        const done = yield* onlyTask;
+        const summary = report === "present" ? "Deployment verified." : "Last assistant message.";
+        assert.strictEqual(done.status, "completed");
+        assert.strictEqual(done.resultSummary, summary);
+        assert.strictEqual(done.completionReport, report);
+        const completions = (yield* taskEvents).filter((event) => event.type === "task.completed");
+        assert.strictEqual(completions.length, 1);
+        assert.strictEqual(completions[0]!.payload.report, report);
+        assert.strictEqual(completions[0]!.payload.summary, summary);
+        const records = yield* botMessages;
+        const chips = records.turnItems.flatMap((item) =>
+          item.type === "notification" && item.ledgerTask?.taskId === task.taskId
+            ? [item.ledgerTask]
+            : [],
+        );
+        assert.strictEqual(chips.at(-1)?.status, "completed");
+        assert.strictEqual(chips.at(-1)?.completionReport, report);
+        assert.strictEqual(resultsTo(harness.slackSent, "result").length, 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect.each(["failed", "cancelled"] as const)(
+    "keeps run-level %s authoritative over a succeeded report",
+    (status) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { threadId, runtime } = yield* startTask();
+        yield* storeReport(harness, { outcome: "succeeded", summary: "Claimed success." });
+        harness.world.setStatus(threadId, 1, status);
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, status);
+        const events = yield* taskEvents;
+        if (status === "failed") {
+          const failure = events.find((event) => event.type === "task.failed");
+          assert.strictEqual(failure?.payload.reason, "failed");
+        } else {
+          assert.isTrue(events.some((event) => event.type === "task.cancelled"));
+        }
+        assert.isFalse(events.some((event) => event.type === "task.completed"));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
 
   it.effect.each(["failed", "cancelled"] as const)(
     "ends a task waiting for an answer when its worker run %s",

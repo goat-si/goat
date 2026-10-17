@@ -78,6 +78,42 @@ describe("presentTaskChip", () => {
     });
   });
 
+  it("flags a completed task whose worker did not report, even with an open question count", () => {
+    for (const openQuestionCount of [0, 2]) {
+      expect(
+        presentTaskChip(
+          chip({ status: "completed", completionReport: "missing", openQuestionCount }),
+        ),
+      ).toMatchObject({ statusLabel: "Done", attentionLabel: "Finished without a report" });
+    }
+    expect(
+      presentTaskChip(
+        chip({ status: "running", completionReport: "missing", openQuestionCount: 1 }),
+      ).attentionLabel,
+    ).toBe("1 question");
+  });
+
+  it.each(["present", undefined] as const)(
+    "preserves question labels when completion report is %s",
+    (completionReport) => {
+      for (const [openQuestionCount, label] of [
+        [0, null],
+        [1, "1 question"],
+        [3, "3 questions"],
+      ] as const) {
+        expect(
+          presentTaskChip(
+            chip({
+              status: "completed",
+              ...(completionReport === undefined ? {} : { completionReport }),
+              openQuestionCount,
+            }),
+          ).attentionLabel,
+        ).toBe(label);
+      }
+    },
+  );
+
   it("counts open questions and drops an empty summary", () => {
     expect(presentTaskChip(chip({ openQuestionCount: 1, status: "waiting_input" }))).toMatchObject({
       statusLabel: "Needs your input",
@@ -148,6 +184,27 @@ describe("goatBotItemReaders", () => {
     if (item.type !== "user_message") throw new Error("expected a user message");
     expect(goatBotItemReaders.message(item)).toBeNull();
   });
+
+  it.each(["missing", "present", undefined] as const)(
+    "decodes report %s through the notification reader",
+    (completionReport) => {
+      const item = decodeItem({
+        ...baseJson,
+        type: "notification",
+        source: { kind: "background_task" },
+        outcome: "updated",
+        summary: "Finished",
+        ledgerTask: chip({
+          status: "completed",
+          ...(completionReport === undefined ? {} : { completionReport }),
+        }),
+      });
+      if (item.type !== "notification") throw new Error("expected a notification");
+      expect(goatBotItemReaders.taskCard(item)?.attentionLabel).toBe(
+        completionReport === "missing" ? "Finished without a report" : null,
+      );
+    },
+  );
 
   it("turns a notification's ledger task into a card and ignores plain notifications", () => {
     const notification = (ledgerTask: unknown) =>

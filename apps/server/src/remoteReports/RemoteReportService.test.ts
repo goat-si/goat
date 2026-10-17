@@ -11,6 +11,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2StoredEvent,
+  type ThreadResultReport,
 } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
@@ -366,6 +367,73 @@ test("observes completed A after B starts and summarizes only A's last assistant
         .reason,
     ).toBe("run_not_found");
   }));
+it.effect.each(["succeeded", "failed", "cancelled", "blocked"] as const)(
+  "returns the stored %s outcome for the watched terminal run",
+  (outcome) =>
+    withFixture(({ service, state, sql }) =>
+      Effect.gen(function* () {
+        state.runs = [run(runA, "completed"), run(runB, "completed", 2)];
+        state.latestRunId = runB;
+        state.messages = [message("a1", runA, "Assistant text is not the structured summary.")];
+        const report: ThreadResultReport = { outcome, summary: "  Verified report. \n" };
+        yield* sql`
+          INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+          VALUES (${threadId}, ${runA}, ${JSON.stringify(report)}, ${"2026-10-12T00:00:00.000Z"})
+        `;
+        const result = yield* service.wait(waitInput);
+        expect(result.observedRun).toMatchObject({
+          runId: runA,
+          status: "completed",
+          summary: "Assistant text is not the structured summary.",
+          reported: { outcome, summary: "Verified report." },
+        });
+        const unreported = yield* service.wait({ ...waitInput, watchRunId: runB });
+        expect(unreported.observedRun).not.toHaveProperty("reported");
+      }),
+    ),
+);
+
+it.effect.each([undefined, " \n ", "x".repeat(4000)])(
+  "omits a blank reported summary and bounds a full-length summary (%#)",
+  (summary) =>
+    withFixture(({ service, state, sql }) =>
+      Effect.gen(function* () {
+        state.runs = [run(runA, "completed")];
+        const report: ThreadResultReport = {
+          outcome: "succeeded",
+          ...(summary === undefined ? {} : { summary }),
+        };
+        yield* sql`
+          INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+          VALUES (${threadId}, ${runA}, ${JSON.stringify(report)}, ${"2026-10-12T00:00:00.000Z"})
+        `;
+        const result = yield* service.wait(waitInput);
+        expect(result.observedRun?.reported).toEqual(
+          summary?.trim()
+            ? { outcome: "succeeded", summary: "x".repeat(4000) }
+            : { outcome: "succeeded" },
+        );
+      }),
+    ),
+);
+
+it.effect.each(["queued", "running"] as const)(
+  "does not expose a stored result while the run is %s",
+  (status) =>
+    withFixture(({ service, state, sql }) =>
+      Effect.gen(function* () {
+        state.runs = [run(runA, status)];
+        yield* sql`
+          INSERT INTO thread_run_results (thread_id, run_id, report_json, reported_at)
+          VALUES (${threadId}, ${runA}, ${JSON.stringify({ outcome: "failed", summary: "Still revising." })}, ${"2026-10-12T00:00:00.000Z"})
+        `;
+        const result = yield* service.wait({ ...waitInput, knownRun: null, timeoutMs: 0 });
+        expect(result.observedRun?.status).toBe(status);
+        expect(result.observedRun).not.toHaveProperty("reported");
+      }),
+    ),
+);
+
 test("wakes from the report PubSub with no run event", ({ service, subscribed }) =>
   Effect.gen(function* () {
     const fiber = yield* service.wait(waitInput).pipe(Effect.forkChild);
