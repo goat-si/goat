@@ -5,7 +5,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type ChannelReceptionInput,
   type ChannelTask,
-  type ChannelTaskEvent,
+  ChannelTaskEvent,
   type RemoteReportedOutcome,
   ProjectId,
   EnvironmentId,
@@ -14,22 +14,20 @@ import {
   type RemoteReportKind,
   type RuntimeMode,
 } from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
 import * as Logger from "effect/Logger";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
-import * as ChannelDispatcher from "./ChannelDispatcher.ts";
-import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -120,8 +118,6 @@ class RemoteMachine {
   /** After the answer's run, another run starts at once and asks this. */
   questionInRunAfterAnswer: string | undefined;
   readonly release = Deferred.makeUnsafe<void>();
-  /** Test handshake: the observer has reached its second terminal observation. */
-  onSettleWait: Effect.Effect<void> = Effect.void;
   private readonly pendingThreads = new Map<string, string>();
   private readonly everFiled = new Map<string, Array<RemoteReport>>();
   private changed = Deferred.makeUnsafe<void>();
@@ -412,7 +408,6 @@ class RemoteMachine {
                       known.holds.continuationPending !== (holds?.continuationPending ?? false)));
                 const timeoutMs = call.arguments.timeoutMs as number;
                 if (changed || timeoutMs === 0) return first.value;
-                if (timeoutMs === REMOTE_SETTLE_WAIT_MS) yield* machine.onSettleWait;
                 yield* Effect.raceFirst(
                   Deferred.await(machine.changed),
                   Effect.sleep(Duration.millis(timeoutMs)),
@@ -519,47 +514,20 @@ const readState = (taskId: ChannelTask["taskId"]) =>
     return JSON.parse(json ?? "{}") as { readonly readKey: string; readonly cursor: number };
   });
 
-/**
- * Drive the real remote service with a commit notification around the real ledger. This runtime
- * owns the launch/observer so no second observer races it. Await commits, never poll task state.
- */
-const reportedOutcomeRuntime = Effect.gen(function* () {
-  const committed = yield* Queue.unbounded<ChannelTaskEvent>();
-  const remoteContext = yield* Layer.build(
-    ChannelRemoteWorkers.layer.pipe(
-      Layer.updateService(ChannelLedger.ChannelLedger, (ledger) => ({
-        ...ledger,
-        applyTaskEvent: (input) =>
-          ledger
-            .applyTaskEvent(input)
-            .pipe(
-              Effect.tap((sequence) => Queue.offer(committed, { ...input.write.event, sequence })),
-            ),
-      })),
-    ),
-  );
-  const remote = Context.get(remoteContext, ChannelRemoteWorkers.ChannelRemoteWorkers);
-  const dispatcherContext = yield* Layer.build(
-    ChannelDispatcher.layer.pipe(
-      Layer.updateService(ChannelRemoteWorkers.ChannelRemoteWorkers, () => remote),
-    ),
-  );
-  const dispatcher = Context.get(dispatcherContext, ChannelDispatcher.ChannelDispatcher);
-  const runtimeContext = yield* Layer.build(
-    ChannelRuntime.layer.pipe(
-      Layer.updateService(ChannelRemoteWorkers.ChannelRemoteWorkers, () => remote),
-      Layer.updateService(ChannelDispatcher.ChannelDispatcher, () => dispatcher),
-    ),
-  );
-  const runtime = Context.get(runtimeContext, ChannelRuntime.ChannelRuntime);
-  const event = (predicate: (event: ChannelTaskEvent) => boolean) =>
-    Stream.fromQueue(committed).pipe(
-      Stream.filter(predicate),
-      Stream.runHead,
-      Effect.map(Option.getOrThrow),
+/** Read the persisted event after until has driven the task to its expected state. */
+const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly event_json: string }>`
+      SELECT event_json FROM channel_task_events
+      WHERE task_id = ${task.taskId} AND type = ${type}
+      ORDER BY sequence DESC LIMIT 1
+    `;
+    assert.lengthOf(rows, 1);
+    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
+      rows[0]!.event_json,
     );
-  return { runtime, event };
-});
+  });
 
 describe("memory grants on another machine", () => {
   it.effect.each([
@@ -573,15 +541,12 @@ describe("memory grants on another machine", () => {
       const { machine, harness } = remoteHarness();
       return Effect.gen(function* () {
         yield* setupBot;
-        const { runtime, event } = yield* reportedOutcomeRuntime;
         const gateway = yield* ChannelGateway.ChannelGateway;
         yield* gateway.ingest(goatInput("do@mac-studio: use memory", "remote-memory"), {
           ...rpcContext,
           grantedScopes: [...owner.grantedScopes, ...scopes],
         });
-        yield* runtime.drain;
-        yield* event((event) => event.type === "task.worker.bound");
-        const task = yield* onlyTask;
+        const task = yield* until("running", (task) => task.status === "running");
         assert.strictEqual(task.status, "running");
         assert.strictEqual(task.target?.memoryGrantCeiling, ceiling);
         assert.lengthOf(machine.launches, 1);
@@ -594,7 +559,9 @@ describe("memory grants on another machine", () => {
           assert.notProperty(machine.launches[0]!, "memoryGrantCeiling");
         }
         assert.lengthOf(harness.world.launches, 0);
-      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 
@@ -602,7 +569,7 @@ describe("memory grants on another machine", () => {
     const { machine, harness } = remoteHarness();
     return Effect.gen(function* () {
       yield* setupBot;
-      const { runtime, event } = yield* reportedOutcomeRuntime;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
       yield* runtime.drain;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const receipt = yield* gateway.ingest(
@@ -642,12 +609,11 @@ describe("memory grants on another machine", () => {
         },
         { owner: runtime.ownerToken },
       );
-      yield* runtime.drain;
-      yield* event((event) => event.type === "task.worker.bound");
-      assert.strictEqual((yield* onlyTask).target?.memoryGrantCeiling, "read");
+      const recovered = yield* until("recovered", (task) => task.status === "running");
+      assert.strictEqual(recovered.target?.memoryGrantCeiling, "read");
       assert.lengthOf(machine.launches, 1);
       assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
-    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect(
@@ -658,17 +624,15 @@ describe("memory grants on another machine", () => {
       machine.refuseLaunchCode = SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED;
       return Effect.gen(function* () {
         yield* setupBot;
-        const { runtime, event } = yield* reportedOutcomeRuntime;
         yield* (yield* ChannelGateway.ChannelGateway).ingest(
           goatInput("do@mac-studio: memory required", "memory-refused"),
           { ...rpcContext, grantedScopes: [...owner.grantedScopes, "memory:read"] },
         );
-        yield* runtime.drain;
-        const failure = yield* event((event) => event.type === "task.failed");
+        const task = yield* until("failed", (task) => task.status === "failed");
+        const failure = yield* readTaskEvent(task, "task.failed");
         if (failure.type !== "task.failed") return yield* Effect.die("expected task.failed");
         assert.strictEqual(failure.payload.reason, "memory_unsupported");
         assert.strictEqual(failure.payload.summary, REMOTE_COPY.memoryUnsupported(machine.host));
-        const task = yield* onlyTask;
         assert.strictEqual(task.status, "failed");
         assert.strictEqual(task.resultSummary, REMOTE_COPY.memoryUnsupported(machine.host));
         assert.strictEqual(task.target?.memoryGrantCeiling, "read");
@@ -676,7 +640,7 @@ describe("memory grants on another machine", () => {
         assert.isTrue(machine.calls.some((call) => call.tool === "goat_origin_reports_wait"));
         // Even a later pass well beyond the launch grace must not retry without memory.
         yield* TestClock.adjust(Duration.minutes(6));
-        yield* runtime.drain;
+        yield* settle();
         assert.lengthOf(machine.launches, 1);
         assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
         assert.lengthOf(harness.world.launches, 0);
@@ -687,7 +651,9 @@ describe("memory grants on another machine", () => {
           ),
         );
         assert.notInclude(JSON.stringify([task, records.messages]), "do-not-show");
-      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 });
@@ -700,33 +666,28 @@ describe("reported outcomes from another machine", () => {
     const { machine, harness } = remoteHarness();
     return Effect.gen(function* () {
       yield* setupBot;
-      const { runtime, event } = yield* reportedOutcomeRuntime;
       const gateway = yield* ChannelGateway.ChannelGateway;
       yield* gateway.ingest(goatInput("do@mac-studio: deploy", "reported-failure"), rpcContext);
-      yield* runtime.drain;
-      yield* event((event) => event.type === "task.worker.bound");
-      const settleWaiting = yield* Deferred.make<void>();
-      machine.onSettleWait = Deferred.succeed(settleWaiting, undefined).pipe(Effect.asVoid);
+      yield* until("running", (task) => task.status === "running");
       machine.finishRun(correlationOf(machine), "completed", "Claimed success.", {
         outcome,
         summary: "  Deployment failed.  ",
       });
-      yield* Deferred.await(settleWaiting);
-      yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
-      const failure = yield* event((event) => event.type === "task.failed");
+
+      const task = yield* until("failed", (task) => task.status === "failed");
+      const failure = yield* readTaskEvent(task, "task.failed");
       if (failure.type !== "task.failed") throw new Error("expected a failure");
       assert.strictEqual(failure.payload.reason, reason);
-      const task = yield* onlyTask;
       assert.strictEqual(task.status, "failed");
       assert.strictEqual(task.resultSummary, "Deployment failed.");
-      yield* runtime.drain;
+      yield* settle();
       const records = yield* botMessages;
       assert.isFalse(
         records.turnItems.some(
           (item) => item.type === "notification" && item.ledgerTask?.status === "completed",
         ),
       );
-    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect.each(["failed", "cancelled"] as const)(
@@ -735,21 +696,18 @@ describe("reported outcomes from another machine", () => {
       const { machine, harness } = remoteHarness();
       return Effect.gen(function* () {
         yield* setupBot;
-        const { runtime, event } = yield* reportedOutcomeRuntime;
         const gateway = yield* ChannelGateway.ChannelGateway;
         yield* gateway.ingest(goatInput("do@mac-studio: deploy", "run-level-failure"), rpcContext);
-        yield* runtime.drain;
-        yield* event((event) => event.type === "task.worker.bound");
-        const settleWaiting = yield* Deferred.make<void>();
-        machine.onSettleWait = Deferred.succeed(settleWaiting, undefined).pipe(Effect.asVoid);
+        yield* until("running", (task) => task.status === "running");
         machine.finishRun(correlationOf(machine), status, "Assistant summary.", {
           outcome: "succeeded",
           summary: "Claimed success.",
         });
-        yield* Deferred.await(settleWaiting);
-        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
-        const terminal = yield* event(
-          (event) => event.type === "task.failed" || event.type === "task.cancelled",
+
+        const task = yield* until(status, (task) => task.status === status);
+        const terminal = yield* readTaskEvent(
+          task,
+          status === "failed" ? "task.failed" : "task.cancelled",
         );
         assert.strictEqual((yield* onlyTask).status, status);
         if (status === "failed") {
@@ -764,7 +722,9 @@ describe("reported outcomes from another machine", () => {
           assert.strictEqual((yield* onlyTask).resultSummary, "The coding thread was stopped.");
         }
         assert.isUndefined((yield* onlyTask).completionReport);
-      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 
@@ -774,13 +734,9 @@ describe("reported outcomes from another machine", () => {
       const { machine, harness } = remoteHarness();
       return Effect.gen(function* () {
         yield* setupBot;
-        const { runtime, event } = yield* reportedOutcomeRuntime;
         const gateway = yield* ChannelGateway.ChannelGateway;
         yield* gateway.ingest(goatInput("do@mac-studio: deploy", "reported-success"), rpcContext);
-        yield* runtime.drain;
-        yield* event((event) => event.type === "task.worker.bound");
-        const settleWaiting = yield* Deferred.make<void>();
-        machine.onSettleWait = Deferred.succeed(settleWaiting, undefined).pipe(Effect.asVoid);
+        yield* until("running", (task) => task.status === "running");
         machine.finishRun(
           correlationOf(machine),
           "completed",
@@ -789,24 +745,25 @@ describe("reported outcomes from another machine", () => {
             ? { outcome: "succeeded", summary: "  Verified deployment.  " }
             : undefined,
         );
-        yield* Deferred.await(settleWaiting);
-        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
-        const completion = yield* event((event) => event.type === "task.completed");
+
+        const task = yield* until("completed", (task) => task.status === "completed", 400);
+        const completion = yield* readTaskEvent(task, "task.completed");
         if (completion.type !== "task.completed") throw new Error("expected completion");
         const summary = report === "present" ? "Verified deployment." : "Assistant summary.";
         assert.strictEqual(completion.payload.report, report);
         assert.strictEqual(completion.payload.summary, summary);
-        const task = yield* onlyTask;
         assert.strictEqual(task.status, "completed");
         assert.strictEqual(task.resultSummary, summary);
         assert.strictEqual(task.completionReport, report);
-        yield* runtime.drain;
+        yield* settle();
         const records = yield* botMessages;
         const chips = records.turnItems.flatMap((item) =>
           item.type === "notification" && item.ledgerTask !== undefined ? [item.ledgerTask] : [],
         );
         assert.strictEqual(chips.at(-1)?.completionReport, report);
-      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 
@@ -823,35 +780,25 @@ describe("reported outcomes from another machine", () => {
       const { machine, harness } = remoteHarness();
       return Effect.gen(function* () {
         yield* setupBot;
-        const { runtime, event } = yield* reportedOutcomeRuntime;
         const gateway = yield* ChannelGateway.ChannelGateway;
         yield* gateway.ingest(goatInput("do@mac-studio: deploy", "reported-blocked"), rpcContext);
-        yield* runtime.drain;
-        yield* event((event) => event.type === "task.worker.bound");
+        yield* until("running", (task) => task.status === "running");
         const original = yield* onlyTask;
         const correlationId = correlationOf(machine);
-        const settleWaiting = yield* Deferred.make<void>();
-        machine.onSettleWait = Deferred.succeed(settleWaiting, undefined).pipe(Effect.asVoid);
         machine.finishRun(correlationId, "completed", "Done.", {
           outcome: "blocked",
           ...(summary === undefined ? {} : { summary }),
         });
-        yield* Deferred.await(settleWaiting);
-        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
-        yield* event((event) => event.type === "task.question.opened");
-        const waiting = yield* onlyTask;
+
+        const waiting = yield* until("blocked", (task) => task.status === "waiting_input", 400);
         assert.strictEqual(waiting.status, "waiting_input");
         assert.strictEqual(waiting.openQuestions.length, 1);
         assert.strictEqual(waiting.openQuestions[0]?.text, question);
         yield* gateway.ingest(goatInput("answer: staging", "reported-blocked-answer"), rpcContext);
-        yield* runtime.drain;
-        const rebound = yield* event(
-          (event) =>
-            event.type === "task.worker.bound" &&
-            event.payload.worker.runId !== original.worker?.runId,
+        const resumed = yield* until(
+          "resumed with a new run",
+          (task) => task.status === "running" && task.worker?.runId !== original.worker?.runId,
         );
-        if (rebound.type !== "task.worker.bound") throw new Error("expected worker binding");
-        const resumed = yield* onlyTask;
         assert.strictEqual(resumed.taskId, original.taskId);
         assert.strictEqual(resumed.generation, original.generation);
         assert.strictEqual(resumed.status, "running");
@@ -860,14 +807,13 @@ describe("reported outcomes from another machine", () => {
         assert.strictEqual(machine.runs(correlationId).length, 2);
         assert.strictEqual(machine.launches.length, 1);
         assert.strictEqual(machine.sends.length, 1);
-        const secondSettleWaiting = yield* Deferred.make<void>();
-        machine.onSettleWait = Deferred.succeed(secondSettleWaiting, undefined).pipe(Effect.asVoid);
         machine.finishRun(correlationId, "completed", "Deployed to staging.");
-        yield* Deferred.await(secondSettleWaiting);
-        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
-        yield* event((event) => event.type === "task.completed");
+
+        yield* until("completed", (task) => task.status === "completed", 400);
         assert.strictEqual((yield* onlyTask).resultSummary, "Deployed to staging.");
-      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 });
