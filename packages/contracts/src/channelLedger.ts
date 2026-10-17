@@ -110,6 +110,8 @@ export const ChannelDispatchTarget = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: ChannelWorkspaceStrategy,
   remote: Schema.optional(ChannelRemoteTarget),
+  /** Why this machine and provider account were chosen, such as "Codex · 46% weekly used". */
+  placementReason: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(300))),
   /**
    * The memory the worker may use, captured from the requester when the target is chosen so
    * relaunches and remote recovery reuse it and never widen it. Absent means none.
@@ -297,6 +299,8 @@ export const ChannelTaskChip = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   worker: Schema.optional(ChannelWorkerRef),
+  /** Copied from the task's target: why it runs where it runs. */
+  placementReason: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(300))),
   summary: Schema.optional(Schema.String),
   openQuestionCount: NonNegativeInt,
   completionReport: Schema.optional(ChannelTaskCompletionReport),

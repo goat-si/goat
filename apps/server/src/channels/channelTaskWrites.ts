@@ -69,6 +69,9 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
           ...(task.worker.host === undefined ? {} : { host: task.worker.host }),
         },
       }),
+  ...(task.target?.placementReason === undefined
+    ? {}
+    : { placementReason: task.target.placementReason }),
   ...(task.resultSummary === undefined ? {} : { summary: task.resultSummary }),
   openQuestionCount: task.openQuestions.length,
   ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),

@@ -39,7 +39,7 @@ export interface GoatBotTaskCard {
   readonly tone: GoatBotCardTone;
   /**
    * The requester, prefixed by the originating channel for requests made elsewhere and followed
-   * by the machine that runs remote work.
+   * by the machine that runs remote work and why the work was placed there.
    */
   readonly sourceLabel: string | null;
   readonly summary: string | null;

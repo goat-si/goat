@@ -113,6 +113,26 @@ describe("presentTaskChip", () => {
       }
     },
   );
+  it("says why the work runs where it runs, before and after the worker starts", () => {
+    const { worker: _worker, ...noWorker } = chip();
+    expect(
+      presentTaskChip({
+        ...noWorker,
+        status: "dispatching",
+        placementReason: "Codex (work) · 12% weekly used",
+      }).sourceLabel,
+    ).toBe("Jun · Codex (work) · 12% weekly used");
+    const worker = {
+      environmentId: EnvironmentId.make("remote-env"),
+      threadId: ThreadId.make("worker"),
+      host: "mac-studio",
+    };
+    expect(
+      presentTaskChip(
+        chip({ originKind: "slack", worker, placementReason: "Codex · 46% weekly used" }),
+      ).sourceLabel,
+    ).toBe("Slack · Jun · on mac-studio · Codex · 46% weekly used");
+  });
 
   it("counts open questions and drops an empty summary", () => {
     expect(presentTaskChip(chip({ openQuestionCount: 1, status: "waiting_input" }))).toMatchObject({

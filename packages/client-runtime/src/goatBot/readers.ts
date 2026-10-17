@@ -61,6 +61,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   const prefix = SOURCE_PREFIX[chip.originKind];
   const summary = chip.summary?.trim() ?? "";
   const host = chip.worker?.host;
+  const placement = chip.placementReason?.trim() ?? "";
   const requester = prefix === null ? chip.requesterLabel : `${prefix} · ${chip.requesterLabel}`;
   return {
     key: chip.taskId,
@@ -69,7 +70,11 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     title: chip.title,
     statusLabel: status.label,
     tone: status.tone,
-    sourceLabel: host === undefined ? requester : `${requester} · on ${host}`,
+    sourceLabel: [
+      requester,
+      ...(host === undefined ? [] : [`on ${host}`]),
+      ...(placement === "" ? [] : [placement]),
+    ].join(" · "),
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
     target:

@@ -15,6 +15,8 @@
 export const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
 export const LOAD_PENALTY = 40;
+/** Reasons are cut to this length; the chip has room for one short line. */
+export const PLACEMENT_REASON_CHARS = 200;
 
 export interface PlacementWindow {
   readonly label: string;
@@ -103,11 +105,12 @@ export function choosePlacement<A>(
   if (allExhausted) {
     return {
       chosen,
-      reason:
+      reason: clip(
         labelOf(chosen) +
-        (candidates.length === 1
-          ? " · at its usage limit"
-          : " · every candidate is at its usage limit"),
+          (candidates.length === 1
+            ? " · at its usage limit"
+            : " · every candidate is at its usage limit"),
+      ),
     };
   }
   const skipped = candidates.filter((candidate) => isExhausted(candidate, now));
@@ -136,5 +139,10 @@ export function choosePlacement<A>(
   if (skipped.length > 0) {
     parts.push(skipped.map(labelOf).join(", ") + " at usage limit");
   }
-  return { chosen, reason: parts.join(" · ") };
+  return { chosen, reason: clip(parts.join(" · ")) };
 }
+
+const clip = (reason: string) =>
+  reason.length <= PLACEMENT_REASON_CHARS
+    ? reason
+    : reason.slice(0, PLACEMENT_REASON_CHARS - 1).trimEnd() + "…";
