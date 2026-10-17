@@ -93,6 +93,53 @@ describe("task transitions", () => {
     }
   });
 
+  it("moves only active tasks into the next generation and drops the old worker and target", () => {
+    const payload = { generation: 3, host: "mini", fromHost: "mac-studio", replicaCapturedAt: NOW };
+    for (const generation of [1, 2, 4]) {
+      assert.isFalse(
+        applyChannelTaskEvent(task(), event("task.moved", { ...payload, generation })).ok,
+      );
+    }
+    for (const status of ["received", "completed", "failed", "cancelled"]) {
+      assert.isFalse(applyChannelTaskEvent(task({ status }), event("task.moved", payload)).ok);
+    }
+    for (const status of ["dispatching", "running", "waiting_input"]) {
+      const moved = applyChannelTaskEvent(
+        task({
+          status,
+          host: "mac-studio",
+          projectId: "project-old",
+          target: {
+            environmentId: "env-1",
+            projectId: "project-old",
+            modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            workspaceStrategy: { type: "root" },
+          },
+          openQuestions: [{ questionId: "q-old", text: "Continue?", askedAt: NOW }],
+        }),
+        event("task.moved", payload),
+      );
+      assert.isTrue(moved.ok);
+      if (!moved.ok) continue;
+      assert.strictEqual(moved.task.status, "received");
+      assert.strictEqual(moved.task.generation, 3);
+      assert.strictEqual(moved.task.host, "mini");
+      assert.strictEqual(moved.task.version, 5);
+      assert.isUndefined(moved.task.worker);
+      assert.isUndefined(moved.task.target);
+      assert.isUndefined(moved.task.projectId);
+      assert.deepStrictEqual(moved.task.openQuestions, []);
+      assert.deepStrictEqual(moved.task.movedFrom, {
+        host: "mac-studio",
+        generation: 2,
+        at: NOW,
+        replicaCapturedAt: NOW,
+      });
+    }
+  });
+
   it("sends an answered dispatcher question back to dispatch and a worker question back to the worker", () => {
     const question = { questionId: "q-1", text: "Which project?", askedAt: NOW };
     const answer = event("task.question.answered", { questionId: "q-1", answer: "this one" });

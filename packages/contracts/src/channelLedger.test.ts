@@ -160,6 +160,39 @@ describe("channel tasks", () => {
     ).toThrow();
   });
 
+  it("round-trips a move and the copy provenance on tasks and chips", () => {
+    const replicaCapturedAt = "2026-10-12T00:00:04.000Z";
+    const movedFrom = { host: "mac-studio", generation: 1, at: task.updatedAt, replicaCapturedAt };
+    expect(
+      roundTrip(ChannelTaskEvent, {
+        eventId: "move-1",
+        sequence: 4,
+        taskId: task.taskId,
+        taskVersion: 4,
+        occurredAt: task.updatedAt,
+        actor: "user",
+        type: "task.moved",
+        payload: { generation: 2, host: "mini", fromHost: "mac-studio", replicaCapturedAt },
+      }),
+    ).toMatchObject({ type: "task.moved", payload: { generation: 2, replicaCapturedAt } });
+    expect(roundTrip(ChannelTask, { ...task, movedFrom }).movedFrom).toEqual(movedFrom);
+    expect(
+      roundTrip(ChannelTaskChip, {
+        taskId: task.taskId,
+        conversationId: task.conversationId,
+        taskVersion: 4,
+        title: task.title,
+        status: "received",
+        originKind: "slack",
+        requesterLabel: "Jun",
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        openQuestionCount: 0,
+        movedFrom,
+      }).movedFrom,
+    ).toEqual(movedFrom);
+  });
+
   it("treats only completed, failed, and cancelled as terminal", () => {
     expect(
       (["received", "dispatching", "running", "waiting_input"] as const).map(isChannelTaskTerminal),

@@ -168,6 +168,18 @@ export type ChannelProposedCompletion = typeof ChannelProposedCompletion.Type;
 export const ChannelTaskCompletionReport = Schema.Literals(["present", "missing"]);
 export type ChannelTaskCompletionReport = typeof ChannelTaskCompletionReport.Type;
 
+/**
+ * The machine a task left when it continued on another one, because the first stopped answering.
+ * `replicaCapturedAt` is when the work it continued from was copied off that machine.
+ */
+export const ChannelTaskMove = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  generation: PositiveInt,
+  at: IsoDateTime,
+  replicaCapturedAt: IsoDateTime,
+});
+export type ChannelTaskMove = typeof ChannelTaskMove.Type;
+
 export const ChannelTask = Schema.Struct({
   taskId: ChannelTaskId,
   conversationId: ChannelConversationId,
@@ -195,6 +207,8 @@ export const ChannelTask = Schema.Struct({
   openQuestions: Schema.Array(ChannelOpenQuestion),
   /** The worker thread's pull requests, pending native requests and usage-limit wait. */
   observed: Schema.optional(ChannelWorkerObservation),
+  /** Set when the task continued here from a machine that stopped answering. */
+  movedFrom: Schema.optional(ChannelTaskMove),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   completedAt: Schema.optional(IsoDateTime),
@@ -215,6 +229,7 @@ export const ChannelTaskEventType = Schema.Literals([
   "task.cancelled",
   "task.retry.requested",
   "task.worker.observed",
+  "task.moved",
 ]);
 export type ChannelTaskEventType = typeof ChannelTaskEventType.Type;
 
@@ -297,6 +312,17 @@ export const ChannelTaskEvent = Schema.Union([
     generation: PositiveInt,
     observed: ChannelWorkerObservation,
   }),
+  /**
+   * The worker's machine stopped answering and the task continues on `host` from the copy of its
+   * work taken at `replicaCapturedAt`. Starts the next generation, so reports from the machine
+   * it left are stale even when that machine wakes up.
+   */
+  taskEvent("task.moved", {
+    generation: PositiveInt,
+    host: TrimmedNonEmptyString,
+    fromHost: TrimmedNonEmptyString,
+    replicaCapturedAt: IsoDateTime,
+  }),
 ]);
 export type ChannelTaskEvent = typeof ChannelTaskEvent.Type;
 
@@ -322,6 +348,8 @@ export const ChannelTaskChip = Schema.Struct({
   openQuestionCount: NonNegativeInt,
   completionReport: Schema.optional(ChannelTaskCompletionReport),
   observed: Schema.optional(ChannelWorkerObservation),
+  /** Copied from the task: the machine it continued from. */
+  movedFrom: Schema.optional(ChannelTaskMove),
 });
 export type ChannelTaskChip = typeof ChannelTaskChip.Type;
 

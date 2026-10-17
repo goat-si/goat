@@ -32,6 +32,7 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.cancelled": ["received", "dispatching", "running", "waiting_input"],
   "task.retry.requested": ["completed", "failed", "cancelled"],
   "task.worker.observed": ["running", "waiting_input"],
+  "task.moved": ["dispatching", "running", "waiting_input"],
 };
 
 const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
@@ -65,9 +66,13 @@ export function applyChannelTaskEvent(
   if (!allowedFrom[event.type].includes(task.status)) {
     return reject(`${event.type} is not allowed while the task is ${task.status}.`);
   }
-  if (event.type === "task.retry.requested") {
+  if (event.type === "task.retry.requested" || event.type === "task.moved") {
     if (event.payload.generation !== task.generation + 1) {
-      return reject("A retry must start the next generation.");
+      return reject(
+        event.type === "task.moved"
+          ? "A move must start the next generation."
+          : "A retry must start the next generation.",
+      );
     }
   } else {
     const generation = eventGeneration(event);
@@ -202,5 +207,32 @@ export function applyChannelTaskEvent(
     }
     case "task.worker.observed":
       return { ok: true, task: { ...base, observed: event.payload.observed } };
+    case "task.moved": {
+      // The new machine resolves its own project and starts a new worker from the copied work.
+      const {
+        proposedCompletion: _proposed,
+        worker: _worker,
+        target: _target,
+        projectId: _projectId,
+        observed: _observed,
+        ...rest
+      } = base;
+      return {
+        ok: true,
+        task: {
+          ...rest,
+          status: "received",
+          generation: event.payload.generation,
+          host: event.payload.host,
+          openQuestions: [],
+          movedFrom: {
+            host: event.payload.fromHost,
+            generation: task.generation,
+            at: event.occurredAt,
+            replicaCapturedAt: event.payload.replicaCapturedAt,
+          },
+        },
+      };
+    }
   }
 }
