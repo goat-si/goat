@@ -122,7 +122,8 @@ const make = Effect.gen(function* () {
           // Local canonical data is already accounted for; append still performs hub ledger admission.
           if (yield* store.receipt(op.memorySpaceId, op.operationId)) return yield* commit;
         } else if (yield* store.receipt(op.memorySpaceId, op.operationId)) return yield* commit;
-        const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId);
+        // Quota charges the replaced live payload, which is always a current head.
+        const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId, { heads: true });
         const scope =
           op.kind === "forget"
             ? (current.identity?.scope ?? { kind: "user" as const })
@@ -387,7 +388,12 @@ const make = Effect.gen(function* () {
             if (promote) return yield* store.apply(decision);
             return replay;
           }
-          const aggregate = yield* store.loadAggregate(op.memorySpaceId, op.memoryId);
+          // Only a local first forget reads payloads: the source evidence it must exclude.
+          const aggregate = yield* store.loadAggregate(
+            op.memorySpaceId,
+            op.memoryId,
+            op.kind === "forget" ? { when: Store.hasSourceEvidence } : {},
+          );
           const identity = decision.identity ??
             aggregate.identity ?? {
               memorySpaceId: op.memorySpaceId,

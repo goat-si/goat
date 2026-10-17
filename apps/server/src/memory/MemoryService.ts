@@ -631,7 +631,11 @@ const make = Effect.fnUntraced(function* (
           )
             return old;
         }
-        const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId);
+        // The decider reads the whole DAG but only the head and restored payloads.
+        const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId, {
+          heads: true,
+          revisionIds: op.kind === "revert" ? [op.restoredRevisionId] : [],
+        });
         if (admission.kind !== "approvedReplica" && current.pendingForget && op.kind !== "forget")
           return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
         let ancestry: Store.MemoryAncestry | undefined;
@@ -2214,7 +2218,16 @@ const make = Effect.fnUntraced(function* (
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
-    const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId);
+    // Resolve recomputes lineage from its input payloads; the decider needs heads and restored.
+    const current = yield* store.loadAggregate(op.memorySpaceId, op.memoryId, {
+      heads: true,
+      revisionIds:
+        op.kind === "resolve"
+          ? op.expectedHeads
+          : op.kind === "revert"
+            ? [op.restoredRevisionId]
+            : [],
+    });
     // Only the read-only semantic decision is caught; every subsequent write can fail the outer transaction.
     const prepared = yield* Effect.gen(function* () {
       yield* requireImportNotSuppressed(op);
