@@ -107,6 +107,62 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       return yield* setup.status(input);
     }),
   ),
+  goat_ssh_host_add: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const setup = yield* SshHostSetup.SshHostSetup;
+      return yield* setup.add(input, { kind: "mcp", scope }).pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({
+              code:
+                error._tag === "EnvironmentAuthorizationError"
+                  ? "capability_denied"
+                  : "orchestration_error",
+              message: error.message,
+            }),
+        ),
+      );
+    }),
+  ),
+  goat_ssh_host_prepare: McpToolAccess.writes((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const setup = yield* SshHostSetup.SshHostSetup;
+      return yield* setup.prepare(input, { kind: "mcp", scope }).pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({
+              code:
+                error._tag === "EnvironmentAuthorizationError"
+                  ? "capability_denied"
+                  : "orchestration_error",
+              message: error.message,
+            }),
+        ),
+      );
+    }),
+  ),
+  goat_ssh_host_forget: McpToolAccess.destructive(
+    McpToolAccess.writes((input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const setup = yield* SshHostSetup.SshHostSetup;
+        return yield* setup.forget(input, { kind: "mcp", scope }).pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({
+                code:
+                  error._tag === "EnvironmentAuthorizationError"
+                    ? "capability_denied"
+                    : "orchestration_error",
+                message: error.message,
+              }),
+          ),
+        );
+      }),
+    ),
+  ),
   goat_ssh_runtime_update: McpToolAccess.writesEnvironment((input, check) =>
     Effect.gen(function* () {
       const caller = yield* check;

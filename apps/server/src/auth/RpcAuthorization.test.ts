@@ -700,3 +700,15 @@ it.effect(
       }
     }).pipe(Effect.scoped),
 );
+
+it.each([
+  [WS_METHODS.sshHostStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.sshHostHandoffProgress, AuthOrchestrationReadScope],
+  [WS_METHODS.sshHostProbe, AuthSettingsWriteScope],
+  [WS_METHODS.sshHostTrust, AuthSettingsWriteScope],
+  [WS_METHODS.sshHostPrepare, AuthEnvironmentMaintainScope],
+  [WS_METHODS.sshHostForget, AuthSettingsWriteScope],
+] as const)("registers %s with its destination authority", (method, scope) => {
+  expect(WsRpcGroup.requests.has(method)).toBe(true);
+  expect(requiredScopeForRpcMethod(method)).toBe(scope);
+});

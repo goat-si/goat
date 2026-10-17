@@ -21,6 +21,10 @@ import {
   RpcScopeAuthorization,
   WsRpcGroup,
   WsSubscribeServerConfigRpc,
+  WsSshHostProbeRpc,
+  WsSshHostTrustRpc,
+  WsSshHostPrepareRpc,
+  WsSshHostForgetRpc,
   WsSshHostStatusRpc,
   WsSshHostHandoffProgressRpc,
 } from "./rpc.ts";
@@ -30,6 +34,10 @@ const decodeSshHandoffProgressPayload = Schema.decodeUnknownSync(
   WsSshHostHandoffProgressRpc.payloadSchema,
 );
 
+const decodeHostPrepare = Schema.decodeUnknownSync(WsSshHostPrepareRpc.payloadSchema, {
+  onExcessProperty: "error",
+});
+const decodeHostForget = Schema.decodeUnknownSync(WsSshHostForgetRpc.payloadSchema);
 /**
  * The client always sends `environmentThemes`, including to servers built
  * before the field existed, whose payload schema was an empty struct. What
@@ -338,4 +346,28 @@ it("import transport retains both typed import refusal and authorization errors"
   expect(
     Schema.decodeUnknownSync(rpc.errorSchema)({ _tag: "MemoryRpcError", code: "unavailable" }),
   ).toEqual(new Memory.MemoryRpcError({ code: "unavailable" }));
+});
+
+it("installs the complete SSH host transport together while leaving runtimeUpdate unregistered", () => {
+  const rpcs = [
+    WsSshHostProbeRpc,
+    WsSshHostTrustRpc,
+    WsSshHostPrepareRpc,
+    WsSshHostForgetRpc,
+    WsSshHostStatusRpc,
+    WsSshHostHandoffProgressRpc,
+  ];
+  for (const rpc of rpcs) expect(WsRpcGroup.requests.get(rpc._tag)).toBeDefined();
+  expect([...WsRpcGroup.requests.keys()].filter((tag) => tag.startsWith("sshHost."))).toHaveLength(
+    6,
+  );
+  expect(WsRpcGroup.requests.has("sshHost.runtimeUpdate")).toBe(false);
+  expect(decodeHostPrepare({ host: "box" })).toEqual({ host: "box" });
+  for (const key of ["force", "confirmReplacement", "requestedVersion"])
+    expect(() => decodeHostPrepare({ host: "box", [key]: true })).toThrow();
+  expect(() => decodeHostForget({ host: "box" })).toThrow();
+  expect(decodeHostForget({ host: "box", stopRuntime: "no" })).toEqual({
+    host: "box",
+    stopRuntime: "no",
+  });
 });

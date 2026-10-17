@@ -109,3 +109,14 @@ it("report retry reset is Settings-only", () =>
 it("hub reconcile requires Settings authority", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.memoryHubReconcile, {})).toEqual(["settings:write"]);
 });
+
+it("SSH setup separates read, settings and runtime-maintenance authority", () => {
+  for (const method of [WS_METHODS.sshHostProbe, WS_METHODS.sshHostTrust, WS_METHODS.sshHostForget])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["settings:write"]);
+  expect(clientRpcRequiredScopes(WS_METHODS.sshHostPrepare, {})).toEqual(["environment:maintain"]);
+  for (const method of [WS_METHODS.sshHostStatus, WS_METHODS.sshHostHandoffProgress])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:read"]);
+  expect(clientRpcRequiredScopes(WS_METHODS.handoffsRespond, {})).toEqual([
+    "orchestration:operate",
+  ]);
+});

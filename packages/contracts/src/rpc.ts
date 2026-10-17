@@ -7,6 +7,11 @@ import {
 } from "./handoff.ts";
 import * as Memory from "./memory.ts";
 import {
+  SshHostAddInput,
+  SshHostProbeResult,
+  SshHostTrustInput,
+  SshHostPrepareInput,
+  SshHostForgetInput,
   SshHostStatusInput,
   SshHostResult,
   SshHandoffProgressInput,
@@ -530,6 +535,10 @@ export const WS_METHODS = {
   vcsInit: "vcs.init",
   sshWorkspaceLaunch: "sshWorkspace.launch",
   sshWorkspaceFetchBack: "sshWorkspace.fetchBack",
+  sshHostProbe: "sshHost.probe",
+  sshHostTrust: "sshHost.trust",
+  sshHostPrepare: "sshHost.prepare",
+  sshHostForget: "sshHost.forget",
   sshHostStatus: "sshHost.status",
   sshHostHandoffProgress: "sshHost.handoffProgress",
 
@@ -1567,6 +1576,26 @@ const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
 });
 
 // Registered with authorization and handlers when the SSH setup transports are added.
+export const WsSshHostProbeRpc = Rpc.make(WS_METHODS.sshHostProbe, {
+  payload: SshHostAddInput,
+  success: SshHostProbeResult,
+  error: Schema.Union([HandoffError, EnvironmentAuthorizationError]),
+});
+export const WsSshHostTrustRpc = Rpc.make(WS_METHODS.sshHostTrust, {
+  payload: SshHostTrustInput,
+  success: SshHostResult,
+  error: EnvironmentAuthorizationError,
+});
+export const WsSshHostPrepareRpc = Rpc.make(WS_METHODS.sshHostPrepare, {
+  payload: SshHostPrepareInput,
+  success: SshHostResult,
+  error: Schema.Union([HandoffError, EnvironmentAuthorizationError]),
+});
+export const WsSshHostForgetRpc = Rpc.make(WS_METHODS.sshHostForget, {
+  payload: SshHostForgetInput,
+  success: SshHostResult,
+  error: EnvironmentAuthorizationError,
+});
 export const WsSshHostStatusRpc = Rpc.make(WS_METHODS.sshHostStatus, {
   payload: SshHostStatusInput,
   success: SshHostResult,
@@ -2363,6 +2392,12 @@ export const WsCoreRpcGroup = RpcGroup.make(
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
+  WsSshHostStatusRpc,
+  WsSshHostHandoffProgressRpc,
+  WsSshHostProbeRpc,
+  WsSshHostTrustRpc,
+  WsSshHostPrepareRpc,
+  WsSshHostForgetRpc,
   WsSshWorkspaceLaunchRpc,
   WsSshWorkspaceFetchBackRpc,
   WsReviewGetDiffPreviewRpc,

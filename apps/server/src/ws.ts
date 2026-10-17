@@ -1,3 +1,4 @@
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
@@ -1345,6 +1346,7 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const handoffs = yield* Handoffs.Handoffs;
+      const sshHostSetup = yield* SshHostSetup.SshHostSetup;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2354,7 +2356,8 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.rotateWebhookToken(input)),
           ),
         [WS_METHODS.handoffsOpen]: (input) => handoffs.open(input, currentSessionId),
-        [WS_METHODS.handoffsRespond]: (input) => handoffs.respond(input, currentSessionId),
+        [WS_METHODS.handoffsRespond]: (input) =>
+          sshHostSetup.respondHandoff(input, currentSessionId),
         [WS_METHODS.secretsAnswerRequest]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(handoffs.answerSecret(input, currentSessionId)),
@@ -3193,6 +3196,15 @@ const layerWsRpc = (
           gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
         [WS_METHODS.vcsSwitchRef]: (input) =>
           gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+        [WS_METHODS.sshHostStatus]: (input) => sshHostSetup.status(input),
+        [WS_METHODS.sshHostHandoffProgress]: (input) =>
+          sshHostSetup.handoffProgress(input, { kind: "client", sessionId: currentSessionId }),
+        [WS_METHODS.sshHostProbe]: (input) => sshHostSetup.probe(input, currentSessionId),
+        [WS_METHODS.sshHostTrust]: (input) => sshHostSetup.trust(input, currentSessionId),
+        [WS_METHODS.sshHostPrepare]: (input) =>
+          sshHostSetup.prepare(input, { kind: "client", sessionId: currentSessionId }),
+        [WS_METHODS.sshHostForget]: (input) =>
+          sshHostSetup.forget(input, { kind: "client", sessionId: currentSessionId }),
         [WS_METHODS.sshWorkspaceLaunch]: (input) => sshWorkspace.launch(input),
         [WS_METHODS.sshWorkspaceFetchBack]: (input) => sshWorkspace.fetchBack(input),
         [WS_METHODS.vcsInit]: (input) =>
@@ -3485,6 +3497,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const sshHostSetup = yield* SshHostSetup.SshHostSetup;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
@@ -3557,6 +3570,7 @@ export const layer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
+              Layer.provide(Layer.succeed(SshHostSetup.SshHostSetup, sshHostSetup)),
               Layer.provide(OtlpEndpointCheck.layer),
               // Shared like the pull request service, so concurrent generations single-flight.
               Layer.provide(
