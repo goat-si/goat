@@ -706,6 +706,9 @@ it.effect("retains the global codec initialization guard", () =>
     const sql = yield* SqlClient.SqlClient;
     yield* seed;
     yield* checkpoint;
+    // A marker value round trip queues the healthy space without changing its state.
+    yield* sql`UPDATE memory_quota_counters SET value=2 WHERE space=${space} AND dimension='checkpoint_initialized' AND scope_key=''`;
+    yield* sql`UPDATE memory_quota_counters SET value=1 WHERE space=${space} AND dimension='checkpoint_initialized' AND scope_key=''`;
     const pending =
       yield* sql`SELECT * FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`;
     assert.lengthOf(pending, 1);
