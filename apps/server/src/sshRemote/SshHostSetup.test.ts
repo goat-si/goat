@@ -188,6 +188,10 @@ it.effect("shares the dispatch manager", () =>
     let ensures = 0;
     let statusReads = 0;
     const manager = SshTunnel.SshEnvironmentManager.of({
+      readyEnvironment: () => Effect.die("Unexpected ready environment"),
+      beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+      publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+      forgetEnvironment: () => Effect.die("Unexpected forget"),
       status: () =>
         Effect.sync(() => {
           statusReads++;

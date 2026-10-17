@@ -3,6 +3,11 @@ import { assert, describe, it, afterEach, vi } from "@effect/vitest";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import * as Layer from "effect/Layer";
+import * as NetService from "@goat/shared/Net";
+import { HttpClient } from "effect/http";
+import * as SshAuth from "./auth.ts";
+import * as SshTunnel from "./tunnel.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
@@ -12,7 +17,13 @@ import { ChildProcessSpawner } from "effect/process";
 
 import { SshCommandError, SshLaunchError } from "./errors.ts";
 import { prepareRemoteRuntime } from "./tunnel.ts";
-import { ARCHIVE, makeSuccessfulProcess, uploadTarget } from "./tunnel.fixture.ts";
+import {
+  ARCHIVE,
+  makeSuccessfulProcess,
+  uploadTarget,
+  testHttpClient,
+  testNetService,
+} from "./tunnel.fixture.ts";
 
 const ARCHIVE_ADVICE = "Supply the requested runtime archive";
 afterEach(() => vi.unstubAllGlobals());
@@ -43,6 +54,52 @@ const prepareWithProbe = (probe: () => ChildProcessSpawner.ChildProcessHandle) =
   );
 
 describe("SSH runtime preparation errors", () => {
+  it.effect.each([
+    {
+      stderr: "Install shasum or sha256sum to verify the retained GOAT runner.",
+      instruction: "Install sha256sum (coreutils) on devbox, then try again.",
+    },
+    {
+      stderr: "Remote host needs curl or wget to download the archive.",
+      instruction: "Install curl or wget on devbox, then try again.",
+    },
+    {
+      stderr:
+        "Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.",
+      instruction: "Install Node on devbox for the source runtime, then try again.",
+    },
+  ])(
+    "uses a plain, tool-specific recovery for $stderr without unverified root commands",
+    ({ stderr, instruction }) =>
+      Effect.gen(function* () {
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.succeed(
+            command._tag === "StandardCommand" && command.args.includes("-G")
+              ? makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n")
+              : makeExitedProcess(255, stderr),
+          ),
+        );
+        const managerLayer = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          SshTunnel.SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.succeed(ARCHIVE),
+            leaveRemoteServerRunning: true,
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const result = yield* manager.status(uploadTarget);
+          assert.equal(result.status?.failure?.reason, "missing_tools");
+          assert.equal(result.status?.failure?.fix.instruction, instruction);
+          assert.isUndefined(result.status?.failure?.fix.command);
+        }).pipe(Effect.provide(managerLayer), Effect.scoped);
+      }),
+  );
+
   it.effect("records only the bundle branch when its checksum sidecar is missing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

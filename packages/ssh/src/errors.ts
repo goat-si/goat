@@ -56,3 +56,8 @@ export class SshPasswordPromptError extends Data.TaggedError("SshPasswordPromptE
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+export class SshHostKeyProbeError extends Data.TaggedError("SshHostKeyProbeError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}

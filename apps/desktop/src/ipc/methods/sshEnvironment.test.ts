@@ -183,6 +183,10 @@ describe("SSH runtime IPC", () => {
               pairingToken: null,
             };
           }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () => Effect.die("unexpected MCP session"),

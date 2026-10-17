@@ -58,6 +58,10 @@ const waitingStatus = {
 const unusedManager = {
   status: () => Effect.die("unexpected status"),
   ensureEnvironment: () => Effect.die("unexpected ensure"),
+  readyEnvironment: () => Effect.die("Unexpected ready environment"),
+  beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+  publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+  forgetEnvironment: () => Effect.die("Unexpected forget"),
   disconnectEnvironment: () => Effect.void,
   revalidateTunnels: () => Effect.void,
   issueMcpClientSession: () => Effect.die("unexpected session"),
@@ -383,6 +387,10 @@ describe("sshEnvironment", () => {
                   pairingToken: "fixture-token",
                 };
               }),
+            readyEnvironment: () => Effect.die("Unexpected ready environment"),
+            beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+            publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+            forgetEnvironment: () => Effect.die("Unexpected forget"),
             disconnectEnvironment: () => Effect.die("unused"),
             revalidateTunnels: () => Effect.die("unused"),
             issueMcpClientSession: () => Effect.die("unused"),

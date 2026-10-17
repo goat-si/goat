@@ -1,10 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION, SshHostResult } from "@goat/contracts";
+import { ORCHESTRATION_PROTOCOL_VERSION, SshHostResult, SshHostProviders } from "@goat/contracts";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,6 +27,7 @@ import {
 } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
+const decodeProviders = Schema.decodeEffect(SshHostProviders);
 const decodeSshHostResult = Schema.decodeEffect(SshHostResult);
 
 const signals = (version: string) => ({
@@ -50,6 +52,7 @@ const successfulStatus = (result: SshHostResult) => {
 const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOptions = {}) => {
   let probe = initial;
   let probeFailure: string | undefined;
+  let toolFixProbe = "1000\nLinux\nID=debian\n";
   let launchVersion = ARCHIVE.archiveVersion as string;
   const calls = { probes: 0, uploads: 0, launches: 0, forwards: 0, prompts: 0, strict: false };
   const spawner = ChildProcessSpawner.make((command) =>
@@ -73,6 +76,7 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
         Stream.isStream(input.stream)
           ? yield* input.stream.pipe(Stream.decodeText(), Stream.mkString)
           : "";
+      if (script.includes("GOAT_TOOL_FIX_PROBE")) return makeSuccessfulProcess(toolFixProbe);
       if (script.includes("ready=false")) {
         calls.probes++;
         calls.strict = ["StrictHostKeyChecking=yes", "UpdateHostKeys=no", "BatchMode=yes"].every(
@@ -99,6 +103,9 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
   );
   return {
     calls,
+    setToolFixProbe: (value: string) => {
+      toolFixProbe = value;
+    },
     setProbe: (value: unknown) => {
       probe = value;
     },
@@ -134,6 +141,132 @@ const fixture = (initial: unknown, runnerOptions: SshTunnel.RemoteGoatRunnerOpti
 };
 
 describe("SSH runtime status", () => {
+  it.effect("publishes current-operation diagnosis and preserves it on status reads", () => {
+    const f = fixture({
+      ...stopped,
+      ready: true,
+      liveStatus: "live",
+      liveVersion: ARCHIVE.archiveVersion,
+      liveOwned: true,
+      liveDrain: true,
+      liveSignals: signals(ARCHIVE.archiveVersion),
+    });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const first = yield* manager.beginSetupOperation(uploadTarget, "first");
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      assert.equal((yield* manager.status(uploadTarget)).status?.setup?.stage, "diagnosis");
+      const providers = yield* decodeProviders({
+        checkedAt: "2026-10-18T00:00:00.000Z",
+        ready: false,
+        fixes: [{ actor: "human", instruction: "Sign in on the host." }],
+      });
+      assert.isTrue(yield* manager.publishProviderDiagnosis(uploadTarget, first, providers));
+      const failed = yield* manager.status(uploadTarget);
+      yield* decodeSshHostResult(failed);
+      assert.equal(failed.status?.state, "providers_not_ready");
+      assert.deepEqual(failed.status?.providers, providers);
+      assert.equal(failed.status?.setup?.stage, "complete");
+      const second = yield* manager.beginSetupOperation(uploadTarget, "second");
+      assert.isAbove(second.generation, first.generation);
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      assert.isFalse(yield* manager.publishProviderDiagnosis(uploadTarget, first, providers));
+      const current = yield* manager.status(uploadTarget);
+      assert.equal(current.status?.state, "ready");
+      assert.equal(current.status?.setup?.operationId, "second");
+      assert.equal(current.status?.setup?.stage, "diagnosis");
+      assert.isUndefined(current.status?.providers);
+      yield* manager.forgetEnvironment(uploadTarget, { stopRuntime: "no" });
+      assert.isFalse(yield* manager.publishProviderDiagnosis(uploadTarget, second, providers));
+      assert.equal((yield* manager.status(uploadTarget)).status?.state, "untrusted");
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect.each(["ready", "stopped"] as const)(
+    "ready-only access to %s never bootstraps",
+    (state) => {
+      const f = fixture({ ...stopped, ready: true });
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        if (state === "ready") yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+        const before = { ...f.calls };
+        const result = yield* Effect.result(manager.readyEnvironment(uploadTarget));
+        assert.equal(Result.isSuccess(result), state === "ready");
+        assert.deepEqual(f.calls, before);
+        if (state === "stopped") {
+          assert.isTrue(
+            Result.isFailure(
+              yield* Effect.result(
+                manager.issueMcpClientSession(uploadTarget, {
+                  requireReady: true,
+                  label: "diagnose",
+                  ttl: "1h",
+                  runtimeModeCeiling: null,
+                }),
+              ),
+            ),
+          );
+          assert.deepEqual(f.calls, before);
+        }
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
+  it.effect.each(["0", "1000", "unknown"] as const)(
+    "missing tools use plain guidance and root-only commands for uid %s",
+    (uid) => {
+      const f = fixture(stopped);
+      f.failProbe("Remote host needs curl or wget to download the archive.");
+      f.setToolFixProbe(`${uid}\nLinux\nID=debian\n`);
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const result = yield* manager.status(uploadTarget);
+        yield* decodeSshHostResult(result);
+        const fix = result.status?.failure?.fix;
+        assert.equal(fix?.instruction, "Install curl or wget on devbox, then try again.");
+        if (uid === "0") assert.equal(fix?.command, "apt-get update && apt-get install -y curl");
+        else assert.isUndefined(fix?.command);
+        assert.notInclude(fix?.command ?? "", "sudo");
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
+  it.effect.each([true, false])(
+    "auth_failed exposes only the GOAT-generated public key (managed=%s)",
+    (managed) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-public-key-" });
+        const dir = `${home}/.ssh/goat-cloud`;
+        yield* fs.makeDirectory(dir, { recursive: true });
+        yield* fs.writeFileString(
+          `${dir}/devbox.conf`,
+          `Host devbox\n  IdentityFile "${managed ? dir + "/id_ed25519" : home + "/private-key"}"\n`,
+        );
+        yield* fs.writeFileString(`${dir}/id_ed25519.pub`, "ssh-ed25519 AAAAGOATKEY goat-cloud\n");
+        const f = fixture(stopped);
+        f.failProbe("Permission denied (publickey).");
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const result = yield* manager.status(uploadTarget);
+          yield* decodeSshHostResult(result);
+          assert.equal(result.status?.state, "auth_failed");
+          assert.equal(
+            result.status?.publicKey,
+            managed ? "ssh-ed25519 AAAAGOATKEY goat-cloud" : undefined,
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              f.layer,
+              ConfigProvider.layer(ConfigProvider.fromUnknown({ HOME: home })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect.each(["mirror", "installed", "upload"] as const)(
     "reports only executed %s milestones",
     (mode) =>

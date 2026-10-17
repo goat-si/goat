@@ -133,6 +133,10 @@ describe("SSH dispatch tool compatibility", () => {
             wsBaseUrl: "ws://legacy-host:3773/",
             pairingToken: null,
           }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () =>
@@ -543,6 +547,10 @@ describe("SshRemoteDispatch.callHostTool", () => {
                 wsBaseUrl: "ws://127.0.0.1:41000/",
                 pairingToken: null,
               }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: (_target, sessionOptions) => {
@@ -1169,6 +1177,10 @@ const withLaunchRemote = <A, E>(
             pairingToken: null,
           };
         }),
+      readyEnvironment: () => Effect.die("Unexpected ready environment"),
+      beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+      publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+      forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: () => Effect.void,
       revalidateTunnels: () => Effect.void,
       issueMcpClientSession: (target, opts) =>
@@ -1786,6 +1798,10 @@ describe("SSH dispatch launch lineage", () => {
             wsBaseUrl: "ws://lineage-host:3773/",
             pairingToken: null,
           }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: (_target, options) =>
@@ -2492,6 +2508,10 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
             wsBaseUrl: "ws://projects/fixture.invalid/",
             pairingToken: null,
           }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () =>
@@ -2896,6 +2916,10 @@ describe("SshRemoteDispatch SSH attachments", () => {
                 pairingToken: null,
               };
             }),
+          readyEnvironment: () => Effect.die("Unexpected ready environment"),
+          beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+          publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+          forgetEnvironment: () => Effect.die("Unexpected forget"),
           disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
           revalidateTunnels: () => Effect.void,
           issueMcpClientSession: () =>
@@ -3690,6 +3714,10 @@ describe("SSH launcher transport", () => {
             pairingToken: null,
             remoteServerVersion: "0.0.1-older",
           }),
+        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+        publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+        forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: () =>

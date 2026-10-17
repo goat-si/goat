@@ -28,6 +28,50 @@ import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixtu
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
   () => {
+    it.live.each([
+      { kind: "managed", activity: "idle", stopRuntime: "if_idle", stops: true },
+      { kind: "managed", activity: "busy", stopRuntime: "if_idle", stops: false },
+      { kind: "managed", activity: "unknown", stopRuntime: "if_idle", stops: false },
+      { kind: "external", activity: "idle", stopRuntime: "if_idle", stops: false },
+      { kind: "managed", activity: "idle", stopRuntime: "no", stops: false },
+    ] as const)(
+      "forget $stopRuntime preserves $kind/$activity unless owned and idle",
+      ({ kind, activity, stopRuntime, stops }) =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind,
+            oldVersion: "1.2.2",
+            ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+            orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          });
+          yield* f.fs.writeFileString(`${f.test}/activity`, activity);
+          const before = yield* f.snapshot;
+          const layer = Layer.mergeAll(
+            NodeServices.layer,
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+            Layer.succeed(FileSystem.FileSystem, f.observedFs),
+            Layer.succeed(HttpClient.HttpClient, testHttpClient),
+            Layer.succeed(NetService.NetService, testNetService),
+            SshAuth.SshPasswordPrompt.disabledLayer,
+            SshTunnel.SshEnvironmentManager.layer({
+              resolveCliRunner: Effect.succeed(f.runner),
+              leaveRemoteServerRunning: true,
+            }),
+          );
+          yield* Effect.gen(function* () {
+            const manager = yield* SshTunnel.SshEnvironmentManager;
+            const result = yield* manager.forgetEnvironment(uploadTarget, { stopRuntime });
+            assert.equal(result.status?.state, "untrusted");
+            assert.equal((yield* manager.status(uploadTarget)).status?.state, "untrusted");
+          }).pipe(Effect.provide(layer), Effect.scoped);
+          const events = yield* f.fs.readFileString(`${f.test}/events`);
+          assert.equal(events.includes('"type":"stop"'), stops);
+          if (!stops) assert.deepEqual(yield* f.snapshot, before);
+          assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live(
       "cached manager auth pins its compatible release across resolver changes and rechecks both MCP attempts",
       () =>

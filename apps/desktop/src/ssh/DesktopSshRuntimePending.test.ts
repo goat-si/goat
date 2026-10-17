@@ -59,6 +59,10 @@ describe("desktop SSH pending result", () => {
             Layer.succeed(SshTunnel.SshEnvironmentManager, {
               status: () => Effect.die("Unexpected status"),
               ensureEnvironment: () => Effect.succeed(pending),
+              readyEnvironment: () => Effect.die("Unexpected ready environment"),
+              beginSetupOperation: () => Effect.die("Unexpected setup operation"),
+              publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
+              forgetEnvironment: () => Effect.die("Unexpected forget"),
               disconnectEnvironment: () => Effect.void,
               revalidateTunnels: () => Effect.void,
               issueMcpClientSession: () => Effect.die("Unexpected session"),
