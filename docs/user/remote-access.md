@@ -193,26 +193,26 @@ non-interactive login shell there; check with:
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
-After an app update, GOAT moves the host's server to the app's version. The
-server stops taking new messages and gives running agent work up to a minute to
-finish. Every app connected to it shows that it is restarting. It then restarts
-on the new version, and any work it interrupted continues there. If work is still
-running after that minute, the server keeps going as before, the connection
-says it will be replaced when its current work finishes, and GOAT retries in the
-background. If the old server still works with the app, GOAT keeps using it and
-only starts this once it is idle. If the new version fails to start, GOAT puts
-the previous one back.
+The machine that owns your SSH connection keeps the host's GOAT runtime at its
+own version. The host does not need the desktop app. In **Settings → Connections**,
+check the SSH connection's runtime status and choose **Update runtime** to retry an
+update. A busy compatible runtime stays available while the update waits.
 
-A server from a GOAT release that cannot restart itself this way is never
-replaced. GOAT keeps using it if it works with the app; otherwise the error asks
-you to stop it on the host and reconnect. GOAT never replaces a server that is
-newer than the app; update the app instead. If GOAT cannot confirm that it
-launched a server, it leaves it running and the error names the process to stop
-before you reconnect. When two computers update the same host at once, the
+Choose **Update now** and confirm to update immediately. Running agent work gets up
+to a minute to finish, then continues on the new version. **Cancel** leaves the
+runtime running as before. Agents can request an update that runs when the
+runtime is idle. If the new version fails to start, GOAT restores the previous one.
+
+If a runtime archive is unavailable, install a published GOAT release or configure
+a release mirror. GOAT does not replace a newer runtime; update the machine that
+owns the SSH connection instead.
+
+A server that GOAT cannot confirm it launched, or that cannot restart itself,
+is left running. GOAT keeps using it if it is compatible; otherwise, stop it on
+the host and reconnect. When two computers update the same host at once, the
 second retries after the first finishes. If an interrupted update left the host
 locked, the error names the file to remove after you check that no other GOAT
-app is updating it. Removing the connection stops a server that GOAT launched; a
-server that was already running is left alone.
+app is updating it. Removing the connection leaves GOAT's server running on the host.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).

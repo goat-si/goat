@@ -33,14 +33,14 @@ Wire schemas and the libraries web, desktop, and mobile share.
 
 The process that commits orchestration, runs providers, and reaches other machines.
 
-| Doc                                                              | Scope                                                                                                                   |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control.   |
-| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                          |
-| [`channels.md`](channels.md)                                     | The channel ledger, Slack and MCP ingress, and the GOAT Bot thread clients render.                                      |
-| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                             |
-| [`ssh.md`](ssh.md)                                               | OpenSSH host discovery, the remote ~/.goat server, agent browse and launch, and Boat cloud machines as managed aliases. |
-| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                               |
+| Doc                                                              | Scope                                                                                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control.    |
+| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                           |
+| [`channels.md`](channels.md)                                     | The channel ledger, Slack and MCP ingress, and the GOAT Bot thread clients render.                                       |
+| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                              |
+| [`ssh.md`](ssh.md)                                               | OpenSSH discovery, shared runtime state and owner-controlled updates, agent browse and launch, and Boat managed aliases. |
+| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                                |
 
 ### Tier 4 — Clients
 
@@ -167,6 +167,7 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/sourceControl/`                                        | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/sourceControl/builtInDrivers.ts`                       | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/sshRemote/remoteBrowse.ts`                             | [`ssh.md`](ssh.md)                                                                                                                                     |
+| `apps/server/src/sshRemote/SshHostSetup.ts`                             | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/sshRemote/SshRemoteDispatch.ts`                        | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/sshRemote/SshWorkspaceSync.ts`                         | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/vcs/GitVcsDriver.ts`                                   | [`server.md`](server.md)                                                                                                                               |
@@ -202,6 +203,7 @@ the repository is organised by package. Changing an area requires review of ever
 | `packages/contracts/src/remoteReports.ts`                               | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)                                                                                       |
 | `packages/contracts/src/rpc.ts`                                         | [`contracts.md`](contracts.md)                                                                                                                         |
 | `packages/contracts/src/settings.ts`                                    | [`contracts.md`](contracts.md)<br>[`channels.md`](channels.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                 |
+| `packages/contracts/src/sshHost.ts`                                     | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `packages/provider-acp`                                                 | [`server.md`](server.md)                                                                                                                               |
 | `packages/provider-acp-registry`                                        | [`server.md`](server.md)                                                                                                                               |
 | `packages/provider-acp-registry/src/server/driver.ts`                   | [`server.md`](server.md)                                                                                                                               |

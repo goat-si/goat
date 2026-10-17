@@ -65,6 +65,12 @@ refused rather than running half-upgraded:
 
 Update the side the notice names, then reconnect.
 
+For an SSH connection, **Update runtime** in **Settings → Connections** matches the
+host to the version of the machine that owns that connection. It does not install a
+newer release than that machine runs. Check the connection there for its runtime
+version, progress, and any update waiting for running work. Updating this app also
+moves its SSH hosts' runtimes after it restarts.
+
 ## Desktop app updates
 
 GOAT (Nightly) downloads each new nightly by itself, and GOAT downloads each

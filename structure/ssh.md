@@ -55,7 +55,8 @@ Remembered launch files whose PID has exited are stale and do not block attachin
 authority either, because the launch script requires its PID file to name the live PID.
 
 Desktop and agent dispatch both leave the server running when they disconnect
-(`leaveRemoteServerRunning`). The explicit stop script signals a server only after its
+(`leaveRemoteServerRunning`). Removing a saved connection also leaves the remote runtime running.
+The explicit stop script signals a server only after its
 `/.well-known/goat/activity` (with a 404 fallback to `/.well-known/t3/activity`) answers `idle` for that PID. `busy` or no answer leaves it running.
 No client signals a server to replace it; see [Replacement](#replacement).
 
@@ -134,6 +135,11 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
   answers `idle` (see [Replacement](#replacement)). While it is busy, the client attaches to it,
   logs `ssh.runtime.refresh.deferred` with the reason, and retries every 10 minutes.
 
+Manual updates target the owning manager's version too. An idle update waits for running work;
+a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
+runtime whose version cannot be ordered, or an externally started server blocks replacement
+without changing whether a compatible server can be used.
+
 "Older" and "newer" come from `compareRuntimeBuilds` in `packages/shared/src/semver.ts`, used by
 both the client and the remote `__ssh-helper compare-version`. A different core version, or two
 numbered builds of one train (`0.1.0-nightly.20261012.2`), order by SemVer. Any other pair of one
@@ -173,10 +179,25 @@ The client registry keeps one SSH teardown per route in flight (`forkSshDisconne
 marks it to run once more, and that rerun happens only if the route is still off when the first
 one returns.
 
-The desktop app is a second caller of the same package. `apps/desktop/src/ssh/DesktopSshEnvironment.ts`
-discovers hosts and ensures an environment. The server-side caller used by agents is
-`apps/server/src/sshRemote/SshRemoteDispatch.ts`, which imports `@goat/ssh/command`,
-`@goat/ssh/auth`, `@goat/ssh/config`, `@goat/ssh/errors`, and `@goat/ssh/tunnel`.
+SSH runtime state and update results share the contract in
+`packages/contracts/src/sshHost.ts`. `apps/server/src/sshRemote/SshHostSetup.ts` owns
+MCP status and idle updates, reusing the server manager from
+`apps/server/src/sshRemote/SshRemoteDispatch.ts` for dispatch aliases.
+`apps/desktop/src/ssh/DesktopSshEnvironment.ts` owns saved desktop targets and runs
+status, idle updates, and confirmed immediate updates through its existing manager
+and typed IPC (`packages/contracts/src/ipc.ts`). MCP immediate updates direct the
+caller to the owning desktop's Settings; MCP does not execute them.
+
+The managers have separate status caches; the remote replacement lock and runtime
+state coordinate updates across owners. Both retain the drain policy. Progress is
+reported at TypeScript operation boundaries; the remote shell protocol carries no
+progress events. Connections reads the desktop cache and keeps runtime status in
+the saved connection row after transient notifications disappear. Status reads do
+not install or start a stopped runtime, and snapshots last only for the manager's
+lifetime.
+
+The dispatch caller imports `@goat/ssh/command`, `@goat/ssh/auth`, `@goat/ssh/config`,
+`@goat/ssh/errors`, and `@goat/ssh/tunnel`.
 `apps/server/src/device/SshDeviceHost.ts` uses `@goat/ssh/command` for device commands.
 
 ## Agent dispatch
