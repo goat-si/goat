@@ -584,7 +584,11 @@ const make = Effect.gen(function* () {
         const storedTask = yield* ledger.getTask(action.taskId);
         // Moving restarts work under the asker's ceiling, so the mover needs what an answerer needs.
         const mover = requester.originKind === "mcp" ? undefined : yield* judgedNow;
-        if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
+        if (requester.originKind === "mcp") {
+          // Agents move work through channel_task_move, which checks their own ceiling.
+          replyText = CHANNEL_COPY.agentCannotMoveWork;
+          finalDecision = { replyText, action: { type: "report_only" } };
+        } else if (storedTask === undefined || storedTask.task.conversationId !== conversationId) {
           replyText = "I couldn’t match that to work in this conversation. Which task do you mean?";
           finalDecision = { replyText, action: { type: "clarify", question: replyText } };
         } else if (mover === undefined || !mayAnswerFor(mover, storedTask.task.requester)) {
