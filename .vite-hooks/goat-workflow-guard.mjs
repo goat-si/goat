@@ -12,6 +12,8 @@ const workflowPath = ".github/workflows/goat-ci.yml";
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
 const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
+// goat-scope picks the matrix, ci runs it, goat-ci-result aggregates; every job runs on EPYC.
+const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result"]);
 const actions = new Set([
   "actions/checkout@v6",
   "voidzero-dev/setup-vp@v1",
@@ -120,9 +122,9 @@ function validateWorkflow(source, yaml) {
   if (
     !isMapping(workflow.jobs) ||
     !Object.hasOwn(workflow.jobs, "ci") ||
-    Object.keys(workflow.jobs).some((name) => name !== "ci" && name !== "screenshot-gate")
+    Object.keys(workflow.jobs).some((name) => !goatCiJobs.has(name))
   ) {
-    return refuse("jobs must contain ci and optionally screenshot-gate");
+    return refuse("jobs must contain ci and optionally scope, screenshot-gate, result");
   }
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (!isMapping(job)) return refuse(`jobs.${name} must be a mapping`);

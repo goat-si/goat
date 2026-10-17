@@ -243,6 +243,23 @@ describe("goat pre-push workflow guard", () => {
     expect(f.hook(f.record(f.sha)).status).toBe(0);
   });
 
+  it("allows the scope and result jobs and holds them to the EPYC runner", () => {
+    const jobs = { scope: baseJob, ci: baseJob, result: baseJob };
+    const allowed = fixture({ workflow: JSON.stringify({ on: { pull_request: null }, jobs }) });
+    expect(allowed.hook(allowed.record(allowed.sha)).status).toBe(0);
+    const hosted = fixture({
+      workflow: JSON.stringify({
+        on: { pull_request: null },
+        jobs: { ...jobs, scope: { ...baseJob, "runs-on": "ubuntu-latest" } },
+      }),
+    });
+    const refused = hosted.hook(hosted.record(hosted.sha));
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain(
+      "jobs.scope.runs-on must contain exactly self-hosted, linux, x64, goat, epyc",
+    );
+  });
+
   it.each([
     ["hosted runner", { "runs-on": "ubuntu-latest" }, "jobs.screenshot-gate.runs-on"],
     [
@@ -479,17 +496,17 @@ describe("goat pre-push workflow guard", () => {
     [
       "extra job",
       JSON.stringify({ on: { push: null }, jobs: { ci: baseJob, extra: baseJob } }),
-      "jobs must contain ci and optionally screenshot-gate",
+      "jobs must contain ci and optionally scope, screenshot-gate, result",
     ],
     [
       "missing jobs",
       JSON.stringify({ on: { push: null } }),
-      "jobs must contain ci and optionally screenshot-gate",
+      "jobs must contain ci and optionally scope, screenshot-gate, result",
     ],
     [
       "jobs array",
       JSON.stringify({ on: { push: null }, jobs: [] }),
-      "jobs must contain ci and optionally screenshot-gate",
+      "jobs must contain ci and optionally scope, screenshot-gate, result",
     ],
     ["nonmapping ci", workflow(null), "jobs.ci must be a mapping"],
     [
