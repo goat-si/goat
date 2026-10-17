@@ -49,6 +49,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
@@ -77,6 +78,16 @@ import {
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement } from "./channelPlacement.ts";
+import {
+  applyReplicaScript,
+  captureReplicaScript,
+  DEFAULT_MAX_BUNDLE_BYTES,
+  DEFAULT_MAX_UNTRACKED_FILE_BYTES,
+  parseApplyOutput,
+  parseReplicaOutput,
+  replicaRefFor,
+  resumeBranchFor,
+} from "./channelReplica.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
@@ -97,6 +108,13 @@ const BACKOFF_START_MS = 5_000;
 const BACKOFF_MAX_MS = 300_000;
 const INBOX_LIMIT = 200;
 const MAX_PROJECT_PAGES = 5;
+/** Copying a worker's work off its machine runs a bounded git script there. */
+const REPLICA_TIMEOUT_MS = 120_000;
+/** Copies untouched this long belong to finished or abandoned tasks; active ones are rewritten each turn. */
+const REPLICA_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const REPLICA_SWEEP_EVERY_MS = 60 * 60 * 1000;
+/** Copying again for the same remote turn is pointless; this is the turn's key. */
+const replicaKeyFor = (runId: string, status: string) => runId + ":" + status;
 
 /** What the requester reads. Fixed text: remote error text never reaches a channel. */
 export const REMOTE_COPY = {
@@ -133,6 +151,23 @@ export const REMOTE_COPY = {
   outage: (host: string) =>
     "I can't reach " + host + " right now. The work keeps running there; I'll reconnect.",
   reconnected: (host: string) => "Reconnected to " + host + ".",
+  resumeBaseMissing: (host: string, fromHost: string) =>
+    "The project on " +
+    host +
+    " doesn't have the commits the work from " +
+    fromHost +
+    " builds on. Push them, or fetch them on " +
+    host +
+    ", and ask again.",
+  resumeRefConflict: (host: string) =>
+    "The project on " + host + " already has a different copy of this work. Ask again.",
+  resumeUnreadable: (host: string) =>
+    "I couldn't place the copied work on " + host + ". Ask again, or pick another machine.",
+  resumeUnreachable: (host: string) =>
+    "I can't reach " + host + " to continue the work there. Ask again, or pick another machine.",
+  staleMachineBack: (host: string) =>
+    host +
+    " is reachable again. It still has the earlier attempt's work; nothing from it reaches this task.",
   answerRefused: (host: string, answer: string) =>
     "The coding thread on " +
     host +
@@ -192,6 +227,48 @@ const RemoteWorkerState = Schema.Struct({
   /** A finished run seen once; it settles the task if a second look finds nothing newer. */
   settleRunId: Schema.optional(Schema.String),
   outageNoticed: Schema.Boolean,
+  /** The newest copy of the worker's work taken off its machine, one per remote turn. */
+  replica: Schema.optional(
+    Schema.Struct({
+      key: Schema.String,
+      file: Schema.String,
+      commitOid: Schema.String,
+      bytes: Schema.Number,
+      capturedAt: Schema.String,
+    }),
+  ),
+  /** A turn whose copy was not kept, so it is not tried again: too large, or no worktree. */
+  replicaSkipped: Schema.optional(
+    Schema.Struct({ key: Schema.String, reason: Schema.String, at: Schema.String }),
+  ),
+  /** Set by a move: the next generation starts from this copy on its new machine. */
+  resumeFrom: Schema.optional(
+    Schema.Struct({
+      generation: PositiveInt,
+      file: Schema.String,
+      /** The ref the copy carries inside its bundle. */
+      ref: Schema.String,
+      commitOid: Schema.String,
+      fromHost: Schema.String,
+      capturedAt: Schema.String,
+    }),
+  ),
+  /**
+   * Machines a move left behind, with the old binding. Their reports are never read again;
+   * the binding only tells when such a machine is back so the requester hears about it.
+   */
+  superseded: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        generation: PositiveInt,
+        host: Schema.String,
+        correlationId: Schema.String,
+        readKey: Schema.String,
+        remoteThreadId: Schema.optional(Schema.String),
+        noticed: Schema.Boolean,
+      }),
+    ),
+  ),
 });
 export type RemoteWorkerState = typeof RemoteWorkerState.Type;
 
@@ -269,6 +346,34 @@ const decodeHostQuotas = Schema.decodeUnknownEffect(
 const decodeSent = Schema.decodeUnknownEffect(
   Schema.Struct({ runId: RunId, messageId: Schema.String }),
 );
+
+/** What a worker that continues moved work reads first, after its usual brief. */
+const resumeNote = (fromHost: string, capturedAt: string) =>
+  "\n\nThis continues work that started on " +
+  fromHost +
+  ", which stopped answering. Your branch already holds that work's commits and uncommitted changes as copied at " +
+  capturedAt +
+  " (as one extra commit on top). Files over 2 MiB and files that look like secrets were not copied. Check git status and git log before you go on.";
+
+/** Why a move was refused, written for whoever asked. */
+export const MOVE_COPY = {
+  taskNotFound: "I can't find that task.",
+  notRemote: "That task runs on this machine, so there is nothing to move.",
+  notRunning: "That task isn't running anymore.",
+  sameHost: (host: string) => "That task already runs on " + host + ".",
+  unknownHost: (host: string, hosts: ReadonlyArray<string>) =>
+    "I can't send work to " +
+    host +
+    "." +
+    (hosts.length === 0 ? "" : " Machines I know: " + hosts.join(", ") + "."),
+  hostReachable: (host: string) =>
+    host + " still answers, so the work keeps running there. Ask again if it stops answering.",
+  noReplica: (host: string) =>
+    "I don't have a copy of the work on " +
+    host +
+    " yet. A copy is taken each time the worker finishes a turn.",
+  stale: "The task changed while I was moving it. Ask again.",
+} as const;
 
 /** A failure's tag for logs; causes can quote remote text, so they are never printed. */
 const causeTag = (cause: Cause.Cause<unknown>) => {
@@ -385,8 +490,43 @@ export class ChannelRemoteWorkers extends Context.Service<
     ) => Effect.Effect<string | undefined, ChannelLedger.ChannelLedgerError>;
     /** Starts an observer for every running remote task that has none. Returns how many. */
     readonly ensure: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
+    /**
+     * Continues a remote task on another known host after its machine stopped answering, from
+     * the latest copy of its work. Starts the next generation, so the machine it leaves can
+     * never report into the task again; that machine's own work is left where it is.
+     */
+    readonly move: (input: {
+      readonly taskId: ChannelTaskId;
+      readonly host: string;
+      readonly actor: "user" | "agent";
+      readonly owner: string;
+    }) => Effect.Effect<ChannelTaskMoved, ChannelTaskMoveError | ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelRemoteWorkers") {}
+
+export interface ChannelTaskMoved {
+  readonly taskId: ChannelTaskId;
+  readonly generation: number;
+  readonly host: string;
+  readonly fromHost: string;
+  readonly replicaCapturedAt: string;
+}
+
+/** Why a move was refused; `message` is written for the person or agent who asked. */
+export type ChannelTaskMoveRefusal =
+  | "task_not_found"
+  | "not_remote"
+  | "not_running"
+  | "same_host"
+  | "unknown_host"
+  | "host_reachable"
+  | "no_replica"
+  | "stale";
+
+export class ChannelTaskMoveError extends Data.TaggedError("ChannelTaskMoveError")<{
+  readonly reason: ChannelTaskMoveRefusal;
+  readonly message: string;
+}> {}
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
@@ -394,6 +534,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+  const replicaDir = path.join((yield* ServerConfig.ServerConfig).stateDir, "channel-replicas");
   const fibers = yield* FiberMap.make<string, void, never>();
   const locks = new Map<string, Semaphore.Semaphore>();
   const lockFor = (taskId: string) => {
@@ -439,6 +580,157 @@ const make = Effect.gen(function* () {
         update: stateUpdate(taskId, generation, change),
       });
       return decodeState(json);
+    });
+
+  /** One file per task and generation; only the newest copy and a pending resume are kept. */
+  const replicaFileFor = (taskId: ChannelTaskId, generation: number) =>
+    path.join(
+      replicaDir,
+      taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g" + String(generation) + ".bundle",
+    );
+
+  const writeReplicaFile = (file: string, bundleBase64: string) =>
+    Effect.gen(function* () {
+      yield* fileSystem.makeDirectory(replicaDir, { recursive: true });
+      const temporary = file + ".tmp-" + NodeCrypto.randomBytes(6).toString("hex");
+      yield* fileSystem.writeFile(temporary, new Uint8Array(Buffer.from(bundleBase64, "base64")));
+      yield* fileSystem.rename(temporary, file);
+    });
+
+  /** Drops this task's older copies, keeping `keep` (the newest, and any copy a move still needs). */
+  const pruneReplicaFiles = (taskId: ChannelTaskId, keep: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const prefix = taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g";
+      const names = yield* fileSystem
+        .readDirectory(replicaDir)
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const name of names) {
+        const file = path.join(replicaDir, name);
+        if (!name.startsWith(prefix) || keep.includes(file)) continue;
+        yield* fileSystem.remove(file).pipe(Effect.ignore);
+      }
+    });
+
+  /**
+   * Copies the worker's work off its machine at the end of a remote turn: HEAD, its unpushed
+   * commits and its uncommitted changes, as a small git bundle fetched over SSH beside the
+   * report wait. Runs at most once per turn, kept or skipped; an unreachable machine leaves no
+   * record, so the next turn boundary tries again.
+   */
+  const replicate = (taskId: ChannelTaskId, generation: number, owner: string, key: string) =>
+    Effect.gen(function* () {
+      const state = yield* readState(taskId);
+      const stored = yield* ledger.getTask(taskId);
+      if (state === undefined || state.generation !== generation) return;
+      if (state.replica?.key === key || state.replicaSkipped?.key === key) return;
+      const target = stored?.task.target;
+      const remote = target?.remote;
+      if (stored === undefined || target === undefined || remote === undefined) return;
+      if (stored.task.generation !== generation || stored.task.worker?.host === undefined) return;
+      // A worker that continued moved work always runs in its own worktree branch.
+      const onBranch =
+        target.workspaceStrategy.type === "worktree" || state.resumeFrom?.generation === generation;
+      const script = captureReplicaScript({
+        cwd: remote.cwd,
+        ...(onBranch ? { branch: remoteBranchFor(taskId, generation) } : {}),
+        replicaRef: replicaRefFor(taskId, generation),
+        maxBundleBytes: DEFAULT_MAX_BUNDLE_BYTES,
+        maxUntrackedFileBytes: DEFAULT_MAX_UNTRACKED_FILE_BYTES,
+      });
+      const ran = yield* ssh
+        .runHostScript({ host: state.host, script, timeoutMs: REPLICA_TIMEOUT_MS })
+        .pipe(Effect.result);
+      if (ran._tag === "Failure") {
+        yield* Effect.logWarning("channel remote replica failed; retrying next turn", {
+          taskId,
+          host: state.host,
+          reason: ran.failure.reason,
+        });
+        return;
+      }
+      const parsed = parseReplicaOutput(ran.success.stdout);
+      const capturedAt = yield* nowIso;
+      if (parsed.type !== "ok") {
+        yield* Effect.logInfo("channel remote replica not kept", {
+          taskId,
+          host: state.host,
+          reason: parsed.type,
+        });
+        yield* writeState(owner, taskId, generation, (current) => ({
+          ...current,
+          replicaSkipped: { key, reason: parsed.type, at: capturedAt },
+        }));
+        return;
+      }
+      const file = replicaFileFor(taskId, generation);
+      yield* writeReplicaFile(file, parsed.bundleBase64);
+      const saved = yield* writeState(
+        owner,
+        taskId,
+        generation,
+        ({ replicaSkipped: _s, ...current }) => ({
+          ...current,
+          replica: {
+            key,
+            file,
+            commitOid: parsed.commitOid,
+            bytes: parsed.bytes,
+            capturedAt,
+          },
+        }),
+      );
+      if (saved === undefined) return;
+      yield* pruneReplicaFiles(
+        taskId,
+        [file, saved.resumeFrom?.file].filter((name): name is string => name !== undefined),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel remote replica stopped", { taskId, failure: causeTag(cause) }),
+      ),
+    );
+
+  /** Places a moved task's copy in the new machine's project as the branch its worker starts on. */
+  const placeResume = (
+    taskId: ChannelTaskId,
+    generation: number,
+    host: string,
+    cwd: string,
+    resume: NonNullable<RemoteWorkerState["resumeFrom"]>,
+  ) =>
+    Effect.gen(function* () {
+      const bytes = yield* fileSystem.readFile(resume.file).pipe(Effect.result);
+      if (bytes._tag === "Failure") return "unreadable" as const;
+      const script = applyReplicaScript({
+        cwd,
+        bundleBase64: Buffer.from(bytes.success).toString("base64"),
+        replicaRef: resume.ref,
+        targetRef: "refs/heads/" + resumeBranchFor(taskId, generation),
+      });
+      const ran = yield* ssh
+        .runHostScript({ host, script, timeoutMs: REPLICA_TIMEOUT_MS })
+        .pipe(Effect.result);
+      if (ran._tag === "Failure") {
+        yield* Effect.logWarning("channel moved work could not be placed yet", {
+          taskId,
+          host,
+          reason: ran.failure.reason,
+        });
+        return ran.failure.reason === "host_unavailable" || ran.failure.reason === "ssh_failed"
+          ? ("unreachable" as const)
+          : ("unreadable" as const);
+      }
+      const parsed = parseApplyOutput(ran.success.stdout);
+      switch (parsed.type) {
+        case "applied":
+          return parsed.oid === resume.commitOid ? ("placed" as const) : ("ref_conflict" as const);
+        case "base_missing":
+          return "base_missing" as const;
+        case "ref_conflict":
+          return "ref_conflict" as const;
+        default:
+          return "unreadable" as const;
+      }
     });
 
   // Only aliases the user wrote in SSH config; machines seen only in known_hosts are not offered.
@@ -919,6 +1211,9 @@ const make = Effect.gen(function* () {
         );
       }
       if (state === undefined || state.generation !== task.generation || moved) {
+        // A move hands the next generation its starting copy and the machines it left behind.
+        const resumeFrom =
+          state?.resumeFrom?.generation === task.generation ? state.resumeFrom : undefined;
         const fresh: RemoteWorkerState = {
           generation: task.generation,
           host: remote.host,
@@ -932,6 +1227,8 @@ const make = Effect.gen(function* () {
           dropped: 0,
           forwarded: [],
           outageNoticed: false,
+          ...(resumeFrom === undefined ? {} : { resumeFrom }),
+          ...(state?.superseded === undefined ? {} : { superseded: state.superseded }),
         };
         const json = yield* ledger.updateRemoteWorker({
           owner,
@@ -990,6 +1287,36 @@ const make = Effect.gen(function* () {
         return yield* askAgain(owner, stored, REMOTE_COPY.projectGone(state.host));
       }
 
+      // A moved task starts from the copied work: place it in the new project first.
+      const resume =
+        state.resumeFrom?.generation === task.generation ? state.resumeFrom : undefined;
+      if (resume !== undefined) {
+        const placed = yield* placeResume(taskId, task.generation, state.host, remote.cwd, resume);
+        if (placed === "unreachable") {
+          if (elapsed > LAUNCH_GRACE_MS) {
+            yield* failTask(
+              owner,
+              stored,
+              "resume_failed",
+              REMOTE_COPY.resumeUnreachable(state.host),
+            );
+          }
+          return;
+        }
+        if (placed !== "placed") {
+          return yield* failTask(
+            owner,
+            stored,
+            "resume_failed",
+            placed === "base_missing"
+              ? REMOTE_COPY.resumeBaseMissing(state.host, resume.fromHost)
+              : placed === "ref_conflict"
+                ? REMOTE_COPY.resumeRefConflict(state.host)
+                : REMOTE_COPY.resumeUnreadable(state.host),
+          );
+        }
+      }
+
       state = yield* writeState(owner, taskId, task.generation, (current) => ({
         ...current,
         attempts: current.attempts + 1,
@@ -998,7 +1325,10 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const readKeyHash = NodeCrypto.createHash("sha256").update(state.readKey).digest("hex");
       const bot = yield* ledger.getBot(stored.ownerId);
-      const message = yield* workerMessage(task);
+      // A moved task's worker reads where its work came from; that is part of its brief.
+      const message =
+        (yield* workerMessage(task)) +
+        (resume === undefined ? "" : resumeNote(resume.fromHost, resume.capturedAt));
       // SSH's extra reporting note is transport guidance, excluded from deliveredText.
       // The notes travel inside the message unless they were dropped to fit its limit.
       const notesRevision =
@@ -1015,15 +1345,21 @@ const make = Effect.gen(function* () {
             host: state.host,
             cwd: remote.cwd,
             workspace:
-              target.workspaceStrategy.type === "worktree"
+              resume !== undefined
                 ? {
                     type: "worktree",
                     branch: remoteBranchFor(taskId, task.generation),
-                    ...(target.workspaceStrategy.baseRef === undefined
-                      ? {}
-                      : { baseRef: target.workspaceStrategy.baseRef }),
+                    baseRef: "refs/heads/" + resumeBranchFor(taskId, task.generation),
                   }
-                : { type: "cwd" },
+                : target.workspaceStrategy.type === "worktree"
+                  ? {
+                      type: "worktree",
+                      branch: remoteBranchFor(taskId, task.generation),
+                      ...(target.workspaceStrategy.baseRef === undefined
+                        ? {}
+                        : { baseRef: target.workspaceStrategy.baseRef }),
+                    }
+                  : { type: "cwd" },
             title: task.title,
             message: frozen.brief.deliveredText,
             modelSelection: target.modelSelection,
@@ -1561,6 +1897,14 @@ const make = Effect.gen(function* () {
           failures = 0;
           backoff = BACKOFF_START_MS;
           if (state.outageNoticed) yield* noticeOutage(owner, taskId, followed, false);
+          // A turn boundary: copy the work off the machine while it still answers.
+          const watched = answer.success.observedRun;
+          if (watched !== null && (watched.status === "waiting" || TERMINAL.has(watched.status))) {
+            const key = replicaKeyFor(watched.runId, watched.status);
+            if (state.replica?.key !== key && state.replicaSkipped?.key !== key) {
+              yield* background("replica:" + taskId, replicate(taskId, generation, owner, key));
+            }
+          }
           const next: "stop" | "wait" | "now" | "settle" = yield* serialized(taskId)(
             reduce(owner, taskId, followed, answer.success),
           );
@@ -1813,6 +2157,7 @@ const make = Effect.gen(function* () {
   const ensure: ChannelRemoteWorkers["Service"]["ensure"] = (owner) =>
     Effect.gen(function* () {
       let started = 0;
+      yield* sweepReplicas;
       for (const stored of yield* ledger.listTasksByStatus(["running", "waiting_input"])) {
         if (stored.task.worker?.host === undefined) continue;
         const key = observerKey(stored.task.taskId, stored.task.generation);
@@ -1820,8 +2165,133 @@ const make = Effect.gen(function* () {
         yield* background(key, observe(stored.task.taskId, stored.task.generation, owner));
         started += 1;
       }
+      // Tasks that moved off a machine: tell the requester once that machine is back.
+      for (const stored of yield* ledger.listTasksByStatus([
+        "received",
+        "dispatching",
+        "running",
+        "waiting_input",
+      ])) {
+        if (stored.task.movedFrom === undefined) continue;
+        const key = "fence:" + stored.task.taskId;
+        if (yield* FiberMap.has(fibers, key)) continue;
+        const state = yield* readState(stored.task.taskId);
+        if (!(state?.superseded ?? []).some((entry) => !entry.noticed)) continue;
+        yield* background(key, fence(stored.task.taskId, owner));
+      }
       return started;
     });
+
+  let lastSweep = 0;
+  /** At most hourly: removes copies nobody rewrote for a week (finished or abandoned tasks). */
+  const sweepReplicas = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    if (now - lastSweep < REPLICA_SWEEP_EVERY_MS) return;
+    lastSweep = now;
+    const names = yield* fileSystem.readDirectory(replicaDir).pipe(Effect.orElseSucceed(() => []));
+    for (const name of names) {
+      const file = path.join(replicaDir, name);
+      const info = yield* fileSystem.stat(file).pipe(Effect.option);
+      if (info._tag === "None") continue;
+      const modified = info.value.mtime._tag === "Some" ? info.value.mtime.value.getTime() : now;
+      if (now - modified > REPLICA_RETENTION_MS) yield* fileSystem.remove(file).pipe(Effect.ignore);
+    }
+  });
+
+  /**
+   * Watches the machines a move left behind. The task never reads their reports again (the
+   * old binding belongs to the old generation); once one answers, its running turn is stopped
+   * so it does not keep diverging, its work stays where it is, and the requester hears once.
+   */
+  const fence = (taskId: ChannelTaskId, owner: string) =>
+    Effect.gen(function* () {
+      let backoff = BACKOFF_START_MS;
+      while (true) {
+        if (!(yield* ledger.isOwner(owner))) return;
+        const state = yield* readState(taskId);
+        const stored = yield* ledger.getTask(taskId);
+        if (state === undefined || stored === undefined) return;
+        const pending = (state.superseded ?? []).filter((entry) => !entry.noticed);
+        if (pending.length === 0) return;
+        const authorize = authorityFor(taskId, stored.task.generation, owner);
+        for (const entry of pending) {
+          const seen = yield* probe(
+            {
+              ...state,
+              host: entry.host,
+              correlationId: entry.correlationId,
+              readKey: entry.readKey,
+              cursor: 0,
+            },
+            authorize,
+          ).pipe(Effect.result);
+          if (seen._tag === "Failure") {
+            if (seen.failure instanceof Superseded) return;
+            if (isUnreachable(seen.failure)) continue;
+            // The binding or its thread is gone there: nothing is left running to tell about.
+          } else if (entry.remoteThreadId !== undefined) {
+            yield* callHost(
+              {
+                host: entry.host,
+                tool: "goat_thread_interrupt",
+                arguments: {
+                  threadId: entry.remoteThreadId,
+                  reason: "This task continued on another machine.",
+                  clientRequestId: "channel-fence:" + entry.correlationId,
+                },
+                writes: true,
+                timeoutMs: SEND_TIMEOUT_MS,
+              },
+              authorize,
+            ).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("channel stale worker interrupt failed", {
+                  taskId,
+                  host: entry.host,
+                  failure: causeTag(cause),
+                }),
+              ),
+            );
+          }
+          yield* serialized(taskId)(
+            Effect.gen(function* () {
+              const current = yield* ledger.getTask(taskId);
+              const mark = stateUpdate(taskId, state.generation, (latest) => ({
+                ...latest,
+                superseded: (latest.superseded ?? []).map((item) =>
+                  item.correlationId === entry.correlationId ? { ...item, noticed: true } : item,
+                ),
+              }));
+              if (seen._tag === "Success" && current?.task.status === "running") {
+                const next = yield* commitTransition(
+                  ledger,
+                  current,
+                  {
+                    type: "task.progress",
+                    payload: {
+                      generation: current.task.generation,
+                      summary: REMOTE_COPY.staleMachineBack(entry.host),
+                    },
+                  },
+                  { owner, narrate: true, remoteWorker: mark },
+                );
+                if (next !== undefined) return;
+              }
+              yield* ledger.updateRemoteWorker({ owner, now: yield* nowIso, update: mark });
+            }),
+          );
+        }
+        yield* Effect.sleep(Duration.millis(backoff));
+        backoff = Math.min(BACKOFF_MAX_MS, backoff * 2);
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("channel stale worker watch stopped", {
+          taskId,
+          failure: causeTag(cause),
+        }),
+      ),
+    );
 
   const attemptedElsewhere: ChannelRemoteWorkers["Service"]["attemptedElsewhere"] = (stored) =>
     Effect.gen(function* () {
@@ -1836,6 +2306,105 @@ const make = Effect.gen(function* () {
       return moved ? state.host : undefined;
     });
 
+  const move: ChannelRemoteWorkers["Service"]["move"] = ({ taskId, host, actor, owner }) =>
+    serialized(taskId)(
+      Effect.gen(function* () {
+        const refuse = (reason: ChannelTaskMoveRefusal, message: string) =>
+          Effect.fail(new ChannelTaskMoveError({ reason, message }));
+        const stored = yield* ledger.getTask(taskId);
+        if (stored === undefined) return yield* refuse("task_not_found", MOVE_COPY.taskNotFound);
+        const task = stored.task;
+        if (task.host === undefined && task.worker?.host === undefined) {
+          return yield* refuse("not_remote", MOVE_COPY.notRemote);
+        }
+        if (
+          task.status !== "running" &&
+          task.status !== "waiting_input" &&
+          task.status !== "dispatching"
+        ) {
+          return yield* refuse("not_running", MOVE_COPY.notRunning);
+        }
+        const state = yield* readState(taskId);
+        if (state === undefined || state.generation !== task.generation) {
+          return yield* refuse("not_running", MOVE_COPY.notRunning);
+        }
+        const alias = host.trim();
+        if (alias === state.host) return yield* refuse("same_host", MOVE_COPY.sameHost(alias));
+        const hosts = yield* knownHosts;
+        if (!hosts.includes(alias)) {
+          return yield* refuse("unknown_host", MOVE_COPY.unknownHost(alias, hosts));
+        }
+        // Only a machine that stopped answering is left; while it answers, the work stays there.
+        if (!state.outageNoticed) {
+          return yield* refuse("host_reachable", MOVE_COPY.hostReachable(state.host));
+        }
+        const replica = state.replica;
+        const present =
+          replica !== undefined &&
+          (yield* fileSystem.exists(replica.file).pipe(Effect.orElseSucceed(() => false)));
+        if (replica === undefined || !present) {
+          return yield* refuse("no_replica", MOVE_COPY.noReplica(state.host));
+        }
+        const next = task.generation + 1;
+        const fromHost = state.host;
+        const carry = stateUpdate(taskId, task.generation, (current) => ({
+          ...current,
+          resumeFrom: {
+            generation: next,
+            file: replica.file,
+            ref: replicaRefFor(taskId, task.generation),
+            commitOid: replica.commitOid,
+            fromHost,
+            capturedAt: replica.capturedAt,
+          },
+          superseded: [
+            ...(current.superseded ?? []).filter(
+              (item) => item.correlationId !== current.correlationId,
+            ),
+            {
+              generation: current.generation,
+              host: current.host,
+              correlationId: current.correlationId,
+              readKey: current.readKey,
+              ...(current.remoteThreadId === undefined
+                ? {}
+                : { remoteThreadId: current.remoteThreadId }),
+              noticed: false,
+            },
+          ],
+        }));
+        const moved = yield* commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.moved",
+            payload: {
+              generation: PositiveInt.make(next),
+              host: alias,
+              fromHost,
+              replicaCapturedAt: replica.capturedAt,
+            },
+          },
+          {
+            owner,
+            actor,
+            narrate: true,
+            remoteWorker: carry,
+            pendingAnswerMessageId: null,
+            completionHold: null,
+          },
+        );
+        if (moved === undefined) return yield* refuse("stale", MOVE_COPY.stale);
+        return {
+          taskId,
+          generation: next,
+          host: alias,
+          fromHost,
+          replicaCapturedAt: replica.capturedAt,
+        } satisfies ChannelTaskMoved;
+      }),
+    );
+
   return ChannelRemoteWorkers.of({
     knownHosts,
     resolve,
@@ -1844,6 +2413,7 @@ const make = Effect.gen(function* () {
     forward,
     ensure,
     attemptedElsewhere,
+    move,
   });
 });
 
