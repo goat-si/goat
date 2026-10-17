@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   type SshLaunchWorkspace,
 } from "@goat/contracts";
+import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import { targetConnectionKey } from "@goat/ssh/command";
 import * as SshAuth from "@goat/ssh/auth";
@@ -493,6 +494,7 @@ const make = Effect.gen(function* () {
     string,
     { readonly token: string; readonly expiresAt: number; readonly ceilingApplied: boolean }
   >();
+  const sessionLocks = yield* KeyedLock.make<string>();
   // Cache only optional launch arguments; memory admission always uses a fresh catalog.
   const launchArguments = new Map<string, ReadonlySet<string>>();
   const connected = new Set<string>();
@@ -589,51 +591,62 @@ const make = Effect.gen(function* () {
     memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
   ) {
     const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling);
-    const now = yield* Clock.currentTimeMillis;
-    const cached = sessions.get(key);
-    if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now) return cached;
-    // A session that may answer approvals is never swapped for a narrower one.
-    const issued = yield* withRuntime(
-      manager.issueMcpClientSession(target, {
-        label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
-        ttl: SESSION_TTL,
-        runtimeModeCeiling: ceiling,
-        ...(approvals ? { approvals: true } : {}),
-        memoryScopes:
-          memoryGrantCeiling === "none"
-            ? []
-            : memoryGrantCeiling === "read"
-              ? ["memory:read"]
-              : ["memory:read", "memory:write"],
+    return yield* sessionLocks.withLock(
+      key,
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const cached = sessions.get(key);
+        if (cached !== undefined && cached.expiresAt - SESSION_REFRESH_MARGIN_MS > now)
+          return cached;
+        // A session that may answer approvals is never swapped for a narrower one.
+        const issued = yield* withRuntime(
+          manager.issueMcpClientSession(target, {
+            label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
+            ttl: SESSION_TTL,
+            runtimeModeCeiling: ceiling,
+            ...(approvals ? { approvals: true } : {}),
+            memoryScopes:
+              memoryGrantCeiling === "none"
+                ? []
+                : memoryGrantCeiling === "read"
+                  ? ["memory:read"]
+                  : ["memory:read", "memory:write"],
+          }),
+        ).pipe(
+          // The remote answered and refused; its message names the runtime and what happens next.
+          Effect.mapError((error) =>
+            error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
+              ? failure("remote_refused", error.message)
+              : error,
+          ),
+          approvals
+            ? Effect.mapError((error) =>
+                error instanceof SshRemoteDispatchError
+                  ? error
+                  : failure(
+                      "remote_refused",
+                      `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
+                    ),
+              )
+            : sshFailed(target.alias),
+        );
+        const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
+        const session = {
+          token: issued.token,
+          expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : now + SESSION_TTL_MS,
+          ceilingApplied: issued.runtimeModeCeilingApplied,
+        };
+        sessions.set(key, session);
+        launchArguments.delete(key);
+        return session;
       }),
-    ).pipe(
-      // The remote answered and refused; its message names the runtime and what happens next.
-      Effect.mapError((error) =>
-        error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
-          ? failure("remote_refused", error.message)
-          : error,
-      ),
-      approvals
-        ? Effect.mapError((error) =>
-            error instanceof SshRemoteDispatchError
-              ? error
-              : failure(
-                  "remote_refused",
-                  `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
-                ),
-          )
-        : sshFailed(target.alias),
     );
-    const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
-    const session = {
-      token: issued.token,
-      expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : now + SESSION_TTL_MS,
-      ceilingApplied: issued.runtimeModeCeilingApplied,
-    };
-    sessions.set(key, session);
-    launchArguments.delete(key);
-    return session;
   });
+
+  // A delayed rejection of an older bearer must not evict its replacement.
+  const invalidateSession = (key: string, token: string) => {
+    if (sessions.get(key)?.token === token) sessions.delete(key);
+  };
 
   /**
    * Current launch capabilities, with optional declarations from cache if listing
@@ -720,7 +733,10 @@ const make = Effect.gen(function* () {
         }
         if (describe(error).includes("HTTP 401")) {
           // Revoked or expired on the remote: forget it so the next call issues a fresh one.
-          sessions.delete(sessionKey(input.target, input.ceiling, false, input.memoryGrantCeiling));
+          invalidateSession(
+            sessionKey(input.target, input.ceiling, false, input.memoryGrantCeiling),
+            input.token,
+          );
           return failure(
             "remote_refused",
             `${input.target.alias} rejected this machine's GOAT session; call the tool again to sign in anew.`,
@@ -1380,11 +1396,13 @@ const make = Effect.gen(function* () {
       ),
     );
 
+    let attemptedToken: string | undefined;
     const attempt = (retried: boolean): Effect.Effect<unknown, SshRemoteDispatchError | E, R> =>
       Effect.gen(function* () {
         const session = yield* sessionFor(target, ceiling, call.approvals === true).pipe(
           unavailable(target.alias),
         );
+        attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
           return yield* failure(
             "remote_refused",
@@ -1418,7 +1436,12 @@ const make = Effect.gen(function* () {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) {
             // Revoked or expired on the remote: issue a fresh session once.
-            sessions.delete(sessionKey(target, ceiling, call.approvals === true));
+            if (attemptedToken !== undefined) {
+              invalidateSession(
+                sessionKey(target, ceiling, call.approvals === true),
+                attemptedToken,
+              );
+            }
             return retried
               ? Effect.fail(
                   failure(

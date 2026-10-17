@@ -477,7 +477,12 @@ describe("SshRemoteDispatch.callHostTool", () => {
    */
   const withRemote = <A, E>(
     options: {
-      readonly answer: (request: { readonly method: string; readonly tool?: string }) => ToolAnswer;
+      readonly answer: (request: {
+        readonly method: string;
+        readonly tool?: string;
+        readonly authorization: string | null;
+      }) => ToolAnswer | Promise<ToolAnswer>;
+      readonly beforeSessionIssue?: (attempt: number) => Effect.Effect<void, SshCommandError>;
       readonly ensureFails?: boolean;
       readonly ceilingApplied?: boolean;
       /** The remote CLI cannot grant orchestration:approve. */
@@ -500,8 +505,9 @@ describe("SshRemoteDispatch.callHostTool", () => {
           params?: { name?: string };
         };
         if (request.method === "tools/call") record.toolCalls.push(request.params?.name ?? "");
-        const answer = options.answer({
+        const answer = await options.answer({
           method: request.method,
+          authorization: new Headers(init?.headers).get("authorization"),
           ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
         });
         if ("throws" in answer) throw new TypeError(answer.throws);
@@ -548,7 +554,8 @@ describe("SshRemoteDispatch.callHostTool", () => {
                   stderr: "",
                 }),
               )
-            : Effect.sync(() => {
+            : Effect.gen(function* () {
+                yield* options.beforeSessionIssue?.(record.sessionRequests.length) ?? Effect.void;
                 record.sessionsIssued += 1;
                 return {
                   token: `session-${record.sessionsIssued}`,
@@ -755,6 +762,213 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect("shares one in-flight session issuance for concurrent calls with the same key", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { result, record } = yield* withRemote(
+        {
+          beforeSessionIssue: () =>
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          answer: (request) =>
+            initialize(request) ?? {
+              result: { structuredContent: { authorization: request.authorization } },
+            },
+        },
+        Effect.gen(function* () {
+          const first = yield* Effect.forkChild(readCall(), { startImmediately: true });
+          yield* Deferred.await(started);
+          // Run the second caller up to its lock wait before releasing the issuer.
+          const second = yield* Effect.forkChild(readCall(), { startImmediately: true });
+          yield* Deferred.succeed(release, undefined);
+          return [yield* Fiber.join(first), yield* Fiber.join(second)];
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: [
+          { value: { authorization: "Bearer session-1" } },
+          { value: { authorization: "Bearer session-1" } },
+        ],
+      });
+      expect(record.sessionRequests).toEqual([false]);
+      expect(record.sessionsIssued).toBe(1);
+    }),
+  );
+
+  it.effect.each(["runtime ceiling", "approvals"] as const)(
+    "issues independently for concurrent calls with different %s keys",
+    (differentKey) =>
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const { result, record } = yield* withRemote(
+          {
+            beforeSessionIssue: (attempt) =>
+              Deferred.succeed(attempt === 1 ? firstStarted : secondStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+              ),
+            answer: (request) => initialize(request) ?? { result: { structuredContent: {} } },
+          },
+          Effect.gen(function* () {
+            const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+            const first = yield* Effect.forkChild(readCall(), { startImmediately: true });
+            yield* Deferred.await(firstStarted);
+            const second = yield* Effect.forkChild(
+              dispatch.callHostTool(
+                {
+                  host,
+                  tool: "goat_thread_read",
+                  arguments: { threadId: "thread-2" },
+                  timeoutMs: 5_000,
+                  writes: false,
+                  approvals: differentKey === "approvals",
+                },
+                Effect.succeed(
+                  differentKey === "runtime ceiling" ? "approval-required" : "full-access",
+                ),
+              ),
+              { startImmediately: true },
+            );
+            yield* Deferred.await(secondStarted);
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(first);
+            yield* Fiber.join(second);
+          }),
+        );
+        expect(result._tag).toBe("Success");
+        expect(record.sessionsIssued).toBe(2);
+        expect(record.sessionRequests).toEqual([false, differentKey === "approvals"]);
+      }),
+  );
+
+  it.effect("retries session issuance after a failed in-flight attempt", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { result, record } = yield* withRemote(
+        {
+          beforeSessionIssue: (attempt) =>
+            attempt === 1
+              ? Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(
+                    Effect.fail(
+                      new SshCommandError({
+                        message: "fixture issuance failed",
+                        command: ["ssh", host],
+                        exitCode: 255,
+                        stderr: "",
+                      }),
+                    ),
+                  ),
+                )
+              : Effect.void,
+          answer: (request) => initialize(request) ?? { result: { structuredContent: {} } },
+        },
+        Effect.gen(function* () {
+          const first = yield* Effect.forkChild(readCall().pipe(Effect.result));
+          yield* Deferred.await(started);
+          yield* Deferred.succeed(release, undefined);
+          expect((yield* Fiber.join(first))._tag).toBe("Failure");
+          yield* readCall();
+          yield* readCall();
+        }),
+      );
+      expect(result._tag).toBe("Success");
+      expect(record.sessionRequests).toEqual([false, false]);
+      expect(record.sessionsIssued).toBe(1);
+    }),
+  );
+
+  it.effect("shares one refresh when concurrent calls enter the ten-minute expiry margin", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const { result, record } = yield* withRemote(
+        {
+          beforeSessionIssue: (attempt) =>
+            attempt === 1
+              ? Effect.void
+              : Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          answer: (request) => initialize(request) ?? { result: { structuredContent: {} } },
+        },
+        Effect.gen(function* () {
+          yield* readCall();
+          yield* TestClock.adjust((11 * 60 + 49) * 60 * 1000);
+          yield* readCall();
+          yield* TestClock.adjust("1 minute");
+          const first = yield* Effect.forkChild(readCall(), { startImmediately: true });
+          yield* Deferred.await(started);
+          const second = yield* Effect.forkChild(readCall(), { startImmediately: true });
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+        }),
+      );
+      expect(result._tag).toBe("Success");
+      expect(record.sessionsIssued).toBe(2);
+      expect(record.sessionRequests).toEqual([false, false]);
+    }),
+  );
+
+  it.effect("reuses the fresh session after a delayed concurrent 401 for the old bearer", () =>
+    Effect.gen(function* () {
+      const firstRejected = yield* Deferred.make<(answer: ToolAnswer) => void>();
+      const secondRejected = yield* Deferred.make<(answer: ToolAnswer) => void>();
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      let rejected = 0;
+      const { result, record } = yield* withRemote(
+        {
+          beforeSessionIssue: (attempt) =>
+            attempt === 1
+              ? Effect.void
+              : Deferred.succeed(refreshStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseRefresh)),
+                ),
+          answer: (request) => {
+            if (request.method === "initialize" && request.authorization === "Bearer session-1") {
+              rejected += 1;
+              const pending = rejected === 1 ? firstRejected : secondRejected;
+              return new Promise<ToolAnswer>((resolve) => {
+                Deferred.doneUnsafe(pending, Effect.succeed(resolve));
+              });
+            }
+            return (
+              initialize(request) ?? {
+                result: { structuredContent: { authorization: request.authorization } },
+              }
+            );
+          },
+        },
+        Effect.gen(function* () {
+          const first = yield* Effect.forkChild(readCall());
+          const rejectFirst = yield* Deferred.await(firstRejected);
+          const second = yield* Effect.forkChild(readCall());
+          const rejectSecond = yield* Deferred.await(secondRejected);
+          rejectFirst({ status: 401 });
+          yield* Deferred.await(refreshStarted);
+          yield* Deferred.succeed(releaseRefresh, undefined);
+          const firstResult = yield* Fiber.join(first);
+          // The old request arrives after the replacement has already been cached.
+          rejectSecond({ status: 401 });
+          return [firstResult, yield* Fiber.join(second)];
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: [
+          { value: { authorization: "Bearer session-2" } },
+          { value: { authorization: "Bearer session-2" } },
+        ],
+      });
+      expect(record.sessionsIssued).toBe(2);
+      expect(record.sessionRequests).toEqual([false, false]);
+    }),
+  );
+
   it.effect("signs in anew once when the remote rejects the cached session", () =>
     Effect.gen(function* () {
       let rejected = false;
@@ -926,6 +1140,8 @@ const withLaunchRemote = <A, E>(
     projectReply?: unknown;
     broad?: boolean;
     registrationAccess?: boolean;
+    declaresMemoryCeiling?: boolean;
+    beforeSessionIssue?: (scopes: ReadonlyArray<string>) => Effect.Effect<void, SshCommandError>;
   },
   body: (record: {
     tools: { name: string; args: Record<string, unknown>; authorization: string | null }[];
@@ -953,7 +1169,8 @@ const withLaunchRemote = <A, E>(
       disconnectEnvironment: () => Effect.void,
       revalidateTunnels: () => Effect.void,
       issueMcpClientSession: (target, opts) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* options.beforeSessionIssue?.(opts.memoryScopes ?? []) ?? Effect.void;
           record.sessions.push({ target, ceiling: opts.runtimeModeCeiling as RuntimeMode });
           return {
             token: `token-${record.sessions.length}`,
@@ -1014,7 +1231,12 @@ const withLaunchRemote = <A, E>(
             "goat_thread_launch",
             "goat_environment_read",
             "orchestrator_capabilities",
-          ].map((name) => ({ name })),
+          ].map((name) => ({
+            name,
+            ...(name === "goat_thread_launch" && options.declaresMemoryCeiling === true
+              ? { inputSchema: { type: "object", properties: { memoryGrantCeiling: {} } } }
+              : {}),
+          })),
         };
       else {
         const name = req.params?.name ?? "";
@@ -1102,6 +1324,44 @@ it.effect("alias launch remains compatible", () =>
       expect(record.targets).toHaveLength(0);
     }),
   ),
+);
+it.effect("issues independently for concurrent launches with different memory grant keys", () =>
+  Effect.gen(function* () {
+    const firstStarted = yield* Deferred.make<void>();
+    const secondStarted = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const scopes: ReadonlyArray<string>[] = [];
+    yield* withLaunchRemote(
+      {
+        declaresMemoryCeiling: true,
+        beforeSessionIssue: (requested) => {
+          scopes.push(requested);
+          return Deferred.succeed(
+            scopes.length === 1 ? firstStarted : secondStarted,
+            undefined,
+          ).pipe(Effect.andThen(Deferred.await(release)));
+        },
+      },
+      (record) =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const first = yield* Effect.forkChild(
+            dispatch.launchThread({ ...launchInput, memoryGrantCeiling: "none" }, Effect.void),
+          );
+          yield* Deferred.await(firstStarted);
+          const second = yield* Effect.forkChild(
+            dispatch.launchThread({ ...launchInput, memoryGrantCeiling: "read" }, Effect.void),
+          );
+          yield* Deferred.await(secondStarted);
+          expect(scopes).toEqual([[], ["memory:read"]]);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(second);
+          expect(record.sessions).toHaveLength(2);
+          expect(new Set(record.tools.map((call) => call.authorization)).size).toBe(2);
+        }),
+    );
+  }),
 );
 it.effect("same alias different user or port gets a separate session", () =>
   withLaunchRemote({}, (record) =>
