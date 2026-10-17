@@ -712,15 +712,15 @@ function task(index: number, origin: "goat" | "slack" = "goat"): ChannelTask {
   };
 }
 
-it("counts 101 GOAT waiting tasks across pages, dedupes, shares observers and preserves the last count on errors", async () => {
+it("counts 102 waiting tasks from every channel across pages, dedupes, shares observers and preserves the last count on errors", async () => {
   const page1 = Array.from({ length: 100 }, (_, index) => task(index));
   vi.mocked(port.listTasks)
     .mockResolvedValueOnce({ tasks: page1, nextCursor: "next" })
     .mockResolvedValueOnce({ tasks: [task(99), task(100), task(101, "slack")] });
   await render(true);
   expect([...container.querySelectorAll("output")].map((output) => output.textContent)).toEqual([
-    "101",
-    "101",
+    "102",
+    "102",
   ]);
   expect(port.listTasks).toHaveBeenCalledTimes(2);
   expect(port.listTasks).toHaveBeenLastCalledWith(environmentId, {
@@ -732,7 +732,7 @@ it("counts 101 GOAT waiting tasks across pages, dedupes, shares observers and pr
     .mockResolvedValueOnce({ tasks: [], nextCursor: "error" })
     .mockRejectedValueOnce(new Error("offline"));
   await act(() => window.dispatchEvent(new Event("focus")));
-  expect(container.querySelector("output")?.textContent).toBe("101");
+  expect(container.querySelector("output")?.textContent).toBe("102");
   setConnection(false);
   await render(true);
   expect(container.querySelector("output")?.textContent).toBe("unknown");
