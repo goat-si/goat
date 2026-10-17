@@ -172,6 +172,13 @@ describe("selectTasks", () => {
     };
     // A fixture loads the module by name.
     assert.ok(includes("apps/server/src/rpcInitialItems.ts", "src/rpcInitialItems.memory.test.ts"));
+    assert.ok(includes("apps/server/src/ws.ts", "src/rpcInitialItems.memory.test.ts"));
+    assert.ok(
+      includes(
+        "apps/server/src/orchestration-v2/ThreadManagementService.ts",
+        "src/rpcInitialItems.memory.test.ts",
+      ),
+    );
     // The test spawns a script that imports the change.
     assert.ok(
       includes(

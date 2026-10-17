@@ -132,9 +132,11 @@ describe("buildImportGraph", () => {
     write("apps/server/src/spawn.test.ts", 'spawn("node", [path.join(dir, "cli/helper.ts")]);');
     write("apps/server/src/cli/helper.ts");
     write("apps/server/src/loaded.ts");
+    write("apps/server/src/ws.ts");
+    write("apps/server/src/nested/deep.ts");
     write(
       "apps/server/src/loader.fixture.mjs",
-      'const app = (name) => import(root + "/src/" + name + ".ts");\nawait app("loaded");',
+      'const app = (name) => import(root + "/src/" + name + ".ts");\nawait app("loaded");\nawait app("ws");\nawait app("nested/deep");',
     );
     write(
       "apps/server/src/loader.test.ts",
@@ -195,6 +197,8 @@ describe("buildImportGraph", () => {
 
   it("follows a module that a loader imports by name", () => {
     assert.ok(reaches("apps/server/src/loaded.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/ws.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/nested/deep.ts", "apps/server/src/loader.test.ts"));
   });
 
   it("ignores file names in comments", () => {

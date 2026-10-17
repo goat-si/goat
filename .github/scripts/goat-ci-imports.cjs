@@ -68,8 +68,8 @@ const PATH_EXTENSIONS = new Set([
 const PATH_STRING = /["'\x60]([^"'\x60\n]*?([\w@+-][\w.@+-]*\.[A-Za-z0-9]+))["'\x60]/g;
 /** A dynamic import or require whose argument is not a literal: the file loads modules by name. */
 const NON_LITERAL_LOAD = /\b(?:import|require)\s*\(\s*(?!["']|\x60[^\x60$]*\x60)[^)\s]/;
-/** A short quoted word, which a loader may turn into a module path. */
-const QUOTED_WORD = /["'\x60]([A-Za-z][\w-]{3,})["'\x60]/g;
+/** A quoted module name or extensionless module path, which a loader may turn into a file path. */
+const QUOTED_MODULE = /["'\x60]((?:\.{1,2}\/)*[A-Za-z][\w-]*(?:\/[\w.-]+)*)["'\x60]/g;
 /** A name that matches more files than this is too generic to be a reference. */
 const MAX_NAME_MATCHES = 3;
 /** Build and test configs: reached like any file, but nothing depends on a file through one. */
@@ -87,13 +87,19 @@ function withoutComments(source) {
  * or require, every quoted word that names a module without its extension (a fixture's
  * app("rpcInitialItems")).
  */
-function namedFilesOf(source, from, byBase, byStem, fileSet) {
+function namedFilesOf(source, from, { byBase, byStem, fileSet, packageDirFor }) {
   const found = new Set();
   const code = withoutComments(source);
   const addAll = (matches) => {
     if (matches.length > 0 && matches.length <= MAX_NAME_MATCHES)
       for (const file of matches) found.add(file);
   };
+  // A name several files share most likely means the one in the naming file's own package.
+  const ownPackage = packageDirFor(from);
+  const preferOwnPackage = (matches) =>
+    matches.length <= MAX_NAME_MATCHES || ownPackage === undefined
+      ? matches
+      : matches.filter((file) => file.startsWith(ownPackage + "/"));
   for (const match of code.matchAll(PATH_STRING)) {
     const [, text, base] = match;
     if (!PATH_EXTENSIONS.has(path.posix.extname(base))) continue;
@@ -111,12 +117,24 @@ function namedFilesOf(source, from, byBase, byStem, fileSet) {
       .replace(/^(?:\.{1,2}\/)+/, "");
     const candidates = byBase.get(base) ?? [];
     if (tail.includes("/"))
-      addAll(candidates.filter((file) => file === tail || file.endsWith("/" + tail)));
+      addAll(
+        preferOwnPackage(candidates.filter((file) => file === tail || file.endsWith("/" + tail))),
+      );
     else if (candidates.length === 1) addAll(candidates);
+    else {
+      const local = candidates.filter((file) => ownPackage && file.startsWith(ownPackage + "/"));
+      if (local.length === 1) addAll(local);
+    }
   }
   if (NON_LITERAL_LOAD.test(code)) {
-    for (const match of code.matchAll(QUOTED_WORD)) {
-      if (match[1] !== "index") addAll(byStem.get(match[1]) ?? []);
+    for (const match of code.matchAll(QUOTED_MODULE)) {
+      const name = match[1].replace(/^(?:\.{1,2}\/)+/, "");
+      if (name.length < 2 || name === "index") continue;
+      const candidates = (byStem.get(path.posix.basename(name)) ?? []).filter((file) => {
+        const withoutExtension = file.slice(0, file.length - path.posix.extname(file).length);
+        return withoutExtension === name || withoutExtension.endsWith("/" + name);
+      });
+      addAll(preferOwnPackage(candidates));
     }
   }
   found.delete(from);
@@ -246,6 +264,8 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
   const fileSet = new Set(files);
   const packages = readPackages(root);
   const names = [...packages.keys()].sort((a, b) => b.length - a.length);
+  const packageDirs = [...packages.values()].map((entry) => entry.dir);
+  const packageDirFor = (file) => packageDirs.find((dir) => file.startsWith(dir + "/"));
   const sources = new Map();
   const importers = new Map();
 
@@ -312,7 +332,7 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
       const target = resolve(specifier, file);
       if (target !== undefined && target !== file) link(importers, file, target);
     }
-    for (const named of namedFilesOf(source, file, byBase, byStem, fileSet)) {
+    for (const named of namedFilesOf(source, file, { byBase, byStem, fileSet, packageDirFor })) {
       if (!importers.get(named)?.has(file)) link(namers, file, named);
     }
   }
