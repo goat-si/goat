@@ -15,7 +15,9 @@ import {
 import { isDevProxiedPath } from "@goat/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@goat/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@goat/shared/observability";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -47,6 +49,7 @@ import {
 } from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { base64UrlDecodeUtf8 } from "./auth/utils.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
@@ -172,6 +175,41 @@ function assetByteRange(header: string, size: bigint) {
   };
 }
 
+const decodeAssetExpiry = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ expiresAt: Schema.Finite })),
+);
+
+/** Read only after resolveAsset has authenticated this exact token. */
+function verifiedAssetExpiry(token: string) {
+  try {
+    return Option.getOrUndefined(decodeAssetExpiry(base64UrlDecodeUtf8(token.split(".")[0]!)))
+      ?.expiresAt;
+  } catch {
+    return undefined;
+  }
+}
+
+function assetNotModified(
+  etag: string | undefined,
+  lastModified: string | undefined,
+  conditions: { readonly ifNoneMatch?: string; readonly ifModifiedSince?: string },
+) {
+  if (conditions.ifNoneMatch !== undefined) {
+    return (
+      conditions.ifNoneMatch.trim() === "*" ||
+      (etag !== undefined &&
+        conditions.ifNoneMatch
+          .split(",")
+          .some((candidate) => candidate.trim().replace(/^W\//, "") === etag.replace(/^W\//, "")))
+    );
+  }
+  return (
+    lastModified !== undefined &&
+    conditions.ifModifiedSince !== undefined &&
+    Date.parse(lastModified) <= Date.parse(conditions.ifModifiedSince)
+  );
+}
+
 export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   asset: {
     readonly path: string;
@@ -180,10 +218,12 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly mimeType?: string;
     readonly file?: OpenMediaFile;
     readonly renderIntent?: "mcp-app";
+    readonly expiresAt?: number;
   },
   rangeHeader?: string,
   ifRangeHeader?: string,
   method: "GET" | "HEAD" = "GET",
+  conditions: { readonly ifNoneMatch?: string; readonly ifModifiedSince?: string } = {},
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
   if (
@@ -205,27 +245,68 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
-  const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
-  if (isMedia) {
-    // Host media can change in place. Do not invite conditional range requests
-    // with validators that cannot establish byte-for-byte identity. Attachment media
-    // carries no `file`, and must not outlive the signed URL that granted it either.
-    headers["Cache-Control"] = "private, no-store";
-  }
+  const contentType = headers["Content-Type"] ?? "";
+  const isMedia = /^(?:audio|video)\//i.test(contentType);
   let status = 200;
   let offset = 0n;
   let bytesToRead: bigint | undefined;
   if (isMedia) {
+    const fs = yield* FileSystem.FileSystem;
+    const info = mediaInfo
+      ? {
+          size: mediaInfo.size,
+          mtime: mediaInfo.mtime,
+          // ctime cannot be set back by utimes, so an in-place rewrite always changes it.
+          revision: [mediaInfo.ino, mediaInfo.mtimeNs, mediaInfo.ctimeNs]
+            .map((part) => part.toString(16))
+            .join("-"),
+          strong: true,
+        }
+      : yield* fs.stat(asset.path).pipe(
+          Effect.map((info) => ({
+            strong: false,
+            size: info.size,
+            mtime: Option.getOrNull(info.mtime),
+            revision: Option.map(info.mtime, (mtime) => mtime.getTime().toString(16)).pipe(
+              Option.getOrElse(() => ""),
+            ),
+          })),
+        );
+    const mtime = info.mtime;
+    const now = yield* Clock.currentTimeMillis;
+    const remainingSeconds = Math.floor(((asset.expiresAt ?? now) - now) / 1000);
+    headers["Content-Type"] = contentType;
+    headers["Cache-Control"] =
+      remainingSeconds > 0
+        ? `private, max-age=${remainingSeconds}, must-revalidate`
+        : "private, no-store";
     headers["Accept-Ranges"] = "bytes";
-    // If-Range requires a matching validator. A full response is safe when we cannot validate it.
-    if (method === "GET" && rangeHeader && ifRangeHeader === undefined) {
-      const fs = yield* FileSystem.FileSystem;
-      const info = mediaInfo ?? (yield* fs.stat(asset.path));
+    // A guarded descriptor pins the inode, and its size, mtime and ctime identify the bytes it
+    // serves, so that ETag is strong. Unguarded metadata stays weak: revalidation only.
+    if (mtime !== null) {
+      headers.ETag = `${info.strong ? "" : "W/"}"${info.size.toString(16)}-${info.revision}"`;
+      headers["Last-Modified"] = DateTime.toDateUtc(
+        DateTime.makeUnsafe(Math.min(mtime.getTime(), now)),
+      ).toUTCString();
+    }
+    if (assetNotModified(headers.ETag, headers["Last-Modified"], conditions)) {
+      return HttpServerResponse.empty({ status: 304, headers });
+    }
+    // If-Range joins bytes from two reads, so it needs an exact strong ETag match. Dates and weak
+    // ETags fall back to the full body.
+    const ifRangeMatches =
+      ifRangeHeader === undefined ||
+      (info.strong && headers.ETag !== undefined && ifRangeHeader.trim() === headers.ETag);
+    if (method === "GET" && rangeHeader && ifRangeMatches) {
       const range = assetByteRange(rangeHeader, info.size);
       if (range?._tag === "Unsatisfiable") {
         return HttpServerResponse.empty({
           status: 416,
-          headers: { ...headers, "Content-Range": `bytes */${info.size}` },
+          headers: {
+            ...headers,
+            "Cache-Control": "private, no-store",
+            "Content-Range": `bytes */${info.size}`,
+          },
         });
       }
       if (range?._tag === "Range") {
@@ -234,6 +315,10 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
         bytesToRead = range.bytesToRead;
         headers["Content-Range"] = range.contentRange;
       }
+    }
+    if (method === "HEAD") {
+      headers["Content-Length"] = String(info.size);
+      return HttpServerResponse.empty({ status, headers });
     }
   }
   if (mediaFile && mediaInfo) {
@@ -259,7 +344,13 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
       headers,
     });
   }
-  return yield* HttpServerResponse.file(asset.path, { status, offset, bytesToRead, headers });
+  const response = yield* HttpServerResponse.file(asset.path, {
+    status,
+    offset,
+    bytesToRead,
+    headers,
+  });
+  return isMedia ? HttpServerResponse.setHeaders(response, headers) : response;
 });
 
 export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compression(), {
@@ -487,11 +578,20 @@ export const layerAssetRoute = HttpRouter.add(
         ),
       );
     }
+    const expiresAt = verifiedAssetExpiry(suffix.slice(0, separatorIndex));
     return yield* assetFileResponse(
-      asset,
+      { ...asset, ...(expiresAt !== undefined ? { expiresAt } : {}) },
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",
+      {
+        ...(request.headers["if-none-match"] !== undefined
+          ? { ifNoneMatch: request.headers["if-none-match"] }
+          : {}),
+        ...(request.headers["if-modified-since"] !== undefined
+          ? { ifModifiedSince: request.headers["if-modified-since"] }
+          : {}),
+      },
     ).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

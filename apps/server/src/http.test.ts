@@ -21,7 +21,15 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Tracer from "effect/Tracer";
-import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
+import * as TestClock from "effect/testing/TestClock";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 
 import {
@@ -33,6 +41,13 @@ import {
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@goat/contracts";
 
 import * as ServerConfig from "./config.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { base64UrlEncode, signPayload } from "./auth/utils.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
+import * as GitHubCredentials from "@goat/source-control-github/server/GitHubCredentials";
 
 import {
   assetResponseHeaders,
@@ -391,6 +406,108 @@ it.layer(
   );
 });
 
+describe("signed media HTTP route", () => {
+  it.effect(
+    "authenticates before revalidation and derives cache freshness from the signed claims",
+    () => {
+      const signingKey = new Uint8Array(32).fill(7);
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-media-http-" });
+        const filePath = path.join(directory, "clip.mp4");
+        yield* fs.writeFileString(filePath, "0123456789");
+        yield* TestClock.setTime(1_800_000_000_000);
+        const canonicalPath = yield* fs.realPath(filePath);
+        const file = yield* openMediaFile(canonicalPath);
+        if (!file) throw new Error("Expected an opened media file");
+        const makeUrl = (expiresAt: number, validSignature = true) => {
+          const payload = base64UrlEncode(
+            JSON.stringify({
+              version: 1,
+              kind: "media-file-exact",
+              filePath: canonicalPath,
+              device: file.info.dev.toString(),
+              inode: file.info.ino.toString(),
+              expiresAt,
+            }),
+          );
+          const signature = signPayload(payload, validSignature ? signingKey : new Uint8Array(32));
+          return `http://localhost/api/assets/${payload}.${signature}/clip.mp4`;
+        };
+        const app = yield* HttpRouter.toHttpEffect(ServerHttp.layerAssetRoute);
+        const request = (url: string, method = "GET", headers: Record<string, string> = {}) =>
+          app.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(new Request(url, { method, headers })),
+            ),
+            Effect.map(HttpServerResponse.toWeb),
+          );
+        const url = makeUrl(1_800_000_005_900);
+        const initial = yield* request(url);
+        expect(initial.status).toBe(200);
+        expect(initial.headers.get("cache-control")).toBe("private, max-age=5, must-revalidate");
+        const etag = initial.headers.get("etag")!;
+        const lastModified = initial.headers.get("last-modified")!;
+        expect(yield* Effect.promise(() => initial.text())).toBe("0123456789");
+        for (const method of ["GET", "HEAD"]) {
+          for (const headers of [
+            { "if-none-match": etag },
+            { "if-modified-since": lastModified },
+          ]) {
+            const unchanged = yield* request(url, method, headers);
+            expect(unchanged.status).toBe(304);
+            expect(unchanged.headers.get("etag")).toBe(etag);
+            expect(yield* Effect.promise(() => unchanged.text())).toBe("");
+          }
+        }
+        yield* TestClock.adjust("2 seconds");
+        const partial = yield* request(url, "GET", { range: "bytes=2-4" });
+        expect(partial.status).toBe(206);
+        expect(partial.headers.get("cache-control")).toBe("private, max-age=3, must-revalidate");
+        expect(yield* Effect.promise(() => partial.text())).toBe("234");
+        for (const deniedUrl of [makeUrl(1_800_000_000_000), makeUrl(1_800_000_060_000, false)]) {
+          const denied = yield* request(deniedUrl, "GET", { "if-none-match": "*" });
+          expect(denied.status).toBe(404);
+          expect(denied.headers.get("etag")).toBeNull();
+        }
+        yield* TestClock.adjust("4 seconds");
+        const expired = yield* request(url, "GET", { "if-none-match": etag });
+        expect(expired.status).toBe(404);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            FetchHttpClient.layer,
+            ServerConfig.layerTest(process.cwd(), { prefix: "goat-media-http-config-" }),
+            Layer.mock(ServerSecretStore.ServerSecretStore)({
+              getOrCreateRandom: () => Effect.succeed(signingKey),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({}),
+            Layer.mock(WorkspacePaths.WorkspacePaths)({}),
+            Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
+            Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
+            Layer.mock(GitHubCredentials.GitHubCredentials)({}),
+          ).pipe(Layer.provide(NodeServices.layer), Layer.provideMerge(layerFileResponse)),
+        ),
+      );
+    },
+  );
+});
+
+/** A guarded response closes its descriptor, so each request opens a fresh one, as the server does. */
+const mediaAsset = (
+  path: string,
+  guarded: boolean,
+  extra: { readonly mimeType: string; readonly expiresAt?: number },
+) =>
+  Effect.gen(function* () {
+    if (!guarded) return { path, ...extra };
+    const file = yield* openMediaFile(path);
+    if (!file) throw new Error("Expected an opened media file");
+    return { path, file, ...extra };
+  });
+
 describe("video asset byte ranges", () => {
   it.effect("uses current descriptor metadata after an in-place truncate or extension", () =>
     Effect.gen(function* () {
@@ -511,8 +628,8 @@ describe("video asset byte ranges", () => {
         expect(response.headers.get("accept-ranges")).toBe("bytes");
         expect(response.headers.get("content-range")).toBe(contentRange);
         expect(response.headers.get("cache-control")).toBe("private, no-store");
-        expect(response.headers.get("etag")).toBeNull();
-        expect(response.headers.get("last-modified")).toBeNull();
+        expect(response.headers.get("etag")).toMatch(/^"[\da-f]+(?:-[\da-f]+){3}"$/);
+        expect(response.headers.get("last-modified")).not.toBeNull();
         if (status !== 416)
           expect(response.headers.get("content-length")).toBe(String(expected.length));
         expect(yield* Effect.promise(() => response.text())).toBe(expected);
@@ -520,7 +637,7 @@ describe("video asset byte ranges", () => {
     }).pipe(Effect.provide(layerFileResponse)),
   );
 
-  it.effect("keeps attachment media out of the cache once its signed URL expires", () =>
+  it.effect("keeps media without a verified signed expiry out of the cache", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -528,13 +645,176 @@ describe("video asset byte ranges", () => {
       const filePath = path.join(directory, "audio.wav");
       yield* fs.writeFileString(filePath, "RIFF");
       const canonicalPath = yield* fs.realPath(filePath);
-      // An attachment is read straight from disk, so it carries no opened host file. Its URL is
-      // signed and short-lived; a cached copy would outlive the grant that served it.
+      // Direct callers lack the verified token expiry that the HTTP route supplies.
       const response = HttpServerResponse.toWeb(
         yield* assetFileResponse({ path: canonicalPath, mimeType: "audio/wav" }),
       );
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("accept-ranges")).toBe("bytes");
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("bounds full and partial media freshness by the signed expiry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-media-cache-" });
+      const filePath = path.join(directory, "clip.mp4");
+      yield* fs.writeFileString(filePath, "0123456789");
+      yield* TestClock.setTime(1_800_000_000_000);
+      for (const guarded of [false, true]) {
+        const canonicalPath = yield* fs.realPath(filePath);
+        for (const range of [undefined, "bytes=2-4"]) {
+          const asset = yield* mediaAsset(canonicalPath, guarded, {
+            mimeType: "video/mp4",
+            expiresAt: 1_800_000_005_900,
+          });
+          const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, range));
+          expect(response.status).toBe(range ? 206 : 200);
+          expect(response.headers.get("cache-control")).toBe("private, max-age=5, must-revalidate");
+          expect(response.headers.get("etag")).toMatch(
+            guarded ? /^"[\da-f]+(?:-[\da-f]+){3}"$/ : /^W\/"[\da-f]+-[\da-f]+"$/,
+          );
+          expect(response.headers.get("last-modified")).not.toBeNull();
+          expect(yield* Effect.promise(() => response.text())).toBe(range ? "234" : "0123456789");
+        }
+      }
+      for (const expiresAt of [1_799_999_999_000, 1_800_000_000_000, 1_800_000_000_999]) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ path: filePath, mimeType: "audio/wav", expiresAt }),
+        );
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(yield* Effect.promise(() => response.text())).toBe("0123456789");
+      }
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("revalidates GET and HEAD before processing ranges or reading the media body", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-media-conditional-" });
+      const filePath = path.join(directory, "clip.mp4");
+      yield* fs.writeFileString(filePath, "0123456789");
+      yield* fs.utimes(
+        filePath,
+        DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+        DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+      );
+      yield* TestClock.setTime(1_800_000_000_000);
+      for (const guarded of [false, true]) {
+        const canonicalPath = yield* fs.realPath(filePath);
+        const open = () =>
+          mediaAsset(canonicalPath, guarded, {
+            mimeType: "video/mp4",
+            expiresAt: 1_800_000_060_000,
+          });
+        const initial = HttpServerResponse.toWeb(yield* assetFileResponse(yield* open()));
+        const etag = initial.headers.get("etag")!;
+        // The same tag in the other strength still matches under weak comparison.
+        const otherStrength = etag.startsWith("W/") ? etag.slice(2) : `W/${etag}`;
+        expect(yield* Effect.promise(() => initial.text())).toBe("0123456789");
+        let bodyReads = 0;
+        const mtime = "Tue, 14 Nov 2023 22:13:20 GMT";
+        for (const method of ["GET", "HEAD"] as const) {
+          for (const [conditions, status] of [
+            [{ ifNoneMatch: etag }, 304],
+            [{ ifNoneMatch: otherStrength }, 304],
+            [{ ifNoneMatch: `"other", ${etag}` }, 304],
+            [{ ifNoneMatch: "*" }, 304],
+            [{ ifNoneMatch: etag, ifModifiedSince: "Mon, 13 Nov 2023 22:13:20 GMT" }, 304],
+            [{ ifModifiedSince: mtime }, 304],
+            [{ ifModifiedSince: "Wed, 15 Nov 2023 22:13:20 GMT" }, 304],
+            [{ ifNoneMatch: '"other"', ifModifiedSince: mtime }, method === "HEAD" ? 200 : 416],
+            [{ ifModifiedSince: "Mon, 13 Nov 2023 22:13:20 GMT" }, method === "HEAD" ? 200 : 416],
+            [{ ifModifiedSince: "invalid" }, method === "HEAD" ? 200 : 416],
+          ] as const) {
+            const asset = yield* open();
+            const readSpy =
+              "file" in asset ? vi.spyOn(asset.file.handle, "createReadStream") : undefined;
+            const response = HttpServerResponse.toWeb(
+              yield* assetFileResponse(asset, "bytes=100-", undefined, method, conditions),
+            );
+            bodyReads += readSpy?.mock.calls.length ?? 0;
+            expect(response.status).toBe(status);
+            expect(response.headers.get("etag")).toBe(etag);
+            expect(response.headers.get("last-modified")).toBe(mtime);
+            if (status === 304) {
+              expect(response.headers.get("content-range")).toBeNull();
+              expect(response.headers.get("content-length")).toBeNull();
+              expect(response.headers.get("cache-control")).toBe(
+                "private, max-age=60, must-revalidate",
+              );
+            }
+            expect(yield* Effect.promise(() => response.text())).toBe("");
+          }
+        }
+        expect(bodyReads).toBe(0);
+      }
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("joins ranges only on an exact strong ETag for the same file revision", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-media-if-range-" });
+      const filePath = path.join(directory, "clip.mp4");
+      yield* fs.writeFileString(filePath, "0123456789");
+      yield* fs.utimes(
+        filePath,
+        DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+        DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+      );
+      yield* TestClock.setTime(1_800_000_000_000);
+      for (const guarded of [false, true]) {
+        const canonicalPath = yield* fs.realPath(filePath);
+        const open = () => mediaAsset(canonicalPath, guarded, { mimeType: "video/mp4" });
+        const initial = HttpServerResponse.toWeb(yield* assetFileResponse(yield* open()));
+        const etag = initial.headers.get("etag")!;
+        const lastModified = initial.headers.get("last-modified")!;
+        expect(yield* Effect.promise(() => initial.text())).toBe("0123456789");
+        expect(etag.startsWith("W/")).toBe(!guarded);
+        if (guarded) {
+          const joined = HttpServerResponse.toWeb(
+            yield* assetFileResponse(yield* open(), "bytes=0-1", etag),
+          );
+          expect(joined.status).toBe(206);
+          expect(joined.headers.get("content-range")).toBe("bytes 0-1/10");
+          expect(yield* Effect.promise(() => joined.text())).toBe("01");
+        }
+        const mismatches = guarded
+          ? [`W/${etag}`, lastModified, '"old"', "invalid", ""]
+          : [etag, etag.slice(2), lastModified, '"old"', "invalid", ""];
+        for (const ifRange of mismatches) {
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse(yield* open(), "bytes=0-1", ifRange),
+          );
+          expect(response.status).toBe(200);
+          expect(response.headers.get("content-range")).toBeNull();
+          expect(yield* Effect.promise(() => response.text())).toBe("0123456789");
+        }
+        yield* fs.writeFileString(filePath, "changed");
+        yield* fs.utimes(
+          filePath,
+          DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_001_000)),
+          DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_001_000)),
+        );
+        const changed = HttpServerResponse.toWeb(
+          yield* assetFileResponse(yield* open(), undefined, undefined, "GET", {
+            ifNoneMatch: etag,
+          }),
+        );
+        expect(changed.status).toBe(200);
+        expect(changed.headers.get("etag")).not.toBe(etag);
+        expect(yield* Effect.promise(() => changed.text())).toBe("changed");
+        yield* fs.writeFileString(filePath, "0123456789");
+        yield* fs.utimes(
+          filePath,
+          DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+          DateTime.toDateUtc(DateTime.makeUnsafe(1_700_000_000_000)),
+        );
+      }
     }).pipe(Effect.provide(layerFileResponse)),
   );
 
