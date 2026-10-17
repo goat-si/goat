@@ -486,17 +486,12 @@ export interface DesktopSshEnvironmentBootstrap {
   remoteServerKind?: "external" | "managed";
   /** GOAT version of the remote server, when the runtime reported one. Source runs omit it. */
   remoteServerVersion?: string;
+  /**
+   * A replacement the remote host scheduled for the runtime this connection reached, such as
+   * a busy older build that will be swapped for this app's build once its work finishes.
+   */
+  pendingReplacement?: SshRuntimePendingReplacement;
 }
-
-export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
-  target: DesktopSshEnvironmentTargetSchema,
-  httpBaseUrl: Schema.String,
-  wsBaseUrl: Schema.String,
-  pairingToken: Schema.NullOr(Schema.String),
-  remotePort: Schema.optionalKey(Schema.Number),
-  remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
-  remoteServerVersion: Schema.optionalKey(Schema.String),
-});
 
 export const SshRuntimePendingReplacementSchema = Schema.Struct({
   reason: Schema.Literals(["busy", "unknown", "contended"]),
@@ -507,6 +502,17 @@ export const SshRuntimePendingReplacementSchema = Schema.Struct({
   liveVersion: Schema.String,
 });
 export type SshRuntimePendingReplacement = typeof SshRuntimePendingReplacementSchema.Type;
+
+export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
+  target: DesktopSshEnvironmentTargetSchema,
+  httpBaseUrl: Schema.String,
+  wsBaseUrl: Schema.String,
+  pairingToken: Schema.NullOr(Schema.String),
+  remotePort: Schema.optionalKey(Schema.Number),
+  remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
+  remoteServerVersion: Schema.optionalKey(Schema.String),
+  pendingReplacement: Schema.optionalKey(SshRuntimePendingReplacementSchema),
+});
 
 export const DesktopSshRuntimePendingResultSchema = Schema.Struct({
   type: Schema.Literal("ssh-runtime-pending"),

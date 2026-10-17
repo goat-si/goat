@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { DesktopBridge, DesktopSshRuntimePendingResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { prepareDesktopSshEnvironment, provisionDesktopSshEnvironment } from "./platform.ts";
+import {
+  prepareDesktopSshEnvironment,
+  provisionDesktopSshEnvironment,
+  takeSshRuntimeReplacementNotice,
+} from "./platform.ts";
 
 const target = { alias: "box", hostname: "box.test", username: null, port: null };
 const messages = {
@@ -14,6 +18,33 @@ describe.each([
   { label: "existing SSH connection", consumer: prepareDesktopSshEnvironment },
   { label: "new SSH connection", consumer: provisionDesktopSshEnvironment },
 ])("$label", ({ consumer }) => {
+  it.effect("connects to a busy runtime whose replacement is scheduled", () =>
+    Effect.gen(function* () {
+      const bridge = {
+        ensureSshEnvironment: async () => ({
+          target,
+          httpBaseUrl: "http://127.0.0.1:3201/",
+          wsBaseUrl: "ws://127.0.0.1:3201/",
+          pairingToken: "pairing-token",
+          remoteServerVersion: "1.2.2",
+          pendingReplacement: {
+            reason: "busy",
+            replacement: "older",
+            requestedVersion: "1.2.3",
+            liveVersion: "1.2.2",
+          },
+        }),
+        fetchSshEnvironmentDescriptor: async () => ({
+          environmentId: "environment-ssh",
+          label: "SSH environment",
+        }),
+        bootstrapSshBearerSession: async () => ({ access_token: "bearer" }),
+      } as unknown as DesktopBridge;
+      const connected = yield* consumer(bridge, target);
+      expect(connected.bearerToken).toBe("bearer");
+      expect(connected.bootstrap.pendingReplacement?.requestedVersion).toBe("1.2.3");
+    }),
+  );
   it.effect("explains a tunnel that answers too slowly as high latency", () =>
     Effect.gen(function* () {
       const bridge = {
@@ -109,4 +140,35 @@ describe.each([
         expect(calls).toEqual(["ensure"]);
       }),
   );
+});
+
+describe("scheduled SSH runtime replacement notice", () => {
+  const host = { alias: "notice-box", hostname: "notice-box.test", username: null, port: null };
+  const pending = {
+    reason: "busy",
+    replacement: "older",
+    requestedVersion: "1.2.3",
+    liveVersion: "1.2.2",
+  } as const;
+
+  it("announces a host's scheduled replacement once, and again when the versions change", () => {
+    expect(takeSshRuntimeReplacementNotice(host, pending)).toBe(
+      "This host runs GOAT 1.2.2. It will be replaced with GOAT 1.2.3 when its current work finishes.",
+    );
+    expect(takeSshRuntimeReplacementNotice(host, pending)).toBeNull();
+    expect(
+      takeSshRuntimeReplacementNotice(host, { ...pending, requestedVersion: "1.2.4" }),
+    ).not.toBeNull();
+  });
+
+  it("names the missing capability when the live runtime cannot grant memory access", () => {
+    expect(
+      takeSshRuntimeReplacementNotice(
+        { ...host, alias: "capability-box" },
+        { ...pending, replacement: "capability" },
+      ),
+    ).toBe(
+      "GOAT 1.2.2 on this host cannot grant memory access to tasks. It will be replaced with GOAT 1.2.3 when its current work finishes.",
+    );
+  });
 });

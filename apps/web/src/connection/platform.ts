@@ -26,9 +26,11 @@ import {
   AuthStandardClientScopes,
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
+  type DesktopSshEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  type SshRuntimePendingReplacement,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -41,6 +43,7 @@ import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 
 import { APP_VERSION } from "../branding";
+import { toastManager } from "../components/ui/toast";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
 import {
@@ -264,6 +267,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
     try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
     catch: sshPreparationError,
   });
+  announceSshRuntimeReplacement(bootstrap);
   return {
     environmentId: descriptor.environmentId,
     label: descriptor.label,
@@ -292,12 +296,57 @@ export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ss
       try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
       catch: sshPreparationError,
     });
+    announceSshRuntimeReplacement(bootstrap);
     return {
       bootstrap,
       bearerToken: access.access_token,
     };
   },
 );
+
+/** What a connected client says about a replacement its remote host has scheduled. */
+export function sshRuntimeReplacementNotice(pending: SshRuntimePendingReplacement): string {
+  const replaced = `It will be replaced with GOAT ${pending.requestedVersion} when its current work finishes.`;
+  return pending.replacement === "capability"
+    ? `GOAT ${pending.liveVersion} on this host cannot grant memory access to tasks. ${replaced}`
+    : `This host runs GOAT ${pending.liveVersion}. ${replaced}`;
+}
+
+// Reconnects and route checks prepare the same connection repeatedly; announce each
+// scheduled replacement once per window instead of on every attempt.
+const announcedSshRuntimeReplacements = new Set<string>();
+
+/** The notice the first time a host reports this replacement in this window, then null. */
+export function takeSshRuntimeReplacementNotice(
+  target: DesktopSshEnvironmentTarget,
+  pending: SshRuntimePendingReplacement,
+): string | null {
+  const key = [
+    target.alias,
+    target.hostname,
+    target.username ?? "",
+    target.port ?? "",
+    pending.liveVersion,
+    pending.requestedVersion,
+  ].join("\u0000");
+  if (announcedSshRuntimeReplacements.has(key)) return null;
+  announcedSshRuntimeReplacements.add(key);
+  return sshRuntimeReplacementNotice(pending);
+}
+
+function announceSshRuntimeReplacement(bootstrap: DesktopSshEnvironmentBootstrap) {
+  if (bootstrap.pendingReplacement === undefined) return;
+  const description = takeSshRuntimeReplacementNotice(
+    bootstrap.target,
+    bootstrap.pendingReplacement,
+  );
+  if (description === null) return;
+  toastManager.add({
+    type: "info",
+    title: `GOAT update scheduled on ${bootstrap.target.alias || bootstrap.target.hostname}`,
+    description,
+  });
+}
 
 const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {

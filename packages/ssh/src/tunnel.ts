@@ -4075,6 +4075,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         ) {
           firstConnectionDecisions.add(decisionKey);
         }
+        // A busy runtime that still answers is used now and replaced when idle; say so.
+        const pendingReplacement = pendingReplacements.get(key)?.pending;
         return {
           target: entry.target,
           httpBaseUrl: entry.httpBaseUrl,
@@ -4085,6 +4087,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ...(entry.selectedRuntime.version
             ? { remoteServerVersion: entry.selectedRuntime.version }
             : {}),
+          ...(pendingReplacement === undefined ? {} : { pendingReplacement }),
         };
       }),
     );

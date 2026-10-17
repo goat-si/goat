@@ -443,6 +443,28 @@ describe("SSH pending replacement reconciliation", () => {
     }),
   );
 
+  it.effect("a ready connection reports the replacement its host scheduled until it lands", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      f.setMode("ready-pending");
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const busy = yield* manager.ensureEnvironment(uploadTarget, { issuePairingToken: true });
+        if ("type" in busy) throw new Error("Expected ready");
+        assert.deepStrictEqual(busy.pendingReplacement, pending);
+        assert.equal(busy.remoteServerVersion, "1.2.2");
+
+        f.setMode("ready");
+        const replaced = yield* manager.ensureEnvironment(uploadTarget, {
+          issuePairingToken: true,
+        });
+        if ("type" in replaced) throw new Error("Expected ready");
+        assert.notProperty(replaced, "pendingReplacement");
+        assert.equal(f.count.launches, 2);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }),
+  );
+
   it.effect(
     "healthy cached entries reconcile intent after pairing failure and retain their local port",
     () =>
