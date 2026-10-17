@@ -512,7 +512,11 @@ export interface AcpAdapterV2Options {
      * by exactly that on this receipt.
      */
     readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
+    /** Wire signal is set; the completion callback has not requested its permit yet. */
+    readonly afterPromptWireSettled?: () => Effect.Effect<void>;
     readonly afterPromptSettledWithBackgroundWork?: () => Effect.Effect<void>;
+    /** Terminal events, carryover cleanup, and the completion signal are finished. */
+    readonly afterTurnFinalized?: () => Effect.Effect<void>;
     readonly afterNativeResponseTransportClosed?: () => Effect.Effect<void>;
     readonly afterHardTeardownTransportDrained?: () => Effect.Effect<void>;
     readonly beforeNativeResponseAdmissionCheck?: (
@@ -6798,6 +6802,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
           }
           yield* Deferred.succeed(context.completed, undefined).pipe(Effect.ignore);
+          yield* options.testHooks?.afterTurnFinalized?.() ?? Effect.void;
         });
 
         scheduleDeferredFinalize = (context) =>
@@ -7281,7 +7286,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               // settled-soft classification can observe the native return even when
               // the completion fiber has not yet set promptSettled under the permit.
               Effect.tap(() =>
-                Deferred.succeed(context.promptWireSettled, undefined).pipe(Effect.asVoid),
+                Deferred.succeed(context.promptWireSettled, undefined).pipe(
+                  Effect.andThen(options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
+                  Effect.asVoid,
+                ),
               ),
               Effect.flatMap((result) =>
                 runRuntimeCallbackAtGeneration(

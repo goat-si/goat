@@ -6220,10 +6220,17 @@ describe("AcpAdapterV2", () => {
             | Parameters<RuntimeService["handleSessionUpdate"]>[0]
             | undefined;
           const promptSettled = yield* Deferred.make<void>();
+          const finalizationScheduled = yield* Deferred.make<void>();
+          const turnFinalized = yield* Deferred.make<void>();
+          const terminalObserved = yield* Deferred.make<void>();
           const adapter = yield* makeAcpAdapterV2({
             testHooks: {
               afterPromptSettledWithBackgroundWork: () =>
                 Deferred.succeed(promptSettled, undefined).pipe(Effect.asVoid),
+              onDeferredFinalizeScheduled: () =>
+                Deferred.succeed(finalizationScheduled, undefined).pipe(Effect.asVoid),
+              afterTurnFinalized: () =>
+                Deferred.succeed(turnFinalized, undefined).pipe(Effect.asVoid),
             },
             instanceId,
             flavor: {
@@ -6297,7 +6304,15 @@ describe("AcpAdapterV2", () => {
           const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
           const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
           yield* runtime.events.pipe(
-            Stream.runForEach((event) => Queue.offer(events, event)),
+            Stream.runForEach((event) =>
+              Queue.offer(events, event).pipe(
+                Effect.andThen(
+                  event.type === "turn.terminal"
+                    ? Deferred.succeed(terminalObserved, undefined)
+                    : Effect.void,
+                ),
+              ),
+            ),
             Effect.forkScoped,
           );
           const providerThread = yield* runtime.ensureThread({
@@ -6325,9 +6340,7 @@ describe("AcpAdapterV2", () => {
               rawOutput: { content: "FIRST_DONE" },
             },
           }).pipe(Effect.provideService(Clock.Clock, blockingClock));
-          for (let attempt = 0; attempt < 10; attempt += 1) {
-            yield* Effect.yieldNow;
-          }
+          yield* Deferred.await(finalizationScheduled);
 
           yield* sessionUpdateHandler!({
             sessionId: "mock-session-1",
@@ -6363,8 +6376,10 @@ describe("AcpAdapterV2", () => {
           });
           yield* Deferred.succeed(releaseFinalizationClockRead, undefined);
           yield* Fiber.join(adjustFiber);
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+          // Finalization publishes before cleaning carryover; await both the
+          // completed transition and the subscriber before draining assertions.
+          yield* Deferred.await(turnFinalized);
+          yield* Deferred.await(terminalObserved);
 
           const providerTurnId = idAllocator.derive.providerTurn({
             driver: ACP_TEST_DRIVER,
@@ -8518,6 +8533,8 @@ describe("AcpAdapterV2", () => {
         const instanceId = ProviderInstanceId.make("acp-test");
         let cancelCalled = false;
         let runtimeOrdinalSeen = 0;
+        const backgroundTrackedApplied = yield* Deferred.make<void>();
+        const backgroundCompletedApplied = yield* Deferred.make<void>();
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
           flavor: {
@@ -8532,7 +8549,20 @@ describe("AcpAdapterV2", () => {
             terminateRuntimeProcessGroupOnInterrupt: true,
             preserveRuntimeOnSettledInterrupt: true,
             registerExtensions: ({ runtime: extensionRuntime, applyBackgroundTaskMutation }) =>
-              registerXAiBackgroundTaskTracking(extensionRuntime, applyBackgroundTaskMutation),
+              registerXAiBackgroundTaskTracking(extensionRuntime, (mutation) =>
+                applyBackgroundTaskMutation(mutation).pipe(
+                  Effect.andThen(
+                    mutation.taskId === "task-bg-1"
+                      ? Deferred.succeed(
+                          mutation.status === "running"
+                            ? backgroundTrackedApplied
+                            : backgroundCompletedApplied,
+                          undefined,
+                        )
+                      : Effect.void,
+                  ),
+                ),
+              ),
             // No ownDetachedProcessGroup: if the interrupt wrongly takes the
             // hard path, terminateProcessGroup is missing and the interrupt
             // fails loudly with a poisoned session.
@@ -8629,13 +8659,8 @@ describe("AcpAdapterV2", () => {
         assert.equal(firstTerminalStatus, "interrupted");
         // The cancel handler emitted _x.ai/task_backgrounded for the detached
         // command; the tracked task must report as pending background work.
-        let backgroundTracked = false;
-        for (let attempt = 0; attempt < 80 && !backgroundTracked; attempt += 1) {
-          backgroundTracked = yield* hasPendingBackgroundWork;
-          if (!backgroundTracked) {
-            yield* Effect.sleep("25 millis");
-          }
-        }
+        yield* Deferred.await(backgroundTrackedApplied);
+        const backgroundTracked = yield* hasPendingBackgroundWork;
         assert.isTrue(
           backgroundTracked,
           "cancel-backgrounded task must be tracked as running background work",
@@ -8673,13 +8698,10 @@ describe("AcpAdapterV2", () => {
 
         // _x.ai/task_completed lands ~1.2s after the cancel and clears the
         // tracked task without opening a synthetic continuation run.
-        let backgroundPending = true;
-        for (let attempt = 0; attempt < 50 && backgroundPending; attempt += 1) {
-          backgroundPending = yield* hasPendingBackgroundWork;
-          if (backgroundPending) {
-            yield* Effect.sleep("100 millis");
-          }
-        }
+        // The apply acknowledgement includes continuation decisions, so the
+        // negative offer assertion below cannot run ahead of the end frame.
+        yield* Deferred.await(backgroundCompletedApplied);
+        const backgroundPending = yield* hasPendingBackgroundWork;
         assert.isFalse(
           backgroundPending,
           "tracked background task must clear after _x.ai/task_completed",
@@ -9461,13 +9483,19 @@ describe("AcpAdapterV2", () => {
         let subagentPhase: "spawn" | "complete" = "spawn";
         let cancelCalled = false;
         const promptPhases: Array<string> = [];
-        // Gate adapter-visible prompt return so we can open the race window after
-        // the native stopReason is on the wire. Release lets Effect.tap mark
-        // promptWireSettled before the completion callback requests the permit;
-        // interrupt then ORs wire-done with promptSettled under the permit.
+        // Hold native return first, then hold the adapter after its wire signal
+        // is set but before the completion callback can request the permit.
         const promptWireReturned = yield* Deferred.make<void>();
         const releasePromptCompletion = yield* Deferred.make<void>();
+        const promptWireSettled = yield* Deferred.make<void>();
+        const releaseCompletionCallback = yield* Deferred.make<void>();
         const adapter = yield* makeAcpAdapterV2({
+          testHooks: {
+            afterPromptWireSettled: () =>
+              Deferred.succeed(promptWireSettled, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseCompletionCallback)),
+              ),
+          },
           instanceId,
           flavor: {
             driver: ACP_TEST_DRIVER,
@@ -9571,21 +9599,12 @@ describe("AcpAdapterV2", () => {
           driver: ACP_TEST_DRIVER,
           nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
-        // Fork interrupt while the adapter-side return is still gated. Release so
-        // promptWireSettled completes (Effect.tap) before/while the completion
-        // callback contends for runtimeCallbackPermit. Holding the gate forever
-        // would also block the wire signal (same Effect resolution), so release
-        // is required; the assertion is cancel skipped after that race window.
-        const interruptFiber = yield* runtime
-          .interruptTurn({ providerThread, providerTurnId: firstProviderTurnId })
-          .pipe(Effect.forkScoped);
         yield* Deferred.succeed(releasePromptCompletion, undefined);
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          if (promptPhases.includes("completion-released")) break;
-          yield* Effect.yieldNow;
-        }
-        yield* TestClock.adjust("10 seconds");
-        yield* Fiber.join(interruptFiber);
+        yield* Deferred.await(promptWireSettled);
+        // Completion is still gated: only the wire signal can classify this
+        // interrupt as settled. Await the interrupt before checking no cancel.
+        yield* runtime.interruptTurn({ providerThread, providerTurnId: firstProviderTurnId });
+        yield* Deferred.succeed(releaseCompletionCallback, undefined);
 
         assert.includeMembers(promptPhases, [
           "prompt-start",
