@@ -284,6 +284,7 @@ function FileContent(props: {
         accessibilityLabel={basename(props.relativePath)}
         uri={props.previewUri}
         actionsSource={props.mediaSource}
+        onRetry={props.onRetryPreview}
       />
     );
   }
@@ -864,7 +865,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
             icon: "arrow.clockwise",
             inline: false,
             onPress: async () => {
-              if (isVideoFile || isAudioFile) await assetPreview.refresh();
+              if (isImageFile || isVideoFile || isAudioFile) await assetPreview.refresh();
               setPreviewRevision((current) => current + 1);
             },
           } as const)

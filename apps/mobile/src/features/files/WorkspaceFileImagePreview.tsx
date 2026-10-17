@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from "react";
 import { Image, Pressable, View } from "react-native";
 
 import { FilePreviewLoading } from "./FilePreviewFeedback";
+import { AppText } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { PresentationSource } from "../../components/NativePresentation";
@@ -13,6 +14,7 @@ function ResolvedWorkspaceFileImagePreview(props: {
   readonly accessibilityLabel: string;
   readonly uri: string;
   readonly actionsSource?: MediaActionsSource;
+  readonly onRetry: () => void;
 }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [preview, setPreview] = useState<FilePreviewSource | null>(null);
@@ -59,11 +61,16 @@ function ResolvedWorkspaceFileImagePreview(props: {
         </Pressable>
       </MediaActionsMenu>
       {loadError !== null ? (
-        <View
-          pointerEvents="none"
-          className="absolute inset-0 items-center justify-center bg-card px-6"
-        >
+        <View className="absolute inset-0 items-center justify-center gap-3 bg-card px-6">
           <EmptyState title="Image unavailable" detail={loadError} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry image"
+            onPress={props.onRetry}
+            className="min-h-11 justify-center px-4"
+          >
+            <AppText className="text-sm text-foreground">Retry image</AppText>
+          </Pressable>
         </View>
       ) : null}
       <FilePreviewModal source={preview} onRequestClose={() => setPreview(null)} />
@@ -75,6 +82,7 @@ export function WorkspaceFileImagePreview(props: {
   readonly accessibilityLabel: string;
   readonly uri: string | null;
   readonly actionsSource?: MediaActionsSource;
+  readonly onRetry: () => void;
 }) {
   if (props.uri === null) {
     return <FilePreviewLoading message="Preparing image preview..." background="card" />;
@@ -85,6 +93,7 @@ export function WorkspaceFileImagePreview(props: {
       accessibilityLabel={props.accessibilityLabel}
       uri={props.uri}
       actionsSource={props.actionsSource}
+      onRetry={props.onRetry}
     />
   );
 }

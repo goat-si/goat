@@ -1,10 +1,18 @@
 import { MISSING_FILE_ACCESS_MESSAGE } from "@goat/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import { Image } from "expo-image";
-import { createContext, useContext, useEffect, useEffectEvent, useId, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { fetch } from "expo/fetch";
 import { parse, SvgAst, type JsxAST } from "react-native-svg";
-import { ActivityIndicator, Pressable, StyleSheet, View, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, View, type ViewStyle } from "react-native";
 
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { useFilePreviewGallery } from "../../components/FilePreviewGallery";
@@ -14,7 +22,7 @@ import { MediaActionsMenu } from "../../components/MediaActionsMenu";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useMediaActions } from "../../state/mediaActions";
 import type { MediaActionsSource } from "../../lib/mediaActionsSource";
-import { useAssetUrlState } from "../../state/assets";
+import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import {
   MARKDOWN_IMAGE_MAX_WIDTH,
   type MarkdownImageDisplaySize,
@@ -44,6 +52,7 @@ export function ThreadMarkdownImageView(props: {
   readonly format?: "svg";
   readonly actionsSource?: MediaActionsSource;
   readonly onPressPreview: (source: FilePreviewSource) => void;
+  readonly onRetry?: () => Promise<string | null>;
 }) {
   const withGallery = useFilePreviewGallery();
   const sourceIdentifier = useId();
@@ -56,6 +65,38 @@ export function ThreadMarkdownImageView(props: {
       : contextWidth || measuredWidth;
   const [decodedSize, setDecodedSize] = useState<{ width: number; height: number } | null>(null);
   const [failedUri, setFailedUri] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const retryInFlight = useRef(false);
+  const [retry, setRetry] = useState<{
+    source: string | null;
+    uri: string;
+    revision: number;
+  } | null>(null);
+  const uri = retry?.source === props.uri ? retry.uri : props.uri;
+  const retryImage = async () => {
+    if (retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetrying(true);
+    try {
+      const renewed = props.onRetry ? await props.onRetry() : props.uri;
+      if (renewed !== null) {
+        const revision = (retry?.revision ?? 0) + 1;
+        const hash = renewed.indexOf("#");
+        const base = hash < 0 ? renewed : renewed.slice(0, hash);
+        const fragment = hash < 0 ? "" : renewed.slice(hash);
+        const retryUri = /^https?:/i.test(base)
+          ? `${base}${base.includes("?") ? "&" : "?"}retry=${Date.now()}-${revision}${fragment}`
+          : renewed;
+        setRetry({ source: props.uri, uri: retryUri, revision });
+        setFailedUri(null);
+      }
+    } catch {
+      // Keep the failed image and its retry action available after a signing failure.
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  };
 
   useEffect(() => {
     setDecodedSize(null);
@@ -76,7 +117,8 @@ export function ThreadMarkdownImageView(props: {
           sourceHeight: sourceSize.height,
           availableWidth,
         });
-  const failed = props.unavailable || (props.uri !== null && failedUri === props.uri);
+  const failed = props.unavailable || (uri !== null && failedUri === uri);
+  const canRetry = props.onRetry !== undefined || props.uri !== null;
   const placeholderWidth: ViewStyle["width"] =
     availableWidth > 0 ? Math.min(availableWidth, MARKDOWN_IMAGE_MAX_WIDTH) : "100%";
   const frameStyle: ViewStyle = displaySize ?? { width: placeholderWidth, aspectRatio: 16 / 9 };
@@ -86,11 +128,16 @@ export function ThreadMarkdownImageView(props: {
       onLayout={(event) => setMeasuredWidth(event.nativeEvent.layout.width)}
       style={{ alignSelf: "stretch", gap: 6 }}
     >
-      {props.uri === null || failed ? (
+      {uri === null || failed ? (
         <MediaActionsMenu media={mediaActions}>
           <Pressable
-            accessibilityRole="imagebutton"
-            accessibilityLabel={props.alt ?? "Markdown image"}
+            accessibilityRole={failed && canRetry ? "button" : "imagebutton"}
+            accessibilityLabel={
+              failed && canRetry ? "Retry image" : (props.alt ?? "Markdown image")
+            }
+            accessibilityState={{ disabled: retrying, busy: retrying }}
+            disabled={retrying}
+            onPress={failed && canRetry ? () => void retryImage() : undefined}
             accessibilityHint={
               mediaActions.actions.length > 0 ? "Touch and hold for media actions" : undefined
             }
@@ -99,9 +146,9 @@ export function ThreadMarkdownImageView(props: {
           >
             {failed ? (
               <Text className="px-3 text-center text-xs text-foreground-muted">
-                {props.unavailableDetail
-                  ? `Image unavailable. ${props.unavailableDetail}`
-                  : "Image unavailable"}
+                {retrying
+                  ? "Retrying image…"
+                  : `${props.unavailableDetail ? `Image unavailable. ${props.unavailableDetail}` : "Image unavailable"}${canRetry ? " · Tap to retry" : ""}`}
               </Text>
             ) : (
               <AppActivityIndicator />
@@ -121,7 +168,7 @@ export function ThreadMarkdownImageView(props: {
                 props.onPressPreview(
                   withGallery({
                     kind: "image",
-                    uri: props.uri!,
+                    uri: uri!,
                     name: props.actionsSource?.name ?? props.alt ?? "Image",
                     sourceIdentifier,
                     actionsSource: props.actionsSource,
@@ -135,11 +182,11 @@ export function ThreadMarkdownImageView(props: {
                 style={frameStyle}
               >
                 <ThreadMarkdownImageRequest
-                  key={props.uri}
-                  uri={props.uri}
+                  key={`${uri}:${retry?.revision ?? 0}`}
+                  uri={uri}
                   format={props.format}
                   onLoad={setDecodedSize}
-                  onError={() => setFailedUri(props.uri)}
+                  onError={() => setFailedUri(uri)}
                 />
               </View>
             </Pressable>
@@ -256,6 +303,7 @@ export function ThreadMarkdownImage(props: {
 }) {
   const withGallery = useFilePreviewGallery();
   const assetUrl = useAssetUrlState(props.environmentId, props.resource);
+  const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, props.resource);
 
   return (
     <ThreadMarkdownImageView
@@ -268,6 +316,10 @@ export function ThreadMarkdownImage(props: {
             : `workspace:${props.resource.path}`
       }
       unavailable={assetUrl._tag === "Failure"}
+      onRetry={async () => {
+        const url = await refreshAssetUrl();
+        return url === null ? null : url + (props.srcFragment ?? "");
+      }}
       unavailableDetail={
         assetUrl._tag === "Failure" && assetUrl.reason === "missing-file-access"
           ? MISSING_FILE_ACCESS_MESSAGE

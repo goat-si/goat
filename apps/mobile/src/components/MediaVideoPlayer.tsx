@@ -30,14 +30,79 @@ function LoadedMediaVideo(props: {
     player.bufferOptions = { preferredForwardBufferDuration: 5 };
   });
   const { status } = useEvent(player, "statusChange", { status: player.status });
+  const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
+  const wasPlaying = useRef(props.playRequested);
+  const automaticRetryUsed = useRef(false);
+  const latestAtLoad = useRef(props.uri);
+  const loadedUri = useRef<string | null>(null);
+  const nextUri = useRef<string | null>(null);
+  const pendingRestore = useRef<{
+    currentTime: number;
+    playing: boolean;
+    volume: number;
+    muted: boolean;
+    playbackRate: number;
+  } | null>(null);
+  const rememberPlayback = useEffectEvent(() => {
+    // Native players can report stopped before the error reaches React.
+    pendingRestore.current ??= {
+      currentTime: Number.isFinite(player.currentTime) ? player.currentTime : 0,
+      playing: wasPlaying.current,
+      volume: player.volume,
+      muted: player.muted,
+      playbackRate: player.playbackRate,
+    };
+  });
   const loadSource = useEffectEvent(async (signal: AbortSignal) => {
-    const uri = props.resolvePlaybackUri ? await props.resolvePlaybackUri() : props.uri;
+    const adoptedUri = nextUri.current;
+    nextUri.current = null;
+    const uri =
+      adoptedUri ?? (props.resolvePlaybackUri ? await props.resolvePlaybackUri() : props.uri);
     if (signal.aborted) return;
     if (uri === null) throw new Error("Video unavailable");
+    const restore = pendingRestore.current;
     player.pause();
     await player.replaceAsync({ uri, contentType: "progressive" });
-    if (!signal.aborted && props.playRequested && active.current) player.play();
+    if (signal.aborted) return;
+    loadedUri.current = uri;
+    latestAtLoad.current = props.uri;
+    if (restore !== null) {
+      player.currentTime = restore.currentTime;
+      player.volume = restore.volume;
+      player.muted = restore.muted;
+      player.playbackRate = restore.playbackRate;
+      pendingRestore.current = null;
+    }
+    if ((restore?.playing ?? props.playRequested) && active.current) player.play();
   });
+
+  useEffect(() => {
+    const subscription = player.addListener("playingChange", ({ isPlaying }) => {
+      if (player.status !== "error" && pendingRestore.current === null)
+        wasPlaying.current = isPlaying;
+    });
+    return () => subscription.remove();
+  }, [player]);
+
+  useEffect(() => {
+    if (loadState !== "complete") return;
+    if (status === "error") {
+      rememberPlayback();
+      if (!props.resolvePlaybackUri || automaticRetryUsed.current) return;
+      automaticRetryUsed.current = true;
+      setLoadState("pending");
+      setAttempt((value) => value + 1);
+    } else if (
+      !isPlaying &&
+      props.uri !== latestAtLoad.current &&
+      props.uri !== loadedUri.current
+    ) {
+      rememberPlayback();
+      nextUri.current = props.uri;
+      setLoadState("pending");
+      setAttempt((value) => value + 1);
+    }
+  }, [isPlaying, loadState, props.uri, props.resolvePlaybackUri, status]);
 
   useEffect(() => {
     active.current = focused && !props.paused && AppState.currentState === "active";
@@ -89,7 +154,11 @@ function LoadedMediaVideo(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Retry video"
-            onPress={() => setAttempt((value) => value + 1)}
+            onPress={() => {
+              rememberPlayback();
+              setLoadState("pending");
+              setAttempt((value) => value + 1);
+            }}
             className="min-h-11 justify-center px-4"
           >
             <AppText className="text-sm text-white">Retry</AppText>
