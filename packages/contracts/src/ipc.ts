@@ -11,6 +11,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import { SshRuntimeUpdateMode } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
@@ -461,6 +462,17 @@ export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   port: Schema.NullOr(Schema.Number),
 });
 export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
+
+export const DesktopSshHostStatusInputSchema = Schema.Struct({
+  target: DesktopSshEnvironmentTargetSchema,
+});
+export type DesktopSshHostStatusInput = typeof DesktopSshHostStatusInputSchema.Type;
+
+export const DesktopSshRuntimeUpdateInputSchema = Schema.Struct({
+  target: DesktopSshEnvironmentTargetSchema,
+  mode: Schema.optionalKey(SshRuntimeUpdateMode),
+});
+export type DesktopSshRuntimeUpdateInput = typeof DesktopSshRuntimeUpdateInputSchema.Type;
 
 export type DesktopSshHostSource = "ssh-config" | "known-hosts";
 export const DesktopSshHostSourceSchema = Schema.Literals(["ssh-config", "known-hosts"]);
