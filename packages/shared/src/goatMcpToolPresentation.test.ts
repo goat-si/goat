@@ -209,3 +209,14 @@ it("keeps answer lifecycle labels and permits resolved question reads", () => {
     "questions",
   ]);
 });
+
+it.each(["goat_review_findings_record", "goat_review_findings_export", "channel_task_export"])(
+  "presents %s through direct and provider-qualified names",
+  (tool) => {
+    for (const name of [tool, `mcp__t3-code__${tool}`, `T3-code.${tool}`]) {
+      expect(resolveGoatMcpToolDefinition(name)?.labels).toHaveLength(4);
+      expect(resolveGoatMcpToolPresentation(name)?.logo).toBe("t3-code");
+      expect(resolveGoatMcpToolSummaryAction(name)).not.toBeNull();
+    }
+  },
+);

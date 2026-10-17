@@ -147,6 +147,14 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   delegate_task: tool(["Delegate", "Delegating", "Delegated", "a child task"], "delegate"),
   task_status: tool(["Get", "Getting", "Got", "delegated task status"], "task-status"),
+  goat_review_findings_record: tool(
+    ["Record", "Recording", "Recorded", "review finding decisions"],
+    "thread-update",
+  ),
+  goat_review_findings_export: tool(
+    ["Export", "Exporting", "Exported", "review finding history"],
+    "thread-read",
+  ),
   task_cancel: tool(
     ["Cancel", "Canceling", "Requested cancellation of", "delegated task"],
     "task-cancel",
@@ -457,6 +465,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   channel_input_get: tool(["Read", "Reading", "Read", "a front desk reply"], "channel-reply"),
   channel_task_get: tool(["Read", "Reading", "Read", "a GOAT ledger task"], "channel-task-read"),
   channel_task_list: tool(["List", "Listing", "Listed", "GOAT ledger tasks"], "channel-task-read"),
+  channel_task_export: tool(
+    ["Export", "Exporting", "Exported", "GOAT ledger tasks"],
+    "channel-task-read",
+  ),
   channel_task_report: tool(
     ["Report on", "Reporting on", "Reported on", "a GOAT ledger task"],
     "channel-task-report",

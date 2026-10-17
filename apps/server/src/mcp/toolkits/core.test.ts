@@ -200,6 +200,8 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_queue_promote_to_steer",
     "goat_queue_read",
     "goat_queue_reorder",
+    "goat_review_findings_export",
+    "goat_review_findings_record",
     "goat_ssh_browse",
     "goat_ssh_host_list",
     "goat_ssh_reports",
@@ -236,11 +238,12 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
   expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([
     "channel_ingest",
     "channel_input_get",
+    "channel_task_export",
     "channel_task_get",
     "channel_task_list",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(116);
+  expect(names.size).toBe(119);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
