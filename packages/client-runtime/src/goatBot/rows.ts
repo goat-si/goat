@@ -42,6 +42,8 @@ export interface GoatBotTaskCard {
    * by the machine that runs remote work and why the work was placed there.
    */
   readonly sourceLabel: string | null;
+  /** The machine whose copied work this task continued from. */
+  readonly continuationLabel?: string | null;
   readonly summary: string | null;
   /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;

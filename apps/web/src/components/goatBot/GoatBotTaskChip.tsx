@@ -56,6 +56,9 @@ export function GoatBotTaskChip({ card }: { readonly card: GoatBotTaskCard }) {
       {card.sourceLabel ? (
         <div className="truncate text-xs text-muted-foreground">{card.sourceLabel}</div>
       ) : null}
+      {card.continuationLabel ? (
+        <div className="truncate text-xs text-muted-foreground">{card.continuationLabel}</div>
+      ) : null}
       {card.summary ? (
         <p className="line-clamp-2 text-xs text-muted-foreground">{card.summary}</p>
       ) : null}

@@ -107,6 +107,8 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
       ...(host === undefined ? [] : [`on ${host}`]),
       ...(placement === "" ? [] : [placement]),
     ].join(" · "),
+    continuationLabel:
+      chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
     pullRequests: pullRequestLinks(chip),

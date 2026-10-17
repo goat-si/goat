@@ -36,6 +36,7 @@ describe("presentTaskChip", () => {
       statusLabel: "Working",
       tone: "active",
       sourceLabel: "Jun",
+      continuationLabel: null,
       updatedAt: "2026-10-12T12:01:00.000Z",
       summary: null,
       attentionLabel: null,
@@ -55,6 +56,23 @@ describe("presentTaskChip", () => {
       tone: "danger",
       target: { kind: "none", label: "No worker thread" },
     });
+  });
+
+  it("keeps the previous machine visible while a moved task waits for its new worker", () => {
+    const { worker: _worker, ...withoutWorker } = chip();
+    const card = presentTaskChip({
+      ...withoutWorker,
+      status: "received",
+      movedFrom: {
+        host: "mac-studio",
+        generation: 1,
+        at: "2026-10-12T12:01:00.000Z",
+        replicaCapturedAt: "2026-10-12T12:00:00.000Z",
+      },
+    });
+    expect(card.continuationLabel).toBe("Continued from mac-studio");
+    expect(card.target).toEqual({ kind: "none", label: "Not started yet" });
+    expect(presentTaskChip(chip()).continuationLabel).toBeNull();
   });
 
   it("names where outside requests came from", () => {
