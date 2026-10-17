@@ -1692,6 +1692,13 @@ function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boo
     toolLifecycleStatus: status,
   });
   if (presentation) return presentation.displayName;
+  const commandActions = workEntryCommandActions(activity.workEntry);
+  if (commandActions) {
+    return formatCommandActionsLabel(commandActions, {
+      active: status === "inProgress",
+      formatPath: compactCommandActionPath,
+    });
+  }
   const command = activity.workEntry.command?.trim();
   if (command) {
     const program = commandProgramName(command);

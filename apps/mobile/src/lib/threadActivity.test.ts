@@ -1324,6 +1324,37 @@ describe("buildThreadFeed", () => {
     expect(presented.some((entry) => entry.type === "thinking")).toBe(false);
   });
 
+  it("labels a live command that only inspects files by the file it reads", () => {
+    const startedAt = "2026-06-20T00:00:01.000Z";
+    const { exitCode: _exitCode, ...completedCommand } = command();
+    const runningRead: OrchestrationV2TurnItem = {
+      ...completedCommand,
+      runId: null,
+      status: "running",
+      completedAt: null,
+      output: "",
+      input: "/bin/zsh -lc 'nl -ba src/env.ts'",
+      commandActions: [{ type: "read", path: "/Users/dev/repo/src/env.ts" }],
+    };
+    const feed = buildThreadFeed([
+      projected({ ...userMessage(), runId: null }, 0),
+      projected(runningRead, 1),
+    ]);
+
+    const presented = deriveThreadFeedPresentation(
+      feed,
+      null,
+      new Set(),
+      new Set(),
+      startedAt,
+      true,
+    );
+    expect(presented.find((entry) => entry.type === "work-toggle")).toMatchObject({
+      summary: "Reading env.ts",
+      live: true,
+    });
+  });
+
   it("keeps a runless tail folded while a normal thread waits for its sent run", () => {
     // Right after a send the local clock runs before the server creates the
     // run, and the latest run may still be queued: neither is runless work,
