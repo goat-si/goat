@@ -1524,7 +1524,7 @@ export const agentSurfaceRegistry = {
     toolkit: "pullRequests",
     summary: "Link pull request to thread",
     description:
-      "Register every pull request you open for this thread, including each layer of a stack, right after creating it. Links a pull request to this thread so GOAT tracks it, shows its status beside the thread, and settles the thread when it merges. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.",
+      "Register every pull request you open for this thread, including each layer of a stack, right after creating it. Links a pull request to this thread so GOAT tracks it, shows its status beside the thread, and settles the thread when it merges. By default, creating or agent-linking an open pull request also starts an automatic watch without keeping the thread in the user's Working list; use watch_pull_request for an explicit watch. Pass the URL, or repository plus number. Linking an already-linked pull request succeeds with alreadyLinked=true.",
     effect: "write",
     hostRoutable: false,
     requires: "either",
@@ -1581,7 +1581,7 @@ export const agentSurfaceRegistry = {
     toolkit: "pullRequests",
     summary: "Watch pull request",
     description:
-      "Have GOAT watch an open pull request for this thread, linking it first if needed. GOAT checks it every two minutes and wakes you with a message when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict with its base. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. While GOAT watches, the thread stays in the user's Working list, not their inbox. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when its thread settles or is archived, when GOAT fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call unwatch_pull_request. Unsettle the thread before starting a new watch. A subagent cannot watch: its parent thread owns the pull request.",
+      "Have GOAT watch an open pull request for this thread, linking it first if needed. GOAT checks it every two minutes and follows the event policy: react wakes you, keep_as_context records timeline context for the next wake without starting a turn, and ignore drops the update. By default, check failures, passing required checks, and other people's comments or reviews wake you; bots are ignored unless listed in Settings under Bots that count as people, and conflicts do not wake threads idle for more than 3 days. Use this to monitor or babysit a pull request instead of polling, sleeping, or running a watcher. Only comments posted after this call wake you, so handle the existing ones first, then end your turn. A wake is news, not a merge decision: check readiness yourself before merging. This call makes the watch explicit and keeps the thread in the user's Working list; automatic watches started on create or agent-link do not. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox. Watching ends when the pull request merges or closes, when its thread settles or is archived, when GOAT fails to read it 8 times in a row (a host rate limit only delays it), when the user stops this thread, or when you call unwatch_pull_request. Unsettle the thread before starting a new watch. A subagent cannot watch: its parent thread owns the pull request.",
     effect: "write",
     hostRoutable: false,
     requires: "either",
@@ -1600,7 +1600,7 @@ export const agentSurfaceRegistry = {
     toolkit: "pullRequests",
     summary: "Stop watching pull request",
     description:
-      "Stop GOAT from watching a pull request for this thread. The pull request stays linked. Pass the URL, or repository plus number.",
+      "Stop either an automatic or explicit GOAT watch of a pull request for this thread. The pull request stays linked. Pass the URL, or repository plus number.",
     effect: "write",
     hostRoutable: false,
     requires: "either",

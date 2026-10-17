@@ -297,24 +297,31 @@ closed reviews refresh periodically so reopening one on the host is detected. Me
 when requested. A settled thread's reviews stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
 review is terminal. An open or unsynced link keeps it active.
 
-Ask the agent to watch, monitor, or babysit a pull request and it calls `watch_pull_request`. While
-the thread is active, the server checks the pull request every two minutes and wakes the agent when a
-check fails, the required checks pass, someone else comments or reviews, or the branch starts to
-conflict. Threads in a project that watch the same pull request share one check. On GitHub, a check
-first asks whether anything changed and reads the pull request only when it did, which keeps
-watching inside GitHub's rate limit. Comments from your own account do not wake it. Watching ends
-when the pull request merges or closes, after 10 wakes in a row that bring only comments, after 8
-failed reads in a row, or when you press Stop on the thread. A rate limit only pauses watching.
-Settling or archiving a thread also ends all its watches. Unsettle the thread before starting a new
-watch. Subagents cannot watch pull requests; the thread that delegated to them does. To start or stop
-it yourself, use the row menu in the **Linked pull requests** panel. In the thread details card, a
-watched pull request shows an eye; click it to stop watching.
+GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
+turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
+**Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
+with `watch_pull_request` and keep the thread working between wakes.
 
-A watched thread counts as working between wakes and does not auto-settle. On web and desktop,
-it appears in **Priority** at the top of **Activity**. Priority also holds threads needing an
-approval or answer, unread completions, and returns from snooze. Its **Mark all as read** action
-acknowledges unread completions; it does not stop a watch. On mobile, watched threads stay in
-**Working** when that section is enabled. Agents stop watching when they hand the work back to you.
+The server checks every two minutes. By default, failed checks, passing required checks, and other
+people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
+unless the bot is listed in **Bots that count as people**. Merge conflicts do not wake a thread idle
+for more than 3 days. In **Settings → Organization**, choose **React** to wake the agent immediately,
+**Keep as context** to record an update on the timeline and include it with the next wake without
+starting a turn, or **Ignore** to drop it. You can choose separately for failed checks, passed checks,
+human feedback, bot feedback, and conflicts, and adjust automatic watching and the conflict idle limit.
+
+To start or stop watching yourself, use the row menu in the **Linked pull requests** panel. In the
+thread details card, click a watched pull request's eye to stop it. Asking the agent to stop calls
+`unwatch_pull_request`, which stops either an automatic or explicit watch and keeps the PR linked.
+Watching also ends when the PR merges or closes, after 10 wakes in a row that bring only comments,
+after 8 failed reads in a row, or when you press Stop, settle, or archive the thread. A rate limit
+only pauses watching. Unsettle the thread before starting a new watch. Subagents cannot watch pull
+requests; the thread that delegated to them does.
+
+An explicitly watched thread does not auto-settle. On web and desktop, it appears in **Priority** at
+the top of **Activity**; on mobile, it stays in **Working** when that section is enabled. **Mark all
+as read** acknowledges unread completions without stopping a watch. Agents stop watching when they
+hand the work back to you.
 
 Cross-repository links use a project on the same host. Azure DevOps reviews require a project checked
 out from the matching organization and repository.
