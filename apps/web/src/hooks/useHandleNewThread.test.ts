@@ -15,8 +15,9 @@ import {
 } from "../composerDraftStore";
 
 const testState = vi.hoisted(() => {
-  let completeProjectFileRead: (value: GoatProjectFile | null) => void = () => undefined;
-  let projectFileRead = Promise.resolve<GoatProjectFile | null>(null);
+  type Lookup = { known: true; file: GoatProjectFile | null } | { known: false };
+  let settleProjectFileRead: (value: Lookup) => void = () => undefined;
+  let projectFileRead = Promise.resolve<Lookup>({ known: true, file: null });
   let projectRemoved = false;
   const router = {
     state: { location: { href: "/" }, matches: [{ params: {} as Record<string, string> }] },
@@ -39,13 +40,22 @@ const testState = vi.hoisted(() => {
     restoreProject() {
       projectRemoved = false;
     },
+    cachedProjectFile: { known: false } as Lookup,
     get projectFileRead() {
       return projectFileRead;
     },
-    completeProjectFileRead: (value: GoatProjectFile | null) => completeProjectFileRead(value),
+    /** Settles the background read, then lets the code that waited on it run. */
+    async completeProjectFileRead(file: GoatProjectFile | null) {
+      settleProjectFileRead({ known: true, file });
+      await projectFileRead;
+    },
+    async failProjectFileRead() {
+      settleProjectFileRead({ known: false });
+      await projectFileRead;
+    },
     defer() {
       projectFileRead = new Promise((resolve) => {
-        completeProjectFileRead = resolve;
+        settleProjectFileRead = resolve;
       });
     },
   };
@@ -83,7 +93,8 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("../components/Sidebar.logic", () => ({ orderItemsByPreferredIds: () => [] }));
 vi.mock("../lib/goatProjectFileDefaults", () => ({
-  readGoatProjectFile: () => testState.projectFileRead,
+  peekGoatProjectFile: () => testState.cachedProjectFile,
+  loadGoatProjectFile: () => testState.projectFileRead,
 }));
 vi.mock("../lib/utils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/utils")>()),
@@ -184,6 +195,7 @@ beforeEach(() => {
     defaultRuntimeMode: "full-access",
   };
   testState.projectDefault = null;
+  testState.cachedProjectFile = { known: false };
   testState.shellExists = false;
   testState.restoreProject();
   testState.router.state.location.href = "/";
@@ -235,27 +247,58 @@ describe.each(["new", "stored", "active", "fallback"] as const)(
       const result = await useNewThreadHandler()(projectRef, options);
       expect(store().getDraftSession(result!.draftId)).toMatchObject(options);
     });
-    it("abandons a delayed draft open when the project is removed meanwhile", async () => {
+    it("opens without waiting for the project file", async () => {
       prepare();
       testState.settings.defaultThreadEnvMode = null;
-      const before = store().getDraftSession(draftId);
-      const pending = useNewThreadHandler()(projectRef, { replace: true });
-      testState.removeProject();
-      testState.completeProjectFileRead(null);
-      await expect(pending).resolves.toBeNull();
-      expect(store().getDraftSession(draftId)).toEqual(before);
-      expect(testState.router.navigate).not.toHaveBeenCalled();
+      // The read never settles, as while a remote environment is still connecting.
+      const result = await useNewThreadHandler()(projectRef);
+      expectReset(result!.draftId);
+      expect(testState.router.navigate).toHaveBeenCalledTimes(
+        path === "active" || path === "fallback" ? 0 : 1,
+      );
     });
-    it("abandons a delayed open after navigation", async () => {
+    it("opens with the last known project file", async () => {
       prepare();
       testState.settings.defaultThreadEnvMode = null;
-      const before = store().getDraftSession(draftId);
-      const pending = useNewThreadHandler()(projectRef);
-      testState.router.state.location.href = "/usage";
-      testState.completeProjectFileRead(null);
-      expect(await pending).toBeNull();
-      expect(store().getDraftSession(draftId)).toEqual(before);
-      expect(testState.router.navigate).not.toHaveBeenCalled();
+      testState.settings.newWorktreesStartFromOrigin = true;
+      testState.cachedProjectFile = {
+        known: true,
+        file: { defaultThreadEnvMode: "worktree" } as GoatProjectFile,
+      };
+      const result = await useNewThreadHandler()(projectRef);
+      expectReset(result!.draftId, "worktree", true);
+    });
+    it("applies a project file default that arrives after opening", async () => {
+      prepare();
+      testState.settings.defaultThreadEnvMode = null;
+      testState.settings.newWorktreesStartFromOrigin = true;
+      const result = await useNewThreadHandler()(projectRef);
+      expectReset(result!.draftId, "local", false);
+      await testState.completeProjectFileRead({
+        defaultThreadEnvMode: "worktree",
+      } as GoatProjectFile);
+      expectReset(result!.draftId, "worktree", true);
+    });
+    it("keeps the opened default when the project file read cannot tell", async () => {
+      prepare();
+      testState.settings.defaultThreadEnvMode = null;
+      testState.cachedProjectFile = {
+        known: true,
+        file: { defaultThreadEnvMode: "worktree" } as GoatProjectFile,
+      };
+      const result = await useNewThreadHandler()(projectRef);
+      await testState.failProjectFileRead();
+      expectReset(result!.draftId, "worktree", false);
+    });
+    it("ignores a late project file once the project is removed", async () => {
+      prepare();
+      testState.settings.defaultThreadEnvMode = null;
+      const result = await useNewThreadHandler()(projectRef);
+      testState.removeProject();
+      await testState.completeProjectFileRead({
+        defaultThreadEnvMode: "worktree",
+      } as GoatProjectFile);
+      expect(store().getDraftSession(result!.draftId)?.envMode).toBe("local");
     });
   },
 );
@@ -285,9 +328,10 @@ it.each(["project", "environment", "file"] as const)(
     testState.settings.newWorktreesStartFromOrigin = true;
     testState.settings.defaultThreadEnvMode = source === "environment" ? "worktree" : null;
     testState.projectDefault = source === "project" ? "worktree" : null;
-    const pending = useNewThreadHandler()(projectRef);
-    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
-    await pending;
+    await useNewThreadHandler()(projectRef);
+    await testState.completeProjectFileRead({
+      defaultThreadEnvMode: "worktree",
+    } as GoatProjectFile);
     expectReset(draftId, "worktree", true);
   },
 );
@@ -312,114 +356,88 @@ it("background follow-up resolves defaults after promotion", async () => {
   expect(result!.draftId).not.toBe(draftId);
   expectReset(result!.draftId);
 });
-describe.each(["stored", "active", "fallback"] as const)("async reuse guards for %s", (path) => {
-  it.each([
-    { envMode: "local" as const },
-    { branch: "selected-base" },
-    { worktreePath: "/selected/wt" },
-    { startFromOrigin: false },
-  ])("preserves workspace picked during defaults read: %j", async (selection) => {
-    seed(path !== "stored", path === "fallback");
-    testState.settings.defaultThreadEnvMode = null;
-    testState.settings.newWorktreesStartFromOrigin = true;
-    const pending = useNewThreadHandler()(projectRef);
-    store().setDraftThreadContext(draftId, selection);
-    const selectedDraft = store().getDraftSession(draftId);
-    testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
-    const result = await pending;
-    expect(store().getDraftSession(draftId)).toEqual(selectedDraft);
-    expect(result).toBeNull();
-    expect(testState.router.navigate).not.toHaveBeenCalled();
-  });
-  it("still resets when the branch selector seeds an empty New worktree base", async () => {
-    seed(path !== "stored", path === "fallback");
-    store().setDraftThreadContext(draftId, { branch: null, worktreePath: null });
-    testState.settings.defaultThreadEnvMode = null;
-    const pending = useNewThreadHandler()(projectRef);
-    // BranchToolbarBranchSelector fills an empty base branch on its own once refs load.
-    store().setDraftThreadContext(draftId, { branch: "main" });
-    testState.completeProjectFileRead({} as GoatProjectFile);
-    await pending;
-    expect(store().getDraftSession(draftId)).toMatchObject({
-      envMode: "local",
-      branch: null,
-      worktreePath: null,
-    });
-  });
-  it.each([
-    "promotion",
-    "shell",
-    "mapping",
-    "environment",
-    "project",
-    "thread",
-    "disappearance",
-    "text",
-    "attachment",
-  ] as const)("preserves changes during read: %s", async (change) => {
-    seed(path !== "stored", path === "fallback");
-    testState.settings.defaultThreadEnvMode = null;
-    const pending = useNewThreadHandler()(projectRef);
-    expect(store().getDraftSession(draftId)?.worktreePath).toBe("/old/wt");
-    if (change === "promotion")
-      markPromotedDraftThreadByRef(scopeThreadRef(projectRef.environmentId, threadId));
-    else if (change === "shell") testState.shellExists = true;
-    else if (change === "mapping")
-      store().setLogicalProjectDraftThreadId("remote-project", projectRef, DraftId.make("winner"), {
-        threadId: ThreadId.make("winner-thread"),
-        worktreePath: "/winner",
-        envMode: "worktree",
-      });
-    else if (change === "text" || change === "attachment") invest(change);
-    else {
-      const sessions = { ...store().draftThreadsByThreadKey };
-      const key = draftId;
-      if (change === "disappearance") delete sessions[key];
-      else
-        sessions[key] = {
-          ...sessions[key]!,
-          ...(change === "environment"
-            ? { environmentId: EnvironmentId.make("other") }
-            : change === "project"
-              ? { projectId: ProjectId.make("other") }
-              : { threadId: ThreadId.make("other") }),
-        };
-      useComposerDraftStore.setState({ draftThreadsByThreadKey: sessions });
+describe.each(["new", "stored", "active", "fallback"] as const)(
+  "late project file guards for %s",
+  (path) => {
+    // Opens provisionally local; the project file then says worktree.
+    async function open() {
+      if (path !== "new") seed(path !== "stored", path === "fallback");
+      testState.settings.defaultThreadEnvMode = null;
+      testState.settings.newWorktreesStartFromOrigin = true;
+      const result = await useNewThreadHandler()(projectRef);
+      return result!.draftId;
     }
-    const before = store().draftThreadsByThreadKey;
-    testState.completeProjectFileRead(null);
-    expect(await pending).toBeNull();
-    expect(store().draftThreadsByThreadKey).toEqual(before);
-    expect(testState.router.navigate).not.toHaveBeenCalled();
-  });
-});
-it("abandons an inactive draft opened by another request", async () => {
-  seed();
-  testState.settings.defaultThreadEnvMode = null;
-  const pending = useNewThreadHandler()(projectRef);
-  // Same href isolates the opened-meanwhile guard from the navigation guard.
-  testState.router.state.matches = [{ params: { draftId } }];
-  testState.completeProjectFileRead(null);
-  expect(await pending).toBeNull();
-  expect(store().getDraftSession(draftId)?.worktreePath).toBe("/old/wt");
-});
-it("allows reset of a draft already open when defaults read begins", async () => {
+    const lateWorktreeDefault = () =>
+      testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
+    it.each([
+      { envMode: "worktree" as const, worktreePath: "/selected/wt" },
+      { branch: "selected-base" },
+      { worktreePath: "/selected/wt" },
+      { startFromOrigin: true },
+    ])("keeps a workspace picked before it arrives: %j", async (selection) => {
+      const id = await open();
+      store().setDraftThreadContext(id, selection);
+      const selectedDraft = store().getDraftSession(id);
+      await lateWorktreeDefault();
+      expect(store().getDraftSession(id)).toEqual(selectedDraft);
+    });
+    it.each(["promotion", "shell", "mapping", "project", "thread", "disappearance"] as const)(
+      "drops it after %s",
+      async (change) => {
+        const id = await open();
+        const opened = store().getDraftSession(id)!;
+        if (change === "promotion")
+          markPromotedDraftThreadByRef(scopeThreadRef(projectRef.environmentId, opened.threadId));
+        else if (change === "shell") testState.shellExists = true;
+        else if (change === "mapping")
+          store().setLogicalProjectDraftThreadId(
+            "remote-project",
+            projectRef,
+            DraftId.make("winner"),
+            { threadId: ThreadId.make("winner-thread"), envMode: "local" },
+          );
+        else {
+          const sessions = { ...store().draftThreadsByThreadKey };
+          if (change === "disappearance") delete sessions[id];
+          else
+            sessions[id] = {
+              ...sessions[id]!,
+              ...(change === "project"
+                ? { projectId: ProjectId.make("other") }
+                : { threadId: ThreadId.make("other") }),
+            };
+          useComposerDraftStore.setState({ draftThreadsByThreadKey: sessions });
+        }
+        const before = store().draftThreadsByThreadKey;
+        await lateWorktreeDefault();
+        expect(store().draftThreadsByThreadKey).toEqual(before);
+      },
+    );
+    it.each(["text", "attachment"] as const)("still applies it after typed %s", async (kind) => {
+      const id = await open();
+      if (id === draftId) invest(kind);
+      else store().setPrompt(id, "keep this work");
+      await lateWorktreeDefault();
+      expect(store().getDraftSession(id)?.envMode).toBe("worktree");
+    });
+  },
+);
+it("replaces a seeded New worktree base when the late default is local", async () => {
   seed(true);
   testState.settings.defaultThreadEnvMode = null;
-  const pending = useNewThreadHandler()(projectRef);
-  testState.completeProjectFileRead(null);
-  await pending;
-  expectReset();
-  expect(testState.router.navigate).not.toHaveBeenCalled();
-});
-it("retains concurrent fresh-creation winner context", async () => {
-  testState.settings.defaultThreadEnvMode = null;
-  const pending = useNewThreadHandler()(projectRef);
-  seed();
-  const before = store().getDraftSession(draftId);
-  testState.completeProjectFileRead(null);
-  expect(await pending).toEqual({ draftId, threadId });
-  expect(store().getDraftSession(draftId)).toEqual(before);
+  testState.cachedProjectFile = {
+    known: true,
+    file: { defaultThreadEnvMode: "worktree" } as GoatProjectFile,
+  };
+  await useNewThreadHandler()(projectRef);
+  // BranchToolbarBranchSelector fills an empty base branch on its own once refs load.
+  store().setDraftThreadContext(draftId, { branch: "main" });
+  await testState.completeProjectFileRead({ defaultThreadEnvMode: "local" } as GoatProjectFile);
+  expect(store().getDraftSession(draftId)).toMatchObject({
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+  });
 });
 
 describe("new-thread SSH reset", () => {
@@ -452,22 +470,17 @@ describe("new-thread SSH reset", () => {
     expect(store().getDraftSession(draftId)?.sshDestination).toEqual(destination);
     expect(store().getDraftSession(result!.draftId)?.sshDestination).toBeNull();
   });
-  it("does not clear the concurrently registered winner's SSH destination", async () => {
-    testState.settings.defaultThreadEnvMode = null;
-    const pending = useNewThreadHandler()(projectRef);
-    seed();
-    chooseSsh();
-    testState.completeProjectFileRead(null);
-    await pending;
-    expect(store().getDraftSession(draftId)?.sshDestination).toEqual(destination);
-  });
-  it("keeps a host pick during a pending defaults read", async () => {
+  it("keeps a host picked before the project file arrives", async () => {
     seed(true);
     testState.settings.defaultThreadEnvMode = null;
-    const pending = useNewThreadHandler()(projectRef);
+    await useNewThreadHandler()(projectRef);
     chooseSsh();
-    testState.completeProjectFileRead(null);
-    expect(await pending).toBeNull();
-    expect(store().getDraftSession(draftId)?.sshDestination).toEqual(destination);
+    await testState.completeProjectFileRead({
+      defaultThreadEnvMode: "worktree",
+    } as GoatProjectFile);
+    expect(store().getDraftSession(draftId)).toMatchObject({
+      envMode: "worktree",
+      sshDestination: destination,
+    });
   });
 });
