@@ -28,6 +28,8 @@ import {
   updateSshRuntime,
 } from "./sshEnvironment.ts";
 
+const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
+
 /** A desktop whose home is `home`, for the cloud machine guard. */
 const desktopAt = (home: string) =>
   Layer.effect(
@@ -119,7 +121,7 @@ describe("SSH runtime IPC", () => {
             status: () => Effect.succeed(result),
           }),
         );
-        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(encoded), result);
+        assert.deepEqual(yield* decodeSshHostResult(encoded), result);
         const updated = yield* updateSshRuntime.handler({ target }).pipe(
           Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, {
             ...unusedSshService,
@@ -127,7 +129,7 @@ describe("SSH runtime IPC", () => {
           }),
           Effect.provide(desktopAt("/nonexistent-home")),
         );
-        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(updated), result);
+        assert.deepEqual(yield* decodeSshHostResult(updated), result);
       }
     }),
   );
@@ -193,7 +195,7 @@ describe("SSH runtime IPC", () => {
             .handler({ target, ...(mode === undefined ? {} : { mode }) })
             .pipe(
               Effect.provideService(DesktopSshEnvironment.DesktopSshEnvironment, service),
-              Effect.flatMap(Schema.decodeUnknownEffect(SshHostResult)),
+              Effect.flatMap(decodeSshHostResult),
             );
         assert.equal((yield* invoke()).status?.state, "update_waiting");
         assert.equal((yield* invoke("when_idle")).status?.state, "update_waiting");
@@ -223,7 +225,7 @@ describe("SSH runtime IPC", () => {
       const cloudTarget = { ...target, alias: "boat-bx_23456789" };
       return Effect.gen(function* () {
         const status = yield* getSshHostStatus.handler({ target: cloudTarget });
-        assert.deepEqual(yield* Schema.decodeUnknownEffect(SshHostResult)(status), {
+        assert.deepEqual(yield* decodeSshHostResult(status), {
           kind: "ok",
           status: { ...baseStatus, host: cloudTarget.alias, state: "stopped" },
         });
