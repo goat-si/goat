@@ -96,6 +96,7 @@ describe("V2 preview upgrade", () => {
         [80, "HandoffLookupIndex"],
         [81, "MemoryLastReadySpace"],
         [82, "MemoryHubAdministered"],
+        [83, "MemoryCheckpointLifecycle"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -201,6 +202,7 @@ describe("V2 preview upgrade", () => {
         [80, "HandoffLookupIndex"],
         [81, "MemoryLastReadySpace"],
         [82, "MemoryHubAdministered"],
+        [83, "MemoryCheckpointLifecycle"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

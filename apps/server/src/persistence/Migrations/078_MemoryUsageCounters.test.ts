@@ -54,6 +54,7 @@ it.effect(
         [80, "HandoffLookupIndex"],
         [81, "MemoryLastReadySpace"],
         [82, "MemoryHubAdministered"],
+        [83, "MemoryCheckpointLifecycle"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

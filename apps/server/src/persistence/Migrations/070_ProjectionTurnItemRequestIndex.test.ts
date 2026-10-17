@@ -44,6 +44,7 @@ it.effect(
         [80, "HandoffLookupIndex"],
         [81, "MemoryLastReadySpace"],
         [82, "MemoryHubAdministered"],
+        [83, "MemoryCheckpointLifecycle"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

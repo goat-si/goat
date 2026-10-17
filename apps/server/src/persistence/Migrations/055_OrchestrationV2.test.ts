@@ -54,6 +54,7 @@ layer("055_OrchestrationV2", (it) => {
         [80, "HandoffLookupIndex"],
         [81, "MemoryLastReadySpace"],
         [82, "MemoryHubAdministered"],
+        [83, "MemoryCheckpointLifecycle"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

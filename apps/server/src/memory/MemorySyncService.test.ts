@@ -2140,6 +2140,7 @@ it.effect.each([
             assert.deepStrictEqual(yield* runMigrations(), [
               [81, "MemoryLastReadySpace"],
               [82, "MemoryHubAdministered"],
+              [83, "MemoryCheckpointLifecycle"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
