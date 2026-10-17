@@ -4,12 +4,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../persistence/Migrations/071_Memory.ts";
 import hub from "../persistence/Migrations/072_MemoryHubSync.ts";
 import lineage from "../persistence/Migrations/075_MemoryImportLineage.ts";
-import checkpoint from "../persistence/Migrations/076_MemoryCheckpointAccounting.ts";
-import { refreshCheckpointAccounting } from "./MemoryCheckpointAccounting.ts";
+import checkpointMigration from "../persistence/Migrations/076_MemoryCheckpointAccounting.ts";
+import lifecycleMigration from "../persistence/Migrations/083_MemoryCheckpointLifecycle.ts";
+import {
+  CheckpointAccountingError,
+  refreshCheckpointAccounting,
+} from "./MemoryCheckpointAccounting.ts";
 import {
   selectCheckpointMemory,
   selectCheckpointReceipt,
@@ -29,6 +34,8 @@ import {
   ImportCompletedNoopCodec,
   ImportNoopResultCodec,
 } from "./MemoryStore.ts";
+
+const checkpoint = checkpointMigration.pipe(Effect.andThen(lifecycleMigration));
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(id(1));
@@ -606,20 +613,109 @@ it.effect("keeps aggregate counter cardinality and lookup plans independent of 1
     assert.isTrue(spaces.every((r) => r.detail.includes("memory_checkpoint_spaces")));
     const lifecycle = yield* sql<{
       detail: string;
-    }>`EXPLAIN QUERY PLAN SELECT i.space FROM (
-    SELECT DISTINCT space FROM memory_quota_counters
-    WHERE (dimension='hub_snapshot_rows' OR dimension='checkpoint_initialized' OR dimension='hub_snapshot_bytes') AND scope_key=''
-  ) i WHERE
-    NOT EXISTS(SELECT 1 FROM memory_quota_counters m WHERE m.space=i.space AND m.dimension='checkpoint_initialized' AND m.scope_key='' AND m.value=1)
-    OR NOT EXISTS(SELECT 1 FROM memory_quota_counters b WHERE b.space=i.space AND b.dimension='hub_snapshot_bytes' AND b.scope_key='')
-    OR NOT EXISTS(SELECT 1 FROM memory_quota_counters n WHERE n.space=i.space AND n.dimension='hub_snapshot_rows' AND n.scope_key='') LIMIT 1`;
-    assert.isTrue(lifecycle.some((r) => r.detail.includes("memory_checkpoint_spaces")));
+    }>`EXPLAIN QUERY PLAN SELECT dimension,value FROM memory_quota_counters WHERE space=${space} AND scope_key='' AND dimension IN ('checkpoint_initialized','hub_snapshot_bytes','hub_snapshot_rows')`;
     assert.isTrue(
-      lifecycle.filter((r) => r.detail.includes("SEARCH")).every((r) => r.detail.includes("INDEX")),
+      lifecycle.every((r) => r.detail.includes("SEARCH") && r.detail.includes("INDEX")),
     );
     const owners = yield* sql<{
       detail: string;
     }>`EXPLAIN QUERY PLAN SELECT rowid FROM memory_import_keys WHERE space=${space} AND memory_id=${memoryId} AND key_kind IN ('sourceKey','content','sourceExclusion')`;
     assert.isTrue(owners.every((r) => r.detail.includes("memory_suppression_owner")));
+  }).pipe(Effect.provide(old)),
+);
+
+it.effect.each([1, 100, 1000])(
+  "bounds empty and one-key refresh lifecycle candidates with %s historical spaces",
+  (count) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* seed;
+      yield* checkpoint;
+      const spaces = JSON.stringify(Array.from({ length: count }, (_, n) => id(n + 1)));
+      for (const dimension of ["checkpoint_initialized", "hub_snapshot_bytes", "hub_snapshot_rows"])
+        yield* sql`INSERT INTO memory_quota_counters(space,dimension,scope_key,value)
+          SELECT value,${dimension},'',${dimension === "checkpoint_initialized" ? 1 : 0} FROM json_each(${spaces}) WHERE 1
+          ON CONFLICT(space,dimension,scope_key) DO NOTHING`;
+      // Drain setup invalidations outside the measured refreshes.
+      yield* sql.withTransaction(refreshCheckpointAccounting());
+      for (const touched of [false, true]) {
+        if (touched)
+          yield* sql`UPDATE memory_identity_ledger SET reserve_keys=reserve_keys+1 WHERE space=${space} AND memory_id=${memoryId}`;
+        const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+        const record: Statement.Transformer = (statement) =>
+          Effect.sync(() => {
+            queries.push(statement.compile());
+            return statement;
+          });
+        yield* sql
+          .withTransaction(refreshCheckpointAccounting())
+          .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+        const lifecycle = queries.filter(
+          ([query]) =>
+            query.includes("SELECT dimension,value FROM memory_quota_counters") &&
+            query.includes("'checkpoint_initialized','hub_snapshot_bytes','hub_snapshot_rows'"),
+        );
+        // Every candidate uses one exact space binding and at most its three PK rows.
+        assert.deepStrictEqual(
+          lifecycle.map(([, bindings]) => bindings),
+          touched ? [[space]] : [],
+        );
+        assert.isTrue(lifecycle.every(([query]) => query.includes("WHERE space=?")));
+        assert.isFalse(queries.some(([query]) => query.includes("SELECT DISTINCT space")));
+        assert.deepStrictEqual(
+          yield* sql`SELECT * FROM memory_quota_counters WHERE space IN ('_checkpoint_lifecycle','_checkpoint_dirty')`,
+          [],
+        );
+      }
+    }).pipe(Effect.provide(old)),
+);
+
+it.effect("validates and drains lifecycle addresses created by the first canonical write", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* checkpoint;
+    yield* sql`INSERT INTO memory_identity_ledger(space,memory_id,identity_json,fence_json,reserve_bytes,reserve_keys) VALUES (${space},${memoryId},${JSON.stringify(identity)},${JSON.stringify(fence)},66560,0)`;
+    const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+    const record: Statement.Transformer = (statement) =>
+      Effect.sync(() => {
+        queries.push(statement.compile());
+        return statement;
+      });
+    yield* sql
+      .withTransaction(refreshCheckpointAccounting())
+      .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+    const lifecycle = queries.filter(
+      ([query]) =>
+        query.includes("SELECT dimension,value FROM memory_quota_counters") &&
+        query.includes("'checkpoint_initialized','hub_snapshot_bytes','hub_snapshot_rows'"),
+    );
+    assert.deepStrictEqual(
+      lifecycle.map(([, bindings]) => bindings),
+      [[space], [space]],
+    );
+    assert.isAbove((yield* readSize).bytes, 0);
+    assert.deepStrictEqual(
+      yield* sql`SELECT * FROM memory_quota_counters WHERE space IN ('_checkpoint_lifecycle','_checkpoint_dirty')`,
+      [],
+    );
+  }).pipe(Effect.provide(old)),
+);
+
+it.effect("retains the global codec initialization guard", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed;
+    yield* checkpoint;
+    const pending =
+      yield* sql`SELECT * FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`;
+    assert.lengthOf(pending, 1);
+    yield* sql`DELETE FROM memory_quota_counters WHERE space='_hub_global' AND dimension='checkpoint_codec' AND scope_key=''`;
+    const failed = yield* sql.withTransaction(refreshCheckpointAccounting()).pipe(Effect.flip);
+    assert.instanceOf(failed, CheckpointAccountingError);
+    assert.strictEqual((failed as CheckpointAccountingError).stage, "uninitialized");
+    assert.deepStrictEqual(
+      yield* sql`SELECT * FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`,
+      pending,
+    );
   }).pipe(Effect.provide(old)),
 );

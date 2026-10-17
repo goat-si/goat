@@ -30,6 +30,7 @@ import usageMigration from "../persistence/Migrations/078_MemoryUsageCounters.ts
 import revertMigration from "../persistence/Migrations/079_MemoryRevertResults.ts";
 import readyMigration from "../persistence/Migrations/081_MemoryLastReadySpace.ts";
 import adminMigration from "../persistence/Migrations/082_MemoryHubAdministered.ts";
+import lifecycleMigration from "../persistence/Migrations/083_MemoryCheckpointLifecycle.ts";
 import * as Store from "./MemoryStore.ts";
 import { CheckpointAccountingError } from "./MemoryCheckpointAccounting.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
@@ -133,6 +134,7 @@ const setup = Layer.effectDiscard(
     Effect.andThen(revertMigration),
     Effect.andThen(readyMigration),
     Effect.andThen(adminMigration),
+    Effect.andThen(lifecycleMigration),
     Effect.andThen(searchMigration),
   ),
 ).pipe(Layer.provideMerge(database));
@@ -3006,6 +3008,7 @@ describe("MemoryStore transient source relay", () => {
                 Effect.andThen(revertMigration),
                 Effect.andThen(readyMigration),
                 Effect.andThen(adminMigration),
+                Effect.andThen(lifecycleMigration),
                 Effect.andThen(searchMigration),
               ),
             ).pipe(Layer.provideMerge(db)),
@@ -8328,6 +8331,49 @@ it.effect.each(missingCheckpointCases)(
       assert.strictEqual((failed.cause as CheckpointAccountingError).stage, "missing-total");
       assert.deepStrictEqual(yield* inventory, before);
     }).pipe(checkUsage, Effect.provide(live)),
+);
+
+it.effect.each([0, 2])(
+  "rejects checkpoint marker value %s in an unrelated empty transaction and retains validation evidence",
+  (value) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      yield* store.apply({ ...approved(), identity: checkpoint().identities[0]! });
+      yield* sql`UPDATE memory_quota_counters SET value=${value} WHERE space=${space} AND dimension='checkpoint_initialized' AND scope_key=''`;
+      const pending =
+        yield* sql`SELECT * FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`;
+      assert.deepStrictEqual(pending, [
+        { space: "_checkpoint_lifecycle", dimension: space, scope_key: "", value: 1 },
+      ]);
+      const failed = yield* store.transact(Effect.void).pipe(Effect.flip);
+      assert.instanceOf(failed, Store.MemoryStorageError);
+      assert.strictEqual(failed.stage, "checkpoint-accounting");
+      assert.instanceOf(failed.cause, CheckpointAccountingError);
+      assert.strictEqual((failed.cause as CheckpointAccountingError).stage, "missing-total");
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`,
+        pending,
+      );
+    }).pipe(checkUsage, Effect.provide(live)),
+);
+
+it.effect("rejects a lost checkpoint total in an unrelated empty transaction", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    yield* store.apply({ ...approved(), identity: checkpoint().identities[0]! });
+    yield* sql`DELETE FROM memory_quota_counters WHERE space=${space} AND dimension='hub_snapshot_rows' AND scope_key=''`;
+    const failed = yield* store.transact(Effect.void).pipe(Effect.flip);
+    assert.instanceOf(failed, Store.MemoryStorageError);
+    assert.strictEqual(failed.stage, "checkpoint-accounting");
+    assert.instanceOf(failed.cause, CheckpointAccountingError);
+    assert.strictEqual((failed.cause as CheckpointAccountingError).stage, "missing-total");
+    assert.deepStrictEqual(
+      yield* sql`SELECT dimension FROM memory_quota_counters WHERE space='_checkpoint_lifecycle'`,
+      [{ dimension: space }],
+    );
+  }).pipe(checkUsage, Effect.provide(live)),
 );
 
 it.effect(
