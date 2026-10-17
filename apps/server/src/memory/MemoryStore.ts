@@ -290,6 +290,17 @@ export type MemoryAggregate = {
   readonly pendingForget: PendingForgetIntent | undefined;
   readonly generation: number;
 };
+/**
+ * Narrows which revision payloads `loadAggregate` reads and decodes. The revision DAG is
+ * always complete; payloads outside the selection read as `null`, so pass one only when the
+ * caller never reads those payloads. Omit it to decode every payload.
+ */
+export type MemoryPayloadSelection = {
+  /** Current heads, which admission uses for the live payload. */
+  readonly heads?: boolean;
+  readonly revisionIds?: ReadonlyArray<M.MemoryRevisionId>;
+  readonly when?: (revision: M.MemoryRevision) => boolean;
+};
 /** A published boundary is not proof that an arbitrary unknown UUID was compacted. */
 export type MemoryParentState =
   | {
@@ -318,6 +329,9 @@ export type MemoryAncestry = {
   readonly retentionFloor: number;
   readonly parents: ReadonlyArray<MemoryParentState>;
 };
+/** Only these revisions contribute payload evidence to forget reservations and exclusions. */
+export const hasSourceEvidence = (revision: M.MemoryRevision) =>
+  Boolean(revision.provenance.sourceThread && revision.provenance.sourceWatermark);
 /** Expanded wire exclusions are stored and admitted per message. */
 export const memorySuppressionRecords = (t: M.MemoryTombstone): M.MemorySuppressionRecord[] => [
   ...t.suppressedSourceKeys.map((sourceKey) => ({
@@ -1370,6 +1384,7 @@ export class MemoryStore extends Context.Service<
     readonly loadAggregate: (
       space: M.MemorySpaceId,
       id: M.MemoryId,
+      payloads?: MemoryPayloadSelection,
     ) => Effect.Effect<MemoryAggregate, MemoryStorageError>;
     readonly apply: (
       decision: MemoryDecision,
@@ -3078,29 +3093,76 @@ const make = Effect.gen(function* () {
       };
     },
   );
+  /** Admission reads the whole revision DAG but only the payload bodies it selects. */
+  const loadSelectedRevisions = Effect.fnUntraced(function* (
+    space: M.MemorySpaceId,
+    id: M.MemoryId,
+    heads: ReadonlyArray<M.MemoryRevisionId>,
+    visible: boolean,
+    payloads: MemoryPayloadSelection,
+  ) {
+    const rows = yield* stored(
+      "revisions",
+      sql<HistoryRevisionRow>`SELECT r.*,NULL AS body_json FROM memory_revisions r WHERE r.space=${space} AND r.memory_id=${id}`,
+    );
+    const decoded = yield* Effect.forEach(rows, (row) =>
+      decodeHistoryRevision(row, space, id, false),
+    );
+    if (!visible) return decoded;
+    const wanted = new Set<string>([
+      ...(payloads.heads ? heads : []),
+      ...(payloads.revisionIds ?? []),
+    ]);
+    // The stored payload_ref decides the join, exactly as the full read's LEFT JOIN does.
+    const refs = decoded.map(({ revision }, index) =>
+      wanted.has(revision.revisionId) || payloads.when?.(revision) === true
+        ? rows[index]!.payload_ref
+        : null,
+    );
+    const unique = [...new Set(refs.filter((ref) => ref !== null))];
+    const bodies = new Map<string, string | null>();
+    for (let start = 0; start < unique.length; start += 500) {
+      const chunk = unique.slice(start, start + 500);
+      const found = yield* stored(
+        "revision-payloads",
+        sql<{
+          payload_ref: string;
+          body_json: string | null;
+        }>`SELECT payload_ref,body_json FROM memory_payloads WHERE space=${space} AND payload_ref IN ${sql.in(chunk)}`,
+      );
+      for (const row of found) bodies.set(row.payload_ref, row.body_json);
+    }
+    return yield* Effect.forEach(decoded, (pair, index) =>
+      Effect.gen(function* () {
+        const ref = refs[index];
+        const body = ref === null || ref === undefined ? undefined : bodies.get(ref);
+        return body
+          ? {
+              revision: pair.revision,
+              payload: yield* stored("payload-codec", payloadCodec.decode(body, strict)),
+            }
+          : pair;
+      }),
+    );
+  });
   const loadAggregate = Effect.fn("MemoryStore.loadAggregate")(function* (
     space: M.MemorySpaceId,
     id: M.MemoryId,
+    payloads?: MemoryPayloadSelection,
   ) {
     const item = yield* readItem(space, id);
-    const revisionRows = yield* stored(
-      "revisions",
-      sql<{
-        revision_id: string;
-        operation_id: string;
-        parents_json: string;
-        scope_json: string;
-        assertion_kind: string;
-        provenance_json: string;
-        payload_ref: string | null;
-        created_at: number;
-        body_json: string | null;
-      }>`
+    const visible = item?.item.status !== "forgotten";
+    const revisions =
+      payloads === undefined
+        ? yield* Effect.forEach(
+            yield* stored(
+              "revisions",
+              sql<HistoryRevisionRow>`
       SELECT r.*,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id}`,
-    );
-    const revisions = yield* Effect.forEach(revisionRows, (row) =>
-      decodeHistoryRevision(row, space, id, item?.item.status !== "forgotten"),
-    );
+            ),
+            (row) => decodeHistoryRevision(row, space, id, visible),
+          )
+        : yield* loadSelectedRevisions(space, id, item?.heads ?? [], visible, payloads);
     const tombstones = yield* stored(
       "tombstone",
       sql<{
@@ -3734,7 +3796,8 @@ const make = Effect.gen(function* () {
             accepted && !tombstones.length && op.kind !== "forget"
               ? yield* reservationForRevisions(
                   op,
-                  (yield* loadAggregate(op.memorySpaceId, op.memoryId)).revisions,
+                  (yield* loadAggregate(op.memorySpaceId, op.memoryId, { when: hasSourceEvidence }))
+                    .revisions,
                   false,
                 )
               : { bytes: M.MEMORY_PAYLOAD_MAX_UTF8_BYTES, keys: 0 };
@@ -6671,7 +6734,10 @@ const make = Effect.gen(function* () {
   const firstForgetReservation = Effect.fn("MemoryStore.firstForgetReservation")(function* (
     op: M.MemoryOperation,
   ) {
-    const current = yield* loadAggregate(op.memorySpaceId, op.memoryId);
+    // Only source-attributed revisions contribute payload evidence to the reservation.
+    const current = yield* loadAggregate(op.memorySpaceId, op.memoryId, {
+      when: hasSourceEvidence,
+    });
     return yield* reservationForRevisions(op, [
       ...current.revisions,
       ...(op.kind === "forget" ? [] : [{ revision: op.revision, payload: op.payload }]),
@@ -11845,7 +11911,7 @@ const make = Effect.gen(function* () {
     readResolutionInputsPage,
     readResolutionSnapshot,
     readResolutionHeads,
-    loadAggregate: (space, id) => transact(loadAggregate(space, id)),
+    loadAggregate: (space, id, payloads) => transact(loadAggregate(space, id, payloads)),
     apply: (decision) =>
       decision.admission.kind === "hubAdmission" && decision.operation.kind !== "forget"
         ? transact(withHubBudget(applyDecision(decision)))
