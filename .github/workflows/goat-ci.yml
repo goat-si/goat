@@ -187,6 +187,7 @@ jobs:
         run: >-
           vp test run build-desktop-artifact.test.ts check-release-version.test.ts
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
+          vendored-gitlinks.test.ts
 
       - name: Test CI scripts
         if: matrix.task == 'test'

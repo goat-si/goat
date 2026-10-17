@@ -6,7 +6,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 const repoRoot = NodeURL.fileURLToPath(new URL("../", import.meta.url));
 const git = (...args: string[]) =>
-  NodeChildProcess.execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  // The index listing is several megabytes, past execFileSync's 1 MiB default.
+  NodeChildProcess.execFileSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
 
 describe("vendored submodule gitlinks", () => {
   // actions/checkout runs `git submodule foreach` while removing credentials, and foreach dies
