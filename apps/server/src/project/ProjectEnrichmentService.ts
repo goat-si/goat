@@ -48,6 +48,11 @@ export interface ProjectEnrichmentServiceOptions {
   readonly successTtl?: Duration.Input;
   readonly faviconTtl?: Duration.Input;
   readonly failureTtl?: Duration.Input;
+  /** Observes completed background work after its cache and pending reservation are updated. */
+  readonly onResolved?: (
+    workspaceRoot: string,
+    field: "repositoryIdentity" | "faviconPath",
+  ) => Effect.Effect<void>;
 }
 
 export class ProjectEnrichmentService extends Context.Service<
@@ -205,10 +210,14 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   const startWorkers = (
     lane: EnrichmentWorkLane,
     resolve: (workspaceRoot: string) => Effect.Effect<void>,
+    field: "repositoryIdentity" | "faviconPath",
   ) => {
     const worker = Queue.take(lane.queue).pipe(
       Effect.flatMap((workspaceRoot) =>
-        resolve(workspaceRoot).pipe(Effect.ensuring(removePending(lane, workspaceRoot))),
+        resolve(workspaceRoot).pipe(
+          Effect.ensuring(removePending(lane, workspaceRoot)),
+          Effect.andThen(() => options.onResolved?.(workspaceRoot, field) ?? Effect.void),
+        ),
       ),
       Effect.forever,
     );
@@ -218,8 +227,8 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   };
   yield* Effect.all(
     [
-      startWorkers(repositoryIdentityLane, resolveRepositoryIdentity),
-      startWorkers(faviconLane, resolveFavicon),
+      startWorkers(repositoryIdentityLane, resolveRepositoryIdentity, "repositoryIdentity"),
+      startWorkers(faviconLane, resolveFavicon, "faviconPath"),
     ],
     { concurrency: "unbounded", discard: true },
   );

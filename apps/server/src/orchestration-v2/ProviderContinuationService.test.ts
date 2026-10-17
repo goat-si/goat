@@ -997,15 +997,17 @@ describe("ProviderContinuationService", () => {
     return Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();
       const cleared = yield* Ref.make(false);
+      const clearCompleted = yield* Deferred.make<void>();
       yield* Effect.gen(function* () {
         const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
         yield* requests.offer({
           ...request(),
-          clearIfCurrent: () => Ref.set(cleared, true),
+          clearIfCurrent: () =>
+            Ref.set(cleared, true).pipe(
+              Effect.andThen(Deferred.succeed(clearCompleted, undefined)),
+            ),
         });
-        for (let attempt = 0; attempt < 20 && !(yield* Ref.get(cleared)); attempt += 1) {
-          yield* Effect.yieldNow;
-        }
+        yield* Deferred.await(clearCompleted);
         assert.isTrue(yield* Ref.get(cleared));
         assert.isTrue(Option.isNone(yield* Queue.poll(dispatched)));
       }).pipe(

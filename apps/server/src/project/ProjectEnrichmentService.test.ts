@@ -1,10 +1,12 @@
 import { assert, it } from "@effect/vitest";
 import type { RepositoryIdentity } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
@@ -24,17 +26,29 @@ const identity = (workspaceRoot: string, version = 1): RepositoryIdentity => ({
   rootPath: workspaceRoot,
 });
 
+interface EnrichmentCompletion {
+  readonly workspaceRoot: string;
+  readonly field: "repositoryIdentity" | "faviconPath";
+}
+
+class EnrichmentCompletions extends Context.Service<
+  EnrichmentCompletions,
+  Queue.Queue<EnrichmentCompletion>
+>()("goat/project/ProjectEnrichmentService.test/EnrichmentCompletions") {}
+
 const waitForAvailable = Effect.fn("ProjectEnrichmentServiceTest.waitForAvailable")(function* (
   service: ProjectEnrichment.ProjectEnrichmentService["Service"],
   workspaceRoot: string,
   predicate: (value: ProjectEnrichment.ProjectEnrichment) => boolean,
 ) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const available = yield* service.peek(workspaceRoot);
-    if (predicate(available)) return available;
-    yield* Effect.yieldNow;
+  const completions = yield* EnrichmentCompletions;
+  let available = yield* service.peek(workspaceRoot);
+  while (!predicate(available)) {
+    // Every re-read follows completed work, including favicon work that has no public event.
+    yield* Queue.take(completions);
+    available = yield* service.peek(workspaceRoot);
   }
-  return yield* Effect.die(`Project metadata for ${workspaceRoot} was not resolved in time.`);
+  return available;
 });
 
 const layer = (
@@ -43,13 +57,28 @@ const layer = (
     | RepositoryIdentityResolver.RepositoryIdentityResolver
   >,
   options: ProjectEnrichment.ProjectEnrichmentServiceOptions = {},
-) =>
-  Layer.effect(ProjectEnrichment.ProjectEnrichmentService, ProjectEnrichment.make(options)).pipe(
-    Layer.provide(metadataLayer),
-  );
+) => {
+  const completions = Layer.effect(EnrichmentCompletions, Queue.unbounded<EnrichmentCompletion>());
+  return Layer.effect(
+    ProjectEnrichment.ProjectEnrichmentService,
+    Effect.gen(function* () {
+      const queue = yield* EnrichmentCompletions;
+      return yield* ProjectEnrichment.make({
+        ...options,
+        onResolved: (workspaceRoot, field) =>
+          Queue.offer(queue, { workspaceRoot, field }).pipe(
+            Effect.andThen(options.onResolved?.(workspaceRoot, field) ?? Effect.void),
+            Effect.asVoid,
+          ),
+      });
+    }),
+  ).pipe(Layer.provideMerge(completions), Layer.provide(metadataLayer));
+};
 
 it.effect("preserves either enrichment field when the other resolver fails", () =>
   Effect.gen(function* () {
+    const faviconFailed = yield* Deferred.make<void>();
+    const repositoryFailed = yield* Deferred.make<void>();
     const layerMetadata = Layer.merge(
       Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
         resolve: (workspaceRoot) =>
@@ -76,6 +105,8 @@ it.effect("preserves either enrichment field when the other resolver fails", () 
       yield* service.request("/favicon-fails");
       yield* service.request("/repo-fails");
 
+      yield* Deferred.await(faviconFailed);
+      yield* Deferred.await(repositoryFailed);
       const faviconFailure = yield* waitForAvailable(
         service,
         "/favicon-fails",
@@ -94,7 +125,18 @@ it.effect("preserves either enrichment field when the other resolver fails", () 
       );
       assert.isNull(repositoryFailure.repositoryIdentity);
       assert.equal(repositoryFailure.faviconPath, "/repo-fails/favicon.svg");
-    }).pipe(Effect.provide(layer(layerMetadata)));
+    }).pipe(
+      Effect.provide(
+        layer(layerMetadata, {
+          onResolved: (workspaceRoot, field) =>
+            workspaceRoot === "/favicon-fails" && field === "faviconPath"
+              ? Deferred.succeed(faviconFailed, undefined).pipe(Effect.asVoid)
+              : workspaceRoot === "/repo-fails" && field === "repositoryIdentity"
+                ? Deferred.succeed(repositoryFailed, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+        }),
+      ),
+    );
   }),
 );
 
@@ -134,9 +176,13 @@ it.effect("does not warn about favicons for workspace roots that no longer exist
       yield* service.request("/missing");
       yield* service.request("/broken");
 
-      for (let attempt = 0; attempt < 100 && warnings.length === 0; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      const completions = yield* EnrichmentCompletions;
+      // The single favicon worker processes /missing before /broken; completion
+      // of /broken also proves the missing-root path had a chance to warn.
+      let completion: EnrichmentCompletion;
+      do {
+        completion = yield* Queue.take(completions);
+      } while (completion.workspaceRoot !== "/broken" || completion.field !== "faviconPath");
 
       assert.lengthOf(warnings, 1);
       assert.nestedPropertyVal(warnings[0], "[1].workspaceRoot", "/broken");

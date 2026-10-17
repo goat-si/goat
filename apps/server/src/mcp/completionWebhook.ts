@@ -326,6 +326,12 @@ export class CompletionWebhook extends Context.Service<CompletionWebhook, Comple
   "goat/mcp/completionWebhook",
 ) {}
 
+/** Optional completion observation; ordinary delivery has no observer. */
+export const DeliveryCompleted = Context.Reference<(id: string) => Effect.Effect<void>>(
+  "goat/mcp/completionWebhook/DeliveryCompleted",
+  { defaultValue: () => () => Effect.void },
+);
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -334,6 +340,7 @@ export const make = Effect.gen(function* () {
   const secretRequests = yield* SecretRequests.SecretRequests;
   const resolveHost = yield* InlineHostResolver;
   const scope = yield* Effect.scope;
+  const deliveryCompleted = yield* DeliveryCompleted;
   /** Report ids delivered or in flight, oldest first. */
   const seen = new Set<string>();
 
@@ -458,6 +465,7 @@ export const make = Effect.gen(function* () {
           : undefined;
       // Reports arrive from the launch watch's uninterruptible section; shutdown must still end retries.
       yield* deliver(watch, report, at, keptSecret).pipe(
+        Effect.ensuring(deliveryCompleted(report.id)),
         Effect.interruptible,
         Effect.forkIn(scope),
       );

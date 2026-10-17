@@ -3948,8 +3948,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
       yield* runtime.startTurn(turnInput(thread));
       assert.equal((yield* Fiber.join(terminal))?.status, "completed");
-      // The terminal did not wait on the re-read, which is still in flight.
-      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      // Joining the terminal proves it did not wait on the hung model re-read.
     }).pipe(Effect.scoped),
   );
 

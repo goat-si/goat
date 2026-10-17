@@ -1,11 +1,13 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -50,6 +52,20 @@ const layerMetadata = Layer.merge(
   }),
 );
 
+class EnrichmentCompletions extends Context.Service<EnrichmentCompletions, Queue.Queue<void>>()(
+  "goat/project/ProjectService.test/EnrichmentCompletions",
+) {}
+
+const layerEnrichment = Layer.effect(
+  ProjectEnrichmentService.ProjectEnrichmentService,
+  Effect.gen(function* () {
+    const completions = yield* EnrichmentCompletions;
+    return yield* ProjectEnrichmentService.make({
+      onResolved: () => Queue.offer(completions, undefined).pipe(Effect.asVoid),
+    });
+  }),
+).pipe(Layer.provideMerge(Layer.effect(EnrichmentCompletions, Queue.unbounded<void>())));
+
 const layerTestFor = (
   projectMetadataLayer: Layer.Layer<
     | ProjectFaviconResolver.ProjectFaviconResolver
@@ -57,7 +73,7 @@ const layerTestFor = (
   >,
 ) =>
   RuntimeLayer.layerProjectService.pipe(
-    Layer.provideMerge(ProjectEnrichmentService.layer),
+    Layer.provideMerge(layerEnrichment),
     Layer.provideMerge(layerWorkspacePaths),
     Layer.provideMerge(projectMetadataLayer),
     Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -77,7 +93,7 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provideMerge(LegacyV1ThreadImporter.layer.pipe(Layer.provide(RuntimeLayer.layerEventSink))),
-  Layer.provideMerge(ProjectEnrichmentService.layer),
+  Layer.provideMerge(layerEnrichment),
   Layer.provideMerge(layerWorkspacePaths),
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -91,12 +107,13 @@ const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* 
   projectId: ProjectId,
   predicate: (project: Project) => boolean,
 ) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const project = Option.getOrThrow(yield* service.getById(projectId));
-    if (predicate(project)) return project;
-    yield* Effect.yieldNow;
+  const completions = yield* EnrichmentCompletions;
+  let project = Option.getOrThrow(yield* service.getById(projectId));
+  while (!predicate(project)) {
+    yield* Queue.take(completions);
+    project = Option.getOrThrow(yield* service.getById(projectId));
   }
-  return yield* Effect.die(`Project ${projectId} was not enriched in time.`);
+  return project;
 });
 
 it.layer(layerTest)("ProjectService", (it) => {

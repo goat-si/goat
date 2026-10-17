@@ -7,6 +7,8 @@ import {
   ThreadId,
   type CompletionWebhookSettings,
 } from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -84,6 +86,11 @@ const harness = (
 ) =>
   Effect.gen(function* () {
     const received = yield* Queue.unbounded<Received>();
+    const completed = yield* Queue.unbounded<string>();
+    const retryScheduled = yield* Queue.unbounded<number>();
+    const requestCleanedUp = yield* Queue.unbounded<void>();
+    const timeoutScheduled = yield* Queue.unbounded<void>();
+    const clock = yield* Clock.Clock;
     const log: Array<Received> = [];
     const reads = { count: 0 };
     /** The server secret store, by name. */
@@ -112,7 +119,7 @@ const harness = (
         return Effect.succeed(
           HttpClientResponse.fromWeb(request, new Response(null, { status: answer })),
         );
-      }),
+      }).pipe(Effect.ensuring(Queue.offer(requestCleanedUp, undefined))),
     );
     const countingSettings = Layer.effect(
       ServerSettings.ServerSettingsService,
@@ -126,6 +133,22 @@ const harness = (
     ).pipe(Layer.provide(ServerSettings.layerTest({ completionWebhook: settings })));
     const layer = CompletionWebhook.layer.pipe(
       Layer.provideMerge(countingSettings),
+      Layer.provide(
+        Layer.succeed(CompletionWebhook.DeliveryCompleted, (id: string) =>
+          Queue.offer(completed, id).pipe(Effect.asVoid),
+        ),
+      ),
+      // Expose this clock to the notify caller too: delivery fibers inherit its context.
+      Layer.provideMerge(
+        Layer.succeed(Clock.Clock, {
+          ...clock,
+          sleep: (duration) =>
+            (Duration.toMillis(duration) === 10_000
+              ? Queue.offer(timeoutScheduled, undefined).pipe(Effect.asVoid)
+              : Queue.offer(retryScheduled, Duration.toMillis(duration)).pipe(Effect.asVoid)
+            ).pipe(Effect.andThen(clock.sleep(duration))),
+        }),
+      ),
       Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
       Layer.provide(
         Layer.succeed(CompletionWebhook.InlineHostResolver, (host: string) => {
@@ -151,7 +174,18 @@ const harness = (
         }),
       ),
     );
-    return { received, log, reads, secrets, dns, layer };
+    return {
+      received,
+      completed,
+      retryScheduled,
+      requestCleanedUp,
+      timeoutScheduled,
+      log,
+      reads,
+      secrets,
+      dns,
+      layer,
+    };
   });
 
 const withWebhook = <A, E, LE>(
@@ -169,11 +203,6 @@ const withWebhook = <A, E, LE>(
     const settings = yield* ServerSettings.ServerSettingsService;
     return yield* body(webhook, settings);
   }).pipe(Effect.provide(layer));
-
-/** Lets forked deliveries run up to their next sleep or pending request. */
-const settle = Effect.gen(function* () {
-  for (let i = 0; i < 50; i++) yield* Effect.yieldNow;
-});
 
 const verifySignature = (request: Received, secret: string) =>
   verifyWebhookSignature({
@@ -267,9 +296,8 @@ describe("CompletionWebhook", () => {
       yield* withWebhook(h.layer, (webhook) =>
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook }), runReport());
-          yield* settle;
+          yield* Queue.take(h.completed);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
         }),
       );
       expect(h.reads.count).toBe(1);
@@ -310,16 +338,14 @@ describe("CompletionWebhook", () => {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(h.received);
           for (const backoff of [30_000, 60_000, 120_000, 240_000]) {
-            yield* settle;
+            expect(yield* Queue.take(h.retryScheduled)).toBe(backoff);
             yield* TestClock.adjust(backoff - 1);
-            yield* settle;
             expect(Queue.sizeUnsafe(h.received)).toBe(0);
             yield* TestClock.adjust(1);
             yield* Queue.take(h.received);
           }
-          yield* settle;
+          yield* Queue.take(h.completed);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
         }),
       );
       expect(h.log).toHaveLength(5);
@@ -335,11 +361,12 @@ describe("CompletionWebhook", () => {
       yield* withWebhook(failing.layer, (webhook) =>
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
-          for (let i = 0; i < 10; i++) {
-            yield* settle;
-            yield* TestClock.adjust(15 * 60_000);
+          for (let attempt = 1; attempt < CompletionWebhook.MAX_ATTEMPTS; attempt++) {
+            const backoff = yield* Queue.take(failing.retryScheduled);
+            yield* TestClock.adjust(backoff);
           }
-          yield* settle;
+          yield* Queue.take(failing.completed);
+          yield* TestClock.adjust(60 * 60_000);
         }),
       );
       expect(failing.log).toHaveLength(CompletionWebhook.MAX_ATTEMPTS);
@@ -349,9 +376,8 @@ describe("CompletionWebhook", () => {
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(refused.received);
-          yield* settle;
+          yield* Queue.take(refused.completed);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
         }),
       );
       expect(refused.log).toHaveLength(1);
@@ -369,11 +395,13 @@ describe("CompletionWebhook", () => {
             webhook.notify(watchFor({ notifyWebhook: true }), runReport()),
           );
           yield* Queue.take(h.received);
-          yield* settle;
+          yield* Queue.take(h.retryScheduled);
         }),
       );
       yield* TestClock.adjust(60 * 60_000);
-      yield* settle;
+      // Closing the layer joins the interrupted delivery and its finalizers.
+      yield* Queue.take(h.requestCleanedUp);
+      yield* Queue.take(h.completed);
       expect(h.reads.count).toBe(1);
       expect(h.log).toHaveLength(1);
     }),
@@ -386,15 +414,16 @@ describe("CompletionWebhook", () => {
         Effect.gen(function* () {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(h.received);
-          yield* settle;
-          yield* TestClock.adjust(10_000 + 30_000 - 1);
-          yield* settle;
+          yield* Queue.take(h.timeoutScheduled);
+          yield* TestClock.adjust(10_000);
+          yield* Queue.take(h.requestCleanedUp);
+          expect(yield* Queue.take(h.retryScheduled)).toBe(30_000);
+          yield* TestClock.adjust(30_000 - 1);
           expect(Queue.sizeUnsafe(h.received)).toBe(0);
           yield* TestClock.adjust(1);
           yield* Queue.take(h.received);
-          yield* settle;
+          yield* Queue.take(h.completed);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
         }),
       );
       expect(h.log).toHaveLength(2);
@@ -409,7 +438,7 @@ describe("CompletionWebhook", () => {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(h.received);
           yield* settings.updateSettings({ completionWebhook: { secret: "rotated" } });
-          yield* settle;
+          yield* Queue.take(h.retryScheduled);
           yield* TestClock.adjust(30_000);
           const retry = yield* Queue.take(h.received);
           expect(verifySignature(retry, "rotated")).toBe(true);
@@ -427,9 +456,9 @@ describe("CompletionWebhook", () => {
           yield* webhook.notify(watchFor({ notifyWebhook: true }), runReport());
           yield* Queue.take(h.received);
           yield* settings.updateSettings({ completionWebhook: { enabled: false } });
-          yield* settle;
+          yield* Queue.take(h.retryScheduled);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
+          yield* Queue.take(h.completed);
         }),
       );
       expect(h.reads.count).toBe(2);
@@ -448,7 +477,8 @@ describe("CompletionWebhook", () => {
           yield* webhook.notify(watch, runReport());
           yield* webhook.notify(watch, runReport("server:launch-watch:w:run:run-2"));
           yield* Queue.take(h.received);
-          yield* settle;
+          yield* Queue.take(h.completed);
+          yield* Queue.take(h.completed);
         }),
       );
       expect(h.log.map((request) => request.headers.get("x-goat-delivery"))).toEqual([
@@ -465,7 +495,7 @@ describe("CompletionWebhook", () => {
         Effect.gen(function* () {
           const watch = watchFor({ notifyWebhook: true });
           yield* webhook.notify(watch, runReport());
-          yield* settle;
+          yield* Queue.take(h.completed);
           yield* settings.updateSettings({ completionWebhook: { enabled: true } });
           yield* webhook.notify(watch, runReport());
           yield* Queue.take(h.received);
@@ -552,7 +582,8 @@ describe("CompletionWebhook notify targets", () => {
             );
             yield* Queue.take(h.received);
             yield* Queue.take(h.received);
-            yield* settle;
+            yield* Queue.take(h.completed);
+            yield* Queue.take(h.completed);
           }),
         );
         expect(h.log.map((request) => request.url).toSorted()).toEqual([
@@ -581,9 +612,9 @@ describe("CompletionWebhook notify targets", () => {
             watchFor({ notifyWebhook: false, launcherThreadId: null }),
             runReport("outside"),
           );
-          yield* settle;
+          yield* Queue.take(h.completed);
+          yield* Queue.take(h.completed);
           yield* TestClock.adjust(60 * 60_000);
-          yield* settle;
           expect(yield* webhook.wants(watchFor({ notifyWebhook: false }))).toBe(false);
         }),
       );
@@ -600,7 +631,7 @@ describe("CompletionWebhook notify targets", () => {
           const watch = watchFor({ notifyWebhook: false, webhookTarget: named("bot-a") });
           expect(yield* webhook.wants(watch)).toBe(false);
           yield* webhook.notify(watch, runReport());
-          yield* settle;
+          yield* Queue.take(h.completed);
         }),
       );
       expect(h.log).toEqual([]);
@@ -717,7 +748,8 @@ describe("CompletionWebhook notify targets", () => {
             watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
             runReport("after-release"),
           );
-          yield* settle;
+          yield* Queue.take(h.completed);
+          yield* Queue.take(h.completed);
         }),
       );
       expect(h.log).toHaveLength(1);
@@ -742,7 +774,7 @@ describe("CompletionWebhook notify targets", () => {
           yield* Queue.take(h.received);
           // The watch ends, and its secret with it, while the report still retries.
           yield* webhook.release(route.webhookTarget);
-          yield* settle;
+          yield* Queue.take(h.retryScheduled);
           yield* TestClock.adjust(30_000);
           const retry = yield* Queue.take(h.received);
           expect(verifySignature(retry, "inline-secret")).toBe(true);
@@ -905,9 +937,8 @@ describe("CompletionWebhook notify targets", () => {
               watchFor({ notifyWebhook: false, webhookTarget: route.webhookTarget }),
               runReport(),
             );
-            yield* settle;
+            yield* Queue.take(h.completed);
             yield* TestClock.adjust(60_000);
-            yield* settle;
           }),
         );
         expect(h.log).toHaveLength(0);

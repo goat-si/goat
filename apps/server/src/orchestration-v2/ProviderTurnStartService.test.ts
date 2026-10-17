@@ -42,7 +42,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import * as WorkspaceLease from "../workspace/workspaceLease.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -152,15 +152,27 @@ it.each([
       // checkout until that removal is done with it.
       const held = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const removal = yield* withWorkspaceLease(
+      const removal = yield* WorkspaceLease.withWorkspaceLease(
         "/tmp/missing-provider-turn-start-worktree",
         Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
       ).pipe(Effect.forkChild);
       yield* Deferred.await(held);
+      const startAtLock = yield* Deferred.make<void>();
+      const withWorkspaceLease = WorkspaceLease.withWorkspaceLease;
+      const gatedLease: typeof withWorkspaceLease = (cwd, effect) =>
+        Deferred.succeed(startAtLock, undefined).pipe(
+          Effect.andThen(withWorkspaceLease(cwd, effect)),
+        );
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(WorkspaceLease, "withWorkspaceLease").mockImplementation(gatedLease),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
       const start = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
         .start({ threadId, runId })
         .pipe(Effect.flip, Effect.forkChild);
-      for (let turn = 0; turn < 50; turn++) yield* Effect.yieldNow;
+      yield* Deferred.await(startAtLock);
       expect(createWorktree).not.toHaveBeenCalled();
       expect(projectionReadCount).toBe(1);
       yield* Deferred.succeed(release, undefined);
@@ -181,7 +193,7 @@ it.each([
       }
       expect(writeIfRunCurrent).not.toHaveBeenCalled();
       expect(startRootRun).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(layer), Effect.runPromise);
+    }).pipe(Effect.scoped, Effect.provide(layer), Effect.runPromise);
   },
 );
 

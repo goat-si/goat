@@ -1,6 +1,7 @@
 import type { DesktopHostTelemetrySnapshot } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -157,6 +158,7 @@ describe("HostPowerMonitor", () => {
             updatedAt: DateTime.makeUnsafe("2026-06-17T12:00:01.000Z"),
           },
         };
+        const updateApplied = yield* Deferred.make<void>();
         const desktopChanges = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(1);
         const layerReceiver = DesktopTelemetryReceiver.layerTest({
           latest: Effect.succeedSome(initial),
@@ -166,7 +168,11 @@ describe("HostPowerMonitor", () => {
             yield* PubSub.publish(desktopChanges, updated);
             return {
               latest: Option.some(initial),
-              changes: Stream.fromSubscription(subscription),
+              changes: Stream.fromSubscription(subscription).pipe(
+                Stream.take(1),
+                // The next pull runs only after the monitor has reported this frame.
+                Stream.concat(Stream.fromEffectDrain(Deferred.succeed(updateApplied, undefined))),
+              ),
             };
           }),
         });
@@ -174,13 +180,7 @@ describe("HostPowerMonitor", () => {
 
         yield* Effect.gen(function* () {
           const monitor = yield* HostPowerMonitor.HostPowerMonitor;
-          for (
-            let attempt = 0;
-            attempt < 100 && (yield* monitor.snapshot).onBattery !== "true";
-            attempt += 1
-          ) {
-            yield* Effect.yieldNow;
-          }
+          yield* Deferred.await(updateApplied);
           expect((yield* monitor.snapshot).onBattery).toBe("true");
         }).pipe(Effect.provide(layer));
       }),
