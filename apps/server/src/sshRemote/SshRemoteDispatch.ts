@@ -21,6 +21,7 @@ import {
   type RemoteReportBindingInput,
   type RuntimeMode,
   type SshLaunchWorkspace,
+  type SshHostResult,
 } from "@goat/contracts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
@@ -220,6 +221,11 @@ export interface SshHostToolCall {
 export class SshRemoteDispatch extends Context.Service<
   SshRemoteDispatch,
   {
+    readonly runtimeStatus: (host: string) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
+    readonly runtimeUpdate: (
+      host: string,
+      options: { readonly confirmReplacement: boolean },
+    ) => Effect.Effect<SshHostResult, SshRemoteDispatchError>;
     readonly runRemoteScript: (input: {
       readonly target: DesktopSshEnvironmentTarget;
       readonly script: string;
@@ -602,6 +608,39 @@ const make = Effect.gen(function* () {
         ? error
         : failure("ssh_failed", `SSH to ${alias} failed: ${describe(error)}`),
     );
+
+  const runtimeStatus = Effect.fn("SshRemoteDispatch.runtimeStatus")(function* (host: string) {
+    const target = yield* resolveHost(host);
+    return yield* withRuntime(manager.status(target)).pipe(sshFailed(target.alias));
+  });
+
+  const runtimeUpdate = Effect.fn("SshRemoteDispatch.runtimeUpdate")(function* (
+    host: string,
+    options: { readonly confirmReplacement: boolean },
+  ) {
+    const target = yield* resolveHost(host);
+    // The manager records acquisition failures as status, including the archive and human fix.
+    const ensured = yield* withRuntime(
+      manager.ensureEnvironment(target, {
+        keyOnly: true,
+        issuePairingToken: false,
+        refreshRuntime: true,
+        confirmReplacement: options.confirmReplacement,
+      }),
+    ).pipe(Effect.result);
+    const result = yield* withRuntime(manager.status(target)).pipe(sshFailed(target.alias));
+    if (
+      ensured._tag === "Failure" &&
+      result.kind === "ok" &&
+      (result.status.state === "ready" || result.status.state === "stopped")
+    ) {
+      return yield* failure(
+        "ssh_failed",
+        `SSH to ${target.alias} failed: ${describe(ensured.failure)}`,
+      );
+    }
+    return result;
+  });
 
   const browseTarget = Effect.fn("SshRemoteDispatch.browseTarget")(function* (
     target: DesktopSshEnvironmentTarget,
@@ -1546,6 +1585,8 @@ const make = Effect.gen(function* () {
   const connectedHosts = Effect.sync(() => [...connected].toSorted());
 
   return SshRemoteDispatch.of({
+    runtimeStatus,
+    runtimeUpdate,
     listHosts,
     browse,
     validateLaunchAttachments,

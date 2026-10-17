@@ -22,6 +22,7 @@ describe("SSH dispatch pending runtime", () => {
       Effect.gen(function* () {
         let sessions = 0;
         const manager = SshTunnel.SshEnvironmentManager.of({
+          status: () => Effect.die("Unexpected runtime status"),
           ensureEnvironment: () =>
             Effect.succeed({
               type: "ssh-runtime-pending",
@@ -134,6 +135,7 @@ describe("SSH dispatch memory session refusal", () => {
         stdout: "GOAT_SESSION_ERROR=memory_scopes_unsupported runtime=0.1.0-dev.637a98351\n",
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           Effect.succeed({
             target,

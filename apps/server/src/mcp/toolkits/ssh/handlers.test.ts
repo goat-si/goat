@@ -17,6 +17,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   SshWorkspaceError,
+  SshHostResult,
   ThreadId,
   type ChatFileAttachment,
   type OrchestrationV2ThreadShell,
@@ -24,6 +25,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
@@ -31,6 +33,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import { newLaunchWatch } from "../../launchWatch.ts";
@@ -38,6 +41,8 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as SshHandlers from "./handlers.ts";
 import { SshToolkit } from "./tools.ts";
+
+const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
@@ -125,6 +130,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
         getThreadShell: () => Effect.succeed(caller),
       }),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(CloudMachineService.CloudMachineService)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
         validateLaunchAttachments: (requested) => Effect.succeed(requested),
@@ -510,6 +516,7 @@ const fixture = (sourceFault?: "missing" | "size") =>
             getThreadShell: () => Ref.get(shell),
           }),
           Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+          Layer.mock(SshHostSetup.SshHostSetup)({}),
           Layer.mock(CloudMachineService.CloudMachineService)({}),
           Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
             validateLaunchAttachments: localDispatch.validateLaunchAttachments,
@@ -782,6 +789,7 @@ it.effect.each([undefined, 2])("passes the SSH report limit to the coordinator (
       Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(CloudMachineService.CloudMachineService)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
       Layer.mock(ThreadManagementService.ThreadManagementService)({}),
@@ -868,6 +876,7 @@ const handoff = (
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
     );
     const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
+      Layer.provide(Layer.mock(SshHostSetup.SshHostSetup)({})),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(dependencies),
     );
@@ -1078,6 +1087,7 @@ const createCloudMachine = (grant: {
       }),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
@@ -1118,4 +1128,183 @@ it.effect("creates a cloud machine only for a caller whose settings grant is rec
       expect(denied.created).toEqual([]);
     }
   }),
+);
+
+const runtimeStatus: SshHostResult = {
+  kind: "ok",
+  status: {
+    host: "box",
+    state: "stopped",
+    runtimeVersion: "0.4.2",
+    requestedVersion: "0.4.3",
+  },
+};
+const runtimeScope: McpInvocationContext.McpInvocationScope = {
+  ...clientScope("full-access"),
+  grantedScopes: ["environment:maintain"],
+  reauthorize: () => Effect.void,
+};
+
+/** Registers the real toolkit and setup service, with dispatch as the remote boundary. */
+const runtimeFixture = (result = runtimeStatus) => {
+  const updates: { host: string; confirmReplacement: boolean }[] = [];
+  let statusReads = 0;
+  const dependencies = Layer.mergeAll(
+    Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
+    }),
+    Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+      runtimeStatus: () =>
+        Effect.sync(() => {
+          statusReads++;
+          return result;
+        }),
+      runtimeUpdate: (host, options) =>
+        Effect.sync(() => {
+          updates.push({ host, ...options });
+          return result;
+        }),
+    }),
+    Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+    Layer.mock(CloudMachineService.CloudMachineService)({}),
+    Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+    Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+    Layer.mock(LaunchWatchService.LaunchWatchService)({}),
+  );
+  const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(SshHostSetup.layer),
+    Layer.provide(dependencies),
+  );
+  const call = (
+    name: "goat_ssh_host_status" | "goat_ssh_runtime_update",
+    arguments_: Record<string, unknown>,
+    invocation = runtimeScope,
+  ) =>
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      return yield* server.callTool({ name, arguments: arguments_ });
+    }).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(registered),
+    );
+  return { registered, call, updates, statusReads: () => statusReads };
+};
+
+it.effect("discovers both runtime tools", () =>
+  Effect.gen(function* () {
+    const f = runtimeFixture();
+    const tools = yield* McpServer.McpServer.pipe(
+      Effect.map((server) => server.tools.map(({ tool }) => tool)),
+      Effect.provide(f.registered),
+    );
+    expect(tools.find((tool) => tool.name === "goat_ssh_host_status")).toMatchObject({
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    });
+    expect(tools.find((tool) => tool.name === "goat_ssh_runtime_update")).toMatchObject({
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    });
+    const response = yield* f.call(
+      "goat_ssh_host_status",
+      { host: "box" },
+      clientScope("read-only"),
+    );
+    expect(response.isError).toBe(false);
+    expect(yield* decodeSshHostResult(response.structuredContent)).toEqual(runtimeStatus);
+    expect(f.statusReads()).toBe(1);
+    expect(f.updates).toEqual([]);
+  }),
+);
+
+it.effect("returns the same archive failure as desktop IPC", () =>
+  Effect.gen(function* () {
+    const failure = {
+      kind: "ok",
+      status: {
+        host: "box",
+        state: "failed",
+        runtimeVersion: "0.4.2",
+        requestedVersion: "0.4.3",
+        failure: {
+          reason: "archive_unavailable",
+          archive: {
+            requestedVersion: "0.4.3",
+            platformKey: "linux-x64",
+            sourcesTried: ["https", "gh"],
+          },
+          fix: {
+            actor: "human",
+            instruction:
+              "This build has no published server archive. Install a published GOAT release, or set a release mirror.",
+          },
+        },
+      },
+    } satisfies SshHostResult;
+    const f = runtimeFixture(failure);
+    const updated = yield* f.call("goat_ssh_runtime_update", { host: "box" });
+    const observed = yield* f.call("goat_ssh_host_status", { host: "box" });
+    expect(updated.isError).toBe(false);
+    expect(yield* decodeSshHostResult(updated.structuredContent)).toEqual(failure);
+    expect(yield* decodeSshHostResult(observed.structuredContent)).toEqual(failure);
+    expect(f.updates).toEqual([{ host: "box", confirmReplacement: false }]);
+  }),
+);
+
+it.effect.each(["read-only", "missing-maintain", "revoked"] as const)(
+  "read-only callers cannot update (grant=%s)",
+  (grant) =>
+    Effect.gen(function* () {
+      const f = runtimeFixture();
+      const invocation: McpInvocationContext.McpInvocationScope = {
+        ...runtimeScope,
+        ...(grant === "read-only" ? clientScope("read-only") : {}),
+        ...(grant === "missing-maintain" ? { grantedScopes: [] } : {}),
+        ...(grant === "revoked"
+          ? {
+              reauthorize: () =>
+                Effect.fail(
+                  new EnvironmentAuthorizationError({
+                    message: "The session was revoked.",
+                    requiredScope: "environment:maintain",
+                  }),
+                ),
+            }
+          : {}),
+      };
+      const response = yield* f.call("goat_ssh_runtime_update", { host: "box" }, invocation);
+      expect(declaredFailure(response)).toMatchObject({ code: "capability_denied" });
+      expect(f.updates).toEqual([]);
+      expect(f.statusReads()).toBe(0);
+    }),
+);
+
+it.effect.each([false, true])(
+  "now returns the desktop instruction and when_idle alternative (thread=%s)",
+  (insideThread) =>
+    Effect.gen(function* () {
+      const f = runtimeFixture();
+      const response = yield* f.call(
+        "goat_ssh_runtime_update",
+        { host: "box", mode: "now" },
+        {
+          ...runtimeScope,
+          ...(insideThread ? { thread: scope.thread, client: undefined } : {}),
+        },
+      );
+      expect(response.isError).toBe(false);
+      const result = yield* decodeSshHostResult(response.structuredContent);
+      expect(result).toMatchObject({
+        kind: "error",
+        code: "unsupported",
+        fix: {
+          actor: "human",
+          instruction:
+            "Choose Update now in Settings → Connections on the desktop app that owns this connection.",
+        },
+      });
+      expect(result.kind === "error" && result.message).toContain("call again with mode when_idle");
+      expect(f.updates).toEqual([]);
+      expect(f.statusReads()).toBe(0);
+    }),
 );

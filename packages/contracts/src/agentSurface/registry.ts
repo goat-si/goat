@@ -276,7 +276,7 @@ export const agentSurfaceRegistry = {
     toolkit: "connection",
     summary: "Remove a saved connection",
     description:
-      "Remove a saved connection like Settings → Remove: forget pairing, credentials and cached threads on this device, and stop a server GOAT launched over SSH. The local environment and T3 Connect environments are refused.",
+      "Remove a saved connection like Settings → Remove: forget pairing, credentials and cached threads on this device. GOAT's server keeps running on the host. The local environment and T3 Connect environments are refused.",
     effect: "destructive",
     hostRoutable: false,
     requires: "either",
@@ -1751,6 +1751,44 @@ export const agentSurfaceRegistry = {
     dryRun: "unsupported",
     humanSteps: [],
     annotations: {
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "ssh.host_status": entry({
+    resource: "ssh",
+    verb: "host_status",
+    name: "goat_ssh_host_status",
+    toolkit: "ssh",
+    summary: "Read SSH runtime status",
+    description:
+      "Read the runtime state on an existing SSH host using this machine's SSH configuration. This does not install or start GOAT. Returns the same state names as Settings → Connections.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Read SSH runtime status",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "ssh.runtime_update": entry({
+    resource: "ssh",
+    verb: "runtime_update",
+    name: "goat_ssh_runtime_update",
+    toolkit: "ssh",
+    summary: "Update an SSH runtime",
+    description:
+      "Move this host's GOAT runtime to this SSH owner's version. Defaults to when_idle. MCP mode now returns error/unsupported: Choose Update now in Settings → Connections on the desktop app that owns this connection. For an agent update, call again with mode when_idle. Never replaces a newer or unowned runtime. Call goat_ssh_host_status to follow it. No desktop app is needed on the host.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: ["approval"],
+    annotations: {
+      title: "Update an SSH runtime",
       idempotentHint: false,
       openWorldHint: true,
     },

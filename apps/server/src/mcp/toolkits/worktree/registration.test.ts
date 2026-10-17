@@ -1,4 +1,5 @@
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";
@@ -57,6 +58,7 @@ import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
 const layerStubServices = Layer.mergeAll(
   Layer.mock(CloudSource.CloudTaskSourceService)({}),
   Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+  Layer.mock(SshHostSetup.SshHostSetup)({}),
   Layer.mock(CloudMachineService.CloudMachineService)({}),
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   // Coordinator recovery runs before serving MCP requests.

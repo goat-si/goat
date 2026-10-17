@@ -125,6 +125,7 @@ describe("SSH dispatch tool compatibility", () => {
         }
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           Effect.succeed({
             target,
@@ -525,6 +526,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
         return Response.json({ jsonrpc: "2.0", id: request.id, result: answer.result });
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           options.ensureFails === true
             ? Effect.fail(
@@ -1156,6 +1158,7 @@ const withLaunchRemote = <A, E>(
       sessions: [] as { target: DesktopSshEnvironmentTarget; ceiling: RuntimeMode }[],
     };
     const manager = SshTunnel.SshEnvironmentManager.of({
+      status: () => Effect.die("Unexpected runtime status"),
       ensureEnvironment: (target) =>
         Effect.sync(() => {
           record.targets.push(target);
@@ -1775,6 +1778,7 @@ describe("SSH dispatch launch lineage", () => {
         }
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           Effect.succeed({
             target,
@@ -2480,6 +2484,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
         });
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           Effect.succeed({
             target,
@@ -2880,6 +2885,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
         const host = "build-box";
         const target = { alias: host, hostname: host, username: null, port: null };
         const manager = SshTunnel.SshEnvironmentManager.of({
+          status: () => Effect.die("Unexpected runtime status"),
           ensureEnvironment: () =>
             Effect.sync(() => {
               record.bootstrap += 1;
@@ -3675,6 +3681,7 @@ describe("SSH launcher transport", () => {
         throw new Error(`Unexpected method ${request.method}`);
       });
       const manager = SshTunnel.SshEnvironmentManager.of({
+        status: () => Effect.die("Unexpected runtime status"),
         ensureEnvironment: () =>
           Effect.succeed({
             target,

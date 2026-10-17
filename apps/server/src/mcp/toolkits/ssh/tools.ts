@@ -17,6 +17,9 @@ import {
   TrimmedNonEmptyString,
   SshLaunchWorkspace,
   SshWorkspaceCode,
+  SshHostStatusInput,
+  SshRuntimeUpdateInput,
+  SshHostResult,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -25,6 +28,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -39,6 +43,7 @@ const shared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
+    SshHostSetup.SshHostSetup,
     LaunchWatchService.LaunchWatchService,
     ServerEnvironment.ServerEnvironment,
     RemoteDispatchCoordinator.RemoteDispatchCoordinator,
@@ -78,6 +83,20 @@ const SshHostListTool = Tool.make(agentSurfaceRegistry["ssh.host_list"].name, {
   parameters: Schema.Struct({ probe: Schema.optional(Schema.Boolean) }),
   success: Schema.Struct({ hosts: Schema.Array(SshHost) }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_list"]));
+
+const SshHostStatusTool = Tool.make(agentSurfaceRegistry["ssh.host_status"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["ssh.host_status"].description,
+  parameters: SshHostStatusInput,
+  success: SshHostResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_status"]));
+
+const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["ssh.runtime_update"].description,
+  parameters: SshRuntimeUpdateInput,
+  success: SshHostResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.runtime_update"]));
 
 const SshBrowseTool = Tool.make(agentSurfaceRegistry["ssh.browse"].name, {
   ...shared,
@@ -257,6 +276,8 @@ const CloudMachineResumeTool = Tool.make(agentSurfaceRegistry["cloud_machine.res
 
 export const SshToolkit = Toolkit.make(
   SshHostListTool,
+  SshHostStatusTool,
+  SshRuntimeUpdateTool,
   SshBrowseTool,
   SshThreadLaunchTool,
   SshThreadHandoffTool,

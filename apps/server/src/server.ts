@@ -43,6 +43,7 @@ import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeControl from "./runtimeControl.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import * as BoatClient from "./cloudMachines/BoatClient.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
@@ -1259,6 +1260,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(LaunchWatchService.layer),
   Layer.provide(layerSshWorkspace),
+  Layer.provide(SshHostSetup.layer),
   Layer.provide(SshRemoteDispatch.layer),
   // Guides read through the same pull request service as every other surface.
   Layer.provide(

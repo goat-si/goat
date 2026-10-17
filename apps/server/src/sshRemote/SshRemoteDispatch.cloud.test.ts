@@ -37,6 +37,7 @@ const withDispatch = <A, E>(
       stderr: "",
     });
     const manager = SshTunnel.SshEnvironmentManager.of({
+      status: () => Effect.die("Unexpected runtime status"),
       ensureEnvironment: (target) =>
         Effect.sync(() => void events.push(`ensureEnvironment:${target.alias}`)).pipe(
           Effect.andThen(Effect.fail(sshFailure)),

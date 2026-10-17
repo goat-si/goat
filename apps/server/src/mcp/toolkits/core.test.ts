@@ -55,6 +55,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as ThreadResultService from "../../threadResults/ThreadResultService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../LaunchWatchService.ts";
 import { newLaunchWatch } from "../launchWatch.ts";
@@ -1454,6 +1455,7 @@ it.effect.each([false, true])(
             }),
         }),
         Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+        Layer.mock(SshHostSetup.SshHostSetup)({}),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
           validateLaunchAttachments: (attachments) => Effect.succeed(attachments),
           launchThread: (input, check) =>

@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
+import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
@@ -99,6 +100,27 @@ const toCloudFailure = (error: CloudMachineError) =>
   });
 
 export const layer = McpToolAccess.toLayer(SshToolkit, {
+  goat_ssh_host_status: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      yield* requireOrchestration;
+      const setup = yield* SshHostSetup.SshHostSetup;
+      return yield* setup.status(input);
+    }),
+  ),
+  goat_ssh_runtime_update: McpToolAccess.writesEnvironment((input, check) =>
+    Effect.gen(function* () {
+      const caller = yield* check;
+      const setup = yield* SshHostSetup.SshHostSetup;
+      return yield* setup
+        .update(input, { kind: "mcp", scope: caller.scope })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({ code: "capability_denied", message: error.message }),
+          ),
+        );
+    }),
+  ),
   // Reading ~/.ssh/config changes nothing; probing logs in but runs only `true`.
   goat_ssh_host_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
