@@ -33,14 +33,14 @@ Wire schemas and the libraries web, desktop, and mobile share.
 
 The process that commits orchestration, runs providers, and reaches other machines.
 
-| Doc                                                              | Scope                                                                                                                    |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control.    |
-| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                           |
-| [`channels.md`](channels.md)                                     | The channel ledger, Slack and MCP ingress, and the GOAT Bot thread clients render.                                       |
-| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                              |
-| [`ssh.md`](ssh.md)                                               | OpenSSH discovery, shared runtime state and owner-controlled updates, agent browse and launch, and Boat managed aliases. |
-| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                                |
+| Doc                                                              | Scope                                                                                                                 |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control. |
+| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                        |
+| [`channels.md`](channels.md)                                     | The channel ledger, Slack and MCP ingress, and the GOAT Bot thread clients render.                                    |
+| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                           |
+| [`ssh.md`](ssh.md)                                               | SSH host trust, runtime ownership and updates, provider diagnosis routing, agent dispatch, and Boat managed aliases.  |
+| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                             |
 
 ### Tier 4 — Clients
 
@@ -115,7 +115,8 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/cloudMachines/sshConfig.ts`                            | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/config.ts`                                             | [`overview.md`](overview.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                                                   |
 | `apps/server/src/device/SshDeviceHost.ts`                               | [`ssh.md`](ssh.md)                                                                                                                                     |
-| `apps/server/src/handoffs/Handoffs.ts`                                  | [`server.md`](server.md)                                                                                                                               |
+| `apps/server/src/handoffs/Handoffs.ts`                                  | [`server.md`](server.md)<br>[`ssh.md`](ssh.md)                                                                                                         |
+| `apps/server/src/handoffs/HandoffExpiry.ts`                             | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/mcp/`                                                  | [`mcp-toolkits.md`](mcp-toolkits.md)                                                                                                                   |
 | `apps/server/src/mcp/HostThreadsMcpService.ts`                          | [`mcp-toolkits.md`](mcp-toolkits.md)<br>[`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)                                               |
 | `apps/server/src/mcp/launchWatch.ts`                                    | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)                                                                                       |
@@ -138,7 +139,7 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/orchestration-v2/EventSink.ts`                         | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/orchestration-v2/Orchestrator.ts`                      | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/orchestration-v2/ProviderAdapterRegistry.ts`           | [`server.md`](server.md)                                                                                                                               |
-| `apps/server/src/orchestration-v2/runtimeLayer.ts`                      | [`server.md`](server.md)                                                                                                                               |
+| `apps/server/src/orchestration-v2/runtimeLayer.ts`                      | [`server.md`](server.md)<br>[`ssh.md`](ssh.md)                                                                                                         |
 | `apps/server/src/orchestration-v2/ThreadCommandExecutor.ts`             | [`shared.md`](shared.md)<br>[`server.md`](server.md)                                                                                                   |
 | `apps/server/src/orchestration-v2/ThreadLaunchService.ts`               | [`mcp-toolkits.md`](mcp-toolkits.md)                                                                                                                   |
 | `apps/server/src/orchestration-v2/ThreadManagementService.ts`           | [`server.md`](server.md)<br>[`mcp-toolkits.md`](mcp-toolkits.md)                                                                                       |
@@ -151,6 +152,7 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/persistence/Migrations/067_RemoteDispatchQuestions.ts` | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
 | `apps/server/src/persistence/Migrations/069_RemoteReportRelay.ts`       | [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                               |
 | `apps/server/src/provider/builtInDrivers.ts`                            | [`server.md`](server.md)                                                                                                                               |
+| `apps/server/src/provider/ProviderDiagnosisRouting.ts`                  | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/provider/Drivers/AntigravityDriver.ts`                 | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/provider/Drivers/ClaudeDriver.ts`                      | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/provider/Drivers/CodexDriver.ts`                       | [`server.md`](server.md)                                                                                                                               |
@@ -245,5 +247,6 @@ the repository is organised by package. Changing an area requires review of ever
 | `packages/ssh/src/command.ts`                                           | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `packages/ssh/src/config.ts`                                            | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `packages/ssh/src/errors.ts`                                            | [`ssh.md`](ssh.md)                                                                                                                                     |
+| `packages/ssh/src/hostKey.ts`                                           | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `packages/ssh/src/tunnel.ts`                                            | [`ssh.md`](ssh.md)<br>[`settings-and-storage.md`](settings-and-storage.md)                                                                             |
 | `README.md`                                                             | [`overview.md`](overview.md)                                                                                                                           |

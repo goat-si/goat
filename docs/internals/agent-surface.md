@@ -231,7 +231,7 @@ become aliases. Grouped by resource:
 | `environment`        | `goat_environment_read`, `goat_environment_preferences_update`                                                                                                                                                                                      | unchanged                                                                                      | `toolkits/environment/tools.ts:46-60`                                    |
 | `host`               | `goat_host_status`                                                                                                                                                                                                                                  | unchanged                                                                                      | `toolkits/hostStatus/tools.ts:8`                                         |
 | `connection`         | `goat_connection_list`, `_add_ssh`, `_remove`                                                                                                                                                                                                       | unchanged                                                                                      | `toolkits/connection/tools.ts:24-51`                                     |
-| `ssh`                | `goat_ssh_host_list`, `goat_ssh_browse`, `goat_ssh_thread_launch`, `goat_ssh_reports`                                                                                                                                                               | unchanged                                                                                      | `toolkits/ssh/tools.ts:64-176`                                           |
+| `ssh`                | [SSH toolkit](../../apps/server/src/mcp/toolkits/ssh/tools.ts) and [callable registry](../../packages/contracts/src/agentSurface/registry.ts)                                                                                                       | SSH setup and runtime approvals resume on the server; status observes progress                 | `toolkits/ssh/tools.ts`                                                  |
 | `origin`             | `goat_origin_report`, `goat_origin_reports_wait`                                                                                                                                                                                                    | unchanged                                                                                      | `toolkits/remoteReport/tools.ts:22-29`                                   |
 | `attachment`         | `goat_attachment_prepare_upload`, `goat_attachment_discard`                                                                                                                                                                                         | unchanged                                                                                      | `toolkits/attachment/tools.ts:33-40`                                     |
 | `preview`            | `goat_preview_list`, `goat_preview_close`                                                                                                                                                                                                           | unchanged                                                                                      | `toolkits/previewControls/tools.ts:25-40`                                |
@@ -430,8 +430,24 @@ only.
 
 ### Resume
 
-The original call returns `{status: "needs_human", handoff}`. The server owns the
-continuation: when the handoff completes, it runs `target` itself.
+For SSH setup and runtime updates, the call returns the shared SSH
+`kind: "needs_human"` result with a handoff summary. The server's
+[SshHostSetup](../../apps/server/src/sshRemote/SshHostSetup.ts) continuation worker
+resumes approved `ssh.host_add`, `ssh.host_prepare`, and `ssh.runtime_update`
+targets after rechecking the approving session's target permissions. Fingerprints
+remain private human data. Key-registration instructions run in the person's
+terminal on the environment's owning machine; completion triggers another key-auth
+check, not an assumption that registration succeeded.
+
+Preparation and idle updates return their first actual phase or terminal outcome
+while a server job continues. Agents observe progress with SSH host status; thread
+cards use authenticated handoff progress lookup, including after completion and
+remount. Runtime `ready` with setup diagnosis still pending is intermediate: wait
+for the current operation's setup completion or recovery result. An earlier provider
+summary cannot complete a new setup operation.
+
+The general continuation, wait, and wake behavior below remains proposed. It is
+not provided by the SSH-specific worker:
 
 - `goat_handoff_wait { handoffId, timeoutMs ≤ 300000 }` returns the final
   envelope of `target` once the handoff completes, or the current state on
@@ -452,8 +468,15 @@ continuation: when the handoff completes, it runs `target` itself.
 | `secret`               | 1 hour to answer; the saved ref keeps today's 24 hours |
 | `approval`             | Until the requesting turn ends                         |
 
-An expired handoff returns `error.code: "expired"` from `wait`. The agent may
-create a new one.
+SSH targets have a 24-hour lifetime and survive the requesting run ending.
+Immediate runtime-update approval must also be executed within ten minutes of
+approval, with the same host generation and target build; otherwise it must be
+requested again. See [Handoffs](../../apps/server/src/handoffs/Handoffs.ts) for the
+SSH expiry and acknowledgement rules. The table above describes the proposed
+general lifetimes.
+
+An expired handoff returns `error.code: "expired"` from the proposed `wait` path.
+The agent may create a new one.
 
 ### Surfaces
 
@@ -646,9 +669,16 @@ GOAT never reads, stores, or relays it (`credentialOwner: "provider"`,
 ACP Registry Devin instance, `setup` proposes creating one (approval), and
 `login_start` uses the ACP agent's own auth method.
 
-On an SSH host the same calls take `--host`. Browser and device-code handoffs
-work from any client. Terminal handoffs need the person at that host, either in
-their own shell or in a GOAT terminal with `terminal:operate`.
+The callable provider diagnosis path accepts an SSH host and uses
+[ProviderDiagnosisRouting](../../apps/server/src/provider/ProviderDiagnosisRouting.ts)
+to inspect that host's own providers. It requires a ready runtime; a stopped or
+unprepared host returns instructions to prepare it and check status, without
+waiting for installation or silently diagnosing the local environment.
+`provider.setup` and `provider.login_start` above remain proposals, not callable
+SSH setup capabilities. Provider installation and sign-in stay on the remote host.
+See the [registry](../../packages/contracts/src/agentSurface/registry.ts) for current
+callable paths and human steps, and the [SSH ownership map](../../structure/ssh.md#host-trust-and-forgetting)
+for trust, key registration, and forget boundaries.
 
 ## Rollout
 

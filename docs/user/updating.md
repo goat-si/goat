@@ -69,7 +69,15 @@ For an SSH connection, **Update runtime** in **Settings → Connections** matche
 host to the version of the machine that owns that connection. It does not install a
 newer release than that machine runs. Check the connection there for its runtime
 version, progress, and any update waiting for running work. Updating this app also
-moves its SSH hosts' runtimes after it restarts.
+moves its SSH hosts' runtimes after it restarts. The matching runtime archive must
+be available from a published GOAT release or a configured release mirror.
+
+An agent can request an update when the runtime is idle, then check its status
+while work continues. To update immediately, approve **Update now** in the
+requesting thread or in the owning desktop app. Running work gets up to a minute
+to finish before the restart; cancelling leaves the runtime running. Removing a
+saved connection also leaves it running. To remove GOAT's managed host entry and
+stop an idle runtime GOAT owns, use **Forget host**; remote projects and files stay.
 
 ## Desktop app updates
 

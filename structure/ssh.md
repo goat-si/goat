@@ -10,7 +10,7 @@ once it is up: `$HOME/.goat`, not the local default.
 ## Package
 
 `packages/ssh` (`@goat/ssh`) has no root export. `packages/ssh/package.json` exports `./auth`,
-`./command`, `./config`, `./errors`, and `./tunnel`.
+`./command`, `./config`, `./errors`, `./hostKey`, and `./tunnel`.
 
 `discoverSshHosts` in `packages/ssh/src/config.ts` reads the user's OpenSSH directory: `Host` and
 `Include` aliases from `config`, plus hostnames from `known_hosts`. A discovered host is
@@ -135,6 +135,15 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
   answers `idle` (see [Replacement](#replacement)). While it is busy, the client attaches to it,
   logs `ssh.runtime.refresh.deferred` with the reason, and retries every 10 minutes.
 
+Runtime supply targets the owning process's exact release and platform, not the
+latest published build. The acquisition order in
+[`packages/ssh/src/tunnel.ts`](../packages/ssh/src/tunnel.ts) is bundle, local cache,
+then an explicit mirror before the public release download and GitHub CLI fallback.
+Public archives belong to `goat-si/goat-releases` and are checksum-checked. Enabling
+release publication does not prove an archive exists: fresh-host verification needs
+the matching published asset or an explicitly supplied mirror/cache archive.
+A manually published nightly is evidence only for that exact version and platform.
+
 Manual updates target the owning manager's version too. An idle update waits for running work;
 a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
 runtime whose version cannot be ordered, or an externally started server blocks replacement
@@ -181,12 +190,25 @@ one returns.
 
 SSH runtime state and update results share the contract in
 `packages/contracts/src/sshHost.ts`. `apps/server/src/sshRemote/SshHostSetup.ts` owns
-MCP status and idle updates, reusing the server manager from
-`apps/server/src/sshRemote/SshRemoteDispatch.ts` for dispatch aliases.
+host probe, trust, preparation, forget, status, and runtime updates for dispatch
+aliases. It uses thin bridges in `apps/server/src/sshRemote/SshRemoteDispatch.ts`
+to reach the existing server manager; it does not create another manager.
 `apps/desktop/src/ssh/DesktopSshEnvironment.ts` owns saved desktop targets and runs
 status, idle updates, and confirmed immediate updates through its existing manager
-and typed IPC (`packages/contracts/src/ipc.ts`). MCP immediate updates direct the
-caller to the owning desktop's Settings; MCP does not execute them.
+and typed IPC (`packages/contracts/src/ipc.ts`). Desktop catalog storage remains
+client-owned: local native-primary setup reviews trust through the server but
+installs through the desktop manager. Remote or WSL clients cannot use that local
+ownership path.
+
+SSH setup and immediate-update approvals resume through SshHostSetup's shared
+continuation worker. `apps/server/src/handoffs/Handoffs.ts` retains the private
+approved session and execution payload until the result is published and acknowledged;
+`apps/server/src/handoffs/HandoffExpiry.ts` and
+`apps/server/src/orchestration-v2/runtimeLayer.ts` wire expiry, startup recovery,
+and response wake to that same worker. Execution rechecks the approving session's
+target permissions. This is SSH-specific continuation, not general handoff wake.
+Idle updates also run as server jobs: admission returns on the first actual phase
+or terminal outcome rather than waiting through runtime installation.
 
 The managers have separate status caches; the remote replacement lock and runtime
 state coordinate updates across owners. Both retain the drain policy. Progress is
@@ -194,7 +216,33 @@ reported at TypeScript operation boundaries; the remote shell protocol carries n
 progress events. Connections reads the desktop cache and keeps runtime status in
 the saved connection row after transient notifications disappear. Status reads do
 not install or start a stopped runtime, and snapshots last only for the manager's
-lifetime.
+lifetime. `apps/server/src/provider/ProviderDiagnosisRouting.ts` chooses local or
+remote diagnosis; host diagnosis requires an already-ready runtime and otherwise
+returns prepare/status recovery instructions without starting one. Agent setup
+publishes runtime readiness before diagnosis, so clients keep checking the current
+setup operation until diagnosis completes. Only that operation's result can finish
+setup; an old provider summary cannot. The server manager retains this diagnosis
+summary; the desktop connection row reads its own runtime cache. Thread cards use
+authenticated handoff progress lookup, including after completion and remount,
+without a desktop bridge.
+
+### Host trust and forgetting
+
+`packages/ssh/src/hostKey.ts` probes the effective OpenSSH target without
+authenticating and reports the negotiated destination key. Human approval covers
+that fingerprint and the first Include change. The shared writer in
+`apps/server/src/cloudMachines/sshConfig.ts` keeps ordinary host entries and pins
+under `~/.ssh/goat-hosts`, separate from Boat's `~/.ssh/goat-cloud`. Each use checks
+that `ssh -G` still applies the pinned settings; a changed key stops the connection
+rather than prompting automatic replacement. Existing keys and ssh-agent take
+precedence over creating a GOAT key. Password-based key registration stays in a
+person's terminal on the owning environment's machine.
+
+Forget fences the alias's current operation before waiting for installation,
+invalidates tunnels and sessions, then removes only GOAT-owned config and pins.
+Optional idle stop requires an owned, idle runtime; busy, unknown, and external
+runtimes stay running. Remote data, shared keys, and the Include line remain.
+Removing a saved desktop connection does not perform this host cleanup.
 
 The dispatch caller imports `@goat/ssh/command`, `@goat/ssh/auth`, `@goat/ssh/config`,
 `@goat/ssh/errors`, and `@goat/ssh/tunnel`.
@@ -202,8 +250,10 @@ The dispatch caller imports `@goat/ssh/command`, `@goat/ssh/auth`, `@goat/ssh/co
 
 ## Agent dispatch
 
-`apps/server/src/mcp/toolkits/ssh/tools.ts` registers `goat_ssh_host_list`, `goat_ssh_browse`,
-`goat_ssh_thread_launch`, and `goat_ssh_reports`. Browse uses `apps/server/src/sshRemote/remoteBrowse.ts`.
+The [SSH toolkit](../apps/server/src/mcp/toolkits/ssh/tools.ts) exposes host setup,
+status, updates, forget, browsing, and thread dispatch; callable capabilities and
+human steps are defined in the [registry](../packages/contracts/src/agentSurface/registry.ts).
+Browse uses `apps/server/src/sshRemote/remoteBrowse.ts`.
 Launch goes through `SshRemoteDispatch.launchThread`. When the MCP caller is itself a thread, the
 SSH toolkit asks `RemoteDispatchCoordinator` to persist the dispatch first. That coordinator is
 [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md).

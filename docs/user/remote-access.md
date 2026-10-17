@@ -166,9 +166,10 @@ credentials, and agent work stay on the remote machine.
 
 The remote host must be Linux, an Apple Silicon Mac, or a Windows machine set up
 as described below, with `tar`, `sha256sum` or `shasum`, and
-[provider setup](./install.md#providers). GOAT keeps its
-server, launch state, and data on the host under `~/.goat`, apart from any T3
-Code install in `~/.t3`.
+`git` for project work. Provider CLIs and sign-in are set up on that host;
+see [provider setup](./install.md#providers). GOAT keeps its server, launch state,
+and data under `~/.goat`, apart from any T3 Code install in `~/.t3`. A fresh host
+does not need the desktop app or Node.
 
 A Windows host works when its OpenSSH server uses Git Bash as the default shell
 (the OpenSSH `DefaultShell` setting pointing at Git for Windows' `bash.exe`).
@@ -178,14 +179,13 @@ than the SSH session's: provider CLIs must be on your Windows `PATH`. After an
 app update, a Windows host moves to the new version only from a GOAT release;
 a server started from a source checkout must be stopped before reconnecting.
 
-The first launch uploads GOAT's server from this computer, so it takes longer
-than later ones. When this computer does not already have the server for your
-GOAT version, it downloads it from the public GOAT releases and checks it
-against the published checksums. If that release is not published yet or the
-download fails on the network, GOAT tries the GitHub CLI when it is signed in
-(`gh auth login`). A download that does not match the published checksums is
-refused. If neither source works, the connection fails with an error that names
-the release it looked for.
+The first launch can take longer while GOAT installs its runtime. It uses a
+bundled or cached archive when available. Otherwise it uses your configured
+release mirror, or downloads the matching published GOAT release and checks its
+checksums. If a public download fails, GOAT can try the GitHub CLI when signed in
+(`gh auth login`). It refuses a checksum mismatch and names the expected release
+when it cannot obtain an archive.
+
 On Linux and macOS hosts, provider CLIs must be on the `PATH` of a
 non-interactive login shell there; check with:
 
@@ -203,19 +203,53 @@ to a minute to finish, then continues on the new version. **Cancel** leaves the
 runtime running as before. Agents can request an update that runs when the
 runtime is idle. If the new version fails to start, GOAT restores the previous one.
 
-If a runtime archive is unavailable, install a published GOAT release or configure
-a release mirror. GOAT does not replace a newer runtime; update the machine that
-owns the SSH connection instead.
+Runtime archives come from published GOAT releases or a configured release mirror.
+If the matching archive is unavailable, use a published GOAT release or the mirror
+suggested by the error. GOAT does not replace a newer runtime; update the machine
+that owns the SSH connection instead.
 
 A server that GOAT cannot confirm it launched, or that cannot restart itself,
 is left running. GOAT keeps using it if it is compatible; otherwise, stop it on
 the host and reconnect. When two computers update the same host at once, the
 second retries after the first finishes. If an interrupted update left the host
 locked, the error names the file to remove after you check that no other GOAT
-app is updating it. Removing the connection leaves GOAT's server running on the host.
+app is updating it. Removing the connection leaves GOAT's server running on the
+host. Ask an agent to forget the host and stop its runtime when idle, or use
+**Forget host**. GOAT stops only an idle server it owns; remote projects and files stay.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).
+
+### A fresh VPS
+
+Open **Settings → Connections → Add environment → SSH**, or tell an agent to
+“connect a new SSH host” and give it the address and SSH user. Check the displayed
+host-key fingerprint against your server provider's record before approving.
+The first approval also lets GOAT add its Include line to your SSH config.
+
+GOAT uses SSH keys or your ssh-agent. If it creates a key, register the displayed
+public key with your server provider or add it to the host. If the host only
+accepts a password, run the offered `ssh-copy-id` command in a terminal on the
+machine that owns this GOAT environment, then retry. Your password stays in that
+terminal; GOAT does not collect it or run `sudo` for you.
+
+GOAT prepares the runtime before checking providers. Provider diagnosis needs a
+ready runtime; if preparation is still running or failed, check the host's status
+and finish or retry setup first. After agent setup, GOAT checks provider CLIs and
+sign-in on the remote host. Run any provider installation or sign-in command
+there; signing in on your own computer does not sign in the VPS. The desktop
+connection row reports runtime setup.
+
+Save the prepared host in the desktop app to see its environment in the sidebar.
+With web or mobile alone, approve setup in the requesting thread. The host is then
+available to that environment's SSH tools; adding it does not create a separate
+sidebar environment on those clients.
+
+If the host key changes, GOAT stops connecting. Check why it changed before
+trusting it again. If you rebuilt the server, forget the host and add it again.
+Forgetting removes GOAT's managed SSH entry and pinned key. It keeps your shared
+SSH keys and the host's projects and files, and stops a runtime only when GOAT owns
+it and no work is running.
 
 ### Start a worktree on a saved SSH host
 
