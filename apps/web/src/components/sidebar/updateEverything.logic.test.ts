@@ -38,6 +38,7 @@ function machine(
     },
     connected: true,
     hostedByThisApp: false,
+    hasSavedDesktopSshRoute: false,
     canMaintain: true,
     updateState: { status: "idle" },
     ...overrides,
@@ -45,6 +46,29 @@ function machine(
 }
 
 describe("collectServerUpdateTargets", () => {
+  it("explains saved SSH runtime updates with and without an app restart", () => {
+    const machines = [
+      machine("ssh", "0.0.40", undefined, { hasSavedDesktopSshRoute: true }),
+      machine("manual", "0.0.40", undefined),
+      machine("service", "0.0.40", "boot-service"),
+    ];
+    const baseline = collectServerUpdateTargets(
+      machines.map((entry) => ({ ...entry, hasSavedDesktopSshRoute: false })),
+      "0.0.50",
+    );
+    const withApp = collectServerUpdateTargets(machines, "0.0.50", true);
+    const withoutApp = collectServerUpdateTargets(machines, "0.0.50", false);
+    expect(withApp.skipped.map((entry) => entry.reason)).toEqual([
+      "updates with this app after it restarts",
+      "needs a manual update",
+    ]);
+    expect(withoutApp.skipped.map((entry) => entry.reason)).toEqual([
+      "update its runtime in Settings → Connections",
+      "needs a manual update",
+    ]);
+    expect(withApp.targets).toEqual(baseline.targets);
+    expect(withoutApp.targets).toEqual(baseline.targets);
+  });
   it("updates remote servers that can move to the target and names every skipped one", () => {
     const { targets, skipped } = collectServerUpdateTargets(
       [

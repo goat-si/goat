@@ -21,6 +21,8 @@ export interface UpdateEverythingMachine {
   /** Served by the desktop app this client runs in (the primary backend or a
       local WSL backend). Its server updates when the app installs. */
   readonly hostedByThisApp: boolean;
+  /** A saved SSH route owned by the desktop running this client. */
+  readonly hasSavedDesktopSshRoute: boolean;
   /** The session holds the scope a server update needs. */
   readonly canMaintain: boolean;
   readonly updateState: ServerUpdateState;
@@ -83,6 +85,7 @@ export interface SkippedMachine {
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
   targetVersion: string,
+  installsLocal = false,
 ): { readonly targets: ServerUpdateTarget[]; readonly skipped: SkippedMachine[] } {
   const targets: ServerUpdateTarget[] = [];
   const skipped: SkippedMachine[] = [];
@@ -112,7 +115,13 @@ export function collectServerUpdateTargets(
     const selfUpdate = resolveServerSelfUpdateCapability(config);
     const desktopAppUpdate = supportsDesktopAppUpdate(config);
     if (selfUpdate === null) {
-      skip("needs a manual update");
+      skip(
+        machine.hasSavedDesktopSshRoute
+          ? installsLocal
+            ? "updates with this app after it restarts"
+            : "update its runtime in Settings → Connections"
+          : "needs a manual update",
+      );
       continue;
     }
     if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {

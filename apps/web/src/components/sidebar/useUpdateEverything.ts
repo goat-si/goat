@@ -1,6 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
 import { PROVIDER_DISPLAY_NAMES } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
+import * as Option from "effect/Option";
+import { connectionRoutes } from "@goat/client-runtime/connection";
 import { useMemo } from "react";
 
 import { APP_VERSION } from "~/branding";
@@ -53,6 +55,14 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
           label: environment.label,
           serverConfig: environment.serverConfig,
           connected: environment.connection.phase === "connected",
+          hasSavedDesktopSshRoute:
+            isElectron &&
+            connectionRoutes(environment.entry).some(
+              (route) =>
+                route.target._tag === "SshConnectionTarget" &&
+                Option.isSome(route.profile) &&
+                route.profile.value._tag === "SshConnectionProfile",
+            ),
           hostedByThisApp:
             isElectron &&
             (environment.entry.target._tag === "PrimaryConnectionTarget" ||
@@ -69,6 +79,7 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
   const { targets: behindServers, skipped: unreachable } = collectServerUpdateTargets(
     machines,
     targetVersion,
+    localUpdateVersion !== null,
   );
   // A desktop-managed server installs from its own app's update feed, so only
   // servers that download t3 from npm wait for npm to publish the version.
