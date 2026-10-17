@@ -125,6 +125,9 @@ class RemoteMachine {
   captureGate:
     | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
     | undefined;
+  refuseProbeWith: string | undefined;
+  probeAttempted = Deferred.makeUnsafe<void>();
+  probeCount = 0;
   refuseInterruptWith: string | undefined;
   interruptAttempted = Deferred.makeUnsafe<void>();
   scriptDown = false;
@@ -552,6 +555,14 @@ class RemoteMachine {
                 return { runId, messageId: "remote-message" };
               }
               case "goat_origin_reports_wait": {
+                if (call.arguments.timeoutMs === 0) {
+                  machine.probeCount += 1;
+                  const attempted = machine.probeAttempted;
+                  machine.probeAttempted = Deferred.makeUnsafe<void>();
+                  const refused = machine.refuseProbeWith;
+                  yield* Deferred.succeed(attempted, undefined);
+                  if (refused !== undefined) return yield* machine.refused(refused);
+                }
                 if (call.arguments.correlationId === machine.holdWaitsFor) {
                   yield* Deferred.await(machine.release);
                 }
@@ -1082,6 +1093,83 @@ describe("copies of remote work and host failover", () => {
       assert.strictEqual((yield* readState(task.taskId)).resumeFrom?.file, first.file);
       assert.deepStrictEqual(yield* fs.readFile(first.file), new Uint8Array(REPLICA_BYTES));
       assert.lengthOf(destination.launches, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "retries a refused stale-worker probe before interrupting or marking it noticed",
+    () => {
+      const { machine, destination, harness } = failoverHarness();
+      machine.refuseProbeWith = "orchestration_error";
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const { task, correlationId } = yield* prepareFailover(machine, writes);
+        yield* moveTo(task, destination.host);
+        const running = yield* dispatchMovedTask(task, destination, writes);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const workers = yield* ChannelRemoteWorkers;
+        machine.down = false;
+        const firstProbe = machine.probeAttempted;
+        const probesBefore = machine.probeCount;
+        yield* workers.ensure(runtime.ownerToken);
+        yield* Deferred.await(firstProbe);
+        assert.strictEqual((yield* readState(task.taskId)).superseded?.[0]?.noticed, false);
+        assert.lengthOf(machine.interrupts, 0);
+        assert.deepStrictEqual(yield* onlyTask, running);
+        const nextProbe = machine.probeAttempted;
+        machine.refuseProbeWith = undefined;
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* Deferred.await(nextProbe);
+        const noticed = yield* writes.waitFor(
+          (_current, state) => state?.superseded?.[0]?.noticed === true,
+        );
+        assert.strictEqual(machine.probeCount - probesBefore, 2);
+        assert.strictEqual(noticed.status, "running");
+        assert.strictEqual(noticed.generation, running.generation);
+        assert.strictEqual(noticed.resultSummary, REMOTE_COPY.staleMachineBack(machine.host));
+        assert.lengthOf(machine.interrupts, 1);
+        assert.strictEqual(machine.interrupts[0]?.threadId, machine.thread(correlationId));
+        assert.lengthOf(destination.interrupts, 0);
+        yield* runtime.drain;
+        assert.lengthOf(
+          (yield* botMessages).messages.filter((message) =>
+            message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+          ),
+          1,
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("settles a stale-worker probe reporting thread_not_found without an interrupt", () => {
+    const { machine, destination, harness } = failoverHarness();
+    machine.refuseProbeWith = "thread_not_found";
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task } = yield* prepareFailover(machine, writes);
+      yield* moveTo(task, destination.host);
+      const running = yield* dispatchMovedTask(task, destination, writes);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const workers = yield* ChannelRemoteWorkers;
+      machine.down = false;
+      const probesBefore = machine.probeCount;
+      yield* workers.ensure(runtime.ownerToken);
+      const noticed = yield* writes.waitFor(
+        (_current, state) => state?.superseded?.[0]?.noticed === true,
+      );
+      assert.deepStrictEqual(noticed, running);
+      assert.strictEqual(machine.probeCount - probesBefore, 1);
+      assert.lengthOf(machine.interrupts, 0);
+      yield* TestClock.adjust(Duration.seconds(5));
+      yield* workers.ensure(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual(machine.probeCount - probesBefore, 1);
+      assert.lengthOf(machine.interrupts, 0);
+      assert.isFalse(
+        (yield* botMessages).messages.some((message) =>
+          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+        ),
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 

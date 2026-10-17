@@ -2277,8 +2277,9 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.result);
           if (seen._tag === "Failure") {
             if (seen.failure instanceof Superseded) return;
-            if (isUnreachable(seen.failure)) continue;
-            // The binding or its thread is gone there: nothing is left running to tell about.
+            // Only a thread that is gone there is settled; any other failure is looked at again.
+            if (remoteCode(seen.failure) !== "thread_not_found") continue;
+            // Its thread is gone there: nothing is left running to stop or tell about.
           } else if (entry.remoteThreadId !== undefined) {
             const stopped = yield* callHost(
               {
