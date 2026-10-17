@@ -19,6 +19,25 @@ describe("reception results", () => {
     }
   });
 
+  it("decodes legacy notes without quotes and accepts quotes on new results and tasks", () => {
+    const legacy = {
+      replyText: "Okay.",
+      remember: "Reply in Korean.",
+      action: { type: "report_only" },
+    };
+    expect(decode(legacy)).toEqual(legacy);
+    expect(decode(legacy)).not.toHaveProperty("rememberQuote");
+    expect(decode({ ...legacy, rememberQuote: "remember that" })).toMatchObject({
+      rememberQuote: "remember that",
+    });
+    const action = { type: "create_task", title: "Forget a note", instruction: "Remove it." };
+    expect(decodeAction(action)).toEqual(action);
+    expect(decodeAction(action)).not.toHaveProperty("notesChangeRequested");
+    expect(
+      decodeAction({ ...action, notesChangeRequested: "forget the Korean note" }),
+    ).toMatchObject({ notesChangeRequested: "forget the Korean note" });
+  });
+
   it("rejects actions outside the contract and empty replies", () => {
     expect(() =>
       decode({ replyText: "Okay.", action: { type: "run_shell", command: "ls" } }),

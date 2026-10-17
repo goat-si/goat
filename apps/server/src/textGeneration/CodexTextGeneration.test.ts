@@ -1056,6 +1056,8 @@ it.layer(layerCodexTextGenerationTest)("channel reception", (it) => {
     question: "",
     options: [],
     remember: "",
+    rememberQuote: "",
+    notesChangeRequested: "",
   });
   const receptionInput = {
     mode: "input" as const,

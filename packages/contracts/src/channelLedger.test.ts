@@ -94,6 +94,70 @@ describe("channel tasks", () => {
     ).toThrow();
   });
 
+  it("round-trips old and new task claims without inventing a memory grant or note permission", () => {
+    const target = {
+      environmentId: "env-1",
+      projectId: "project-1",
+      modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      workspaceStrategy: { type: "root" },
+    };
+    const base = {
+      eventId: "claim-1",
+      sequence: 2,
+      taskId: task.taskId,
+      taskVersion: 2,
+      occurredAt: task.createdAt,
+      actor: "system",
+    };
+    const claim = {
+      ...base,
+      type: "task.dispatch.claimed",
+      payload: { generation: 1, target, leaseExpiresAt: task.createdAt },
+    };
+    expect(roundTrip(ChannelTask, { ...task, target }).target).not.toHaveProperty(
+      "memoryGrantCeiling",
+    );
+    expect(roundTrip(ChannelTask, task)).not.toHaveProperty("notesChangeRequested");
+    expect(roundTrip(ChannelTaskEvent, claim)).toEqual(claim);
+    const created = {
+      ...base,
+      type: "task.created",
+      payload: {
+        title: task.title,
+        instruction: task.instruction,
+        originInputId: task.originInputId,
+      },
+    };
+    expect(roundTrip(ChannelTaskEvent, created)).toEqual(created);
+    const notesChangeRequested = "forget the Korean note";
+    expect(roundTrip(ChannelTask, { ...task, notesChangeRequested }).notesChangeRequested).toBe(
+      notesChangeRequested,
+    );
+    expect(
+      roundTrip(ChannelTaskEvent, {
+        ...created,
+        payload: { ...created.payload, notesChangeRequested },
+      }),
+    ).toMatchObject({ payload: { notesChangeRequested } });
+    for (const memoryGrantCeiling of ["none", "read", "read_write"] as const) {
+      const withMemory = { ...target, memoryGrantCeiling };
+      expect(
+        roundTrip(ChannelTask, { ...task, target: withMemory }).target?.memoryGrantCeiling,
+      ).toBe(memoryGrantCeiling);
+      expect(
+        roundTrip(ChannelTaskEvent, {
+          ...claim,
+          payload: { ...claim.payload, target: withMemory },
+        }),
+      ).toMatchObject({ payload: { target: { memoryGrantCeiling } } });
+    }
+    expect(() =>
+      decodeTask({ ...task, target: { ...target, memoryGrantCeiling: "write" } }),
+    ).toThrow();
+  });
+
   it("treats only completed, failed, and cancelled as terminal", () => {
     expect(
       (["received", "dispatching", "running", "waiting_input"] as const).map(isChannelTaskTerminal),

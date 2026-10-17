@@ -8,6 +8,7 @@ import {
   type ChannelTaskEvent,
   type RemoteReportedOutcome,
   ProjectId,
+  EnvironmentId,
   ProviderInstanceId,
   type RemoteReport,
   type RemoteReportKind,
@@ -26,6 +27,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
@@ -43,6 +45,7 @@ import {
   onlyTask,
   resultsTo,
   rpcContext,
+  owner,
   setupBot,
   slackContext,
   slackInput,
@@ -103,6 +106,7 @@ class RemoteMachine {
   slowThreadCreation = false;
   /** Every launch is refused outright with this text (nothing is stored). */
   refuseLaunchWith: string | undefined;
+  refuseLaunchCode = "invalid_request";
   /** Waits on this binding block until `release` completes. */
   holdWaitsFor: string | undefined;
   /** goat_thread_send fails with this remote code. */
@@ -285,7 +289,7 @@ class RemoteMachine {
               return yield* new SshRemoteDispatch.SshRemoteDispatchError({
                 reason: "remote_refused",
                 message: machine.refuseLaunchWith,
-                remoteCode: "invalid_request",
+                remoteCode: machine.refuseLaunchCode,
               });
             }
             if (machine.bindings.has(report.correlationId)) {
@@ -555,6 +559,137 @@ const reportedOutcomeRuntime = Effect.gen(function* () {
       Effect.map(Option.getOrThrow),
     );
   return { runtime, event };
+});
+
+describe("memory grants on another machine", () => {
+  it.effect.each([
+    { scopes: [], ceiling: undefined },
+    { scopes: ["memory:write"], ceiling: undefined },
+    { scopes: ["memory:read"], ceiling: "read" },
+    { scopes: ["memory:read", "memory:write"], ceiling: "read_write" },
+  ] as const)(
+    "forwards exactly the stored $ceiling ceiling from $scopes",
+    ({ scopes, ceiling }) => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const { runtime, event } = yield* reportedOutcomeRuntime;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        yield* gateway.ingest(goatInput("do@mac-studio: use memory", "remote-memory"), {
+          ...rpcContext,
+          grantedScopes: [...owner.grantedScopes, ...scopes],
+        });
+        yield* runtime.drain;
+        yield* event((event) => event.type === "task.worker.bound");
+        const task = yield* onlyTask;
+        assert.strictEqual(task.status, "running");
+        assert.strictEqual(task.target?.memoryGrantCeiling, ceiling);
+        assert.lengthOf(machine.launches, 1);
+        assert.strictEqual(
+          machine.launches[0]!.memoryGrantCeiling,
+          task.target?.memoryGrantCeiling,
+        );
+        if (ceiling === undefined) {
+          assert.notProperty(task.target!, "memoryGrantCeiling");
+          assert.notProperty(machine.launches[0]!, "memoryGrantCeiling");
+        }
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+    },
+  );
+
+  it.effect("recovers a dispatching remote task with its stored ceiling", () => {
+    const { machine, harness } = remoteHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const { runtime, event } = yield* reportedOutcomeRuntime;
+      yield* runtime.drain;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const receipt = yield* gateway.ingest(
+        goatInput("do@mac-studio: recover memory", "remote-memory-recovery"),
+        { ...rpcContext, grantedScopes: [...owner.grantedScopes, "memory:read", "memory:write"] },
+      );
+      yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+        receipt.inputId,
+        runtime.ownerToken,
+      );
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const task = yield* onlyTask;
+      assert.include(task.requester.grantedScopes, "memory:write");
+      // Resume a conservative persisted claim without widening it to the requester's full grant.
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.dispatch.claimed",
+          payload: {
+            generation: task.generation,
+            leaseExpiresAt: "2026-10-12T00:00:00.000Z",
+            target: {
+              environmentId: EnvironmentId.make(machine.environmentId),
+              projectId: ProjectId.make(machine.projects[0]!.id),
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-6.1-sol",
+              },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              workspaceStrategy: { type: "root" },
+              memoryGrantCeiling: "read",
+              remote: { host: machine.host, cwd: machine.projects[0]!.workspaceRoot },
+            },
+          },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* runtime.drain;
+      yield* event((event) => event.type === "task.worker.bound");
+      assert.strictEqual((yield* onlyTask).target?.memoryGrantCeiling, "read");
+      assert.lengthOf(machine.launches, 1);
+      assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+  });
+
+  it.effect(
+    "fails an unsupported memory grant after the binding probe, without relaunching",
+    () => {
+      const { machine, harness } = remoteHarness();
+      machine.refuseLaunchWith = "remote cannot honor memory; token=do-not-show";
+      machine.refuseLaunchCode = SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED;
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const { runtime, event } = yield* reportedOutcomeRuntime;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          goatInput("do@mac-studio: memory required", "memory-refused"),
+          { ...rpcContext, grantedScopes: [...owner.grantedScopes, "memory:read"] },
+        );
+        yield* runtime.drain;
+        const failure = yield* event((event) => event.type === "task.failed");
+        if (failure.type !== "task.failed") return yield* Effect.die("expected task.failed");
+        assert.strictEqual(failure.payload.reason, "memory_unsupported");
+        assert.strictEqual(failure.payload.summary, REMOTE_COPY.memoryUnsupported(machine.host));
+        const task = yield* onlyTask;
+        assert.strictEqual(task.status, "failed");
+        assert.strictEqual(task.resultSummary, REMOTE_COPY.memoryUnsupported(machine.host));
+        assert.strictEqual(task.target?.memoryGrantCeiling, "read");
+        assert.strictEqual(machine.bindings.size, 0);
+        assert.isTrue(machine.calls.some((call) => call.tool === "goat_origin_reports_wait"));
+        // Even a later pass well beyond the launch grace must not retry without memory.
+        yield* TestClock.adjust(Duration.minutes(6));
+        yield* runtime.drain;
+        assert.lengthOf(machine.launches, 1);
+        assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
+        assert.lengthOf(harness.world.launches, 0);
+        const records = yield* botMessages;
+        assert.isTrue(
+          records.messages.some((message) =>
+            message.text.includes(REMOTE_COPY.memoryUnsupported(machine.host)),
+          ),
+        );
+        assert.notInclude(JSON.stringify([task, records.messages]), "do-not-show");
+      }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(machine.layer))));
+    },
+  );
 });
 
 describe("reported outcomes from another machine", () => {

@@ -1300,6 +1300,8 @@ it.layer(layerClaudeTextGenerationTest)("channel reception", (it) => {
             question: "Which project?",
             options: [],
             remember: "",
+            rememberQuote: "",
+            notesChangeRequested: "",
           },
         }),
         cwdMustNotBe: process.cwd(),

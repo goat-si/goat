@@ -1949,7 +1949,10 @@ describe("SSH dispatch launch lineage", () => {
       expect(result._tag).toBe("Failure");
       expect(attempts).toBe(0);
       if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({ reason: "remote_refused" });
+        expect(result.failure).toMatchObject({
+          reason: "remote_refused",
+          remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+        });
     }),
   );
 
@@ -1993,7 +1996,10 @@ describe("SSH dispatch launch lineage", () => {
       expect(attempts).toBe(allowed ? 1 : 0);
       expect(result._tag).toBe(allowed ? "Success" : "Failure");
       if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({ reason: "remote_refused" });
+        expect(result.failure).toMatchObject({
+          reason: "remote_refused",
+          remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+        });
       } else {
         expect(result.success.memorySessions).toEqual([ceiling === "read" ? ["memory:read"] : []]);
         if (admission && (memory || ceiling === "read"))
@@ -2032,7 +2038,10 @@ describe("SSH dispatch launch lineage", () => {
         expect(attempts).toBe(allowed ? 2 : 1);
         expect(result._tag).toBe(allowed ? "Success" : "Failure");
         if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({ reason: "remote_refused" });
+          expect(result.failure).toMatchObject({
+            reason: "remote_refused",
+            remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+          });
         } else {
           const launches = result.success.launches;
           expect(launches[0]).toHaveProperty("report");
@@ -2082,7 +2091,10 @@ describe("SSH dispatch launch lineage", () => {
           expect(attempts).toBe(allowed ? 2 : 1);
           expect(result._tag).toBe(allowed ? "Success" : "Failure");
           if (result._tag === "Failure") {
-            expect(result.failure).toMatchObject({ reason: "remote_refused" });
+            expect(result.failure).toMatchObject({
+              reason: "remote_refused",
+              remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+            });
           } else {
             expect(result.success.memorySessions).toEqual([[]]);
             expect(new Set(result.success.presentedTokens).size).toBe(1);
@@ -2139,7 +2151,10 @@ describe("SSH dispatch launch lineage", () => {
             const result = yield* Fiber.join(fiber);
             expect(result._tag).toBe("Failure");
             if (result._tag === "Failure")
-              expect(result.failure).toMatchObject({ reason: "remote_refused" });
+              expect(result.failure).toMatchObject({
+                reason: "remote_refused",
+                remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+              });
             expect(attempts).toBe(fallback ? 1 : 0);
             expect(lists).toBe(fallback ? 2 : 1);
           }
@@ -2204,7 +2219,10 @@ describe("SSH dispatch launch lineage", () => {
         expect(attempts).toBe(allowed ? 2 : 1);
         expect(result._tag).toBe(allowed ? "Success" : "Failure");
         if (result._tag === "Failure") {
-          expect(result.failure).toMatchObject({ reason: "remote_refused" });
+          expect(result.failure).toMatchObject({
+            reason: "remote_refused",
+            remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+          });
         } else {
           expect(result.success.memorySessions).toEqual([[]]);
           expect(new Set(result.success.presentedTokens).size).toBe(1);
@@ -2259,7 +2277,10 @@ describe("SSH dispatch launch lineage", () => {
           expect(attempts).toBe(ceiling === undefined ? 2 : 1);
           expect(result._tag).toBe(ceiling === undefined ? "Success" : "Failure");
           if (result._tag === "Failure") {
-            expect(result.failure).toMatchObject({ reason: "remote_refused" });
+            expect(result.failure).toMatchObject({
+              reason: "remote_refused",
+              remoteCode: SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED,
+            });
           } else {
             expect(result.success.memorySessions).toEqual([[]]);
             expect(new Set(result.success.presentedTokens).size).toBe(1);

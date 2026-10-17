@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   CHANNEL_HOST_WORKSPACE_LABEL,
+  type AuthEnvironmentScope,
   type ChannelIngestInput,
   type ChannelReceptionInput,
   ChannelTaskEvent,
@@ -9,6 +10,7 @@ import {
   CommandId,
   EnvironmentId,
   ChannelReceptionId,
+  ChannelQuestionId,
   ChannelTaskEventId,
   MessageId,
   ScheduledTaskId,
@@ -18,6 +20,8 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -26,6 +30,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as ServerConfig from "../config.ts";
+import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
@@ -44,6 +50,7 @@ import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
+import { channelBotFilesFor } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
   botLaunchIdsFor,
@@ -75,6 +82,50 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+
+/** Relink through the real one-time code path, keeping the transport's grants unchanged. */
+const linkMemoryUser = (
+  memoryScopes: ReadonlyArray<AuthEnvironmentScope>,
+  key = memoryScopes.join("-"),
+) =>
+  Effect.gen(function* () {
+    const identities = yield* ChannelIdentityService.ChannelIdentityService;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const { code } = yield* identities.createLink(
+      {
+        connectionId: "slack-1",
+        runtimeModeCeiling: "auto-accept-edits",
+        grantedScopes: [...owner.grantedScopes, ...memoryScopes],
+      },
+      { ...owner, grantedScopes: [...owner.grantedScopes, "memory:read", "memory:write"] },
+    );
+    yield* gateway.linkIdentity(
+      {
+        connectionId: "slack-1",
+        externalActorId: "U1",
+        code,
+        idempotencyKey: "memory-link-" + key,
+        replyAddress: slackInput("", "unused").replyAddress,
+      },
+      slackMemoryContext,
+    );
+  });
+
+const slackMemoryContext = {
+  ...slackContext,
+  grantedScopes: [
+    ...owner.grantedScopes,
+    "memory:read",
+    "memory:write",
+  ] satisfies AuthEnvironmentScope[],
+};
+
+const notesFileExists = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig.ServerConfig;
+  return yield* fs.exists(channelBotFilesFor(path, config.stateDir).notes);
+});
 
 /**
  * D10 scenarios 1-6 for the core: the GOAT bot thread is a real orchestrator thread (whose
@@ -693,7 +744,7 @@ describe("duplicates and restarts (scenario 2)", () => {
       return Effect.scoped(
         Effect.gen(function* () {
           yield* setupBot;
-          yield* linkSlackUser();
+          yield* linkMemoryUser(["memory:read"]);
           const first = yield* claimFirstOwner;
           const gateway = yield* ChannelGateway.ChannelGateway;
           const ledger = yield* ChannelLedger.ChannelLedger;
@@ -701,7 +752,7 @@ describe("duplicates and restarts (scenario 2)", () => {
           const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
           const input = yield* gateway.ingest(
             slackInput("do: recover dispatch", "restart-launch"),
-            slackContext,
+            slackMemoryContext,
           );
           yield* reception.receive(input.inputId, first.ownerToken);
           const task = yield* onlyTask;
@@ -714,6 +765,7 @@ describe("duplicates and restarts (scenario 2)", () => {
               payload: {
                 generation: task.generation,
                 target: {
+                  memoryGrantCeiling: "read",
                   environmentId,
                   projectId,
                   modelSelection,
@@ -726,6 +778,8 @@ describe("duplicates and restarts (scenario 2)", () => {
             },
             { owner: first.ownerToken },
           );
+          // A restart must reuse the captured target even after the identity loses memory.
+          yield* linkMemoryUser([]);
           const ids = workerLaunchIdsFor(task.taskId, task.generation);
           if (crashPoint === "after launch acceptance") {
             const accepted = yield* Deferred.make<void>();
@@ -751,9 +805,11 @@ describe("duplicates and restarts (scenario 2)", () => {
           yield* second.drain;
           const bound = yield* onlyTask;
           assert.strictEqual(bound.status, "running");
+          assert.strictEqual(bound.target?.memoryGrantCeiling, "read");
           assert.strictEqual(bound.worker?.threadId, ids.threadId);
           assert.strictEqual(harness.world.launches.length, crashPoint === "before launch" ? 1 : 2);
           for (const launch of harness.world.launches) {
+            assert.strictEqual(launch.initialMessage?.memoryGrantCeiling, "read");
             assert.strictEqual(launch.commandId, ids.commandId);
             assert.strictEqual(launch.threadId, ids.threadId);
             assert.strictEqual(launch.initialMessage?.messageId, ids.messageId);
@@ -763,6 +819,7 @@ describe("duplicates and restarts (scenario 2)", () => {
             ["runs", "messages"],
           );
           assert.strictEqual(records.runs.length, 1);
+          assert.strictEqual(records.runs[0]?.memoryGrantCeiling, "read");
           assert.strictEqual(records.runs[0]?.userMessageId, ids.messageId);
           assert.strictEqual(bound.worker?.runId, records.runs[0]?.id);
           assert.strictEqual(
@@ -1547,11 +1604,12 @@ describe("who may do what (scenario 4)", () => {
     const seen: Array<ChannelReceptionInput> = [];
     harness.script.current = (input) => {
       seen.push(input);
-      return input.inputText === "remember: reply in Korean"
+      return input.inputText === "Always reply in Korean, remember that"
         ? Effect.succeed({
             replyText: "I'll keep that.",
             action: { type: "report_only" as const },
             remember: "Reply in Korean.",
+            rememberQuote: "remember that",
           })
         : defaultScript(input);
     };
@@ -1559,16 +1617,419 @@ describe("who may do what (scenario 4)", () => {
       yield* setupBot;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
-      yield* gateway.ingest(goatInput("remember: reply in Korean", "notes-1"), rpcContext);
+      const receipt = yield* gateway.ingest(
+        goatInput("Always reply in Korean, remember that", "notes-1"),
+        rpcContext,
+      );
       yield* runtime.drain;
       yield* gateway.ingest(goatInput("what machine is this?", "notes-2"), rpcContext);
       yield* runtime.drain;
       const later = seen.find((input) => input.inputText === "what machine is this?");
-      assert.include(later?.notes ?? "", "Reply in Korean.");
+      assert.include(later?.notes ?? "", "Reply in Korean. (asked in " + receipt.inputId + ")");
       assert.include((later?.hostFacts ?? []).map((fact) => fact.value).join("\n"), "test-machine");
       assert.strictEqual(harness.world.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
+});
+
+describe("channel worker memory grants", () => {
+  it.effect.each([
+    { scopes: [], ceiling: "none", readOnly: false, access: "none" },
+    { scopes: ["memory:write"], ceiling: "none", readOnly: false, access: "none" },
+    { scopes: ["memory:read"], ceiling: "read", readOnly: false, access: "read" },
+    {
+      scopes: ["memory:read", "memory:write"],
+      ceiling: "read_write",
+      readOnly: false,
+      access: "read_write",
+    },
+    {
+      scopes: ["memory:read", "memory:write"],
+      ceiling: "read_write",
+      readOnly: true,
+      access: "read",
+    },
+  ] as const)(
+    "persists $ceiling from GOAT scopes $scopes (read-only destination: $readOnly)",
+    ({ scopes, ceiling, readOnly, access }) => {
+      const harness = makeHarness({ realWorkerLaunch: true });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(goatInput("do: use the available memory", "memory-local"), {
+          ...rpcContext,
+          grantedScopes: [...owner.grantedScopes, ...scopes],
+        });
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        assert.strictEqual(task.status, "running");
+        assert.strictEqual(
+          task.target?.memoryGrantCeiling,
+          ceiling === "none" ? undefined : ceiling,
+        );
+        assert.lengthOf(harness.world.launches, 1);
+        const initial = harness.world.launches[0]!.initialMessage!;
+        if (ceiling === "none") {
+          assert.notProperty(task.target!, "memoryGrantCeiling");
+          assert.notProperty(initial, "memoryGrantCeiling");
+        } else {
+          assert.strictEqual(initial.memoryGrantCeiling, ceiling);
+        }
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const records = yield* orchestrator.getThreadRecords(task.worker!.threadId, ["runs"]);
+        assert.lengthOf(records.runs, 1);
+        assert.strictEqual(records.runs[0]!.memoryGrantCeiling, ceiling);
+        assert.deepStrictEqual(
+          currentMemoryAccess({
+            enableAgentMemoryAccess: true,
+            policyReady: true,
+            readOnly,
+            memoryGrantCeiling: records.runs[0]!.memoryGrantCeiling,
+          }),
+          { access, reason: readOnly ? "read_only_destination" : "ceiling" },
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each(["read", "none", "removed"] as const)(
+    "intersects a Slack intake snapshot with a link changed to %s before dispatch",
+    (change) => {
+      const harness = makeHarness({ realWorkerLaunch: true });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkMemoryUser(["memory:read", "memory:write"]);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* runtime.drain;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const receipt = yield* gateway.ingest(
+          slackInput("do: use memory after intake", "memory-slack"),
+          slackMemoryContext,
+        );
+        assert.include(
+          (yield* ledger.getInput(receipt.inputId))!.requester!.grantedScopes,
+          "memory:write",
+        );
+        // The task keeps the intake snapshot; dispatch must consult the current identity as well.
+        yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+          receipt.inputId,
+          runtime.ownerToken,
+        );
+        if (change === "removed") {
+          yield* (yield* ChannelIdentityService.ChannelIdentityService).unlink({
+            connectionId: "slack-1",
+            externalActorId: "U1",
+          });
+        } else {
+          yield* linkMemoryUser(change === "read" ? ["memory:read"] : []);
+        }
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        assert.strictEqual(task.status, "running");
+        assert.include(task.requester.grantedScopes, "memory:write");
+        const expected = change === "read" ? "read" : undefined;
+        assert.strictEqual(task.target?.memoryGrantCeiling, expected);
+        assert.strictEqual(harness.world.launches[0]?.initialMessage?.memoryGrantCeiling, expected);
+        const records = yield* (yield* Orchestrator.OrchestratorV2).getThreadRecords(
+          task.worker!.threadId,
+          ["runs"],
+        );
+        assert.strictEqual(records.runs[0]?.memoryGrantCeiling, expected ?? "none");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+  it.effect.each(["read", "none"] as const)(
+    "does not widen a stored %s ceiling when a Slack link is widened and the target is chosen again",
+    (ceiling) => {
+      const harness = makeHarness({ realWorkerLaunch: true });
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkMemoryUser(["memory:read", "memory:write"]);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* runtime.drain;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const receipt = yield* gateway.ingest(
+          slackInput("do: pick a target again", "rechoose-memory"),
+          slackMemoryContext,
+        );
+        yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+          receipt.inputId,
+          runtime.ownerToken,
+        );
+        yield* linkMemoryUser(ceiling === "read" ? ["memory:read"] : []);
+        const task = yield* onlyTask;
+        const accepted = yield* Deferred.make<void>();
+        harness.launch.afterAccepted = () =>
+          Deferred.succeed(accepted, undefined).pipe(Effect.andThen(Effect.never));
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const launching = yield* dispatcher
+          .dispatch(task.taskId, runtime.ownerToken)
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(accepted);
+        yield* Fiber.interrupt(launching);
+        harness.launch.afterAccepted = () => Effect.void;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const claimed = (yield* ledger.getTask(task.taskId))!;
+        assert.strictEqual(claimed.task.status, "dispatching");
+        assert.isUndefined(claimed.task.worker);
+        assert.strictEqual(
+          claimed.task.target?.memoryGrantCeiling,
+          ceiling === "none" ? undefined : ceiling,
+        );
+        const questionId = ChannelQuestionId.make("question:rechoose-memory");
+        yield* commitTransition(
+          ledger,
+          claimed,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: {
+                questionId,
+                text: "Use this project?",
+                askedAt: "2026-10-12T00:00:00.000Z",
+              },
+            },
+          },
+          { owner: runtime.ownerToken },
+        );
+        yield* linkMemoryUser(["memory:read", "memory:write"], "widened");
+        assert.include(
+          (yield* ledger.findIdentity({ connectionId: "slack-1", externalActorId: "U1" }))!
+            .grantedScopes,
+          "memory:write",
+        );
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId, answer: "Use this project" },
+          },
+          { owner: runtime.ownerToken, actor: "user" },
+        );
+        assert.strictEqual((yield* onlyTask).status, "received");
+        yield* dispatcher.dispatch(task.taskId, runtime.ownerToken);
+        const rebound = yield* onlyTask;
+        assert.strictEqual(rebound.status, "running");
+        assert.strictEqual(
+          rebound.target?.memoryGrantCeiling,
+          ceiling === "none" ? undefined : ceiling,
+        );
+        assert.lengthOf(harness.world.launches, 2);
+        for (const launch of harness.world.launches)
+          assert.strictEqual(
+            launch.initialMessage?.memoryGrantCeiling,
+            ceiling === "none" ? undefined : ceiling,
+          );
+        const records = yield* (yield* Orchestrator.OrchestratorV2).getThreadRecords(
+          rebound.worker!.threadId,
+          ["runs"],
+        );
+        assert.lengthOf(records.runs, 1);
+        assert.strictEqual(records.runs[0]!.memoryGrantCeiling, ceiling);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});
+
+describe("notes require a request in the current input", () => {
+  it.effect.each(["missing quote", "earlier message only", "absent quote", "MCP input"] as const)(
+    "saves no note for %s",
+    (scenario) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        if (scenario === "earlier message only") {
+          yield* gateway.ingest(
+            goatInput("Always reply in Korean, remember that", "earlier-note"),
+            rpcContext,
+          );
+          yield* runtime.drain;
+        }
+        let sawEarlierRequest = false;
+        harness.script.current = (input) => {
+          sawEarlierRequest = input.tail.some((entry) => entry.text.includes("remember that"));
+          return Effect.succeed({
+            replyText: "Okay.",
+            action: { type: "report_only" },
+            remember: "Reply in Korean.",
+            ...(scenario === "missing quote" ? {} : { rememberQuote: "remember that" }),
+          });
+        };
+        if (scenario === "MCP input") {
+          yield* gateway.ingest(
+            {
+              kind: "mcp",
+              connectionId: "mcp",
+              conversationKey: "default",
+              externalMessageId: "agent-note",
+              idempotencyKey: "agent-note",
+              actor: { senderThreadId: ThreadId.make("thread:note-agent") },
+              replyAddress: {
+                kind: "mcp",
+                connectionId: "mcp",
+                requestNamespace: "note-ns",
+                conversationKey: "default",
+              },
+              text: "Always reply in Korean, remember that",
+              attachments: [],
+              receivedAt: "2026-10-12T00:00:00.000Z",
+              intent: "message",
+            },
+            {
+              ...owner,
+              principalId: "mcp:note-ns",
+              caller: { type: "mcp", requestNamespace: "note-ns" },
+            },
+          );
+        } else {
+          yield* gateway.ingest(
+            goatInput(
+              scenario === "missing quote"
+                ? "Always reply in Korean, remember that"
+                : "What machine is this?",
+              "unasked-note",
+            ),
+            rpcContext,
+          );
+        }
+        yield* runtime.drain;
+        if (scenario === "earlier message only") assert.isTrue(sawEarlierRequest);
+        assert.isFalse(yield* notesFileExists);
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "repeats reception after an uncommitted reply without duplicating the input note",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* runtime.drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const receipt = yield* gateway.ingest(
+          goatInput("Always reply in Korean, remember that", "superseded-note"),
+          rpcContext,
+        );
+        const newerId = ChannelReceptionId.make("reception:newer-note-pass");
+        harness.script.current = () =>
+          Effect.gen(function* () {
+            // Same owner, newer reception id: the old pass's completeReception returns false.
+            yield* ledger
+              .beginReception({
+                owner: runtime.ownerToken,
+                inputId: receipt.inputId,
+                receptionId: newerId,
+                readAt: "2026-10-12T00:00:00.000Z",
+              })
+              .pipe(Effect.orDie);
+            return {
+              replyText: "I'll remember.",
+              action: { type: "report_only" as const },
+              remember: "Reply in Korean.",
+              rememberQuote: "remember that",
+            };
+          });
+        yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+          receipt.inputId,
+          runtime.ownerToken,
+        );
+        const stored = (yield* ledger.getInput(receipt.inputId))!;
+        assert.strictEqual(stored.snapshot.receptionId, newerId);
+        assert.strictEqual(stored.snapshot.state, "processing");
+        assert.isUndefined(stored.snapshot.reply);
+        // A note is saved before reply completion; retrying this input must not append another.
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const files = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
+        const firstNotes = yield* fs.readFileString(files.notes);
+        const marker = " (asked in " + receipt.inputId + ")";
+        assert.strictEqual(
+          firstNotes.split("\n").filter((line) => line.includes(marker)).length,
+          1,
+        );
+        harness.script.current = () =>
+          Effect.succeed({
+            replyText: "I'll remember.",
+            action: { type: "report_only" },
+            remember: "Reply in Korean.",
+            rememberQuote: "remember that",
+          });
+        yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+          receipt.inputId,
+          runtime.ownerToken,
+        );
+        assert.strictEqual((yield* ledger.getInput(receipt.inputId))!.snapshot.state, "replied");
+        assert.strictEqual(yield* fs.readFileString(files.notes), firstNotes);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each(["quoted", "unquoted", "missing"] as const)(
+    "records a %s request to change notes and gives the worker the corresponding permission",
+    (scenario) => {
+      const harness = makeHarness();
+      const quote = scenario === "unquoted" ? "forget the English note" : "forget the Korean note";
+      harness.script.current = (input) =>
+        input.mode === "input"
+          ? Effect.succeed({
+              replyText: "On it.",
+              action: {
+                type: "create_task",
+                title: "Forget a note",
+                instruction: "Remove the requested note.",
+                ...(scenario === "missing" ? {} : { notesChangeRequested: quote }),
+              },
+            })
+          : defaultScript(input);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* (yield* ChannelGateway.ChannelGateway).ingest(
+          goatInput("Please forget the Korean note", "change-note"),
+          rpcContext,
+        );
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        const task = yield* onlyTask;
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          event_json: string;
+        }>`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type = 'task.created'`;
+        assert.lengthOf(rows, 1);
+        const created = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
+          rows[0]!.event_json,
+        );
+        assert.strictEqual(created.type, "task.created");
+        if (created.type !== "task.created") return yield* Effect.die("expected task.created");
+        const instruction = harness.world.launches[0]!.initialMessage!.text;
+        if (scenario === "quoted") {
+          assert.strictEqual(task.notesChangeRequested, quote);
+          assert.strictEqual(created.payload.notesChangeRequested, quote);
+          assert.include(instruction, JSON.stringify(quote));
+          assert.include(instruction, "Edit the notes file only to make that change.");
+          assert.notInclude(instruction, "Leave the notes file unchanged");
+        } else {
+          assert.notProperty(task, "notesChangeRequested");
+          assert.notProperty(created.payload, "notesChangeRequested");
+          assert.include(
+            instruction,
+            "Leave the notes file unchanged; this task did not ask to change a note.",
+          );
+          assert.notInclude(instruction, "Edit the notes file only");
+        }
+        assert.isFalse(yield* notesFileExists);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
 });
 
 describe("completion (scenario 5)", () => {
