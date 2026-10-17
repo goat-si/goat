@@ -9,6 +9,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as ChannelGateway from "../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
 import * as ChannelWorkerReports from "../channels/ChannelWorkerReports.ts";
 import * as ConnectionCatalogBroker from "../connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "../device/DeviceService.ts";
@@ -108,6 +109,7 @@ const dependencies = Layer.mergeAll(
   FileSystem.layerNoop({ makeDirectory: () => Effect.void }),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
+  Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
   Layer.mock(ConnectionCatalogBroker.ConnectionCatalogBroker)({}),
   Layer.mock(DeviceService.DeviceService)({}),

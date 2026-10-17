@@ -603,6 +603,7 @@ describe("ChannelLedger brief/outcome pairs", () => {
   const decodePair = Schema.decodeUnknownSync(
     Schema.fromJsonString(
       Schema.Struct({
+        sequence: Schema.Number,
         brief: Schema.NullOr(ChannelTaskBrief),
         terminalState: Schema.String,
         resultSummary: Schema.NullOr(Schema.String),
@@ -810,6 +811,7 @@ describe("ChannelLedger brief/outcome pairs", () => {
         assert.strictEqual(line.resultSummary, "Build passed.");
         assert.strictEqual(line.evidence.runId, "run-1");
         assert.strictEqual(line.channelAnswers, 1);
+        assert.lengthOf((yield* ledger.answerEventIdsThrough(taskId, line.sequence)).eventIds, 1);
         assert.strictEqual(line.reruns, 0);
         assert.strictEqual(line.generation, 1);
         assert.isDefined(first.nextCursor);
@@ -821,6 +823,13 @@ describe("ChannelLedger brief/outcome pairs", () => {
         assert.strictEqual(next.terminalState, "failed");
         assert.strictEqual(next.resultSummary, "Second result.");
         assert.strictEqual(next.reruns, 1);
+        assert.strictEqual(next.channelAnswers, 0);
+        assert.deepStrictEqual(
+          (yield* ledger.answerEventIdsThrough(taskId, next.sequence)).eventIds,
+          [],
+        );
+        // Historical exports retain their own boundary after the task has retried.
+        assert.lengthOf((yield* ledger.answerEventIdsThrough(taskId, line.sequence)).eventIds, 1);
         assert.isNull(next.evidence);
         assert.isUndefined(second.nextCursor);
         assert.strictEqual((yield* ledger.exportTasks({ ...range, to: NOW })).jsonl, "");

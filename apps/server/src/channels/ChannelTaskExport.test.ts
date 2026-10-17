@@ -1,6 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelTaskEventId,
+  CommandId,
+  EventId,
+  ThreadId,
   ChannelTaskExportRow,
   ChannelTaskLedgerExportRow,
   MemoryRevisionId,
@@ -20,8 +23,22 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as Settings from "../serverSettings.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelLayers from "./ChannelLayers.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
+import {
+  makeHarness,
+  setupBot,
+  goatInput,
+  rpcContext,
+  onlyTask,
+  environmentId,
+  scratchProjectId,
+  modelSelection,
+} from "./testkit/ChannelHarness.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
-import { answerForwardIdsFor } from "./channelIds.ts";
+import { answerForwardIdsFor, taskEventIdFor } from "./channelIds.ts";
 
 const at = DateTime.makeUnsafe("2026-10-17T01:00:00.000Z");
 const decodeRequest = Schema.decodeUnknownSync(OrchestrationV2RuntimeRequest);
@@ -263,3 +280,123 @@ describe("channel task export enrichment", () => {
     },
   );
 });
+
+it.effect(
+  "the channel graph builds its exporter with the EventSink supplied inside that graph",
+  () => {
+    const readCommands: Array<CommandId> = [];
+    const innerEvents = Layer.effect(
+      EventSink.EventSinkV2,
+      Effect.gen(function* () {
+        const actual = yield* EventSink.EventSinkV2;
+        return EventSink.EventSinkV2.of({
+          ...actual,
+          readByCommandId: (input) => {
+            readCommands.push(input.commandId);
+            return actual.readByCommandId(input);
+          },
+        });
+      }),
+    );
+    // Like server.ts: EventSink is provided inside the channel graph and is not re-exported.
+    const harness = makeHarness({
+      channelsLayer: ChannelLayers.layerServices.pipe(Layer.provide(innerEvents)),
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const exporter = yield* ChannelTaskExport.ChannelTaskExport;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const actualEvents = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const iso = DateTime.formatIso(now);
+      const owner = "export-graph-owner";
+      yield* ledger.claimOwnership({ token: owner, now: iso, staleBefore: iso });
+      const receipt = yield* gateway.ingest(
+        goatInput("do: count generation answers", "graph-export"),
+        rpcContext,
+      );
+      yield* reception.receive(receipt.inputId, owner);
+      const task = yield* onlyTask;
+      const workerId = ThreadId.make("thread:export-graph-worker");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("export-graph-worker"),
+        threadId: workerId,
+        projectId: scratchProjectId,
+        title: "Export graph worker",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "system",
+        creationSource: "server",
+      });
+      const move = (spec: Parameters<typeof commitTransition>[2]) =>
+        Effect.gen(function* () {
+          return yield* commitTransition(ledger, (yield* ledger.getTask(task.taskId))!, spec, {
+            owner,
+          });
+        });
+      yield* move({
+        type: "task.dispatch.claimed",
+        payload: {
+          generation: 1,
+          leaseExpiresAt: iso,
+          target: {
+            environmentId,
+            projectId: scratchProjectId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            workspaceStrategy: { type: "root" },
+          },
+        },
+      });
+      yield* move({
+        type: "task.worker.bound",
+        payload: { worker: { environmentId, threadId: workerId, generation: 1 } },
+      });
+      yield* move({
+        type: "task.question.opened",
+        payload: {
+          question: {
+            questionId: "question:export-graph" as never,
+            text: "Which branch?",
+            askedAt: iso,
+          },
+        },
+      });
+      const answered = yield* move({
+        type: "task.question.answered",
+        payload: { questionId: "question:export-graph" as never, answer: "dev" },
+      });
+      const native = request("request:graph-native", { createdAt: now, resolvedAt: now });
+      yield* actualEvents.write({
+        events: [
+          {
+            id: EventId.make("event:graph-native"),
+            threadId: workerId,
+            occurredAt: now,
+            type: "runtime-request.updated",
+            payload: native,
+          },
+        ],
+      });
+      yield* move({ type: "task.completed", payload: { generation: 1, summary: "Done" } });
+      const page = yield* exporter.exportTasks({
+        ownerId: task.requester.ownerId,
+        from: iso,
+        to: "9999-12-31T23:59:59.999Z",
+      });
+      const row = yield* decodeRow(page.jsonl);
+      assert.deepStrictEqual(row.humanInterventions, { channelAnswers: 1, threadAnswers: 1 });
+      assert.deepStrictEqual(readCommands, [
+        answerForwardIdsFor(taskEventIdFor(task.taskId, answered!.version)).commandId,
+      ]);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

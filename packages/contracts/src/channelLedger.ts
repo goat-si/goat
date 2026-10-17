@@ -382,6 +382,7 @@ export type ChannelTaskLedgerExportRow = typeof ChannelTaskLedgerExportRow.Type;
 
 export const ChannelTaskExportRow = Schema.Struct({
   ...ChannelTaskOutcomeFields,
+  /** Both counters belong to this outcome's generation; reruns remains task-cumulative. */
   humanInterventions: Schema.Struct({
     channelAnswers: NonNegativeInt,
     /** Local worker's native human answers through the terminal time; null means unknown. */

@@ -158,5 +158,5 @@ export const layer = McpToolAccess.toLayer(
         }),
       ),
     } satisfies McpToolAccess.Handlers<typeof ChannelToolkit.tools>;
-  }).pipe(Effect.provide(ChannelTaskExport.layer)),
+  }),
 );

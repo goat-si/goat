@@ -25,6 +25,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -74,7 +75,8 @@ export const makeLayerServices = <E, R>(
     Layer.provideMerge(layerSlack),
     Layer.provideMerge(layerGateway),
   );
-  return ChannelRuntime.layer.pipe(
+  // Build the exporter inside the same graph as the workers so it captures the shared EventSink.
+  return Layer.mergeAll(ChannelRuntime.layer, ChannelTaskExport.layer).pipe(
     Layer.provideMerge(
       Layer.mergeAll(ChannelBotTimeline.layerGoatTransport, ChannelGateway.layerMcpMailbox).pipe(
         Layer.provideMerge(layerWorkers),

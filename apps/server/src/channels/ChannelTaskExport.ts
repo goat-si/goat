@@ -37,24 +37,23 @@ const unknownMemory: ChannelTaskMemoryDelivered = { state: "unknown", revisions:
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const threads = yield* ThreadManagement.ThreadManagementService;
-  // Partial embeddings can omit these readers. Unknown must not masquerade as complete evidence.
-  const events = yield* Effect.serviceOption(EventSink.EventSinkV2);
+  const events = yield* EventSink.EventSinkV2;
+  // Partial embeddings can omit memory readers. Unknown must not masquerade as complete evidence.
   const memory = yield* Effect.serviceOption(MemoryStore.MemoryStore);
   const settings = yield* Effect.serviceOption(ServerSettings.MemoryHubCommittedSettings);
 
   const threadAnswers = Effect.fn("channel.export.threadAnswers")(
     function* (row: ChannelTaskLedgerExportRow) {
       const worker = row.evidence;
-      if (worker === null || worker.host !== undefined) return null;
-      const answerIds = yield* ledger.answerEventIdsThrough(row.taskId, row.sequence);
-      if (answerIds.overflow || (answerIds.eventIds.length > 0 && events._tag === "None"))
+      if (worker === null || worker.host !== undefined || worker.generation !== row.generation)
         return null;
+      const answerIds = yield* ledger.answerEventIdsThrough(row.taskId, row.sequence);
+      if (answerIds.overflow) return null;
       const forwardedRequests = new Set<string>();
       // Channel forwarding uses a deterministic command id. Only matching persisted resolutions
       // are duplicates; equal answer text or nearby timestamps are not proof of the same answer.
       for (const eventId of answerIds.eventIds) {
-        if (events._tag === "None") return null;
-        const forwarded = yield* events.value
+        const forwarded = yield* events
           .readByCommandId({ commandId: answerForwardIdsFor(eventId).commandId })
           .pipe(Stream.runCollect);
         for (const stored of forwarded) {

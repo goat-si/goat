@@ -43,9 +43,10 @@ MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.m
 
 `ChannelTaskExport` joins ledger outcome pairs with local native-question response provenance
 and memory lineage through existing read services; `ChannelLedger` reads only channel records.
-Human answer counts stop at the terminal timestamp and exclude native resolutions produced by
-channel-forward commands. Notes hashes are frozen at launch. Memory lineage is observed at export
-time and is cumulative for the worker thread, including ancestor revisions; it does not establish
+Both human answer counters are scoped to the outcome's generation, stop at the terminal timestamp,
+and exclude native resolutions produced by channel-forward commands. Reruns remain task-cumulative. Notes hashes are frozen at launch. Memory lineage is observed at export
+time and is cumulative for the worker thread, including ancestor revisions and memory delivered
+after the outcome; it does not establish
 which memory a particular run relied on. `unknown` and `overflow` retain incomplete evidence,
 and remote threads are reported as unknown rather than as empty complete records.
 

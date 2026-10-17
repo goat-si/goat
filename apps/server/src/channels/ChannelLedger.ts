@@ -216,7 +216,7 @@ export class ChannelLedger extends Context.Service<
     readonly exportTasks: (
       input: ChannelTaskExportInput & { readonly ownerId: string },
     ) => Effect.Effect<ChannelTaskExportResult, ChannelLedgerError>;
-    /** Bounded provenance for excluding native replies produced by channel forwarding. */
+    /** Bounded forwarding provenance from the terminal event's generation only. */
     readonly answerEventIdsThrough: (
       taskId: ChannelTaskId,
       sequence: number,
@@ -960,7 +960,12 @@ const make = Effect.gen(function* () {
               ORDER BY bound.sequence DESC LIMIT 1) AS worker_json,
             (SELECT COUNT(*) FROM channel_task_events AS answer
               WHERE answer.task_id = outcome.task_id AND answer.type = 'task.question.answered'
-                AND answer.sequence < outcome.sequence) AS human_interventions,
+                AND answer.sequence < outcome.sequence
+                AND answer.sequence > COALESCE((
+                  SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
+                  WHERE boundary.task_id = outcome.task_id AND boundary.type = 'task.retry.requested'
+                    AND boundary.sequence < outcome.sequence
+                ), 0)) AS human_interventions,
             (SELECT COUNT(*) FROM channel_task_events AS retry
               WHERE retry.task_id = outcome.task_id AND retry.type = 'task.retry.requested'
                 AND retry.sequence < outcome.sequence) AS reruns
@@ -1034,6 +1039,11 @@ const make = Effect.gen(function* () {
       sql<{ readonly event_id: ChannelTaskEventId }>`
         SELECT event_id FROM channel_task_events
         WHERE task_id = ${taskId} AND type = 'task.question.answered' AND sequence < ${sequence}
+          AND sequence > COALESCE((
+            SELECT MAX(boundary.sequence) FROM channel_task_events AS boundary
+            WHERE boundary.task_id = ${taskId} AND boundary.type = 'task.retry.requested'
+              AND boundary.sequence < ${sequence}
+          ), 0)
         ORDER BY sequence LIMIT 501
       `.pipe(
         Effect.map((rows) => ({
