@@ -70,6 +70,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
@@ -638,6 +639,28 @@ function withPullRequestWatch(
 ): ThreadPullRequestLink {
   const { watch: _previous, ...rest } = link;
   return watch === undefined ? rest : { ...rest, watch };
+}
+
+/** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
+function newPullRequestWatch(startedAt: string, automatic: boolean): ThreadPullRequestWatch {
+  return {
+    startedAt,
+    headSha: null,
+    failedChecks: [],
+    passed: false,
+    passedChecks: [],
+    remarksThrough: startedAt,
+    remarkIds: [],
+    conflicting: false,
+    wakes: 0,
+    ...(automatic ? { automatic: true } : {}),
+  };
+}
+
+/** The same watch, now asked for: it keeps the thread working from here on. */
+function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadPullRequestWatch {
+  const { automatic: _automatic, ...rest } = watch;
+  return rest;
 }
 
 /** A legacy single-PR link as a link entry. Re-linking a pull request keeps its watch. */
@@ -2529,7 +2552,45 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
       yield* dispatchThreadMutation(command, events, effects);
-      if (command.wake === undefined) return;
+      if (command.wake === undefined) {
+        if (command.note === undefined) return;
+        // Kept as context: the timeline shows it, and no turn starts.
+        const now = yield* DateTime.now;
+        const ordinal = yield* projectionStore
+          .getNextTurnItemOrdinal(command.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          );
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`turn-item:pr-watch:${command.commandId}`),
+            threadId: command.threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "notification",
+            ...command.note,
+          },
+        });
+        return;
+      }
       yield* dispatchMessage(
         {
           type: "message.dispatch",
@@ -2652,6 +2713,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           cause: `Thread ${command.threadId} was stopped.`,
         });
+      }
+    }
+    // A pull request the thread created, or its agent linked, is watched without a
+    // watch_pull_request call when the project's policy allows, under the limits an agent's
+    // watch has. A settings read that fails only skips the watch; the link still lands.
+    let autoWatch = false;
+    if (
+      command.type === "thread.pull-request.link" &&
+      (command.source === "created" || command.source === "agent") &&
+      thread.archivedAt === null &&
+      thread.settledOverride !== "settled" &&
+      thread.settledAt === null &&
+      !isProviderNativeSubagentThread(thread) &&
+      thread.lineage.relationshipToParent !== "subagent"
+    ) {
+      autoWatch = yield* serverSettings.getSettings.pipe(
+        Effect.map(
+          (settings) =>
+            resolveProjectSettings(settings, thread.projectId).settings.pullRequestWatchPolicy
+              .autoWatch,
+        ),
+        Effect.orElseSucceed(() => false),
+      );
+      if (autoWatch && command.source === "agent") {
+        const { runs } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs"])
+          .pipe(mapDispatchError(command));
+        const latest = latestExecutedRun(runs);
+        if (latest !== null && (yield* stopReachedRun(command, command.threadId, latest.id))) {
+          autoWatch = false;
+        }
       }
     }
     if (
@@ -3201,7 +3293,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               command.source !== "stack" &&
               command.source !== "stack-dismissed";
             if (existing && !undismisses) return thread;
-            const link = existing
+            const linked: ThreadPullRequestLink = existing
               ? { ...existing, source: command.source, url: command.url }
               : {
                   ...key,
@@ -3211,6 +3303,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   snapshot: null,
                   stack: null,
                 };
+            const link =
+              autoWatch && linked.watch === undefined
+                ? withPullRequestWatch(linked, newPullRequestWatch(DateTime.formatIso(now), true))
+                : linked;
             const branch = thread.branchPullRequest;
             const branchKey = branch ? legacyThreadPullRequestKey(branch) : null;
             pullRequests = [
@@ -3316,17 +3412,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : existing.watch
               : !command.watching
                 ? undefined
-                : (existing.watch ?? {
-                    startedAt,
-                    headSha: null,
-                    failedChecks: [],
-                    passed: false,
-                    passedChecks: [],
-                    remarksThrough: startedAt,
-                    remarkIds: [],
-                    conflicting: false,
-                    wakes: 0,
-                  });
+                : existing.watch === undefined
+                  ? newPullRequestWatch(startedAt, false)
+                  : // Asking to watch an automatic watch makes it explicit, keeping its progress.
+                    existing.watch.automatic === true
+                    ? explicitPullRequestWatch(existing.watch)
+                    : existing.watch;
           if (watch === existing.watch && links === linked) return thread;
           return {
             ...thread,
