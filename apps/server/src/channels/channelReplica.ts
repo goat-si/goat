@@ -271,7 +271,8 @@ if ! base64 -d < "$tmp/base64" > "$tmp/bundle" 2>/dev/null; then
 fi
 if ! LC_ALL=C git bundle verify "$tmp/bundle" > "$tmp/verify" 2>&1; then
   printf 'GOAT_REPLICA_BASE_MISSING\n'
-  awk '($1 ~ /^[0-9a-f]+$/ && (length($1) == 40 || length($1) == 64)) { print $1 }' "$tmp/verify"
+  # Git prefixes each line with "error: "; the missing commits follow the "lacks" line.
+  awk '{ sub(/^(error|fatal): /, "") } /lacks these prerequisite/ { p = 1; next } p && $1 ~ /^[0-9a-f]+$/ && (length($1) == 40 || length($1) == 64) { print $1 }' "$tmp/verify"
   exit 0
 fi
 oid=$(git bundle list-heads "$tmp/bundle" "$replica_ref" | awk '{print $1}')
