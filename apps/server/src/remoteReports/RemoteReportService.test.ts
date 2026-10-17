@@ -7,6 +7,7 @@ import {
   RuntimeRequestId,
   MessageId,
   type OrchestrationV2Run,
+  type ThreadPullRequestLink,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ConversationMessage,
@@ -78,7 +79,28 @@ const setup = Effect.gen(function* () {
   yield* threadRunResultsMigration;
   yield* relayMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
-  const deletions = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+  const changeTypes = [
+    "thread.deleted",
+    "runtime-request.updated",
+    "turn-item.updated",
+    "provider-thread.updated",
+    "thread.pull-request-link-updated",
+    "thread.pull-request-synced",
+    "thread.metadata-updated",
+  ] as const;
+  const changeQueues = new Map(
+    yield* Effect.forEach(changeTypes, (type) =>
+      Queue.unbounded<OrchestrationV2StoredEvent>().pipe(
+        Effect.map((queue) => [type, queue] as const),
+      ),
+    ),
+  );
+  const changes = (event: OrchestrationV2StoredEvent) => {
+    const queue = changeQueues.get(event.event.type as (typeof changeTypes)[number]);
+    return queue === undefined
+      ? Effect.die("unexpected fixture event " + event.event.type)
+      : Queue.offer(queue, event);
+  };
   const creations = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const subscribed = yield* Deferred.make<void>();
   const state: {
@@ -93,6 +115,7 @@ const setup = Effect.gen(function* () {
     questions: string[];
     backgroundTasks: number;
     continuationPending: boolean;
+    shell: Partial<OrchestrationV2ThreadShell>;
     subscriptions: Array<
       Parameters<Orchestrator.OrchestratorV2["Service"]["streamStoredEventsFrom"]>[0]
     >;
@@ -107,6 +130,7 @@ const setup = Effect.gen(function* () {
     questions: [],
     backgroundTasks: 0,
     continuationPending: false,
+    shell: { pullRequests: [] },
     subscriptions: [],
   };
   const fake = Layer.mock(Orchestrator.OrchestratorV2)({
@@ -118,6 +142,7 @@ const setup = Effect.gen(function* () {
             activeRunId: state.activeRunId,
             latestRunId: state.latestRunId,
             deletedAt: state.deletedAt,
+            ...state.shell,
           }) as unknown as OrchestrationV2ThreadShell,
       ),
     getThreadEventSequence: () => Effect.succeed(17),
@@ -138,6 +163,7 @@ const setup = Effect.gen(function* () {
             id,
             kind: "user_input",
             status: "pending",
+            createdAt: DateTime.makeUnsafe(0),
           })),
           providerThreads: [
             {
@@ -162,13 +188,13 @@ const setup = Effect.gen(function* () {
           )
         : input?.eventType === "run.created"
           ? Stream.fromQueue(creations)
-          : Stream.fromQueue(deletions);
+          : Stream.fromQueue(changeQueues.get(input!.eventType as (typeof changeTypes)[number])!);
     },
   });
   const context = yield* Layer.build(RemoteReportService.layer.pipe(Layer.provide(fake)));
   const service = Context.get(context, RemoteReportService.RemoteReportService);
   yield* service.bind(threadId, binding);
-  return { service, sql, state, events, deletions, creations, subscribed };
+  return { service, sql, state, events, changes, creations, subscribed };
 });
 type Fixture = Effect.Success<typeof setup>;
 const withFixture = <A, E, R>(body: (fixture: Fixture) => Effect.Effect<A, E, R>) =>
@@ -353,6 +379,7 @@ test("observes completed A after B starts and summarizes only A's last assistant
       status: "completed",
       summary: "x".repeat(4000),
       holds: { backgroundTasks: 0, continuationPending: false },
+      observation: { pullRequests: [], needsYou: [] },
     });
     expect(result.latestRunId).toBe(runB);
     const latest = yield* service.wait({ ...waitInput, watchRunId: null });
@@ -361,6 +388,7 @@ test("observes completed A after B starts and summarizes only A's last assistant
       status: "running",
       summary: null,
       pendingRequestIds: [],
+      observation: { pullRequests: [], needsYou: [] },
     });
     expect(
       (yield* service.wait({ ...waitInput, watchRunId: RunId.make("missing") }).pipe(Effect.flip))
@@ -463,6 +491,7 @@ test("a new run wakes a wait that follows the latest run", ({
       status: "queued",
       summary: null,
       pendingRequestIds: [],
+      observation: { pullRequests: [], needsYou: [] },
     });
     expect(result.timedOut).toBe(false);
     expect(state.subscriptions).toContainEqual({
@@ -491,6 +520,7 @@ test("replays a run update between initial snapshot and stream subscription", ({
       status: "completed",
       summary: null,
       holds: { backgroundTasks: 0, continuationPending: false },
+      observation: { pullRequests: [], needsYou: [] },
     });
     expect(state.subscriptions).toContainEqual({
       threadId,
@@ -565,7 +595,7 @@ test("times out using TestClock and returns a final running observation", ({
 test("an open question releases a caller that echoes questions once, and never an older one", ({
   service,
   state,
-  deletions,
+  changes,
   subscribed,
 }) =>
   Effect.gen(function* () {
@@ -573,8 +603,7 @@ test("an open question releases a caller that echoes questions once, and never a
     const fiber = yield* service.wait({ ...waitInput, knownRun }).pipe(Effect.forkChild);
     yield* Deferred.await(subscribed);
     state.questions = ["request-1"];
-    yield* Queue.offer(
-      deletions,
+    yield* changes(
       stored(18, { type: "turn-item.updated", payload: { type: "user_input_request" } }),
     );
     expect(yield* Fiber.join(fiber)).toMatchObject({
@@ -595,7 +624,7 @@ test("an open question releases a caller that echoes questions once, and never a
 test("a finished run reports what holds it open and releases when that changes", ({
   service,
   state,
-  deletions,
+  changes,
   subscribed,
 }) =>
   Effect.gen(function* () {
@@ -610,12 +639,143 @@ test("a finished run reports what holds it open and releases when that changes",
     yield* Deferred.await(subscribed);
     state.backgroundTasks = 0;
     state.continuationPending = false;
-    yield* Queue.offer(deletions, stored(18, { type: "provider-thread.updated", payload: {} }));
+    yield* changes(stored(18, { type: "provider-thread.updated", payload: {} }));
     expect(yield* Fiber.join(fiber)).toMatchObject({
       timedOut: false,
       observedRun: { holds: { backgroundTasks: 0, continuationPending: false } },
     });
   }));
+const watchedPullRequest: ThreadPullRequestLink = {
+  host: "github.com",
+  repository: "goat-si/goat",
+  number: 42,
+  url: "https://github.com/goat-si/goat/pull/42",
+  source: "agent",
+  linkedAt: "2026-10-12T00:00:00.000Z",
+  snapshot: null,
+  stack: null,
+  watch: {
+    startedAt: "2026-10-12T00:00:00.000Z",
+    headSha: null,
+    failedChecks: [],
+    passed: false,
+    passedChecks: [],
+    remarksThrough: "2026-10-12T00:00:00.000Z",
+    remarkIds: [],
+    conflicting: false,
+    wakes: 0,
+  },
+};
+test("a pull request observation wakes an origin that echoes it and waits once echoed", ({
+  service,
+  state,
+  changes,
+  subscribed,
+}) =>
+  Effect.gen(function* () {
+    const knownRun = {
+      runId: runA,
+      status: "running",
+      observation: { pullRequests: [], needsYou: [] },
+    };
+    const fiber = yield* service.wait({ ...waitInput, knownRun }).pipe(Effect.forkChild);
+    yield* Deferred.await(subscribed);
+    state.shell = { ...state.shell, pullRequests: [watchedPullRequest] };
+    yield* changes(
+      stored(18, { type: "thread.pull-request-link-updated", payload: watchedPullRequest }),
+    );
+    const changed = yield* Fiber.join(fiber);
+    const observation = {
+      pullRequests: [
+        {
+          repository: "goat-si/goat",
+          number: 42,
+          url: "https://github.com/goat-si/goat/pull/42",
+          watching: true,
+        },
+      ],
+      needsYou: [],
+    };
+    expect(changed).toMatchObject({ timedOut: false, observedRun: { observation } });
+    expect(RemoteReportService.observedRunChanged(knownRun, changed.observedRun)).toBe(true);
+    expect(RemoteReportService.observedRunChanged(waitInput.knownRun, changed.observedRun)).toBe(
+      false,
+    );
+    expect(
+      (yield* service.wait({
+        ...waitInput,
+        knownRun: { ...knownRun, observation },
+        timeoutMs: 0,
+      })).timedOut,
+    ).toBe(true);
+    // An older origin never echoes observations, so a PR cannot make it spin.
+    expect((yield* service.wait({ ...waitInput, timeoutMs: 0 })).timedOut).toBe(true);
+    state.shell = { ...state.shell, pullRequests: [] };
+    expect(
+      (yield* service.wait({
+        ...waitInput,
+        knownRun: { ...knownRun, observation },
+        timeoutMs: 0,
+      })).timedOut,
+    ).toBe(false);
+  }));
+test("a completed run stays held by its watched pull request without provider background tasks", ({
+  service,
+  state,
+}) =>
+  Effect.gen(function* () {
+    state.runs = [run(runA, "completed")];
+    state.activeRunId = null;
+    state.shell = { ...state.shell, pullRequests: [watchedPullRequest] };
+    const result = yield* service.wait(waitInput);
+    expect(result.observedRun?.holds?.backgroundTasks).toBeGreaterThanOrEqual(1);
+    expect(result.observedRun?.observation).toEqual({
+      pullRequests: [
+        {
+          repository: "goat-si/goat",
+          number: 42,
+          url: "https://github.com/goat-si/goat/pull/42",
+          watching: true,
+        },
+      ],
+      needsYou: [],
+    });
+  }));
+it.effect.each(["unknown reset", "unchosen recovery", "auto resume"] as const)(
+  "reports a failed usage-limited run with %s without arming recovery",
+  (choice) =>
+    withFixture(({ service, state }) =>
+      Effect.gen(function* () {
+        const resetAt = "2099-01-01T00:00:00.000Z";
+        state.runs = [{ ...run(runA, "failed"), completedAt: DateTime.makeUnsafe(0) }];
+        state.activeRunId = null;
+        state.shell = {
+          lastErrorClass: "usage_limit",
+          ...(choice === "unknown reset" ? {} : { usageLimitResetAt: resetAt }),
+          ...(choice === "auto resume"
+            ? {
+                limitRecovery: { runId: runA, resetAt, autoResume: true, snooze: false },
+              }
+            : {}),
+        };
+        const result = yield* service.wait(waitInput);
+        expect(result.observedRun).toMatchObject({ runId: runA, status: "failed" });
+        expect(result.observedRun?.observation).toEqual({
+          pullRequests: [],
+          needsYou:
+            choice === "auto resume"
+              ? []
+              : [
+                  {
+                    kind: "usage_limit",
+                    since: "1970-01-01T00:00:00.000Z",
+                  },
+                ],
+          ...(choice === "unknown reset" ? {} : { usageLimitResetAt: resetAt }),
+        });
+      }),
+    ),
+);
 test("unbind removes reports, wakes waiters and blocks future reports", ({
   service,
   sql,
@@ -640,7 +800,7 @@ test("unbind removes reports, wakes waiters and blocks future reports", ({
 test("thread deletion wakes the wait into a thread_deleted error", ({
   service,
   state,
-  deletions,
+  changes,
   subscribed,
 }) =>
   Effect.gen(function* () {
@@ -651,7 +811,7 @@ test("thread deletion wakes the wait into a thread_deleted error", ({
       .report(threadId, { status: "progress", summary: "late" })
       .pipe(Effect.flip);
     expect(refused.reason).toBe("thread_deleted");
-    yield* Queue.offer(deletions, stored(18, { type: "thread.deleted", payload: { threadId } }));
+    yield* changes(stored(18, { type: "thread.deleted", payload: { threadId } }));
     const result = yield* Fiber.join(fiber);
     expect(result._tag === "Failure" && result.failure.reason).toBe("thread_deleted");
   }));
