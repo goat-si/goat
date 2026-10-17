@@ -48,8 +48,7 @@ export async function readGoatBotWaiting(input: {
       ...(cursor === undefined ? {} : { cursor }),
     });
     for (const task of page.tasks) {
-      if (task.status === "waiting_input" && task.originAddress.kind === "goat")
-        taskIds.add(task.taskId);
+      if (task.status === "waiting_input") taskIds.add(task.taskId);
     }
     cursor = page.nextCursor;
     if (cursor !== undefined) {

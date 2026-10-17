@@ -208,7 +208,11 @@ export class ChannelLedger extends Context.Service<
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
     /** How many of an owner's GOAT-origin tasks wait for an answer, without reading them. */
-    readonly countWaitingGoatTasks: (ownerId: string) => Effect.Effect<number, ChannelLedgerError>;
+    /**
+     * Tasks from any channel that wait on a person: an open question, or a running worker whose
+     * thread needs an answer, approval, sign-in or resume (`observed.needsYou`). Each counts once.
+     */
+    readonly countWaitingTasks: (ownerId: string) => Effect.Effect<number, ChannelLedgerError>;
     readonly findTaskByWorkerThread: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelStoredTask | undefined, ChannelLedgerError>;
@@ -898,14 +902,20 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listTasksByStatus")),
       ),
 
-    countWaitingGoatTasks: (ownerId) =>
+    countWaitingTasks: (ownerId) =>
       sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM channel_tasks
-        WHERE status = 'waiting_input' AND owner_id = ${ownerId}
-          AND json_extract(task_json, '$.originAddress.kind') = 'goat'
+        WHERE owner_id = ${ownerId}
+          AND (
+            status = 'waiting_input'
+            OR (
+              status = 'running'
+              AND COALESCE(json_array_length(task_json, '$.observed.needsYou'), 0) > 0
+            )
+          )
       `.pipe(
         Effect.map((rows) => Number(rows[0]?.count ?? 0)),
-        Effect.mapError(toLedgerError("countWaitingGoatTasks")),
+        Effect.mapError(toLedgerError("countWaitingTasks")),
       ),
 
     findTaskByWorkerThread: (threadId) =>

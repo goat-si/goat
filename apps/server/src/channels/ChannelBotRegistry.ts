@@ -186,7 +186,7 @@ const make = Effect.gen(function* () {
   const status: ChannelBotRegistry["Service"]["status"] = (owner) =>
     Effect.all({
       bot: ledger.getBot(owner.ownerId).pipe(Effect.map((stored) => stored?.bot ?? null)),
-      waitingCount: ledger.countWaitingGoatTasks(owner.ownerId),
+      waitingCount: ledger.countWaitingTasks(owner.ownerId),
     }).pipe(Effect.mapError(persistence));
 
   return ChannelBotRegistry.of({ ensure, ensureForReport, status });

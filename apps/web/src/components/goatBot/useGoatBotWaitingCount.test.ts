@@ -39,15 +39,15 @@ describe("readGoatBotWaiting", () => {
     expect(port.listTasks).not.toHaveBeenCalled();
   });
 
-  it("pages an older server and counts only GOAT-origin tasks", async () => {
+  it("pages an older server and counts waiting tasks from every channel once", async () => {
     const listTasks = vi
       .fn<GoatBotChannelPort["listTasks"]>()
       .mockResolvedValueOnce({ tasks: [task("a", "goat"), task("b", "slack")], nextCursor: "1" })
-      .mockResolvedValueOnce({ tasks: [task("c", "goat")] });
+      .mockResolvedValueOnce({ tasks: [task("c", "goat"), task("b", "slack")] });
     const port = makePort({ listTasks });
     await expect(
       readGoatBotWaiting({ port, environmentId, supportsStatus: false, alive: () => true }),
-    ).resolves.toEqual({ count: 2, bot: null });
+    ).resolves.toEqual({ count: 3, bot: null });
     expect(listTasks).toHaveBeenCalledTimes(2);
     expect(port.getBotStatus).not.toHaveBeenCalled();
   });
