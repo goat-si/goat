@@ -3,10 +3,15 @@
  *
  * Completion comes from the worker thread's own runs, read from its projection: the task's
  * current run must finish `completed`, with no open question, no answer still on its way, no
- * provider background work, and no pending restart continuation. Process exit, a last assistant
- * sentence, or an explicit "completed" report alone never finish a task. Reading the projection
- * (rather than counting events) makes a replayed or missed event harmless: every pass decides
- * from the current state, and a finished task cannot finish again.
+ * provider background work, no pull request watch, and no pending restart continuation. Process
+ * exit, a last assistant sentence, or an explicit "completed" report alone never finish a task.
+ * Reading the projection (rather than counting events) makes a replayed or missed event harmless:
+ * every pass decides from the current state, and a finished task cannot finish again.
+ *
+ * Each pass also records what the worker thread shows besides its run status (linked pull
+ * requests, native questions and approvals, a usage-limit wait) as `task.worker.observed`. A run
+ * that stopped on a usage limit keeps the task alive: GOAT resumes the worker after the reset, or
+ * shows that a person has to.
  *
  * Workers may also report progress, questions, and proposed completion with channel_task_report;
  * the caller's thread and generation must match the task's assignment.
@@ -15,6 +20,8 @@
  */
 import {
   ChannelGatewayError,
+  channelWorkerObservationEquals,
+  CommandId,
   type ChannelTaskEventId,
   type ChannelTaskReportInput,
   type OrchestrationV2Run,
@@ -32,6 +39,14 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import { questionIdFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import {
+  completionHoldCount,
+  needsYouFromRuntimeRequests,
+  observeWorker,
+  pullRequestsFromLinks,
+  usageLimitWait,
+  type UsageLimitWait,
+} from "./channelWorkerObservation.ts";
 
 const TERMINAL_RUN_STATUSES = new Set([
   "completed",
@@ -82,6 +97,33 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => undefined),
       );
 
+  /**
+   * Whether `run` stopped on a usage limit, and how it continues. A reset ahead with no choice
+   * made for this run arms automatic resume for the worker thread, the same recovery a person turns
+   * on for a thread, so channel work continues after the limit without anyone watching.
+   */
+  const workerUsageLimit = (threadId: ThreadId, run: OrchestrationV2Run) =>
+    Effect.gen(function* () {
+      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+      const wait = usageLimitWait(shell, run, yield* DateTime.now);
+      if (wait?.arm === undefined) return wait;
+      const { resetAt, resetMs } = wait.arm;
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`channel-limit-arm:${threadId}:${run.id}:${resetMs}`),
+          threadId,
+          limitRecovery: { runId: run.id, resetAt, autoResume: true, snooze: false },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("channels.worker.limit-recovery-arm-failed", { threadId, cause }),
+          ),
+        );
+      // A failed arm is retried next pass with the same command id.
+      return { resetAt } satisfies UsageLimitWait;
+    });
+
   /** One task against its worker's current runs. True when the ledger changed. */
   const reconcileTask = (stored: ChannelLedger.ChannelStoredTask, owner: string) =>
     Effect.gen(function* () {
@@ -90,10 +132,11 @@ const make = Effect.gen(function* () {
       // Workers on another machine report through ChannelRemoteWorkers.
       if (worker === undefined || worker.host !== undefined) return false;
       const records = yield* threads
-        .getThreadRecords(worker.threadId, ["runs", "providerThreads"])
+        .getThreadRecords(worker.threadId, ["runs", "providerThreads", "runtimeRequests"])
         .pipe(Effect.option);
       if (records._tag === "None") return false;
       const runs = records.value.runs.toSorted((left, right) => left.ordinal - right.ordinal);
+      const pullRequestLinks = records.value.thread.pullRequests;
       const bound = runs.find((run) => run.id === worker.runId);
 
       // An answer was sent to the worker: wait for the run it starts before judging anything.
@@ -124,6 +167,33 @@ const make = Effect.gen(function* () {
         if (reread === undefined) return true;
         latest = reread;
       }
+
+      const limit =
+        current.status === "failed" ? yield* workerUsageLimit(worker.threadId, current) : undefined;
+      const observed = observeWorker({
+        pullRequests: pullRequestsFromLinks(pullRequestLinks),
+        needsYou: [
+          ...needsYouFromRuntimeRequests(records.value.runtimeRequests),
+          ...(limit?.needsYou === undefined ? [] : [limit.needsYou]),
+        ],
+        usageLimitResetAt: limit?.resetAt,
+      });
+      if (!channelWorkerObservationEquals(latest.task.observed, observed)) {
+        const wrote = yield* commitTransition(
+          ledger,
+          latest,
+          {
+            type: "task.worker.observed",
+            payload: { generation: latest.task.generation, observed },
+          },
+          { owner },
+        );
+        if (wrote === undefined) return latest !== stored;
+        const reread = yield* ledger.getTask(task.taskId);
+        if (reread === undefined) return true;
+        latest = reread;
+      }
+
       if (!TERMINAL_RUN_STATUSES.has(current.status)) return latest !== stored;
       // A worker that asked a question and stopped waits for the answer; one whose run failed or
       // was stopped while waiting has ended the task all the same.
@@ -142,11 +212,18 @@ const make = Effect.gen(function* () {
         .pipe(Effect.orElseSucceed(() => false));
       if (continuationPending) return latest !== stored;
 
+      // A usage limit is a pause: the continuation run GOAT or a person starts rebinds the task.
+      if (limit !== undefined) return latest !== stored;
+
       if (current.status === "completed") {
-        const backgroundPending = records.value.providerThreads.some(
-          (providerThread) => (providerThread.pendingBackgroundTasks ?? []).length > 0,
-        );
-        if (backgroundPending) {
+        const held =
+          completionHoldCount({
+            current,
+            runs,
+            providerThreads: records.value.providerThreads,
+            pullRequests: pullRequestLinks,
+          }) > 0;
+        if (held) {
           if (latest.completionHold !== BACKGROUND_HOLD) {
             yield* ledger.setCompletionHold({ owner, taskId: task.taskId, hold: BACKGROUND_HOLD });
           }
