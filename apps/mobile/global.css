@@ -48,6 +48,11 @@
   font-family: var(--font-bold);
 }
 
+/* No 600 face is bundled; like CSS weight matching, semibold resolves to the 700 face. */
+@utility font-goat-semibold {
+  font-family: var(--font-bold);
+}
+
 @utility font-goat-extrabold {
   font-family: var(--font-bold);
   font-weight: 800;
