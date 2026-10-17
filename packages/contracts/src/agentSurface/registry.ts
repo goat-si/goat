@@ -174,6 +174,25 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
+  "channel.task_export": entry({
+    resource: "channel",
+    verb: "task_export",
+    name: "channel_task_export",
+    toolkit: "channel",
+    summary: "Export GOAT brief/outcome pairs",
+    description:
+      "Export GOAT ledger brief/outcome pairs as JSONL for terminal events in the UTC interval [from, to). Results include the frozen brief, terminal state, summary, worker/run evidence pointers, human interventions and reruns. Old tasks export brief:null. Use nextCursor to continue.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Export GOAT brief/outcome pairs",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
   "channel.task_report": entry({
     resource: "channel",
     verb: "task_report",

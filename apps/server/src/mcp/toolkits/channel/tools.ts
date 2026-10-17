@@ -7,6 +7,8 @@ import {
   ChannelListTasksInput,
   ChannelListTasksResult,
   ChannelTask,
+  ChannelTaskExportInput,
+  ChannelTaskExportResult,
   ChannelTaskId,
   ChannelTaskReportInput,
   OrchestratorMcpFailure,
@@ -65,6 +67,13 @@ const ChannelTaskListTool = Tool.make(agentSurfaceRegistry["channel.task_list"].
   success: ChannelListTasksResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_list"]));
 
+const ChannelTaskExportTool = Tool.make(agentSurfaceRegistry["channel.task_export"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["channel.task_export"].description,
+  parameters: ChannelTaskExportInput,
+  success: ChannelTaskExportResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_export"]));
+
 const ChannelTaskReportTool = Tool.make(agentSurfaceRegistry["channel.task_report"].name, {
   ...shared,
   description: agentSurfaceRegistry["channel.task_report"].description,
@@ -77,5 +86,6 @@ export const ChannelToolkit = Toolkit.make(
   ChannelInputGetTool,
   ChannelTaskGetTool,
   ChannelTaskListTool,
+  ChannelTaskExportTool,
   ChannelTaskReportTool,
 );

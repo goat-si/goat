@@ -1,11 +1,22 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
+import * as ChannelReceptionService from "../../../channels/ChannelReceptionService.ts";
+import { commitTransition } from "../../../channels/channelTaskWrites.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
-import { environmentId, makeHarness } from "../../../channels/testkit/ChannelHarness.ts";
+import {
+  environmentId,
+  makeHarness,
+  goatInput,
+  onlyTask,
+  rpcContext,
+  setupBot,
+} from "../../../channels/testkit/ChannelHarness.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -60,3 +71,61 @@ it.effect.each(["ingest", "read"] as const)("MCP %s follows home ownership", (op
     }
   }).pipe(Effect.provide(Layer.merge(scope, harness.layer)));
 });
+
+it.effect.each(["owner", "another-owner"] as const)(
+  "read-only export filters %s terminal events",
+  (caller) => {
+    const harness = makeHarness();
+    const scope = Layer.succeed(McpInvocationContext.McpInvocationContext, {
+      environmentId: caller === "owner" ? environmentId : EnvironmentId.make("environment:other"),
+      capabilities: new Set(["orchestration"] as const),
+      issuedAt: 0,
+      requestNamespace: "export-tools",
+      thread: undefined,
+      client: { sessionId: "export-tools", label: "Reader", access: "read-only" },
+    });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger.claimOwnership({ token: "export-owner", now, staleBefore: now });
+      const input = yield* gateway.ingest(
+        goatInput("do: export old work", "export-old"),
+        rpcContext,
+      );
+      yield* reception.receive(input.inputId, "export-owner");
+      const task = yield* onlyTask;
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.cancelled",
+          payload: { reason: "No longer needed" },
+        },
+        { owner: "export-owner" },
+      );
+      const toolkit = yield* ChannelToolkit.pipe(
+        Effect.provide(McpToolAccess.HandlersLayer.layer(ChannelHandlers.layer)),
+      );
+      const result = yield* toolkit
+        .handle("channel_task_export", {
+          from: now,
+          to: "9999-12-31T23:59:59.999Z",
+          limit: 1,
+        })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      const page = result.at(-1)!.result;
+      assert.isTrue("jsonl" in page);
+      if (!("jsonl" in page)) return;
+      if (caller === "owner") {
+        assert.include(page.jsonl, task.taskId);
+        assert.include(page.jsonl, '"brief":null');
+        assert.include(page.jsonl, '"terminalState":"cancelled"');
+      } else {
+        assert.strictEqual(page.jsonl, "");
+      }
+    }).pipe(Effect.provide(Layer.merge(scope, harness.layer)));
+  },
+);

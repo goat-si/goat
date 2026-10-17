@@ -132,6 +132,14 @@ export const layer = McpToolAccess.toLayer(ChannelToolkit, {
       };
     }),
   ),
+  channel_task_export: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      return yield* ledger
+        .exportTasks({ ...input, ownerId: yield* ownerIdOf })
+        .pipe(Effect.mapError(failureFor));
+    }),
+  ),
   channel_task_report: McpToolAccess.writes((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
