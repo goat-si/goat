@@ -16,6 +16,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { MorphIcon } from "~/components/MorphIcon";
+import { MediaImagePreview } from "~/components/media/MediaImagePreview";
+import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { toastManager } from "~/components/ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -230,6 +232,16 @@ export function AttachmentFilePreview(props: {
     })();
   };
 
+  const retryMedia = props.file
+    ? undefined
+    : async () => {
+        const renewed = await refresh();
+        if (!renewed) throw new Error("Reconnect to the environment and try again.");
+        authorizedAt.current = Date.now();
+        setRemoteUrl(renewed);
+        return renewed;
+      };
+
   const body = failure ? (
     <FileSurfaceFailure
       message={failure}
@@ -265,25 +277,17 @@ export function AttachmentFilePreview(props: {
     <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
   ) : kind === "video" ? (
     <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-      <video
-        controls
-        playsInline
+      <MediaVideoPlayer
         src={url}
-        aria-label={props.name}
-        className="max-h-full max-w-full"
-        onError={() => setError("Unable to load video.")}
+        label={props.name}
+        preload="metadata"
+        className="max-h-full w-full"
+        videoClassName="max-h-full max-w-full"
+        onRetry={retryMedia}
       />
     </div>
   ) : kind === "image" ? (
-    // oxlint-disable-next-line goat/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <img
-        src={url}
-        alt={props.name}
-        className="max-h-full max-w-full object-contain"
-        onError={() => setError("Unable to load image.")}
-      />
-    </div>
+    <MediaImagePreview src={url} name={props.name} mimeType={props.mimeType} onRetry={retryMedia} />
   ) : (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
       <p className="text-sm font-medium">No preview for this file</p>

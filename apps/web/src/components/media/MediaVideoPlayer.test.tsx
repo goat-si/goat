@@ -70,6 +70,37 @@ describe("MediaVideoPlayer signed URL recovery", () => {
     expect(video.playbackRate).toBe(1.5);
   });
 
+  it("preserves a paused playhead across two consecutive signed URL refreshes", async () => {
+    const video = await render(first);
+    let paused = false;
+    Object.defineProperty(video, "paused", { configurable: true, get: () => paused });
+    const play = vi.spyOn(video, "play").mockResolvedValue(undefined);
+    await dispatch(video, "play");
+    paused = true;
+    await dispatch(video, "pause");
+    video.currentTime = 42;
+    video.volume = 0.4;
+    video.muted = true;
+    video.playbackRate = 1.5;
+
+    for (const refreshedSrc of [second, third]) {
+      await render(refreshedSrc);
+      expect(video.getAttribute("src")).toBe(refreshedSrc);
+      // A native source replacement resets playback before metadata arrives.
+      video.currentTime = 0;
+      video.volume = 1;
+      video.muted = false;
+      video.playbackRate = 1;
+      await dispatch(video, "loadedmetadata");
+      expect(video.currentTime).toBe(42);
+      expect(video.volume).toBe(0.4);
+      expect(video.muted).toBe(true);
+      expect(video.playbackRate).toBe(1.5);
+      expect(video.paused).toBe(true);
+    }
+    expect(play).not.toHaveBeenCalled();
+  });
+
   it("uses an already renewed URL after a range error and restores playing state once", async () => {
     const video = await render(first);
     Object.defineProperty(video, "paused", { configurable: true, get: () => false });
@@ -140,6 +171,37 @@ describe("MediaVideoPlayer signed URL recovery", () => {
     await dispatch(video, "error");
     expect(onRetry).toHaveBeenCalledOnce();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+  });
+
+  it("restores the playhead after a manual retry when the refreshed URL fails again", async () => {
+    const onRetry = vi.fn().mockResolvedValue(third);
+    const video = await render(first, onRetry);
+    Object.defineProperty(video, "paused", { configurable: true, get: () => true });
+    video.currentTime = 17;
+    video.volume = 0.3;
+    video.playbackRate = 1.25;
+
+    await dispatch(video, "error");
+    video.currentTime = 0;
+    await dispatch(video, "loadedmetadata");
+    expect(video.currentTime).toBe(17);
+    // The refreshed URL fails before playback advances, so automatic recovery is spent.
+    await dispatch(video, "error");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Video unavailable");
+
+    const retry = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Retry video"),
+    )!;
+    await act(async () => retry.click());
+    const retried = container.querySelector("video")!;
+    expect(retried.getAttribute("src")).toBe(third);
+    retried.currentTime = 0;
+    retried.volume = 1;
+    retried.playbackRate = 1;
+    await dispatch(retried, "loadedmetadata");
+    expect(retried.currentTime).toBe(17);
+    expect(retried.volume).toBe(0.3);
+    expect(retried.playbackRate).toBe(1.25);
   });
 
   it.each([3, 4])(

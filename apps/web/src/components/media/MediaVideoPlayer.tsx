@@ -110,7 +110,7 @@ export function MediaVideoPlayer({
       (playbackSource.latestAtPin !== latestSrc || playbackSource.revision !== revision)
     ) {
       rememberPlayback();
-      setPlaybackSource(null);
+      setPlaybackSource({ src: latestSrc, revision, latestAtPin: latestSrc });
     }
   }, [latestSrc, playbackSource, rememberPlayback, revision]);
   useEffect(refreshPausedRevision, [refreshPausedRevision]);
@@ -283,6 +283,8 @@ export function MediaVideoPlayer({
                 ? latestSrc
                 : null;
             if (autoRefreshUsed.current || (!newerSrc && !onRetry)) {
+              // Keep the position for a manual retry, which mounts a fresh video element.
+              if (pendingRestore.current === null) rememberPlayback();
               setFailure({ src, format: format && (autoRefreshUsed.current || src === latestSrc) });
               return;
             }
