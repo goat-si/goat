@@ -6,6 +6,7 @@ import {
   type ChannelReceptionInput,
   type ChannelTask,
   ChannelTaskEvent,
+  ChannelQuestionId,
   type RemoteReportedOutcome,
   type ChannelWorkerObservation,
   type RemoteKnownRun,
@@ -23,6 +24,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Logger from "effect/Logger";
@@ -47,6 +49,7 @@ import {
   REMOTE_COPY,
   REMOTE_SETTLE_WAIT_MS,
   type RemoteWorkerState,
+  layer as remoteWorkersLayer,
 } from "./ChannelRemoteWorkers.ts";
 import { remoteBranchFor, remoteCorrelationFor } from "./channelIds.ts";
 import { resumeBranchFor } from "./channelReplica.ts";
@@ -116,8 +119,14 @@ class RemoteMachine {
     readonly kind: "capture" | "apply";
   }> = [];
   readonly interrupts: Array<Readonly<Record<string, unknown>>> = [];
+  readonly captureFibers: Array<Fiber.Fiber<unknown, unknown>> = [];
   captureOutput = "GOAT_REPLICA_NO_WORKTREE\n";
   applyOutput = "GOAT_REPLICA_APPLIED " + REPLICA_COMMIT + "\n";
+  captureGate:
+    | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+    | undefined;
+  refuseInterruptWith: string | undefined;
+  interruptAttempted = Deferred.makeUnsafe<void>();
   scriptDown = false;
   scriptCalled = Deferred.makeUnsafe<void>();
   waitUnavailable = Deferred.makeUnsafe<void>();
@@ -420,13 +429,17 @@ class RemoteMachine {
               kind === "capture" ? "git bundle create" : "git bundle verify",
             );
             machine.scripts.push({ ...input, kind });
+            if (kind === "capture")
+              machine.captureFibers.push(yield* Effect.withFiberSucceed((fiber) => fiber));
+            const unavailable = machine.down || machine.scriptDown;
+            const stdout = kind === "capture" ? machine.captureOutput : machine.applyOutput;
             yield* Deferred.succeed(machine.scriptCalled, undefined);
-            if (machine.down || machine.scriptDown)
-              return yield* machine.unreachable("script transport down");
-            return {
-              stdout: kind === "capture" ? machine.captureOutput : machine.applyOutput,
-              stderr: "",
-            };
+            if (unavailable) return yield* machine.unreachable("script transport down");
+            if (kind === "capture" && machine.captureGate !== undefined) {
+              yield* Deferred.succeed(machine.captureGate.entered, undefined);
+              yield* Deferred.await(machine.captureGate.release);
+            }
+            return { stdout, stderr: "" };
           }),
         callHostTool: <E, R>(
           call: SshRemoteDispatch.SshHostToolCall,
@@ -504,9 +517,15 @@ class RemoteMachine {
                     },
                   ],
                 };
-              case "goat_thread_interrupt":
+              case "goat_thread_interrupt": {
                 machine.interrupts.push(call.arguments);
+                const attempted = machine.interruptAttempted;
+                machine.interruptAttempted = Deferred.makeUnsafe<void>();
+                const refused = machine.refuseInterruptWith;
+                yield* Deferred.succeed(attempted, undefined);
+                if (refused !== undefined) return yield* machine.refused(refused);
                 return {};
+              }
               case "goat_thread_send": {
                 machine.sends.push(call.arguments);
                 if (machine.refuseSendWith !== undefined) {
@@ -577,17 +596,19 @@ class RemoteMachine {
 const REPLICA_COMMIT = "b".repeat(40);
 // The transport fixture need only satisfy the wire parser; no shell or git is run here.
 const REPLICA_BYTES = Buffer.from("worker commits and uncommitted edits\n");
-const REPLICA_OUTPUT = [
-  "GOAT_REPLICA_OK",
-  "HEAD " + "a".repeat(40),
-  "COMMIT " + REPLICA_COMMIT,
-  "BYTES " + REPLICA_BYTES.length,
-  "EXCLUDED ",
-  "GOAT_REPLICA_BUNDLE_BEGIN",
-  REPLICA_BYTES.toString("base64"),
-  "GOAT_REPLICA_BUNDLE_END",
-  "",
-].join("\n");
+const replicaOutput = (commitOid: string, bytes: Buffer) =>
+  [
+    "GOAT_REPLICA_OK",
+    "HEAD " + "a".repeat(40),
+    "COMMIT " + commitOid,
+    "BYTES " + bytes.length,
+    "EXCLUDED ",
+    "GOAT_REPLICA_BUNDLE_BEGIN",
+    bytes.toString("base64"),
+    "GOAT_REPLICA_BUNDLE_END",
+    "",
+  ].join("\n");
+const REPLICA_OUTPUT = replicaOutput(REPLICA_COMMIT, REPLICA_BYTES);
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted", "rolled_back"]);
 const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
@@ -697,6 +718,8 @@ const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
 /** Observes committed SQLite writes without replacing their behavior or polling the ledger. */
 const channelWriteMilestones = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const completedForwards = new Set<number>();
+  const forwardListeners = new Map<number, Deferred.Deferred<void>>();
   const listeners = new Set<{
     readonly check: (task: ChannelTask, state: RemoteWorkerState | undefined) => boolean;
     readonly done: Deferred.Deferred<ChannelTask>;
@@ -718,19 +741,39 @@ const channelWriteMilestones = Effect.gen(function* () {
       const observed: {
         updateRemoteWorker: typeof ledger.updateRemoteWorker;
         applyTaskEvent: typeof ledger.applyTaskEvent;
+        completeForward: typeof ledger.completeForward;
       } = ledger;
       const update = observed.updateRemoteWorker;
       const apply = observed.applyTaskEvent;
+      const complete = observed.completeForward;
+      observed.completeForward = (input) =>
+        complete(input).pipe(
+          Effect.tap(() =>
+            Effect.gen(function* () {
+              completedForwards.add(input.sequence);
+              const done = forwardListeners.get(input.sequence);
+              if (done !== undefined) yield* Deferred.succeed(done, undefined);
+            }),
+          ),
+        );
       observed.updateRemoteWorker = (input) => update(input).pipe(Effect.tap(() => notify));
       observed.applyTaskEvent = (input) => apply(input).pipe(Effect.tap(() => notify));
       return () => {
         observed.updateRemoteWorker = update;
         observed.applyTaskEvent = apply;
+        observed.completeForward = complete;
       };
     }),
     (restore) => Effect.sync(restore),
   );
   return {
+    waitForForward: (sequence: number) =>
+      Effect.gen(function* () {
+        if (completedForwards.has(sequence)) return;
+        const done = yield* Deferred.make<void>();
+        forwardListeners.set(sequence, done);
+        yield* Deferred.await(done);
+      }),
     waitFor: (check: (task: ChannelTask, state: RemoteWorkerState | undefined) => boolean) =>
       Effect.gen(function* () {
         const done = yield* Deferred.make<ChannelTask>();
@@ -809,7 +852,11 @@ const prepareFailover = (machine: RemoteMachine, writes: ChannelWriteMilestones)
     return { task: away, correlationId, replica };
   });
 
-const moveTo = (task: ChannelTask, host: string) =>
+const moveTo = (
+  task: ChannelTask,
+  host: string,
+  callerCeiling = task.requester.runtimeModeCeiling,
+) =>
   Effect.gen(function* () {
     const workers = yield* ChannelRemoteWorkers;
     const runtime = yield* ChannelRuntime.ChannelRuntime;
@@ -818,7 +865,24 @@ const moveTo = (task: ChannelTask, host: string) =>
       host,
       actor: "user",
       owner: runtime.ownerToken,
+      callerCeiling,
     });
+  });
+
+/** Dispatch without running the runtime's forward or fence passes. */
+const dispatchMovedTask = (
+  task: ChannelTask,
+  destination: RemoteMachine,
+  writes: ChannelWriteMilestones,
+) =>
+  Effect.gen(function* () {
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    yield* (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, runtime.ownerToken);
+    const running = yield* writes.waitFor(
+      (current) => current.status === "running" && current.generation === task.generation + 1,
+    );
+    yield* Deferred.await(destination.waitIdle);
+    return running;
   });
 
 describe("copies of remote work and host failover", () => {
@@ -842,7 +906,10 @@ describe("copies of remote work and host failover", () => {
         assert.strictEqual(path.dirname(replica.file), path.join(stateDir, "channel-replicas"));
         assert.strictEqual(
           path.basename(replica.file),
-          task.taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g1.bundle",
+          task.taskId.replace(/[^A-Za-z0-9_-]/gu, "_") +
+            "-g1-" +
+            REPLICA_COMMIT.slice(0, 16) +
+            ".bundle",
         );
         assert.deepStrictEqual(yield* fs.readFile(replica.file), new Uint8Array(REPLICA_BYTES));
         assert.strictEqual(replica.bytes, REPLICA_BYTES.length);
@@ -941,6 +1008,256 @@ describe("copies of remote work and host failover", () => {
       assert.lengthOf(destination.scripts, 0);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect.each(["approval-required", "auto-accept-edits"] as const)(
+    "refuses a mover with the lower %s ceiling without changing the task or state",
+    (callerCeiling) => {
+      const { machine, destination, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const { task } = yield* prepareFailover(machine, writes);
+        assert.strictEqual(task.requester.runtimeModeCeiling, "full-access");
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const stateBefore = yield* ledger.getRemoteWorker(task.taskId);
+        const result = yield* moveTo(task, destination.host, callerCeiling).pipe(Effect.result);
+        assert.strictEqual(result._tag, "Failure");
+        if (result._tag !== "Failure" || result.failure._tag !== "ChannelTaskMoveError") {
+          return yield* Effect.die("expected a move refusal");
+        }
+        assert.strictEqual(result.failure.reason, "not_allowed");
+        assert.deepStrictEqual(yield* onlyTask, task);
+        assert.strictEqual(yield* ledger.getRemoteWorker(task.taskId), stateBefore);
+        assert.lengthOf(destination.scripts, 0);
+        assert.lengthOf(destination.launches, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("keeps the move's pinned snapshot when an in-flight turn captures a newer one", () => {
+    const { machine, destination, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine);
+      const correlationId = correlationOf(machine);
+      machine.finishRun(correlationId, "waiting", null);
+      yield* writes.waitFor((_task, state) => state?.replica !== undefined);
+      const first = (yield* readState(task.taskId)).replica!;
+      yield* Fiber.await(machine.captureFibers[0]!);
+      const newerOid = "c".repeat(40);
+      const newerBytes = Buffer.from("later changes that the move did not choose\n");
+      machine.captureOutput = replicaOutput(newerOid, newerBytes);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      machine.captureGate = { entered, release };
+      machine.startRun(correlationId);
+      machine.finishRun(correlationId, "waiting", null);
+      yield* Deferred.await(entered);
+      // The capture started while reachable, but finishes only after move pins the old copy.
+      const away = yield* noticeMachineOutage(machine, writes);
+      yield* moveTo(away, destination.host);
+      assert.strictEqual((yield* readState(task.taskId)).resumeFrom?.file, first.file);
+      yield* Deferred.succeed(release, undefined);
+      yield* writes.waitFor((_task, state) => state?.replica?.commitOid === newerOid);
+      // Wait for pruning too, so the preserved-file assertions cannot race cleanup.
+      yield* Fiber.await(machine.captureFibers[1]!);
+      const state = yield* readState(task.taskId);
+      const newer = state.replica!;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const prefix = task.taskId.replace(/[^A-Za-z0-9_-]/gu, "_") + "-g1-";
+      assert.strictEqual(
+        path.basename(first.file),
+        prefix + REPLICA_COMMIT.slice(0, 16) + ".bundle",
+      );
+      assert.strictEqual(path.basename(newer.file), prefix + newerOid.slice(0, 16) + ".bundle");
+      assert.notStrictEqual(newer.file, first.file);
+      assert.strictEqual(state.resumeFrom?.file, first.file);
+      assert.strictEqual(state.resumeFrom?.commitOid, REPLICA_COMMIT);
+      assert.deepStrictEqual(yield* fs.readFile(first.file), new Uint8Array(REPLICA_BYTES));
+      assert.deepStrictEqual(yield* fs.readFile(newer.file), new Uint8Array(newerBytes));
+      yield* dispatchMovedTask(task, destination, writes);
+      const apply = destination.scripts.find((call) => call.kind === "apply")!;
+      assert.include(apply.script, REPLICA_BYTES.toString("base64"));
+      assert.notInclude(apply.script, newerBytes.toString("base64"));
+      assert.strictEqual((yield* readState(task.taskId)).resumeFrom?.file, first.file);
+      assert.deepStrictEqual(yield* fs.readFile(first.file), new Uint8Array(REPLICA_BYTES));
+      assert.lengthOf(destination.launches, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("retries a refused interrupt without marking or narrating the stale worker yet", () => {
+    const { machine, destination, harness } = failoverHarness();
+    machine.refuseInterruptWith = "orchestration_error";
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task } = yield* prepareFailover(machine, writes);
+      yield* moveTo(task, destination.host);
+      yield* dispatchMovedTask(task, destination, writes);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const workers = yield* ChannelRemoteWorkers;
+      machine.down = false;
+      const firstAttempt = machine.interruptAttempted;
+      yield* workers.ensure(runtime.ownerToken);
+      yield* Deferred.await(firstAttempt);
+      const secondAttempt = machine.interruptAttempted;
+      yield* TestClock.adjust(Duration.seconds(5));
+      yield* Deferred.await(secondAttempt);
+      assert.lengthOf(machine.interrupts, 2);
+      assert.strictEqual((yield* readState(task.taskId)).superseded?.[0]?.noticed, false);
+      yield* runtime.drain;
+      assert.isFalse(
+        (yield* botMessages).messages.some((message) =>
+          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+        ),
+      );
+      machine.refuseInterruptWith = undefined;
+      yield* TestClock.adjust(Duration.seconds(10));
+      yield* writes.waitFor((_current, state) => state?.superseded?.[0]?.noticed === true);
+      assert.lengthOf(machine.interrupts, 3);
+      yield* runtime.drain;
+      yield* TestClock.adjust(Duration.seconds(20));
+      yield* workers.ensure(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.lengthOf(machine.interrupts, 3);
+      assert.lengthOf(
+        (yield* botMessages).messages.filter((message) =>
+          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+        ),
+        1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("marks a stale worker whose interrupt reports thread_not_found as noticed", () => {
+    const { machine, destination, harness } = failoverHarness();
+    machine.refuseInterruptWith = "thread_not_found";
+    return Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      const { task } = yield* prepareFailover(machine, writes);
+      yield* moveTo(task, destination.host);
+      yield* dispatchMovedTask(task, destination, writes);
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const workers = yield* ChannelRemoteWorkers;
+      machine.down = false;
+      yield* workers.ensure(runtime.ownerToken);
+      const noticed = yield* writes.waitFor(
+        (_current, state) => state?.superseded?.[0]?.noticed === true,
+      );
+      assert.strictEqual(noticed.status, "running");
+      assert.lengthOf(machine.interrupts, 1);
+      yield* TestClock.adjust(Duration.seconds(5));
+      yield* workers.ensure(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.lengthOf(machine.interrupts, 1);
+      assert.lengthOf(
+        (yield* botMessages).messages.filter((message) =>
+          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
+        ),
+        1,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect.each([0, 1])(
+    "clears an answer recorded %i ms before the move without sending it to the new worker",
+    (beforeMoveMs) => {
+      const { machine, destination, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const { task } = yield* prepareFailover(machine, writes);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const questionId = ChannelQuestionId.make("before-move-question");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: { questionId, text: "Which deploy target?", askedAt: task.updatedAt },
+            },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const answered = yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId, answer: "the old machine's staging target" },
+          },
+          {
+            owner: runtime.ownerToken,
+            forward: true,
+            pendingAnswerMessageId: "answer-before-move",
+          },
+        );
+        assert.isDefined(answered);
+        const pending = (yield* ledger.listPendingForwards(50))[0]!;
+        assert.strictEqual(pending.event.type, "task.question.answered");
+        if (beforeMoveMs > 0) yield* TestClock.adjust(Duration.millis(beforeMoveMs));
+        yield* moveTo(answered!, destination.host);
+        const running = yield* dispatchMovedTask(task, destination, writes);
+        assert.strictEqual(
+          Date.parse(running.movedFrom!.at) - Date.parse(pending.event.occurredAt),
+          beforeMoveMs,
+        );
+        // Keep the old forward until after the new worker is bound: the cutoff must discard it.
+        assert.lengthOf(yield* ledger.listPendingForwards(50), 1);
+        yield* (yield* ChannelRemoteWorkers).forward(pending, runtime.ownerToken);
+        yield* writes.waitForForward(pending.sequence);
+        assert.lengthOf(yield* ledger.listPendingForwards(50), 0);
+        assert.lengthOf(destination.sends, 0);
+        assert.lengthOf(machine.sends, 0);
+        assert.isFalse(destination.calls.some((call) => call.tool === "goat_thread_send"));
+        const state = yield* readState(task.taskId);
+        assert.notInclude(state.forwarded, pending.event.eventId);
+        assert.isUndefined(state.receipt);
+        assert.strictEqual((yield* onlyTask).generation, running.generation);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "sweeps a finished moved task's unnoticed old worker on a fresh service's first ensure",
+    () => {
+      const { machine, destination, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        const { task } = yield* prepareFailover(machine, writes);
+        yield* moveTo(task, destination.host);
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.cancelled",
+            payload: { reason: "Cancelled after moving." },
+          },
+          { owner: runtime.ownerToken },
+        );
+        // No runtime pass has started a fence for the moved task. Model a later process's scan.
+        yield* TestClock.adjust(Duration.hours(1));
+        machine.down = false;
+        assert.strictEqual((yield* readState(task.taskId)).superseded?.[0]?.noticed, false);
+        assert.lengthOf(machine.interrupts, 0);
+        yield* Effect.gen(function* () {
+          const fresh = yield* ChannelRemoteWorkers;
+          yield* fresh.ensure(runtime.ownerToken);
+          const noticed = yield* writes.waitFor(
+            (_current, state) => state?.superseded?.[0]?.noticed === true,
+          );
+          assert.strictEqual(noticed.status, "cancelled");
+          assert.strictEqual(noticed.generation, task.generation + 1);
+          assert.lengthOf(machine.interrupts, 1);
+          yield* TestClock.adjust(Duration.seconds(5));
+          yield* fresh.ensure(runtime.ownerToken);
+          assert.lengthOf(machine.interrupts, 1);
+        }).pipe(Effect.provide(Layer.fresh(remoteWorkersLayer).pipe(Layer.provide(machine.layer))));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("refuses a move when the recorded replica file has disappeared", () => {
     const { machine, destination, harness } = failoverHarness();
