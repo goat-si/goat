@@ -7679,6 +7679,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const taskId = idAllocator.derive.delegatedTaskNode({ commandId: command.commandId });
     const task: OrchestrationV2Subagent = {
       ...original,
+      parentModelSelection: owner.modelSelection,
       reviewLedger: undefined,
       memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
       createdBy: command.createdBy,

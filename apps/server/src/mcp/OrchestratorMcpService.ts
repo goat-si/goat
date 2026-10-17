@@ -2985,13 +2985,15 @@ const make = Effect.gen(function* () {
         const page = rows.slice(0, limit);
         const lines = yield* Effect.forEach(page, ({ task, index }) => {
           const entry = task.reviewLedger![index]!;
-          const latestOutcome =
-            entry.kind === "decision"
-              ? task.reviewLedger?.findLast(
-                  (candidate) =>
-                    candidate.kind === "outcome" && candidate.findingId === entry.findingId,
-                )
-              : undefined;
+          let latestOutcome: Extract<ReviewLedgerEntry, { readonly kind: "outcome" }> | null = null;
+          if (entry.kind === "decision") {
+            for (let next = index + 1; next < task.reviewLedger!.length; next++) {
+              const candidate = task.reviewLedger![next]!;
+              if (candidate.findingId !== entry.findingId) continue;
+              if (candidate.kind === "decision") break;
+              latestOutcome = candidate;
+            }
+          }
           const metadata = {
             taskId: task.id,
             threadId: task.threadId,

@@ -463,6 +463,15 @@ it.effect("a fresh follow-up task does not inherit its predecessor's ledger", ()
       occurredAt: now,
       payload: { ...task, status: "completed", result: "Published review", completedAt: now },
     });
+    const owner = (yield* fixture.store.getThreadRecords(parentId, ["runs"])).runs[0]!;
+    const followupAuthor = { instanceId, model: "followup-author-model" };
+    yield* fixture.store.apply({
+      id: EventId.make("followup-owner-model"),
+      type: "run.updated",
+      threadId: parentId,
+      occurredAt: now,
+      payload: { ...owner, modelSelection: followupAuthor },
+    });
     yield* fixture.orchestrator.dispatch({
       type: "message.dispatch",
       commandId: CommandId.make("followup"),
@@ -480,6 +489,14 @@ it.effect("a fresh follow-up task does not inherit its predecessor's ledger", ()
     assert.lengthOf(tasks, 2);
     assert.lengthOf(tasks.find((candidate) => candidate.id === task.id)!.reviewLedger!, 3);
     assert.isUndefined(tasks.find((candidate) => candidate.id !== task.id)!.reviewLedger);
+    assert.deepEqual(
+      tasks.find((candidate) => candidate.id !== task.id)!.parentModelSelection,
+      followupAuthor,
+    );
+    assert.deepEqual(
+      tasks.find((candidate) => candidate.id === task.id)!.parentModelSelection,
+      parentModel,
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -506,4 +523,78 @@ it.effect.each([false, true])("refuses missing and provider-native tasks, native
     assert.equal(refused._tag, "OrchestratorReviewLedgerError");
     assert.include(refused.message, "app-owned task of the parent");
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "exports outcomes only within each decision's lifetime and clears the current outcome on a new decision",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const initial = yield* service.recordReviewFindings(scope, {
+          taskId: fixture.task.id,
+          entries: [
+            decisions[1],
+            {
+              kind: "outcome",
+              findingId: decisions[1].findingId,
+              link: { kind: "test", ref: "old-failure" },
+            },
+            decisions[0],
+            { ...decisions[1], decision: "accepted" },
+          ],
+        });
+        assert.isNull(
+          initial.findings.find((finding) => finding.decision.findingId === decisions[1].findingId)!
+            .latestOutcome,
+        );
+        const updated = yield* service.recordReviewFindings(scope, {
+          taskId: fixture.task.id,
+          entries: [
+            {
+              kind: "outcome",
+              findingId: decisions[1].findingId,
+              link: { kind: "revert", ref: "unneeded" },
+            },
+            decisions[1],
+            {
+              kind: "outcome",
+              findingId: decisions[1].findingId,
+              link: { kind: "test", ref: "new-failure" },
+            },
+          ],
+        });
+        const exported = yield* service.exportReviewFindings(scope, {
+          from: baseTime,
+          to: nextDay,
+        });
+        const decodeLine = Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              kind: Schema.String,
+              entryId: Schema.String,
+              latestOutcome: Schema.optional(Schema.NullOr(ReviewLedgerEntry)),
+            }),
+          ),
+        );
+        const entries = yield* Effect.forEach(exported.jsonl.trim().split("\n"), (line) =>
+          decodeLine(line),
+        );
+        const outcomes = new Map(
+          entries
+            .filter((entry) => entry.kind === "decision")
+            .map((entry) => [entry.entryId, entry.latestOutcome]),
+        );
+        assert.deepEqual(outcomes.get(updated.reviewLedger[0]!.entryId), updated.reviewLedger[1]);
+        assert.isNull(outcomes.get(updated.reviewLedger[2]!.entryId));
+        assert.deepEqual(outcomes.get(updated.reviewLedger[3]!.entryId), updated.reviewLedger[4]);
+        assert.deepEqual(outcomes.get(updated.reviewLedger[5]!.entryId), updated.reviewLedger[6]);
+        assert.deepEqual(
+          updated.findings.find((finding) => finding.decision.findingId === decisions[1].findingId)!
+            .latestOutcome,
+          updated.reviewLedger[6],
+        );
+      }).pipe(Effect.provide(serviceLayer(fixture)));
+    }).pipe(Effect.provide(layerTest)),
 );
