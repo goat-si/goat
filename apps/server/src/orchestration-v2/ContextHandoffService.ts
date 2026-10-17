@@ -141,7 +141,10 @@ function makeForkDeltaSummary(input: {
   ].join("\n");
 }
 
-function makeLegacyImportSummary(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
+export function summarizeConversationForHandoff(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+  header: string,
+): string {
   const sections = items.flatMap((item) => {
     switch (item.type) {
       case "user_message":
@@ -152,8 +155,6 @@ function makeLegacyImportSummary(items: ReadonlyArray<OrchestrationV2TurnItem>):
         return [];
     }
   });
-  const header =
-    "Imported conversation history from the previous GOAT orchestrator. Use it as context; do not repeat it unless the user asks.";
   const maxChars = 32_000;
   const selected: Array<string> = [];
   let remaining = maxChars - header.length - 2;
@@ -280,7 +281,10 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
           strategy: "manual_context",
           status: "ready",
           summaryMessageId: null,
-          summaryText: makeLegacyImportSummary(input.items),
+          summaryText: summarizeConversationForHandoff(
+            input.items,
+            "Imported conversation history from the previous GOAT orchestrator. Use it as context; do not repeat it unless the user asks.",
+          ),
           history: {
             messages: selected.messages,
             coverage,
