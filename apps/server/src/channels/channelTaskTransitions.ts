@@ -12,6 +12,12 @@ export type ChannelTaskTransition =
 
 const reject = (reason: string): ChannelTaskTransition => ({ ok: false, reason });
 
+/** A finished task keeps the pull requests it produced; nothing is waiting on anyone anymore. */
+const settledObservation = (task: ChannelTask): Partial<Pick<ChannelTask, "observed">> =>
+  task.observed === undefined || task.observed.pullRequests.length === 0
+    ? {}
+    : { observed: { pullRequests: task.observed.pullRequests, needsYou: [] } };
+
 const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskStatus>> = {
   "task.created": [],
   "task.dispatch.claimed": ["received"],
@@ -24,6 +30,7 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.failed": ["received", "dispatching", "running", "waiting_input"],
   "task.cancelled": ["received", "dispatching", "running", "waiting_input"],
   "task.retry.requested": ["completed", "failed", "cancelled"],
+  "task.worker.observed": ["running", "waiting_input"],
 };
 
 const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
@@ -32,6 +39,7 @@ const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
     case "task.progress":
     case "task.completed":
     case "task.failed":
+    case "task.worker.observed":
       return event.payload.generation;
     case "task.worker.bound":
       return event.payload.worker.generation;
@@ -126,11 +134,12 @@ export function applyChannelTaskEvent(
       return { ok: true, task: { ...base, proposedCompletion: event.payload.proposal } };
     }
     case "task.completed": {
-      const { proposedCompletion: _proposed, ...rest } = base;
+      const { proposedCompletion: _proposed, observed: _observed, ...rest } = base;
       return {
         ok: true,
         task: {
           ...rest,
+          ...settledObservation(task),
           status: "completed",
           resultSummary: event.payload.summary,
           ...(event.payload.report === undefined ? {} : { completionReport: event.payload.report }),
@@ -139,11 +148,12 @@ export function applyChannelTaskEvent(
       };
     }
     case "task.failed": {
-      const { proposedCompletion: _proposed, ...rest } = base;
+      const { proposedCompletion: _proposed, observed: _observed, ...rest } = base;
       return {
         ok: true,
         task: {
           ...rest,
+          ...settledObservation(task),
           status: "failed",
           resultSummary: event.payload.summary ?? event.payload.reason,
           completedAt: event.occurredAt,
@@ -151,11 +161,12 @@ export function applyChannelTaskEvent(
       };
     }
     case "task.cancelled": {
-      const { proposedCompletion: _proposed, ...rest } = base;
+      const { proposedCompletion: _proposed, observed: _observed, ...rest } = base;
       return {
         ok: true,
         task: {
           ...rest,
+          ...settledObservation(task),
           status: "cancelled",
           ...(event.payload.reason === undefined ? {} : { resultSummary: event.payload.reason }),
           completedAt: event.occurredAt,
@@ -169,6 +180,7 @@ export function applyChannelTaskEvent(
         completedAt: _completedAt,
         resultSummary: _summary,
         completionReport: _report,
+        observed: _observed,
         ...rest
       } = base;
       return {
@@ -181,5 +193,7 @@ export function applyChannelTaskEvent(
         },
       };
     }
+    case "task.worker.observed":
+      return { ok: true, task: { ...base, observed: event.payload.observed } };
   }
 }
