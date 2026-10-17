@@ -782,6 +782,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       "mcp__goat__goat_provider_diagnose",
       "mcp__goat__goat_queue_list",
       "mcp__goat__goat_queue_read",
+      "mcp__goat__goat_review_findings_export",
       "mcp__goat__html_preview",
       "mcp__goat__html_render",
     ]);
