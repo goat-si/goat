@@ -1255,7 +1255,7 @@ test("handoff rejects a missing thread", (f) =>
   }));
 
 testEach(
-  ([1, 2, 3] as const).map(
+  ([1, 2, 3, 4] as const).map(
     (check) => [`handoff rejects a deleted thread at check ${check}`, check] as const,
   ),
   (check, f) =>
@@ -1281,7 +1281,7 @@ testEach(
 
 testEach(
   (["queued", "running"] as const).flatMap((status) =>
-    ([2, 3] as const).map(
+    ([2, 3, 4] as const).map(
       (check) =>
         [`handoff rejects new ${status} work at check ${check}`, { status, check }] as const,
     ),
@@ -1327,7 +1327,8 @@ test("handoff summarizes the projection re-read after transfer", (f) =>
       },
     ];
     yield* f.sync.handoffThread(f.handoffInput);
-    assert.strictEqual(f.state.projectionReads, 3);
+    // Entry, before the snapshot, while summarizing, and right before the remote launch.
+    assert.strictEqual(f.state.projectionReads, 4);
     assert.include(f.state.launches[0]?.message ?? "", "Completed during transfer");
   }));
 

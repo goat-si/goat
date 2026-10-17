@@ -377,6 +377,8 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
     handoff?: {
       readonly beforeSnapshot: Effect.Effect<void, SshWorkspaceError>;
       readonly beforeRemoteChange: Effect.Effect<void, SshWorkspaceError>;
+      /** Runs once the remote is ready, immediately before the remote thread is created. */
+      readonly beforeLaunch: Effect.Effect<void, SshWorkspaceError>;
       readonly prepareMessage: Effect.Effect<string, SshWorkspaceError>;
     },
   ) {
@@ -476,7 +478,7 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
           callerRuntimeMode: "full-access",
           interactionMode: input.interactionMode,
         },
-        handoff?.beforeRemoteChange ?? Effect.void,
+        handoff?.beforeLaunch ?? Effect.void,
       )
       .pipe(
         Effect.mapError((error) =>
@@ -611,6 +613,8 @@ printf 'GOAT_REPO\\n%s\\n' "$repo"
       {
         beforeSnapshot: readSource().pipe(Effect.asVoid),
         beforeRemoteChange: input.beforeRemoteChange ?? Effect.void,
+        // Remote bootstrap can take a while; the source may be deleted or start a run meanwhile.
+        beforeLaunch: readSource().pipe(Effect.andThen(input.beforeRemoteChange ?? Effect.void)),
         prepareMessage,
       },
     );
