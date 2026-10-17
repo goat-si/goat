@@ -409,6 +409,16 @@ export interface ProjectionStoreV2Shape {
     Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>,
     ProjectionStoreV2Error
   >;
+  /** Stable task-id/entry-index pages over ledger history, including archived parents. */
+  readonly getReviewLedgerEntries: (input: {
+    readonly from: string;
+    readonly to: string;
+    readonly limit: number;
+    readonly cursor?: { readonly taskId: string; readonly index: number };
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly task: OrchestrationV2Subagent; readonly index: number }>,
+    ProjectionStoreV2Error
+  >;
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
@@ -713,10 +723,15 @@ function preserveCompletionDelivery(
   current: OrchestrationV2Subagent | undefined,
   next: OrchestrationV2Subagent,
 ): OrchestrationV2Subagent {
-  if (next.completionDelivery !== undefined || current?.completionDelivery === undefined) {
-    return next;
-  }
-  return { ...next, completionDelivery: current.completionDelivery };
+  return {
+    ...next,
+    ...(next.completionDelivery === undefined && current?.completionDelivery !== undefined
+      ? { completionDelivery: current.completionDelivery }
+      : {}),
+    ...(next.reviewLedger === undefined && current?.reviewLedger !== undefined
+      ? { reviewLedger: current.reviewLedger }
+      : {}),
+  };
 }
 
 export function emptyProjection(
@@ -2207,7 +2222,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 started_at = excluded.started_at,
                 completed_at = excluded.completed_at,
                 updated_at = excluded.updated_at,
-                payload_json = CASE
+                payload_json = json_patch(CASE
                   WHEN json_type(excluded.payload_json, '$.completionDelivery') IS NULL
                     AND json_type(orchestration_v2_projection_subagents.payload_json, '$.completionDelivery') IS NOT NULL
                   THEN json_set(
@@ -2219,7 +2234,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     )
                   )
                   ELSE excluded.payload_json
-                END
+                END, CASE
+                  WHEN json_type(excluded.payload_json, '$.reviewLedger') IS NULL
+                    AND json_type(orchestration_v2_projection_subagents.payload_json, '$.reviewLedger') IS NOT NULL
+                  THEN json_object('reviewLedger', json_extract(orchestration_v2_projection_subagents.payload_json, '$.reviewLedger'))
+                  ELSE '{}'
+                END)
             `;
             break;
           }
@@ -6286,8 +6306,37 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    const getReviewLedgerEntries: ProjectionStoreV2Shape["getReviewLedgerEntries"] = (input) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ task_id: string; payload_json: string; entry_index: number }>`
+          SELECT task.subagent_id AS task_id, task.payload_json, CAST(entry.key AS INTEGER) AS entry_index
+          FROM orchestration_v2_projection_subagents AS task
+          JOIN orchestration_v2_projection_threads AS parent ON parent.thread_id = task.thread_id
+          JOIN json_each(task.payload_json, '$.reviewLedger') AS entry
+          WHERE json_extract(task.payload_json, '$.reviewLedger') IS NOT NULL
+            AND task.origin = 'app_owned'
+            AND json_extract(task.payload_json, '$.role') = 'review'
+            AND parent.deleted_at IS NULL
+            AND julianday(json_extract(entry.value, '$.recordedAt')) >= julianday(${input.from})
+            AND julianday(json_extract(entry.value, '$.recordedAt')) < julianday(${input.to})
+            AND (task.subagent_id > ${input.cursor?.taskId ?? ""}
+              OR (task.subagent_id = ${input.cursor?.taskId ?? ""} AND CAST(entry.key AS INTEGER) > ${input.cursor?.index ?? -1}))
+          ORDER BY task.subagent_id COLLATE BINARY, CAST(entry.key AS INTEGER)
+          LIMIT ${Math.min(Math.max(input.limit, 1), 1_001)}
+        `;
+        const tasks = new Map<string, OrchestrationV2Subagent>();
+        return yield* Effect.forEach(rows, (row) =>
+          Effect.gen(function* () {
+            const task = tasks.get(row.task_id) ?? (yield* decodeSubagentPayload(row.payload_json));
+            tasks.set(row.task_id, task);
+            return { task, index: row.entry_index };
+          }),
+        );
+      }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ cause })));
+
     return {
       apply,
+      getReviewLedgerEntries,
       getShellSnapshot,
       readShellSnapshot,
       getThreadShell,
@@ -6497,6 +6546,33 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 left.id.localeCompare(right.id),
             );
         }),
+      getReviewLedgerEntries: (input) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter(({ thread }) => thread.deletedAt === null)
+              .flatMap(({ subagents }) =>
+                subagents
+                  .filter((task) => task.origin === "app_owned" && task.role === "review")
+                  .flatMap((task) =>
+                    (task.reviewLedger ?? []).flatMap((entry, index) => {
+                      const time = Date.parse(entry.recordedAt);
+                      return time >= Date.parse(input.from) &&
+                        time < Date.parse(input.to) &&
+                        (input.cursor === undefined ||
+                          task.id > input.cursor.taskId ||
+                          (task.id === input.cursor.taskId && index > input.cursor.index))
+                        ? [{ task, index }]
+                        : [];
+                    }),
+                  ),
+              )
+              .sort((a, b) =>
+                a.task.id < b.task.id ? -1 : a.task.id > b.task.id ? 1 : a.index - b.index,
+              )
+              .slice(0, Math.min(Math.max(input.limit, 1), 1_001)),
+          ),
+        ),
       getThreadWorktreePaths: () =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>

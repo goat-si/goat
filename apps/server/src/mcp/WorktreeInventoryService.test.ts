@@ -85,6 +85,7 @@ const fixture = Effect.gen(function* () {
             .map(shell),
           archivedThreads: [],
         })),
+      getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
       getThreadShell: (id: string) =>
         Effect.sync(() => {
           const thread = threads.find((entry) => entry.id === id);

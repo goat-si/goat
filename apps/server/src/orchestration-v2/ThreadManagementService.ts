@@ -143,6 +143,7 @@ export function existingThreadIdsForCommand(
     case "delegated_task.remote.progress":
     case "delegated_task.remote.result":
     case "delegated_task.wake-policy":
+    case "delegated_task.review-ledger.append":
     case "delegated_task.completion-delivery.acknowledge":
     case "delegated_task.completion-delivery.dispose":
       return [command.parentThreadId];
@@ -411,6 +412,7 @@ export interface ThreadManagementServiceShape {
   }) => Effect.Effect<OrchestrationV2GetTurnItemResult, Orchestrator.OrchestratorV2Error>;
   readonly getLaunchedPendingQuestions: Orchestrator.OrchestratorV2Shape["getLaunchedPendingQuestions"];
   readonly getThreadRecords: Orchestrator.OrchestratorV2["Service"]["getThreadRecords"];
+  readonly getReviewLedgerEntries: Orchestrator.OrchestratorV2["Service"]["getReviewLedgerEntries"];
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, Orchestrator.OrchestratorV2Error>;
@@ -1839,6 +1841,7 @@ const make = Effect.gen(function* () {
     getShellSnapshot: orchestrator.getShellSnapshot,
     readShellSnapshot: orchestrator.readShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
+    getReviewLedgerEntries: orchestrator.getReviewLedgerEntries,
     listProjectThreads,
     sendToThread,
     assertReviewTaskSendAllowed,

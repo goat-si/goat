@@ -450,6 +450,7 @@ it.live.each(["thread", "shell"] as const)(
       const items = yield* subscription.pipe(
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
+          getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
           streamStoredEventsFrom: (
             input: Parameters<
               ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]

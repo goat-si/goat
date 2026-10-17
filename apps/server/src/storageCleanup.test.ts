@@ -291,6 +291,7 @@ const cleanupFixture = Effect.gen(function* () {
           snapshotReads++;
           return { threads: input?.location === "archive" ? [] : threads };
         }),
+      getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
       getThreadWorktreePaths: () =>
         Effect.sync(() =>
           threads.flatMap((thread) =>

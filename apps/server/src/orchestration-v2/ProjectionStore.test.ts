@@ -10,6 +10,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
   type OrchestrationV2AppThread,
   type OrchestrationV2RuntimeRequest,
   OrchestrationV2TurnItem,
@@ -7434,3 +7435,145 @@ it.effect("discovers persisted MCP app attachments under either peer output key"
   }).pipe(Effect.provide(layerTest)),
 );
 // goat-rename: legacy-end
+
+it.effect(
+  "SQL and memory page review history by entry time and preserve it through omitted provider fields",
+  () => {
+    const verify = Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* createD10Thread("review-ledger");
+      const task = {
+        memoryGrantCeiling: "none",
+        id: NodeId.make("review-task"),
+        threadId,
+        runId: null,
+        parentNodeId: NodeId.make("parent-node"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver,
+        providerInstanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        prompt: "Review",
+        title: null,
+        model: "reviewer",
+        role: "review",
+        status: "running",
+        result: null,
+        startedAt: D10_NOW,
+        completedAt: null,
+        updatedAt: D10_NOW,
+        completionDelivery: { state: "pending", observedByRunId: null },
+        reviewLedger: [
+          {
+            kind: "decision",
+            entryId: "first",
+            findingId: "finding",
+            severity: "high",
+            cites: null,
+            summary: "Check",
+            decision: "rebutted",
+            evidence: { kind: "test", ref: "guard.test.ts" },
+            recordedAt: "2026-10-16T00:00:00.000Z",
+            recordedByRunId: null,
+          },
+          {
+            kind: "decision",
+            entryId: "second",
+            findingId: "other",
+            severity: "low",
+            cites: null,
+            summary: "Fix",
+            decision: "accepted",
+            evidence: null,
+            recordedAt: "2026-10-16T12:00:00.000Z",
+            recordedByRunId: null,
+          },
+          {
+            kind: "outcome",
+            entryId: "third",
+            findingId: "finding",
+            outcome: "later_confirmed",
+            link: { kind: "test", ref: "failing.test.ts" },
+            recordedAt: "2026-10-17T00:00:00.000Z",
+            recordedByRunId: null,
+          },
+        ],
+      } satisfies OrchestrationV2Subagent;
+      yield* store.apply({
+        id: EventId.make("review-task-created"),
+        type: "subagent.updated",
+        threadId,
+        occurredAt: D10_NOW,
+        payload: task,
+      });
+      // A provider snapshot without app bookkeeping must not erase the ledger.
+      yield* store.apply({
+        id: EventId.make("review-task-progress"),
+        type: "subagent.updated",
+        threadId,
+        occurredAt: D10_NOW,
+        payload: {
+          ...task,
+          reviewLedger: undefined,
+          completionDelivery: undefined,
+          progress: "Still reviewing",
+        },
+      });
+      const persisted = (yield* store.getThreadRecords(threadId, ["subagents"])).subagents[0]!;
+      assert.deepEqual(persisted.reviewLedger, task.reviewLedger);
+      assert.deepEqual(persisted.completionDelivery, task.completionDelivery);
+      const range = { from: "2026-10-16T00:00:00.000Z", to: "2026-10-17T00:00:00.000Z", limit: 1 };
+      const first = yield* store.getReviewLedgerEntries(range);
+      assert.deepEqual(
+        first.map(({ index }) => index),
+        [0],
+      );
+      const second = yield* store.getReviewLedgerEntries({
+        ...range,
+        cursor: { taskId: task.id, index: 0 },
+      });
+      assert.deepEqual(
+        second.map(({ index }) => index),
+        [1],
+      );
+      assert.deepEqual(
+        yield* store.getReviewLedgerEntries({ ...range, cursor: { taskId: task.id, index: 1 } }),
+        [],
+      );
+      const atBoundary = yield* store.getReviewLedgerEntries({
+        from: range.to,
+        to: "2026-10-18T00:00:00.000Z",
+        limit: 10,
+      });
+      assert.deepEqual(
+        atBoundary.map(({ index }) => index),
+        [2],
+      );
+      const thread = yield* store.getThread(threadId);
+      yield* store.apply({
+        id: EventId.make("archive-review-parent"),
+        type: "thread.archived",
+        threadId,
+        occurredAt: D10_NOW,
+        payload: { ...thread, archivedAt: D10_NOW },
+      });
+      assert.lengthOf(yield* store.getReviewLedgerEntries(range), 1);
+      yield* store.apply({
+        id: EventId.make("delete-review-parent"),
+        type: "thread.deleted",
+        threadId,
+        occurredAt: D10_NOW,
+        payload: { ...thread, deletedAt: D10_NOW },
+      });
+      assert.deepEqual(yield* store.getReviewLedgerEntries(range), []);
+      return persisted.reviewLedger;
+    });
+    return Effect.gen(function* () {
+      const sql = yield* verify.pipe(Effect.provide(layerTest));
+      const memory = yield* verify.pipe(Effect.provide(ProjectionStore.layerMemory));
+      assert.deepEqual(sql, memory);
+    });
+  },
+);

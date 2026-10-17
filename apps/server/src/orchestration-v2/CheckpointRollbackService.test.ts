@@ -500,6 +500,7 @@ it.effect.skipIf(!symlinksSupported)(
       const threadId = ThreadId.make("restore-alias-current");
       const otherId = ThreadId.make("restore-alias-archived");
       const projections = ProjectionStore.ProjectionStoreV2.of({
+        getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
         getShellSnapshot: () =>
           Effect.succeed({
             schemaVersion: 1,

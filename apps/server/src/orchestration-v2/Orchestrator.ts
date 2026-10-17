@@ -30,7 +30,7 @@ import {
   describeUserInputResponder,
   isProviderNativeSubagentThread,
   MessageId,
-  type NodeId,
+  NodeId,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
@@ -163,6 +163,32 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
 ) {
   override get message(): string {
     return `Failed to dispatch orchestration command ${this.commandType} (${this.commandId}).`;
+  }
+}
+
+export class OrchestratorReviewLedgerError extends Schema.TaggedError<OrchestratorReviewLedgerError>()(
+  "OrchestratorReviewLedgerError",
+  {
+    taskId: NodeId,
+    reason: Schema.Literals([
+      "task_not_owned",
+      "not_review",
+      "evidence_required",
+      "decision_required",
+    ]),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "task_not_owned":
+        return "Review ledger requires an app-owned task of the parent thread.";
+      case "not_review":
+        return "Review ledger requires a task with role review.";
+      case "evidence_required":
+        return "Rebutting a critical or high severity finding requires evidence.";
+      case "decision_required":
+        return "A finding requires an existing decision before an outcome.";
+    }
   }
 }
 
@@ -316,6 +342,7 @@ export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError
 export const OrchestratorV2Error = Schema.Union([
   RuntimeAdmission.ServerDrainingError,
   OrchestratorQuestionAlreadyAnsweredError,
+  OrchestratorReviewLedgerError,
   OrchestratorDispatchError,
   OrchestratorCommandRejectedError,
   OrchestratorProjectionError,
@@ -427,6 +454,12 @@ export interface OrchestratorV2Shape {
     input: Parameters<ProjectionStoreV2["Service"]["getLaunchedPendingQuestions"]>[0],
   ) => Effect.Effect<
     Effect.Success<ReturnType<ProjectionStoreV2["Service"]["getLaunchedPendingQuestions"]>>,
+    OrchestratorV2Error
+  >;
+  readonly getReviewLedgerEntries: (
+    input: Parameters<ProjectionStoreV2["Service"]["getReviewLedgerEntries"]>[0],
+  ) => Effect.Effect<
+    Effect.Success<ReturnType<ProjectionStoreV2["Service"]["getReviewLedgerEntries"]>>,
     OrchestratorV2Error
   >;
   readonly getThreadShell: (
@@ -571,6 +604,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "delegated_task.remote.progress":
     case "delegated_task.remote.result":
     case "delegated_task.wake-policy":
+    case "delegated_task.review-ledger.append":
     case "delegated_task.completion-delivery.acknowledge":
     case "delegated_task.completion-delivery.dispose":
     case "thread.created.record":
@@ -2098,6 +2132,78 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }),
     ),
   );
+
+  const dispatchReviewLedgerAppend = (
+    command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "delegated_task.review-ledger.append" }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.parentThreadId, ["subagents", "runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.parentThreadId, cause }),
+          ),
+        );
+      const task = projection.subagents.find(
+        (candidate) =>
+          candidate.id === command.taskId &&
+          candidate.origin === "app_owned" &&
+          candidate.threadId === command.parentThreadId,
+      );
+      const refuse = (reason: OrchestratorReviewLedgerError["reason"]) =>
+        new OrchestratorReviewLedgerError({ taskId: command.taskId, reason });
+      if (task === undefined) return yield* refuse("task_not_owned");
+      if (task.role !== "review") return yield* refuse("not_review");
+      const now = yield* DateTime.now;
+      const ledger = [...(task.reviewLedger ?? [])];
+      const observingRun = projection.runs
+        .filter(isBlockingRun)
+        .toSorted((a, b) => b.ordinal - a.ordinal)[0];
+      for (const [index, input] of command.entries.entries()) {
+        const recorded = {
+          entryId: `review-ledger:${command.commandId}:${index}`,
+          recordedAt: DateTime.formatIso(now),
+          recordedByRunId: observingRun?.id ?? null,
+        };
+        if (input.kind === "decision") {
+          if (
+            input.decision === "rebutted" &&
+            (input.severity === "critical" || input.severity === "high") &&
+            input.evidence === null
+          ) {
+            return yield* refuse("evidence_required");
+          }
+          ledger.push({ ...input, ...recorded });
+        } else {
+          const decision = ledger.findLast(
+            (entry) => entry.kind === "decision" && entry.findingId === input.findingId,
+          );
+          if (decision?.kind !== "decision") return yield* refuse("decision_required");
+          ledger.push({
+            ...input,
+            ...recorded,
+            outcome: decision.decision === "rebutted" ? "later_confirmed" : "unneeded",
+          });
+        }
+      }
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "subagent.updated",
+        threadId: command.parentThreadId,
+        ...(task.runId === null ? {} : { runId: task.runId }),
+        nodeId: task.id,
+        driver: task.driver,
+        providerInstanceId: task.providerInstanceId,
+        occurredAt: now,
+        payload: { ...task, reviewLedger: ledger, updatedAt: now },
+      });
+    });
 
   const dispatchDelegatedTaskCompletionDeliveryResolution = (
     command: Extract<
@@ -7573,6 +7679,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const taskId = idAllocator.derive.delegatedTaskNode({ commandId: command.commandId });
     const task: OrchestrationV2Subagent = {
       ...original,
+      reviewLedger: undefined,
       memoryGrantCeiling: command.memoryGrantCeiling ?? "none",
       createdBy: command.createdBy,
       driver: adapter.driver,
@@ -12565,6 +12672,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "delegated_task.wake-policy":
         yield* dispatchDelegatedTaskWakePolicy(command, events);
         break;
+      case "delegated_task.review-ledger.append":
+        yield* dispatchReviewLedgerAppend(command, events);
+        break;
       case "delegated_task.completion-delivery.acknowledge":
       case "delegated_task.completion-delivery.dispose":
         yield* dispatchDelegatedTaskCompletionDeliveryResolution(command, events);
@@ -13161,6 +13271,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: input.threadId, cause }),
           ),
         ),
+    getReviewLedgerEntries: (input) =>
+      projectionStore.getReviewLedgerEntries(input).pipe(Effect.mapError(shellProjectionError)),
     getThreadRecords: (threadId, fields, filter) =>
       projectionStore
         .getThreadRecords(threadId, fields, filter)
@@ -13300,6 +13412,10 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
     getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getTurnItem: ({ threadId }) => Effect.fail(new OrchestratorProjectionError({ threadId })),
+    getReviewLedgerEntries: () =>
+      Effect.fail(
+        new OrchestratorProjectionError({ threadId: ThreadId.make("thread:review-ledger") }),
+      ),
     getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getThreadProjection: (threadId) =>
       Effect.fail(
