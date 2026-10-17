@@ -774,8 +774,19 @@ describe("providerMaintenanceRunner", () => {
     const calls: Array<string> = [];
     return Effect.gen(function* () {
       const { registry } = yield* makeRegistry([baseProvider, baseOpenCodeProvider]);
+      const secondQueued = yield* Deferred.make<void>();
       const updater = yield* makeTestRunner({
         ...registry,
+        setProviderMaintenanceActionState: (input) =>
+          registry
+            .setProviderMaintenanceActionState(input)
+            .pipe(
+              Effect.tap(() =>
+                input.instanceId === OPENCODE_INSTANCE_ID && input.state?.status === "queued"
+                  ? Deferred.succeed(secondQueued, undefined)
+                  : Effect.void,
+              ),
+            ),
         getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
           Effect.succeed(
             makeProviderMaintenanceCapabilities({
@@ -795,17 +806,8 @@ describe("providerMaintenanceRunner", () => {
       yield* Effect.promise(() => firstStarted);
 
       const second = yield* updater.updateProvider(OPENCODE_DRIVER).pipe(Effect.forkScoped);
-      let providersWhileQueued: ReadonlyArray<ServerProvider> = [];
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        providersWhileQueued = yield* registry.getProviders;
-        const queuedStatus = providersWhileQueued.find(
-          (provider) => provider.instanceId === OPENCODE_INSTANCE_ID,
-        )?.updateState?.status;
-        if (queuedStatus === "queued") {
-          break;
-        }
-        yield* Effect.yieldNow;
-      }
+      yield* Deferred.await(secondQueued);
+      const providersWhileQueued = yield* registry.getProviders;
       assert.deepStrictEqual(calls, ["install -g @openai/codex@latest"]);
       assert.strictEqual(
         providersWhileQueued.find((provider) => provider.instanceId === OPENCODE_INSTANCE_ID)

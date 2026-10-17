@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -74,44 +76,76 @@ const connect = Effect.gen(function* () {
   return yield* opencode.connect({ baseUrl: "http://127.0.0.1:4096", password: "secret" });
 });
 
-/** Sends `events`, then keeps the connection open without another byte, like a frozen server. */
-const layerServingThenSilent = (events: ReadonlyArray<unknown>) =>
+/** Sends `events`, then acknowledges the next body read and leaves it pending. */
+const layerServingThenSilent = (
+  events: ReadonlyArray<unknown>,
+  silentReadStarted: Deferred.Deferred<void>,
+) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
-      Effect.succeed(
-        HttpClientResponse.fromWeb(
+      Effect.sync(() => {
+        const response = HttpClientResponse.fromWeb(
           request,
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                for (const event of events) {
-                  controller.enqueue(new TextEncoder().encode(`data: ${encodeJson(event)}\n\n`));
-                }
-              },
-            }),
-            { headers: { "content-type": "text/event-stream" } },
+          new Response(events.map((event) => `data: ${encodeJson(event)}\n\n`).join(""), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        );
+        // Override only the body accessor; retain the response's other getters.
+        return Object.defineProperty(response, "stream", {
+          value: response.stream.pipe(
+            Stream.concat(
+              Stream.fromEffect(
+                Deferred.succeed(silentReadStarted, undefined).pipe(Effect.andThen(Effect.never)),
+              ),
+            ),
           ),
-        ),
-      ),
+        });
+      }),
     ),
   );
 
 describe("OpenCode2Client events", () => {
   it.effect("fails a stream that stops sending anything, even heartbeats", () =>
     Effect.gen(function* () {
+      const firstFrameProcessed = yield* Deferred.make<void>();
+      const silentReadStarted = yield* Deferred.make<void>();
+      const watchdogStarted = yield* Deferred.make<void>();
+      const clock = yield* Clock.Clock;
+      const watchdogClock = {
+        ...clock,
+        sleep: (duration) =>
+          Effect.gen(function* () {
+            // Start the real TestClock sleep through registration before acknowledging it.
+            const sleeping = yield* clock
+              .sleep(duration)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.succeed(watchdogStarted, undefined);
+            yield* Fiber.join(sleeping);
+          }),
+      } satisfies Clock.Clock;
       const { events } = yield* connect.pipe(
         Effect.provide(
           OpenCode2Client.layer.pipe(
             Layer.provide(
-              layerServingThenSilent([{ id: "evt_1", type: "server.connected", data: {} }]),
+              layerServingThenSilent(
+                [{ type: "session.execution.started", data: { sessionID: "ses_x", lane: 7 } }],
+                silentReadStarted,
+              ),
             ),
           ),
         ),
       );
-      const drained = yield* (yield* events).pipe(Stream.runDrain, Effect.flip, Effect.forkChild);
-      // Let the first frame arrive and the timer start before the clock moves.
-      for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+      const drained = yield* (yield* events).pipe(
+        Stream.tap(() => Deferred.succeed(firstFrameProcessed, undefined)),
+        Stream.runDrain,
+        Effect.flip,
+        Effect.provideService(Clock.Clock, watchdogClock),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstFrameProcessed);
+      yield* Deferred.await(silentReadStarted);
+      yield* Deferred.await(watchdogStarted);
       yield* TestClock.adjust("46 seconds");
       const failure = yield* Fiber.join(drained);
       assert.strictEqual(failure._tag, "OpenCode2SilentStreamError");

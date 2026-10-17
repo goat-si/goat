@@ -1787,21 +1787,17 @@ it.layer(
           yield* Ref.set(returnPendingSnapshot, false);
           const workspaceUpdate = yield* registry.streamChanges.pipe(
             Stream.runHead,
-            Effect.forkChild,
+            Effect.forkChild({ startImmediately: true }),
           );
-          yield* Effect.yieldNow;
           const firstRefresh = yield* registry
             .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" })
             .pipe(Effect.forkChild);
           yield* Deferred.await(probeStarted);
-          const duplicateRefresh = yield* registry
-            .refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" })
-            .pipe(Effect.forkChild);
-          yield* Effect.yieldNow;
+          // The duplicate must finish while the original probe is still blocked.
+          yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
           assert.strictEqual(yield* Ref.get(snapshotCalls), 2);
           yield* Deferred.succeed(releaseProbe, undefined);
           yield* Fiber.join(firstRefresh);
-          yield* Fiber.join(duplicateRefresh);
           const published = yield* Fiber.join(workspaceUpdate);
           assert.strictEqual(published._tag, "Some");
           const providers = yield* registry.getProviders;
@@ -1882,17 +1878,15 @@ it.layer(
             [latestSkills],
           );
 
+          const rebuiltUpdate = yield* registry.streamChanges.pipe(
+            Stream.filter((providers) => providers[0]?.checkedAt === rebuiltProvider.checkedAt),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
           yield* Ref.set(instancesRef, [rebuiltInstance]);
           yield* PubSub.publish(registryChanges, undefined);
-          let rebuilt = yield* registry.getProviders;
-          for (
-            let attempt = 0;
-            attempt < 50 && rebuilt[0]?.checkedAt !== rebuiltProvider.checkedAt;
-            attempt += 1
-          ) {
-            yield* Effect.yieldNow;
-            rebuilt = yield* registry.getProviders;
-          }
+          yield* Fiber.join(rebuiltUpdate);
+          const rebuilt = yield* registry.getProviders;
           assert.strictEqual(rebuilt[0]?.checkedAt, rebuiltProvider.checkedAt);
           assert.strictEqual(rebuilt[0]?.workspaceSnapshots, undefined);
         }).pipe(Effect.provide(runtimeServices));
@@ -2757,7 +2751,7 @@ it.layer(
         const changes = yield* PubSub.unbounded<void>();
         const instancesRef = yield* Ref.make<ReadonlyArray<ProviderInstance>>([codexInstance]);
         const failNextList = yield* Ref.make(false);
-        const wait = () => Effect.yieldNow;
+        const failedList = yield* Deferred.make<void>();
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           {
@@ -2771,6 +2765,7 @@ it.layer(
               const shouldFail = yield* Ref.get(failNextList);
               if (shouldFail) {
                 yield* Ref.set(failNextList, false);
+                yield* Deferred.succeed(failedList, undefined);
                 return yield* Effect.die(new Error("simulated registry list failure"));
               }
               return yield* Ref.get(instancesRef);
@@ -2801,21 +2796,21 @@ it.layer(
             withBundledCompatibility(codexProvider),
           ]);
 
+          const aggregateUpdate = yield* registry.streamChanges.pipe(
+            Stream.filter((providers) =>
+              providers.some((provider) => provider.instanceId === claudeInstanceId),
+            ),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
           yield* Ref.set(failNextList, true);
           yield* PubSub.publish(changes, undefined);
+          yield* Deferred.await(failedList);
 
           yield* Ref.set(instancesRef, [codexInstance, claudeInstance]);
           yield* PubSub.publish(changes, undefined);
-
-          let providers = yield* registry.getProviders;
-          for (
-            let attempt = 0;
-            attempt < 50 && !providers.some((provider) => provider.instanceId === claudeInstanceId);
-            attempt += 1
-          ) {
-            yield* wait();
-            providers = yield* registry.getProviders;
-          }
+          yield* Fiber.join(aggregateUpdate);
+          const providers = yield* registry.getProviders;
 
           assert.deepStrictEqual(
             providers.map((provider) => provider.instanceId).toSorted(),
@@ -2913,17 +2908,24 @@ it.layer(
 
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
-          let providers = yield* registry.getProviders;
-          for (
-            let attempts = 0;
-            attempts < 50 &&
-            providers.find((provider) => provider.instanceId === "codex_personal")?.status !==
-              "error";
-            attempts += 1
+          const probeFailure = yield* registry.streamChanges.pipe(
+            Stream.filter(
+              (providers) =>
+                providers.find((provider) => provider.instanceId === "codex_personal")?.status ===
+                "error",
+            ),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          // Subscribe before reading: the real probe can finish during layer construction.
+          const currentProviders = yield* registry.getProviders;
+          if (
+            currentProviders.find((provider) => provider.instanceId === "codex_personal")
+              ?.status !== "error"
           ) {
-            yield* Effect.yieldNow;
-            providers = yield* registry.getProviders;
+            yield* Fiber.join(probeFailure);
           }
+          const providers = yield* registry.getProviders;
           const codexPersonal = providers.find(
             (provider) => provider.instanceId === "codex_personal",
           );
