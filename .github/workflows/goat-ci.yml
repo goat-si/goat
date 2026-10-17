@@ -1,9 +1,14 @@
 name: goat-ci
 
 # goat fork CI. Runs only on the EPYC self-hosted runners; every upstream workflow is disabled.
+#
+# A pull request runs only the tasks its changes reach: the goat-scope job reads the diff and the
+# workspace graph (.github/scripts/goat-ci-scope.cjs) and hands ci its matrix. The ci:full label
+# (then re-run the workflow) runs everything. Nothing runs on push, so merging into dev starts no
+# CI. Run the workflow by hand for a full run of any branch (gh workflow run goat-ci.yml --ref dev);
+# a successful manual run on dev is what starts goat-nightly. goat-ci-result is the one check to
+# read: it fails when any selected task failed or was cancelled.
 on:
-  push:
-    branches: [main, dev, preview, "goat/**"]
   pull_request:
     branches: [main, dev, preview, "goat/**"]
   workflow_dispatch:
@@ -19,41 +24,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: goat-scope
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.scope.outputs.matrix }}
+    steps:
+      # The PR merge commit and its first parent (the base) are all the diff needs; the
+      # package.json files carry the workspace graph.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          sparse-checkout: |
+            /package.json
+            /.github/scripts/
+            /apps/*/package.json
+            /packages/*/package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          # The scope script only needs Node.
+          run-install: false
+
+      - name: Select tasks
+        id: scope
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/goat-ci-scope.cjs
+
   ci:
     name: goat-${{ matrix.task }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shard_count) || '' }}
+    needs: scope
     runs-on: [self-hosted, linux, x64, goat, epyc]
     timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 75 || 40 }}
     strategy:
       fail-fast: false
-      matrix:
-        task:
-          [
-            check,
-            typecheck,
-            test,
-            test-desktop,
-            test-contracts,
-            test-client-runtime,
-            test-mobile-memory,
-            test-shared,
-            test-memory-growth,
-            build,
-          ]
-        include:
-          # apps/server runs one file at a time. Four duration-balanced shards
-          # keep that isolation and stay inside the job timeout.
-          - task: test-server
-            shard: 1
-            shard_count: 4
-          - task: test-server
-            shard: 2
-            shard_count: 4
-          - task: test-server
-            shard: 3
-            shard_count: 4
-          - task: test-server
-            shard: 4
-            shard_count: 4
+      # Tasks: check, typecheck, test, test-desktop, test-contracts, test-client-runtime,
+      # test-mobile-memory, test-shared, test-memory-growth, build, and test-server in four
+      # duration-balanced shards (apps/server runs one file at a time). goat-scope picks which.
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -172,9 +188,9 @@ jobs:
           vp test run build-desktop-artifact.test.ts check-release-version.test.ts
           resolve-nightly-release.test.ts goat-workflow-guard.test.ts lib/release-notices.test.ts
 
-      - name: Test PR screenshot gate
+      - name: Test CI scripts
         if: matrix.task == 'test'
-        run: node --test .github/scripts/pr-screenshot-gate.test.cjs
+        run: node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.
@@ -205,8 +221,8 @@ jobs:
           done
 
       - name: Upload build output
-        # Only on push to dev/main: PR runs filled the private-repo artifact quota.
-        if: matrix.task == 'build' && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+        # Only on manual runs of dev/main: PR runs filled the private-repo artifact quota.
+        if: matrix.task == 'build' && github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
         # Nothing downloads this artifact, so a full storage quota must not fail the build.
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -222,6 +238,8 @@ jobs:
 
   screenshot-gate:
     name: goat-screenshot-gate
+    # It reads the pull request, so a manual run has nothing to inspect.
+    if: github.event_name == 'pull_request'
     runs-on: [self-hosted, linux, x64, goat, epyc]
     timeout-minutes: 40
     permissions:
@@ -263,3 +281,25 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GOAT_SCREENSHOT_GATE: ${{ vars.GOAT_SCREENSHOT_GATE }}
         run: node .github/scripts/pr-screenshot-gate.cjs
+
+  result:
+    name: goat-ci-result
+    needs: [scope, ci, screenshot-gate]
+    # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
+    if: ${{ !cancelled() }}
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected task
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          CI: ${{ needs.ci.result }}
+          SCREENSHOT_GATE: ${{ needs.screenshot-gate.result }}
+        run: |
+          echo "goat-scope: $SCOPE, ci: $CI, goat-screenshot-gate: $SCREENSHOT_GATE"
+          test "$SCOPE" = success || { echo "::error::goat-scope did not succeed ($SCOPE)"; exit 1; }
+          test "$CI" = success || { echo "::error::a selected ci task did not succeed ($CI)"; exit 1; }
+          case "$SCREENSHOT_GATE" in
+            success | skipped) ;;
+            *) echo "::error::goat-screenshot-gate did not succeed ($SCREENSHOT_GATE)"; exit 1 ;;
+          esac
