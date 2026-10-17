@@ -406,6 +406,14 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "thread-create",
   ),
   goat_ssh_host_list: tool(["List", "Listing", "Listed", "SSH hosts"], "ssh-host-list"),
+  goat_ssh_host_status: tool(
+    ["Check", "Checking", "Checked", "an SSH host's runtime"],
+    "host-status",
+  ),
+  goat_ssh_runtime_update: tool(
+    ["Update", "Updating", "Updated", "an SSH host's runtime"],
+    "environment-update",
+  ),
   goat_ssh_browse: tool(["Browse", "Browsing", "Browsed", "folders over SSH"], "ssh-browse"),
   goat_ssh_reports: tool(["List", "Listing", "Listed", "remote thread reports"], "thread-list"),
   goat_ssh_thread_launch: tool(
