@@ -761,7 +761,7 @@ exit 1
 
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const prepareGateText =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
 const downstreamGateText =
   "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const macRunner = ["self-hosted", "macOS", "ARM64", "goat", "mac-studio"];
@@ -923,14 +923,17 @@ describe("goat pre-push nightly workflow guard", () => {
     [
       "a gate that accepts pull request runs",
       withJob("prepare", {
-        if: prepareGateText.replace(" && github.event.workflow_run.event == 'push'", ""),
+        if: prepareGateText.replace(
+          " && github.event.workflow_run.event == 'workflow_dispatch'",
+          "",
+        ),
       }),
-      "jobs.prepare.if must be the dev-push gate",
+      "jobs.prepare.if must be the manual dev run gate",
     ],
     [
       "a missing gate",
       withJob("prepare", { if: undefined }),
-      "jobs.prepare.if must be the dev-push gate",
+      "jobs.prepare.if must be the manual dev run gate",
     ],
     [
       "a job without needs: prepare",

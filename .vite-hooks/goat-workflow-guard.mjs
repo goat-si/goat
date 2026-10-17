@@ -20,7 +20,7 @@ const actions = new Set([
   "actions/upload-artifact@v4",
 ]);
 // goat-nightly.yml signs on the Mac Studio and publishes with the goat-releases App,
-// so it may only run after a successful dev push of goat-ci, never from a pull request.
+// so it may only run after a successful manual goat-ci run on dev, never from a pull request.
 const nightlyActions = new Set([
   ...actions,
   "actions/download-artifact@v4",
@@ -38,7 +38,7 @@ const selfHostedRunners = [
   ["self-hosted", "macos", "arm64", "goat", "mac-studio"],
 ];
 const prepareGate =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
 const downstreamGate = "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const verifiedRef = "${{ needs.prepare.outputs.sha }}";
 const prepareRef = "${{ steps.resolve.outputs.sha }}";
@@ -307,7 +307,7 @@ function validateNightlyWorkflow(source, yaml) {
     }
     if (name === "prepare") {
       if (normalizeExpression(job.if) !== prepareGate)
-        fail("jobs.prepare.if must be the dev-push gate");
+        fail("jobs.prepare.if must be the manual dev run gate");
       if (Object.hasOwn(job, "needs")) fail("jobs.prepare must not need other jobs");
       // Downstream checkouts trust needs.prepare.outputs.sha, so it must come from
       // the resolve step that checks the commit against dev.
