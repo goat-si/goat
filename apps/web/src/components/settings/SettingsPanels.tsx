@@ -2,6 +2,7 @@ import { SettingsGroup } from "./SettingsGroup";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
+import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import {
   ArchiveIcon,
@@ -662,6 +663,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests
         ? ["Keep threads with a PR"]
         : []),
+      ...(Object.entries(DEFAULT_UNIFIED_SETTINGS.pullRequestWatchPolicy).some(
+        ([field, value]) =>
+          JSON.stringify(
+            settings.pullRequestWatchPolicy[field as keyof typeof settings.pullRequestWatchPolicy],
+          ) !== JSON.stringify(value),
+      )
+        ? ["Pull request watching"]
+        : []),
       ...(settings.sidebarAutoSettleOnMerge !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge
         ? ["Auto-settle merged threads"]
         : []),
@@ -789,6 +798,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleKeepPullRequests,
+      settings.pullRequestWatchPolicy,
       settings.sidebarAutoSettleOnMerge,
       settings.autoResumeLimitedThreads,
       settings.snoozeLimitedThreads,
@@ -895,6 +905,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
+      pullRequestWatchPolicy: DEFAULT_UNIFIED_SETTINGS.pullRequestWatchPolicy,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
@@ -2571,6 +2582,7 @@ export function GeneralSettingsPanel() {
             ) : null}
           </>
         ) : null}
+        <PullRequestWatchSettings />
       </SettingsSection>
 
       <SettingsSection id="behavior" title="Behavior">
