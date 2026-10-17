@@ -95,7 +95,7 @@ function PullRequestWatchFields() {
         settingKeys={["pullRequestWatchPolicy"]}
         mixed={autoWatchMixed}
         {...searchableSetting("pull-request-watch-automatic")}
-        description="Watch pull requests a thread creates or its agent links."
+        description="Watch pull requests a thread creates or its agent links, without keeping the thread in Working."
         resetAction={reset("autoWatch", "automatic pull request watching")}
         control={
           <Switch
@@ -120,7 +120,7 @@ function PullRequestWatchFields() {
             {...row}
             description={
               field === "checksFailed"
-                ? "React wakes the agent. Keep as context saves updates for its next turn. Ignore drops them."
+                ? "React wakes the agent. Keep as context notes the update in the thread and tells the agent at its next wake. Ignore drops it."
                 : undefined
             }
             resetAction={reset(field, row.title)}
@@ -181,7 +181,7 @@ function PullRequestWatchFields() {
         settingKeys={["pullRequestWatchPolicy"]}
         mixed={daysMixed}
         {...searchableSetting("pull-request-watch-conflict-idle-days")}
-        description="Skip merge conflict updates after this many days without thread activity. Never keeps them enabled."
+        description="Merge conflicts do not wake a thread that has been idle this long. Never lets them wake any thread."
         resetAction={reset("conflictMaxIdleDays", "conflict idle limit")}
         control={
           <div className="flex flex-wrap items-center justify-end gap-2">
