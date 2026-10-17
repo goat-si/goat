@@ -26,6 +26,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import migration from "../persistence/Migrations/064_RemoteReports.ts";
 import dispatchMigration from "../persistence/Migrations/065_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/068_ThreadRunResults.ts";
 import relayMigration from "../persistence/Migrations/069_RemoteReportRelay.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
@@ -73,6 +74,7 @@ const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* migration;
   yield* dispatchMigration;
+  yield* threadRunResultsMigration;
   yield* relayMigration;
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const deletions = yield* Queue.unbounded<OrchestrationV2StoredEvent>();

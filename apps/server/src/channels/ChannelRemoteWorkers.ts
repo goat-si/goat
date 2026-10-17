@@ -65,6 +65,7 @@ import {
   remoteCorrelationFor,
   remoteReportEventIdFor,
 } from "./channelIds.ts";
+import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 
@@ -648,6 +649,7 @@ const make = Effect.gen(function* () {
         task.generation +
         ").",
       "If you need a decision from the person who asked, report needs_input with your question, then stop. When you finish, end with a short summary of the result.",
+      "Before you end, call goat_thread_report_result with your outcome (succeeded, failed, blocked or cancelled) and a short summary; the task settles from that report.",
     ].join("\n");
 
   /** Binds the task to the remote thread the launch (or its recovery) found. */
@@ -1282,17 +1284,21 @@ const make = Effect.gen(function* () {
       }
       if (watched.status === "completed") {
         const proposal = stored.task.proposedCompletion;
-        const summary =
+        const fallbackSummary =
           watched.summary?.trim() ||
           (proposal?.runId === runId ? proposal.summary : undefined) ||
           "Finished.";
+        // An older remote sends no report, which settles as before with report "missing".
         yield* commitTransition(
           ledger,
           stored,
-          {
-            type: "task.completed",
-            payload: { generation: stored.task.generation, runId, summary },
-          },
+          settleCompletedRun({
+            task: stored.task,
+            runId,
+            reported: watched.reported,
+            fallbackSummary,
+            now: yield* nowIso,
+          }),
           { owner, narrate: true, completionHold: null },
         );
       } else if (watched.status === "cancelled") {

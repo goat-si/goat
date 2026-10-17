@@ -10,6 +10,7 @@ import {
   RemoteRelaySend,
   type RemoteKnownRun,
   type RemoteObservedRun,
+  type RemoteReportedOutcome,
   RemoteOriginReportInput,
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
@@ -30,6 +31,7 @@ import {
   isTerminalRunStatus,
   pendingUserInputRequestIdsForRun,
 } from "../orchestration-v2/ThreadManagementService.ts";
+import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
 
 export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
   "RemoteReportError",
@@ -362,6 +364,7 @@ const make = Effect.gen(function* () {
             const run = records.runs.find((candidate) => candidate.id === runId);
             if (run === undefined) return yield* new RemoteReportError({ reason: "run_not_found" });
             let summary: string | null = null;
+            let reported: RemoteReportedOutcome | undefined;
             if (isTerminalRunStatus(run.status)) {
               const messages = yield* orchestrator
                 .getThreadRecords(binding.threadId, ["messages"], {
@@ -379,8 +382,28 @@ const make = Effect.gen(function* () {
                   )
                   .at(-1)
                   ?.text.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) ?? null;
+              // The origin settles a completed run from the worker's own report.
+              const stored = yield* readStoredThreadResultReport(binding.threadId, runId).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.mapError(unavailable),
+              );
+              if (stored !== null) {
+                const reportedSummary = stored.report.summary?.trim();
+                reported = {
+                  outcome: stored.report.outcome,
+                  ...(reportedSummary === undefined || reportedSummary === ""
+                    ? {}
+                    : { summary: reportedSummary.slice(0, REMOTE_REPORT_SUMMARY_MAX_CHARS) }),
+                };
+              }
             }
-            observedRun = { runId, status: run.status, summary, ...(yield* runState(run)) };
+            observedRun = {
+              runId,
+              status: run.status,
+              summary,
+              ...(yield* runState(run)),
+              ...(reported === undefined ? {} : { reported }),
+            };
           }
           return {
             threadId: binding.threadId,

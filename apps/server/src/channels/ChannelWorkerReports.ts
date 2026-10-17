@@ -24,10 +24,13 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { questionIdFor } from "./channelIds.ts";
+import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
 const TERMINAL_RUN_STATUSES = new Set([
@@ -61,6 +64,7 @@ export class ChannelWorkerReports extends Context.Service<
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const sql = yield* SqlClient.SqlClient;
 
   const lastAssistantText = (threadId: ThreadId, run: OrchestrationV2Run) =>
     threads
@@ -148,7 +152,15 @@ const make = Effect.gen(function* () {
           }
           return true;
         }
-        const summary =
+        // The worker's own report decides failed, cancelled and blocked; an unreadable report
+        // waits for the next pass rather than settling as "no report".
+        const reportRead = yield* readStoredThreadResultReport(worker.threadId, current.id).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.option,
+        );
+        if (reportRead._tag === "None") return latest !== stored;
+        const reported = reportRead.value?.report;
+        const fallbackSummary =
           (yield* lastAssistantText(worker.threadId, current)) ??
           (latest.task.proposedCompletion?.runId === current.id
             ? latest.task.proposedCompletion.summary
@@ -156,10 +168,13 @@ const make = Effect.gen(function* () {
         yield* commitTransition(
           ledger,
           latest,
-          {
-            type: "task.completed",
-            payload: { generation: task.generation, runId: current.id, summary },
-          },
+          settleCompletedRun({
+            task: latest.task,
+            runId: current.id,
+            reported,
+            fallbackSummary,
+            now: DateTime.formatIso(yield* DateTime.now),
+          }),
           { owner, narrate: true, completionHold: null },
         );
         return true;

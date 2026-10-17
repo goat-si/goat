@@ -133,6 +133,7 @@ export function applyChannelTaskEvent(
           ...rest,
           status: "completed",
           resultSummary: event.payload.summary,
+          ...(event.payload.report === undefined ? {} : { completionReport: event.payload.report }),
           completedAt: event.occurredAt,
         },
       };
@@ -167,6 +168,7 @@ export function applyChannelTaskEvent(
         worker: _worker,
         completedAt: _completedAt,
         resultSummary: _summary,
+        completionReport: _report,
         ...rest
       } = base;
       return {

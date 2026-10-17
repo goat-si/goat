@@ -86,6 +86,7 @@ const workerInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
     'For progress on long work, call channel_task_report with status "running" at meaningful milestones.',
     "Before anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing), ask first: show the draft or plan in a waiting_input question.",
     'If you need a decision from the person who asked, call channel_task_report with this taskId and generation, status "waiting_input", a new eventId, and your question, then stop.',
+    "Before you end, call goat_thread_report_result with your outcome (succeeded, failed, blocked or cancelled) and a short summary; GOAT settles the task from that report.",
     "When you finish, end with a short summary of the result.",
   ].join("\n");
 

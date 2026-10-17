@@ -48,6 +48,14 @@ function questionLabel(count: number): string | null {
   return count === 1 ? "1 question" : `${count} questions`;
 }
 
+/** A finished task whose worker never reported its outcome is worth a second look. */
+function attentionLabel(chip: ChannelTaskChip): string | null {
+  if (chip.status === "completed" && chip.completionReport === "missing") {
+    return "Finished without a report";
+  }
+  return questionLabel(chip.openQuestionCount);
+}
+
 export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
   const status = TASK_STATUS[chip.status];
   const prefix = SOURCE_PREFIX[chip.originKind];
@@ -63,7 +71,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
     tone: status.tone,
     sourceLabel: host === undefined ? requester : `${requester} · on ${host}`,
     summary: summary.length > 0 ? summary : null,
-    attentionLabel: questionLabel(chip.openQuestionCount),
+    attentionLabel: attentionLabel(chip),
     target:
       chip.worker === undefined
         ? { kind: "none", label: workerlessLabel(chip.status) }

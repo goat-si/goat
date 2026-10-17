@@ -71,6 +71,7 @@ const chipFor = (task: ChannelTask): ChannelTaskChip => ({
       }),
   ...(task.resultSummary === undefined ? {} : { summary: task.resultSummary }),
   openQuestionCount: task.openQuestions.length,
+  ...(task.completionReport === undefined ? {} : { completionReport: task.completionReport }),
 });
 
 export const botAddress = (bot: ChannelBotRef): ChannelReplyAddress => ({
