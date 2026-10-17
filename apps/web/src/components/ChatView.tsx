@@ -266,6 +266,7 @@ import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { settleAndAdvance } from "../settleAndAdvance";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
+import { noteDraftWorkspacePick } from "../lib/draftWorkspacePicks";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
@@ -11590,6 +11591,7 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       if (isLocalDraftThread) {
+        if (typeof composerDraftTarget === "string") noteDraftWorkspacePick(composerDraftTarget);
         setDraftThreadContext(composerDraftTarget, {
           envMode: mode,
           sshDestination: null,

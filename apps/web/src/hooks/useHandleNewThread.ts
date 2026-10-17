@@ -45,6 +45,7 @@ import {
   resolveNewThreadModelSelectionOverride,
 } from "../lib/chatThreadActions";
 import { loadGoatProjectFile, peekGoatProjectFile } from "../lib/goatProjectFileDefaults";
+import { draftWorkspacePickCount } from "../lib/draftWorkspacePicks";
 import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -299,6 +300,7 @@ export function useNewThreadHandler() {
         keepStartFromOrigin: boolean,
       ) => {
         if (project === undefined || !consultProjectFile) return;
+        const picksAtRequest = draftWorkspacePickCount(draftId);
         void loadGoatProjectFile(project.environmentId, project.workspaceRoot, {
           signal: AbortSignal.timeout(PROJECT_FILE_READ_TIMEOUT_MS),
         }).then((lookup) => {
@@ -316,6 +318,7 @@ export function useNewThreadHandler() {
             draftStore.getDraftSessionByLogicalProjectKey(logicalProjectKey)?.draftId !== draftId ||
             readThreadShell(scopeThreadRef(draft.environmentId, threadId)) !== null ||
             readProject(projectRef) === null ||
+            draftWorkspacePickCount(draftId) !== picksAtRequest ||
             workspaceSelectionChanged(applied, pickExplicitWorkspaceOptions(draft)) ||
             branchPickedSince(applied, draft)
           ) {

@@ -13,6 +13,7 @@ import {
   markPromotedDraftThreadByRef,
   useComposerDraftStore,
 } from "../composerDraftStore";
+import { noteDraftWorkspacePick } from "../lib/draftWorkspacePicks";
 
 const testState = vi.hoisted(() => {
   type Lookup = { known: true; file: GoatProjectFile | null } | { known: false };
@@ -438,6 +439,33 @@ it("replaces a seeded New worktree base when the late default is local", async (
     branch: null,
     worktreePath: null,
   });
+});
+it("keeps a base branch picked in worktree mode before the project file arrives", async () => {
+  seed(true);
+  testState.settings.defaultThreadEnvMode = null;
+  testState.cachedProjectFile = {
+    known: true,
+    file: { defaultThreadEnvMode: "worktree" } as GoatProjectFile,
+  };
+  await useNewThreadHandler()(projectRef);
+  // A pick in the branch selector, which an automatic seed would look identical to.
+  noteDraftWorkspacePick(draftId);
+  store().setDraftThreadContext(draftId, { branch: "feature", environmentSelection: "manual" });
+  await testState.completeProjectFileRead({ defaultThreadEnvMode: "local" } as GoatProjectFile);
+  expect(store().getDraftSession(draftId)).toMatchObject({
+    envMode: "worktree",
+    branch: "feature",
+  });
+});
+it("keeps a mode chosen again before the project file arrives", async () => {
+  seed(true);
+  testState.settings.defaultThreadEnvMode = null;
+  await useNewThreadHandler()(projectRef);
+  // Choosing Local while the draft already shows Local leaves the stored value unchanged.
+  noteDraftWorkspacePick(draftId);
+  store().setDraftThreadContext(draftId, { envMode: "local", sshDestination: null });
+  await testState.completeProjectFileRead({ defaultThreadEnvMode: "worktree" } as GoatProjectFile);
+  expect(store().getDraftSession(draftId)?.envMode).toBe("local");
 });
 
 describe("new-thread SSH reset", () => {

@@ -70,6 +70,7 @@ import { ComposerControl } from "./chat/ComposerControl";
 import { MiddleTruncate } from "./ui/middle-truncate";
 import { BranchPicker, BranchPickerRefItem } from "./BranchPicker";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { noteDraftWorkspacePick } from "../lib/draftWorkspacePicks";
 
 export interface BranchToolbarBranchSelectorHandle {
   open: () => void;
@@ -214,6 +215,7 @@ export function BranchToolbarBranchSelector({
         currentWorktreePath: activeWorktreePath,
         effectiveEnvMode,
       });
+      if (!automatic && draftId) noteDraftWorkspacePick(draftId);
       setDraftThreadContext(draftId ?? threadRef, {
         branch,
         worktreePath,
