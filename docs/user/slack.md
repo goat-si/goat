@@ -40,7 +40,12 @@ GOAT Bot screen shows only a chip for the work and its final report.
   Notes live in
   `goat-bot/memory.md` in GOAT's data folder on that machine; edit the file
   to change them. Put written procedures in `goat-bot/skills/` as Markdown
-  files, and the bot points its coding agents to the one that fits.
+  files, and the bot points its coding agents to the one that fits. Work sent
+  to another machine gets the notes, and any procedure the request names, in
+  its first message.
+- When a provider has more than one signed-in account on the machine running
+  the work, GOAT uses the one with more quota left and the task card says why,
+  such as "Codex (work) · 20% weekly used".
 - For memories used in coding conversations and shared between devices, see
   [Memory](./memory.md).
 - Work you start from Slack is capped at the access level chosen when you

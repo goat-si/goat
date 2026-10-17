@@ -65,9 +65,9 @@ branch name remains.
 In **Settings → General → Standing instructions**, write the rules every thread an
 agent launches should follow, such as which model to use for subagents or how to
 commit and open pull requests. GOAT puts them in front of the first message of each
-thread an agent starts here, including threads started from another machine over
-SSH, which get this machine's instructions. Select a project to replace them for
-that project; an empty project value turns them off there.
+thread an agent, GOAT Bot, or Slack starts here, including threads started from
+another machine over SSH, which get this machine's instructions. Select a project to
+replace them for that project; an empty project value turns them off there.
 
 The launched thread shows them as a collapsed **Standing instructions** block above
 the task, with a short version code that changes whenever the text does. Threads you
