@@ -31,6 +31,8 @@ import {
   type ChannelDispatchTarget,
   type ChannelTaskEventId,
   type ChannelTaskId,
+  ChannelWorkerObservation,
+  channelWorkerObservationEquals,
   EnvironmentId,
   type MemoryTaskGrantCeiling,
   type ModelSelection,
@@ -41,6 +43,7 @@ import {
   RemoteReport,
   RemoteRunHolds,
   RunId,
+  RuntimeRequestId,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
@@ -69,6 +72,7 @@ import {
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
+import { observesUsageLimit } from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 export const REMOTE_WAIT_MS = 50_000;
@@ -163,6 +167,10 @@ const RemoteWorkerState = Schema.Struct({
       status: Schema.String,
       /** Echoed back so the wait releases when background work or a continuation ends. */
       holds: Schema.optional(RemoteRunHolds),
+      /** Echoed back so the wait releases when a question opens or closes. */
+      pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+      /** Echoed back so the wait releases when pull requests, requests or a usage limit change. */
+      observation: Schema.optional(ChannelWorkerObservation),
     }),
   ),
   inbox: Schema.Array(RemoteReport),
@@ -1133,6 +1141,12 @@ const make = Effect.gen(function* () {
                   runId: watched.runId,
                   status: watched.status,
                   ...(watched.holds === undefined ? {} : { holds: watched.holds }),
+                  ...(watched.pendingRequestIds === undefined
+                    ? {}
+                    : { pendingRequestIds: watched.pendingRequestIds }),
+                  ...(watched.observation === undefined
+                    ? {}
+                    : { observation: watched.observation }),
                 },
               }),
         };
@@ -1174,6 +1188,32 @@ const make = Effect.gen(function* () {
         state = yield* readState(taskId);
         if (state === undefined) return "stop" as const;
       }
+
+      // The remote worker's pull requests, native requests and usage-limit wait, for the current
+      // run only. An older remote sends none, and the task shows nothing extra.
+      stored = yield* ledger.getTask(taskId);
+      if (stored === undefined || !sameWorker(stored, state)) return "stop" as const;
+      const observation = watched?.observation;
+      if (
+        observation !== undefined &&
+        watched !== null &&
+        watched.runId === stored.task.worker?.runId &&
+        (stored.task.status === "running" || stored.task.status === "waiting_input") &&
+        !channelWorkerObservationEquals(stored.task.observed, observation)
+      ) {
+        yield* commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.worker.observed",
+            payload: { generation: stored.task.generation, observed: observation },
+          },
+          { owner },
+        );
+      }
+      // A usage limit pauses the worker; the continuation run the remote starts rebinds the task.
+      const limited =
+        watched !== null && watched.status === "failed" && observesUsageLimit(observation);
 
       // 3. The inbox, oldest first, against the current run.
       if (state.dropped > 0) {
@@ -1228,7 +1268,8 @@ const make = Effect.gen(function* () {
         watched.runId === runId &&
         latest === runId &&
         TERMINAL.has(watched.status) &&
-        watched.status !== "completed"
+        watched.status !== "completed" &&
+        !limited
       ) {
         yield* commitTransition(
           ledger,
@@ -1256,7 +1297,8 @@ const make = Effect.gen(function* () {
         watched !== null &&
         watched.runId === runId &&
         latest === runId &&
-        TERMINAL.has(watched.status);
+        TERMINAL.has(watched.status) &&
+        !limited;
       if (!settles) {
         if (state.settleRunId !== undefined) {
           yield* writeState(

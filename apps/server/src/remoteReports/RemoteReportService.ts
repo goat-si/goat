@@ -1,9 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - read-key hashing needs a constant-time compare.
 import * as NodeCrypto from "node:crypto";
 import {
+  channelWorkerObservationEquals,
   NonNegativeInt,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
+  type OrchestrationV2ThreadShell,
   ThreadId,
   RemoteReportBindingInput,
   RemoteReport,
@@ -32,6 +34,13 @@ import {
   pendingUserInputRequestIdsForRun,
 } from "../orchestration-v2/ThreadManagementService.ts";
 import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
+import {
+  completionHoldCount,
+  needsYouFromRuntimeRequests,
+  observeWorker,
+  pullRequestsFromLinks,
+  usageLimitWait,
+} from "../channels/channelWorkerObservation.ts";
 
 export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
   "RemoteReportError",
@@ -90,10 +99,14 @@ const sameHolds = (known: RemoteKnownRun["holds"], observed: RemoteObservedRun["
   known === undefined ||
   (known.backgroundTasks === (observed?.backgroundTasks ?? 0) &&
     known.continuationPending === (observed?.continuationPending ?? false));
+const sameObservation = (
+  known: RemoteKnownRun["observation"],
+  observed: RemoteObservedRun["observation"],
+) => known === undefined || channelWorkerObservationEquals(known, observed);
 /**
- * Whether a read differs from the caller's last view. Questions and holds count
- * only when the caller sent them, so an older origin that cannot echo them back
- * is not released on every call while a question is open.
+ * Whether a read differs from the caller's last view. Questions, holds and the
+ * observation count only when the caller sent them, so an older origin that cannot
+ * echo them back is not released on every call while a question is open.
  */
 export const observedRunChanged = (
   known: RemoteKnownRun | null,
@@ -104,7 +117,8 @@ export const observedRunChanged = (
   (known !== null &&
     observed !== null &&
     (!sameRequestIds(known.pendingRequestIds, observed.pendingRequestIds) ||
-      !sameHolds(known.holds, observed.holds)));
+      !sameHolds(known.holds, observed.holds) ||
+      !sameObservation(known.observation, observed.observation)));
 
 export class RemoteReportService extends Context.Service<
   RemoteReportService,
@@ -291,9 +305,15 @@ const make = Effect.gen(function* () {
         const afterSequence = yield* orchestrator
           .getThreadEventSequence(binding.threadId)
           .pipe(Effect.mapError(unavailable));
-        // A live run's open questions; what still holds a finished run's thread open.
-        const runState = (run: OrchestrationV2Run) =>
+        // A live run's open questions; what still holds a finished run's thread open; and what
+        // the thread shows besides its run status, read as the origin reads a local worker.
+        const runState = (run: OrchestrationV2Run, shell: OrchestrationV2ThreadShell) =>
           Effect.gen(function* () {
+            const requests = yield* orchestrator
+              .getThreadRecords(binding.threadId, ["runtimeRequests"])
+              .pipe(Effect.mapError(unavailable));
+            const pullRequests = pullRequestsFromLinks(shell.pullRequests);
+            const needsYou = needsYouFromRuntimeRequests(requests.runtimeRequests);
             if (!isTerminalRunStatus(run.status)) {
               const items = yield* orchestrator
                 .getThreadRecords(binding.threadId, ["turnItems"], {
@@ -304,17 +324,21 @@ const make = Effect.gen(function* () {
               const requestIds = items.turnItems.flatMap((item) =>
                 item.type === "user_input_request" && item.runId === run.id ? [item.requestId] : [],
               );
-              if (requestIds.length === 0) return { pendingRequestIds: [] };
-              const requests = yield* orchestrator
-                .getThreadRecords(binding.threadId, ["runtimeRequests"], {
-                  runtimeRequestIds: requestIds,
-                })
-                .pipe(Effect.mapError(unavailable));
+              const requested = new Set<string>(requestIds);
               return {
-                pendingRequestIds: pendingUserInputRequestIdsForRun(
-                  { ...items, ...requests },
-                  run.id,
-                ),
+                pendingRequestIds:
+                  requestIds.length === 0
+                    ? []
+                    : pendingUserInputRequestIdsForRun(
+                        {
+                          ...items,
+                          runtimeRequests: requests.runtimeRequests.filter((request) =>
+                            requested.has(request.id),
+                          ),
+                        },
+                        run.id,
+                      ),
+                observation: observeWorker({ pullRequests, needsYou }),
               };
             }
             const records = yield* orchestrator
@@ -323,14 +347,24 @@ const make = Effect.gen(function* () {
             const continuationPending = yield* orchestrator
               .delegatedTaskResultPending(binding.threadId)
               .pipe(Effect.mapError(unavailable));
+            // This machine cannot arm recovery for the origin, so a limit nothing resumes needs a person.
+            const limit =
+              run.status === "failed" ? usageLimitWait(shell, run, yield* DateTime.now) : undefined;
             return {
               holds: {
-                backgroundTasks: records.providerThreads.reduce(
-                  (count, thread) => count + (thread.pendingBackgroundTasks?.length ?? 0),
-                  0,
-                ),
+                backgroundTasks: completionHoldCount({
+                  current: run,
+                  runs: [run],
+                  providerThreads: records.providerThreads,
+                  pullRequests: shell.pullRequests,
+                }),
                 continuationPending,
               },
+              observation: observeWorker({
+                pullRequests,
+                needsYou: [...needsYou, ...(limit?.needsYou === undefined ? [] : [limit.needsYou])],
+                usageLimitResetAt: limit?.resetAt,
+              }),
             };
           });
         const read = Effect.gen(function* () {
@@ -401,7 +435,7 @@ const make = Effect.gen(function* () {
               runId,
               status: run.status,
               summary,
-              ...(yield* runState(run)),
+              ...(yield* runState(run, shell)),
               ...(reported === undefined ? {} : { reported }),
             };
           }
@@ -449,6 +483,10 @@ const make = Effect.gen(function* () {
               ),
             ),
             stream("provider-thread.updated"),
+            // Pull request links, watches and usage-limit recovery choices change the observation.
+            stream("thread.pull-request-link-updated"),
+            stream("thread.pull-request-synced"),
+            stream("thread.metadata-updated"),
           ],
           { concurrency: "unbounded" },
         ).pipe(
