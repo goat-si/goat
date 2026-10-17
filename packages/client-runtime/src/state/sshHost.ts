@@ -2,6 +2,7 @@ import {
   WS_METHODS,
   type EnvironmentId,
   type SshHostResult,
+  type SshHostProbeError,
   type SshHandoffProgressResult,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,21 @@ import { createEnvironmentQueryAtomFamily, createEnvironmentRpcCommand } from ".
 import type { AtomCommand } from "./runtime.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
 import { sshRuntimeRecoveryText, sshRuntimeStatusText } from "./sshRuntime.ts";
+
+/** Present probe failures using the requested SSH port, without parsing SSH diagnostics. */
+export function sshHostProbeErrorText(error: SshHostProbeError, port: number) {
+  switch (error.reason) {
+    case "unreachable":
+      return `Can't reach ${error.host}. Check the address and that SSH is running, then try again.`;
+    case "connection_refused":
+      return `${error.host} refused the connection on port ${port}. Check the SSH port, then try again.`;
+    case "alias_conflict":
+      return `${error.host} is already used by another SSH host. Pick a different name.`;
+    case "invalid_request":
+    case "operation_failed":
+      return error.message;
+  }
+}
 
 /** Visible clients own the timer; ready runtime with pending diagnosis is still running setup. */
 export function sshHostPollDelay(result: SshHostResult | undefined, awaitingContinuation = false) {

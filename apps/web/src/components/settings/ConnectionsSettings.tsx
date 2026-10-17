@@ -1,3 +1,4 @@
+import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
 import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
 import { desktopOwnsSshHostConfig } from "~/connection/platform";
@@ -32,6 +33,7 @@ import {
 import {
   AuthAccessReadScope,
   SshHostAlias,
+  SshHostProbeError,
   type SshHostProbeResult,
   type SshHostResult,
   AuthAccessWriteScope,
@@ -404,6 +406,7 @@ function formatDesktopSshConnectionError(error: unknown): string {
 }
 
 const isSshHostAlias = Schema.is(SshHostAlias);
+const isSshHostProbeError = Schema.is(SshHostProbeError);
 
 function sshSetupError(result: SshHostResult, host: string) {
   return result.kind === "error"
@@ -2762,9 +2765,11 @@ export function ConnectionsSettings() {
         else {
           const error = squashAtomCommandFailure(result);
           setSavedBackendError(
-            error instanceof Error
-              ? error.message
-              : `Can't reach ${target.hostname}. Check that it's running and reachable, then try again.`,
+            isSshHostProbeError(error)
+              ? sshHostProbeErrorText(error, target.port ?? 22)
+              : error instanceof Error
+                ? error.message
+                : "Could not check this SSH host. Try again.",
           );
         }
       } finally {

@@ -9,6 +9,7 @@ import {
   TurnItemId,
   SshHandoffProgressResult,
   SshHostResult,
+  SshHostProbeError,
   WS_METHODS,
   type AuthSessionState,
   type AuthEnvironmentScope,
@@ -33,6 +34,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import {
   createSshHostState,
   sshHostPollDelay,
+  sshHostProbeErrorText,
   sshHostProgressComplete,
   sshHostProgressText,
 } from "./sshHost.ts";
@@ -266,4 +268,30 @@ describe("SSH origin progress", () => {
       }),
     ),
   );
+});
+
+describe("SSH probe failure copy", () => {
+  it.each([
+    {
+      reason: "unreachable",
+      expected: "Can't reach vps-1. Check the address and that SSH is running, then try again.",
+    },
+    {
+      reason: "connection_refused",
+      expected: "vps-1 refused the connection on port 2222. Check the SSH port, then try again.",
+    },
+    {
+      reason: "alias_conflict",
+      expected: "vps-1 is already used by another SSH host. Pick a different name.",
+    },
+    { reason: "invalid_request", expected: "The SSH address is not valid." },
+    { reason: "operation_failed", expected: "The SSH address is not valid." },
+  ] as const)("presents $reason without parsing SSH output", ({ reason, expected }) => {
+    const error = new SshHostProbeError({
+      host: "vps-1",
+      reason,
+      message: "The SSH address is not valid.",
+    });
+    expect(sshHostProbeErrorText(error, 2222)).toBe(expected);
+  });
 });

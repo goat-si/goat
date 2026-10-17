@@ -300,7 +300,7 @@ function VisibleSshHandoffProgress({
   const recovery = approvalExpired ? null : sshHostProgressRecovery(progress);
   const publicKey =
     progress.kind === "available" && progress.result.status?.state === "auth_failed"
-      ? progress.result.status.publicKey
+      ? (progress.result.status.keyAuth?.publicKey ?? progress.result.status.publicKey)
       : undefined;
   return (
     <div role="status" className="space-y-1 text-sm text-muted-foreground">

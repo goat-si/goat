@@ -119,7 +119,8 @@ function SshRuntimeSettingsRowContent({
       status.state === "stopped" ||
       (status.state === "ready" && status.runtimeVersion !== status.requestedVersion));
   const authInstructions =
-    status?.state === "auth_failed" && originLabel
+    status?.keyAuth ??
+    (status?.state === "auth_failed" && originLabel
       ? buildSshKeyAuthInstructions({
           originLabel,
           host: target.alias || target.hostname,
@@ -127,7 +128,7 @@ function SshRuntimeSettingsRowContent({
           port: target.port ?? 22,
           ...(status.publicKey ? { publicKey: status.publicKey, generatedKey: true } : {}),
         })
-      : null;
+      : null);
   const recovery =
     (result?.kind === "error" && result.code === "host_unreachable") ||
     (status?.state === "untrusted" && onReviewTrust)
@@ -139,7 +140,8 @@ function SshRuntimeSettingsRowContent({
   const showRetry =
     onRetry !== undefined &&
     (status?.state === "auth_failed" || result?.kind === "error" || status?.state === "failed");
-  const copyText = status?.publicKey ?? copyCommand;
+  const publicKey = status?.keyAuth?.publicKey ?? status?.publicKey;
+  const copyText = publicKey ?? copyCommand;
   const errorMessage =
     result?.kind === "error"
       ? result.code === "host_unreachable"
@@ -232,14 +234,14 @@ function SshRuntimeSettingsRowContent({
                 .writeText(copyText)
                 .catch(() =>
                   setCommandError(
-                    status?.publicKey
+                    publicKey
                       ? "Could not copy the public key. Try again."
                       : "Could not copy the command. Try again.",
                   ),
                 )
             }
           >
-            {status?.publicKey ? "Copy public key" : "Copy setup command"}
+            {publicKey ? "Copy public key" : "Copy setup command"}
           </Button>
         ) : null}
       </div>

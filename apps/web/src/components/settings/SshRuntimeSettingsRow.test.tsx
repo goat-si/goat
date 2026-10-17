@@ -446,3 +446,48 @@ describe("SSH runtime recovery actions", () => {
     expect(writeText).toHaveBeenCalledExactlyOnceWith(withKey ? publicKey : command);
   });
 });
+
+it.each(["owner-key", "legacy-key", "command"] as const)(
+  "uses the owner's key-auth recovery (%s)",
+  async (source) => {
+    const publicKey = "ssh-ed25519 owner-generated-key";
+    const command = "ssh-copy-id -i '/origin/.ssh/goat-hosts/id_ed25519.pub' -p '2222' 'ops@vps-1'";
+    reply = {
+      kind: "error",
+      code: "operation_failed",
+      message: "Register the key.",
+      status: {
+        ...base,
+        state: "auth_failed",
+        ...(source !== "command" ? { publicKey } : {}),
+        keyAuth: {
+          originLabel: "SSH origin",
+          instruction: "Register the key on the SSH origin, then retry.",
+          command,
+          ...(source === "owner-key" ? { publicKey } : {}),
+        },
+      },
+      fix: { actor: "human", instruction: "Old recovery", command: "old-command" },
+    };
+    const writeText = vi.fn(async (_value: string) => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    await act(async () =>
+      root.render(
+        <RegistryContext value={registry}>
+          <SshRuntimeSettingsRow {...input} enabled pendingAdd originLabel="Renderer machine" />
+        </RegistryContext>,
+      ),
+    );
+    await settle();
+    expect(container.textContent).toContain("Register the key on the SSH origin, then retry.");
+    expect(container.textContent).not.toContain("Run this on Renderer machine");
+    const label = source === "command" ? "Copy setup command" : "Copy public key";
+    expect(
+      [...container.querySelectorAll("button")]
+        .filter((node) => node.textContent?.startsWith("Copy "))
+        .map((node) => node.textContent),
+    ).toEqual([label]);
+    await click(label);
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(source === "command" ? command : publicKey);
+  },
+);
