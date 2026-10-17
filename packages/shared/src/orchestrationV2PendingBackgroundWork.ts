@@ -208,8 +208,8 @@ export function pendingBackgroundTurnItems<Item extends PendingBackgroundWorkTur
  * Sources:
  * - Provider-thread roster (Claude SDK background tasks)
  * - Active command_execution / dynamic_tool / subagent turn items
- * - Pull request watches, as monitors: a watch wakes the agent, so the thread
- *   stays working between wakes instead of returning to the inbox. Callers
+ * - Explicit pull request watches, as monitors: the thread stays working
+ *   between wakes. Automatic watches wake the agent without holding it working. Callers
  *   that pick a run to interrupt leave `pullRequests` out; Stop ends watches
  *   on its own.
  *
@@ -290,7 +290,7 @@ function pullRequestWatchTasks(
   pullRequests: ReadonlyArray<PendingBackgroundWorkPullRequest> | undefined,
 ): Array<PendingBackgroundWorkTask> {
   return (pullRequests ?? []).flatMap((link) =>
-    link.watch === undefined || link.source === "stack-dismissed"
+    link.watch === undefined || link.watch.automatic === true || link.source === "stack-dismissed"
       ? []
       : [
           {

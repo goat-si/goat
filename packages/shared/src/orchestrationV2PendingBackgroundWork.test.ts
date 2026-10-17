@@ -564,6 +564,22 @@ describe("derivePendingBackgroundWork kinds", () => {
       expect(backgroundWorkHoldsCompletion(tasks)).toBe(true);
     });
 
+    it("does not keep a thread waiting on an automatic watch", () => {
+      for (const latestRun of [
+        null,
+        { id: "run-1" as never, ordinal: 1, status: "completed" as const },
+      ]) {
+        const tasks = derivePendingBackgroundWork({
+          latestRun,
+          providerThreads: [],
+          turnItems: [],
+          pullRequests: [{ ...link(1, {}), watch: { ...watch, automatic: true } }],
+        });
+        expect(tasks).toEqual([]);
+        expect(backgroundWorkHoldsCompletion(tasks)).toBe(false);
+      }
+    });
+
     it("keeps a thread that never ran waiting on its watch", () => {
       expect(
         derivePendingBackgroundWork({
