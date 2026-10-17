@@ -17,11 +17,15 @@ import {
   EnvironmentId,
   MessageId,
   type OrchestrationV2Run,
+  type OrchestrationV2RuntimeRequest,
+  type OrchestrationV2ServerCommand,
+  type OrchestrationV2ThreadShell,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type ThreadPullRequestLink,
   TextGenerationError,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -95,6 +99,18 @@ export class WorkerWorld {
   readonly runs = new Map<string, Array<OrchestrationV2Run>>();
   readonly finalText = new Map<string, string>();
   readonly background = new Set<string>();
+  readonly pullRequests = new Map<string, ReadonlyArray<ThreadPullRequestLink>>();
+  readonly runtimeRequests = new Map<string, ReadonlyArray<OrchestrationV2RuntimeRequest>>();
+  readonly shells = new Map<
+    string,
+    Partial<
+      Pick<
+        OrchestrationV2ThreadShell,
+        "latestRunId" | "lastErrorClass" | "usageLimitResetAt" | "limitRecovery"
+      >
+    >
+  >();
+  readonly commands: Array<OrchestrationV2ServerCommand> = [];
   readonly launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
   readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
 
@@ -255,8 +271,15 @@ export function makeHarness(
             filter as { readonly messageRunIds?: ReadonlyArray<string> } | undefined
           )?.messageRunIds;
           return Effect.succeed({
-            thread: { id: threadId, projectId, archivedAt: null, deletedAt: null },
+            thread: {
+              id: threadId,
+              projectId,
+              archivedAt: null,
+              deletedAt: null,
+              pullRequests: world.pullRequests.get(threadId) ?? [],
+            },
             runs,
+            runtimeRequests: world.runtimeRequests.get(threadId) ?? [],
             providerThreads: world.background.has(threadId)
               ? [{ pendingBackgroundTasks: [{ taskId: "background" }] }]
               : [],
@@ -270,6 +293,38 @@ export function makeHarness(
               }),
           } as never);
         }) as typeof real.getThreadRecords,
+        getThreadShell: (threadId) => {
+          if (!isWorker(threadId)) return real.getThreadShell(threadId);
+          return Effect.succeed({
+            id: threadId,
+            latestRunId: world.latestRun(threadId)?.id ?? null,
+            ...world.shells.get(threadId),
+          } as OrchestrationV2ThreadShell);
+        },
+        dispatch: (command) => {
+          if (!("threadId" in command) || !isWorker(command.threadId)) {
+            return real.dispatch(command);
+          }
+          return Effect.sync(() => {
+            world.commands.push(command);
+            if (command.type === "thread.metadata.update" && command.limitRecovery !== undefined) {
+              const previous = world.shells.get(command.threadId);
+              const recovery = command.limitRecovery;
+              world.shells.set(command.threadId, {
+                ...previous,
+                limitRecovery:
+                  recovery === null
+                    ? null
+                    : {
+                        ...recovery,
+                        autoResume:
+                          recovery.autoResume ?? previous?.limitRecovery?.autoResume ?? false,
+                      },
+              });
+            }
+            return { sequence: 0, storedEvents: [] };
+          });
+        },
         sendToThread: (input) => {
           if (!isWorker(input.threadId)) return real.sendToThread(input);
           world.sends.push(input);

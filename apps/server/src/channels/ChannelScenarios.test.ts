@@ -13,9 +13,13 @@ import {
   ChannelQuestionId,
   ChannelTaskEventId,
   MessageId,
+  NodeId,
+  RuntimeRequestId,
   ScheduledTaskId,
   ThreadId,
+  type ThreadPullRequestLink,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -245,7 +249,7 @@ describe("GOAT bot boundary (scenario 6)", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("reads the bot and its GOAT waiting count without creating the bot", () => {
+  it.effect("reads the bot and its waiting count across channels without creating the bot", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const bots = yield* ChannelBotRegistry.ChannelBotRegistry;
@@ -279,10 +283,11 @@ describe("GOAT bot boundary (scenario 6)", () => {
       }
       yield* runtime.drain;
 
-      // Only the GOAT-origin task counts; the Slack one is answered in Slack.
+      // Both channels contribute to the owner's waiting count.
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 2);
       assert.deepStrictEqual(yield* bots.status(owner), {
         bot: { environmentId, projectId: scratchProjectId, threadId: botThreadId },
-        waitingCount: 1,
+        waitingCount: 2,
       });
     }).pipe(Effect.provide(harness.layer));
   });
@@ -2218,6 +2223,186 @@ describe("completion (scenario 5)", () => {
       );
     },
   );
+  it.effect("holds a finished worker for its PR watch and keeps the PR after completion", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const link: ThreadPullRequestLink = {
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 123,
+        url: "https://github.com/goat-si/goat/pull/123",
+        source: "created",
+        linkedAt: "2026-10-12T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      harness.world.pullRequests.set(threadId, [
+        {
+          ...link,
+          watch: {
+            startedAt: link.linkedAt,
+            headSha: null,
+            failedChecks: [],
+            passed: false,
+            passedChecks: [],
+            remarksThrough: link.linkedAt,
+            remarkIds: [],
+            conflicting: false,
+            wakes: 0,
+          },
+        },
+      ]);
+      harness.world.setStatus(threadId, 1, "completed", "Opened the pull request.");
+
+      yield* reports.reconcile(runtime.ownerToken);
+      const held = yield* ledger.getTask(task.taskId);
+      assert.strictEqual(held?.task.status, "running");
+      assert.strictEqual(held?.completionHold, "background");
+      assert.deepStrictEqual(held?.task.observed, {
+        pullRequests: [{ repository: link.repository, number: 123, url: link.url, watching: true }],
+        needsYou: [],
+      });
+      assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+
+      harness.world.pullRequests.set(threadId, [link]);
+      yield* reports.reconcile(runtime.ownerToken);
+      const done = yield* ledger.getTask(task.taskId);
+      assert.strictEqual(done?.task.status, "completed");
+      assert.isUndefined(done?.completionHold);
+      assert.deepStrictEqual(done?.task.observed, {
+        pullRequests: [
+          { repository: link.repository, number: 123, url: link.url, watching: false },
+        ],
+        needsYou: [],
+      });
+      yield* runtime.drain;
+      assert.lengthOf(resultsTo(harness.slackSent, "result"), 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("counts a running worker's pending approval and clears it when resolved", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const since = "2026-10-12T00:01:00.000Z";
+      const request = {
+        id: RuntimeRequestId.make("approval:channel-worker"),
+        nodeId: NodeId.make("node:channel-worker"),
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "command" as const,
+        status: "pending" as const,
+        responseCapability: { type: "message" as const },
+        createdAt: DateTime.makeUnsafe(since),
+        resolvedAt: null,
+      };
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 0);
+      harness.world.runtimeRequests.set(threadId, [request]);
+      yield* reports.reconcile(runtime.ownerToken);
+      const pending = yield* onlyTask;
+      assert.strictEqual(pending.status, "running");
+      assert.deepStrictEqual(pending.observed?.needsYou, [{ kind: "approval", since }]);
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 1);
+
+      harness.world.runtimeRequests.set(threadId, [
+        {
+          ...request,
+          status: "resolved",
+          resolvedAt: DateTime.makeUnsafe("2026-10-12T00:02:00.000Z"),
+        },
+      ]);
+      yield* reports.reconcile(runtime.ownerToken);
+      const resolved = yield* onlyTask;
+      assert.strictEqual(resolved.status, "running");
+      assert.deepStrictEqual(resolved.observed?.needsYou, []);
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("arms usage-limit recovery once and rebinds to the continuation run", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-12T00:00:00.000Z"));
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const resetAt = "2026-10-12T01:00:00.000Z";
+      const runId = task.worker!.runId!;
+      harness.world.setStatus(threadId, 1, "failed");
+      harness.world.shells.set(threadId, {
+        latestRunId: runId,
+        lastErrorClass: "usage_limit",
+        usageLimitResetAt: resetAt,
+      });
+      yield* reports.reconcile(runtime.ownerToken);
+      const waiting = yield* onlyTask;
+      assert.strictEqual(waiting.status, "running");
+      assert.deepStrictEqual(waiting.observed, {
+        pullRequests: [],
+        needsYou: [],
+        usageLimitResetAt: resetAt,
+      });
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 0);
+      assert.deepStrictEqual(harness.world.commands, [
+        {
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`channel-limit-arm:${threadId}:${runId}:1791766800000`),
+          threadId,
+          limitRecovery: { runId, resetAt, autoResume: true, snooze: false },
+        },
+      ]);
+
+      assert.strictEqual(yield* reports.reconcile(runtime.ownerToken), 0);
+      const unchanged = yield* onlyTask;
+      assert.strictEqual(unchanged.version, waiting.version);
+      assert.deepStrictEqual(unchanged.observed, waiting.observed);
+      assert.lengthOf(harness.world.commands, 1);
+      assert.isFalse(yield* ledger.hasTaskEvent(taskEventIdFor(task.taskId, waiting.version + 1)));
+
+      const continuation = harness.world.addRun(threadId, MessageId.make("limit-continuation"));
+      yield* reports.reconcile(runtime.ownerToken);
+      const resumed = yield* onlyTask;
+      assert.strictEqual(resumed.status, "running");
+      assert.strictEqual(resumed.worker?.runId, continuation.id);
+      assert.isAbove(resumed.version, waiting.version);
+      assert.deepStrictEqual(resumed.observed, { pullRequests: [], needsYou: [] });
+      assert.lengthOf(harness.world.commands, 1);
+      assert.lengthOf(resultsTo(harness.slackSent, "failure"), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps a usage-limited worker running and asks for help when no reset is known", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const since = "2026-10-12T00:00:00.000Z";
+      yield* TestClock.setTime(Date.parse(since));
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      harness.world.setStatus(threadId, 1, "failed");
+      harness.world.shells.set(threadId, {
+        latestRunId: task.worker!.runId!,
+        lastErrorClass: "usage_limit",
+      });
+      yield* reports.reconcile(runtime.ownerToken);
+      const waiting = yield* onlyTask;
+      assert.strictEqual(waiting.status, "running");
+      assert.deepStrictEqual(waiting.observed, {
+        pullRequests: [],
+        needsYou: [{ kind: "usage_limit", since }],
+      });
+      assert.strictEqual(yield* ledger.countWaitingTasks(ownerId), 1);
+      assert.lengthOf(harness.world.commands, 0);
+      yield* runtime.drain;
+      assert.lengthOf(resultsTo(harness.slackSent, "failure"), 0);
+      assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect.each(["failed", "cancelled"] as const)(
     "ends a task waiting for an answer when its worker run %s",
