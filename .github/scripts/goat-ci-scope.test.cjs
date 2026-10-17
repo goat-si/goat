@@ -9,6 +9,7 @@ const {
   MEMORY_LABEL,
   TASKS,
   MEMORY_GROWTH_TESTS,
+  SOURCE_SCANNING_TESTS,
   readWorkspace,
   readServerWeights,
   planServerTests,
@@ -18,7 +19,8 @@ const {
   laneRun,
   planRun,
 } = require("./goat-ci-scope.cjs");
-const { buildImportGraph } = require("./goat-ci-imports.cjs");
+const fs = require("node:fs");
+const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
 
 // The real workspace and import graphs, so these cases follow the code as it exists.
 const root = path.resolve(__dirname, "../..");
@@ -162,6 +164,44 @@ describe("selectTasks", () => {
     assert.equal(result.server.mode, "full");
     assert.ok(result.tasks.includes("test-server"));
   });
+
+  it("keeps the tests that reach a change without importing it", () => {
+    const includes = (changed, test) => {
+      const { server } = select(changed);
+      return server.mode === "full" || server.files.includes(test);
+    };
+    // A fixture loads the module by name.
+    assert.ok(includes("apps/server/src/rpcInitialItems.ts", "src/rpcInitialItems.memory.test.ts"));
+    // The test spawns a script that imports the change.
+    assert.ok(
+      includes(
+        "apps/server/scripts/acpMockCancellationState.ts",
+        "src/provider/acp/AcpJsonRpcConnection.test.ts",
+      ),
+    );
+    // The test reads the server source tree.
+    assert.ok(
+      includes(
+        "apps/server/src/channels/ChannelDispatcher.ts",
+        "src/orchestration-v2/V1ImportBoundary.test.ts",
+      ),
+    );
+  });
+
+  it("runs the replay tests of a deleted fixture", () => {
+    const deleted =
+      "apps/server/src/orchestration-v2/testkit/fixtures/multi_turn/codex_transcript.ndjson";
+    const without = buildImportGraph(
+      root,
+      listWorkspaceFiles(root).filter((file) => file !== deleted),
+    );
+    const { server } = selectTasks([deleted], workspace, { graph: without, weights });
+    assert.notEqual(server.mode, "none");
+  });
+
+  it("lists source-scanning tests that exist", () => {
+    for (const file of SOURCE_SCANNING_TESTS) assert.ok(fs.existsSync(path.join(root, file)), file);
+  });
 });
 
 describe("planServerTests", () => {
@@ -212,6 +252,27 @@ describe("planServerTests", () => {
 
   it("runs the full suite for a data file nothing imports or names", () => {
     assert.equal(planServerTests(["apps/server/src/fixtures/orphan.bin"], fake, {}).mode, "full");
+  });
+
+  it("follows a deleted data file to the tests that still name its directory", () => {
+    const plan = planServerTests(["apps/server/src/fixtures/simple/gone.jsonl"], fake, {});
+    assert.equal(plan.mode, "related");
+    assert.deepEqual(plan.files, ["src/replay.test.ts"]);
+  });
+
+  it("runs the full suite for a deleted data file nothing names", () => {
+    assert.equal(planServerTests(["apps/server/src/data/gone.bin"], fake, {}).mode, "full");
+  });
+
+  it("adds the source-scanning tests to a server source change", () => {
+    const [scanner] = SOURCE_SCANNING_TESTS;
+    const scanning = fakeGraph({ ...files, [scanner]: "" }, edges);
+    const plan = planServerTests(["apps/server/src/a.ts"], scanning, {});
+    assert.deepEqual(plan.files, ["src/a.test.ts", scanner.slice("apps/server/".length)]);
+    assert.deepEqual(
+      planServerTests(["apps/server/src/fixtures/simple/events.jsonl"], scanning, {}).files,
+      ["src/replay.test.ts"],
+    );
   });
 
   it("runs the full suite when a change reaches the server Vitest config", () => {

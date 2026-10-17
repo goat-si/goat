@@ -45,6 +45,13 @@ const SERVER_RUN_CONFIG = [
 ];
 /** Selected server tests carrying at least this share of the suite's time run as the full suite. */
 const SERVER_FULL_SHARE = 0.5;
+/**
+ * Server tests that read the server's own source tree instead of importing it. Any change to
+ * server source can break them, so they join every related run that a server source change starts.
+ */
+const SOURCE_SCANNING_TESTS = ["apps/server/src/orchestration-v2/V1ImportBoundary.test.ts"];
+/** Directories whose data files the server suite reads; an unplaceable one there runs the full suite. */
+const SERVER_DATA_ROOTS = ["apps/server/", "packages/"];
 /** Estimated seconds one related-test shard aims for. */
 const SERVER_SHARD_TARGET_SECONDS = 360;
 /**
@@ -192,25 +199,53 @@ function planServerTests(changed, graph, weights) {
     reached: new Map(),
   });
   const seeds = new Map();
+  const isServerData = (file) =>
+    !isSource(file) && SERVER_DATA_ROOTS.some((dir) => file.startsWith(dir));
   for (const file of changed) {
-    if (!graph.files.has(file)) continue; // Deleted: whatever imported it changed too.
     if (SERVER_RUN_CONFIG.includes(file)) return full(file + " configures every server test");
-    seeds.set(file, file);
     const mentions = mentionsOf(graph, file);
     for (const mention of mentions) if (!seeds.has(mention)) seeds.set(mention, file);
-    if (!isSource(file) && !graph.importers.has(file) && mentions.length === 0) {
+    if (!graph.files.has(file)) {
+      // Deleted. Code that imported it changed too (or fails typecheck); code that still names it
+      // by path is in mentions. A deleted data file that nothing names may still be read through a
+      // computed path.
+      if (isServerData(file) && mentions.length === 0)
+        return full("deleted " + file + " is not named anywhere");
+      continue;
+    }
+    seeds.set(file, file);
+    if (
+      isServerData(file) &&
+      !graph.importers.has(file) &&
+      !graph.namers?.has(file) &&
+      mentions.length === 0
+    ) {
       return full("nothing imports or names " + file);
     }
   }
   const reach = dependents(graph, seeds.keys());
-  const config = SERVER_RUN_CONFIG.find((file) => reach.has(file));
-  if (config) return full(seeds.get(reach.get(config)) + " reaches " + config);
+  // Imports alone decide whether a change reaches the test configuration: a config that names a
+  // build entry in a string does not run it.
+  const imported = dependents(
+    graph,
+    changed.filter((file) => graph.files.has(file)),
+    { importsOnly: true },
+  );
+  const config = SERVER_RUN_CONFIG.find((file) => imported.has(file));
+  if (config) return full(imported.get(config) + " reaches " + config);
 
   const allTests = [...graph.sources.keys()].filter(
     (file) => file.startsWith(SERVER_DIR + "/") && SERVER_TEST_RE.test(file),
   );
   const seconds = (file) => (weights[serverKey(file)] ?? 0) + FILE_ESTIMATE_SECONDS;
-  const selected = allTests.filter((file) => reach.has(file));
+  const sourceChange = changed.find(
+    (file) => file.startsWith(SERVER_DIR + "/src/") && isSource(file) && !SERVER_TEST_RE.test(file),
+  );
+  const origin = (file) => seeds.get(reach.get(file)) ?? sourceChange;
+  const selected = allTests.filter(
+    (file) =>
+      reach.has(file) || (sourceChange !== undefined && SOURCE_SCANNING_TESTS.includes(file)),
+  );
   if (selected.length === 0) {
     return {
       mode: "none",
@@ -230,9 +265,7 @@ function planServerTests(changed, graph, weights) {
         "% of the suite's time",
     );
   }
-  const reached = new Map(
-    selected.sort().map((file) => [serverKey(file), seeds.get(reach.get(file))]),
-  );
+  const reached = new Map(selected.sort().map((file) => [serverKey(file), origin(file)]));
   return {
     mode: "related",
     files: [...reached.keys()],
@@ -559,6 +592,7 @@ module.exports = {
   TASKS,
   MEMORY_GROWTH_TESTS,
   SERVER_RUN_CONFIG,
+  SOURCE_SCANNING_TESTS,
   isDocument,
   readWorkspace,
   readServerWeights,

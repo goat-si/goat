@@ -51,6 +51,78 @@ function specifiersOf(source) {
   return found;
 }
 
+/** Extensions of files a source can name by path: sources, data, fixtures and scripts. */
+const PATH_EXTENSIONS = new Set([
+  ...RESOLVE_EXTENSIONS,
+  ".jsonl",
+  ".ndjson",
+  ".sh",
+  ".sql",
+  ".txt",
+  ".yaml",
+  ".yml",
+  ".md",
+  ".wasm",
+]);
+/** A string literal, or a template literal's text, that ends in a file name with an extension. */
+const PATH_STRING = /["'\x60]([^"'\x60\n]*?([\w@+-][\w.@+-]*\.[A-Za-z0-9]+))["'\x60]/g;
+/** A dynamic import or require whose argument is not a literal: the file loads modules by name. */
+const NON_LITERAL_LOAD = /\b(?:import|require)\s*\(\s*(?!["']|\x60[^\x60$]*\x60)[^)\s]/;
+/** A short quoted word, which a loader may turn into a module path. */
+const QUOTED_WORD = /["'\x60]([A-Za-z][\w-]{3,})["'\x60]/g;
+/** A name that matches more files than this is too generic to be a reference. */
+const MAX_NAME_MATCHES = 3;
+/** Build and test configs: reached like any file, but nothing depends on a file through one. */
+const CONFIG_FILE = /(?:^|\/)vite\.config\.[cm]?[jt]s$/;
+
+/** Source text without comments, so a file name in prose is not a reference. URLs keep their //. */
+function withoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\x60\\])\/\/.*$/gm, "$1");
+}
+
+/**
+ * Files a source names in strings: a path ending in a file name (a fixture it reads, a script it
+ * spawns), resolved against the source's directory, else by its trailing path segments, else by a
+ * file name no other file shares; and, when the source loads modules through a non-literal import
+ * or require, every quoted word that names a module without its extension (a fixture's
+ * app("rpcInitialItems")).
+ */
+function namedFilesOf(source, from, byBase, byStem, fileSet) {
+  const found = new Set();
+  const code = withoutComments(source);
+  const addAll = (matches) => {
+    if (matches.length > 0 && matches.length <= MAX_NAME_MATCHES)
+      for (const file of matches) found.add(file);
+  };
+  for (const match of code.matchAll(PATH_STRING)) {
+    const [, text, base] = match;
+    if (!PATH_EXTENSIONS.has(path.posix.extname(base))) continue;
+    if (text.startsWith("./") || text.startsWith("../")) {
+      const relative = path.posix.normalize(path.posix.join(path.posix.dirname(from), text));
+      if (fileSet.has(relative)) {
+        found.add(relative);
+        continue;
+      }
+    }
+    // Whatever follows the last template substitution and any leading ./ or ../ segments.
+    const tail = text
+      .replace(/^[\s\S]*\}/, "")
+      .replace(/^\/+/, "")
+      .replace(/^(?:\.{1,2}\/)+/, "");
+    const candidates = byBase.get(base) ?? [];
+    if (tail.includes("/"))
+      addAll(candidates.filter((file) => file === tail || file.endsWith("/" + tail)));
+    else if (candidates.length === 1) addAll(candidates);
+  }
+  if (NON_LITERAL_LOAD.test(code)) {
+    for (const match of code.matchAll(QUOTED_WORD)) {
+      if (match[1] !== "index") addAll(byStem.get(match[1]) ?? []);
+    }
+  }
+  found.delete(from);
+  return found;
+}
+
 function isSource(file) {
   return SOURCE_EXTENSIONS.includes(path.posix.extname(file));
 }
@@ -164,9 +236,11 @@ function resolveExport(manifest, subpath) {
 }
 
 /**
- * Builds the graph: { files, sources, importers, packageDirs }. importers maps a file, or a
+ * Builds the graph: { files, sources, importers, namers, packageDirs }. importers maps a file, or a
  * "package:<dir>" node that stands for a whole package when an import of it could not be pinned to
- * one file, to the set of source files that import it.
+ * one file, to the set of source files that import it. namers maps a file to the source files that
+ * name it in a string (see namedFilesOf); a config that names a build entry does not depend on it
+ * the way an importer does, so callers can follow imports alone.
  */
 function buildImportGraph(root, files = listWorkspaceFiles(root)) {
   const fileSet = new Set(files);
@@ -208,6 +282,23 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
     return file ?? "package:" + dir;
   };
 
+  const namers = new Map();
+  const link = (edges, from, to) => {
+    if (!edges.has(to)) edges.set(to, new Set());
+    edges.get(to).add(from);
+  };
+  const byBase = new Map();
+  const byStem = new Map();
+  for (const file of files) {
+    const base = path.posix.basename(file);
+    if (!byBase.has(base)) byBase.set(base, []);
+    byBase.get(base).push(file);
+    if (isSource(file)) {
+      const stem = base.slice(0, base.length - path.posix.extname(base).length);
+      if (!byStem.has(stem)) byStem.set(stem, []);
+      byStem.get(stem).push(file);
+    }
+  }
   for (const file of files) {
     if (!isSource(file)) continue;
     let source;
@@ -219,15 +310,17 @@ function buildImportGraph(root, files = listWorkspaceFiles(root)) {
     sources.set(file, source);
     for (const specifier of specifiersOf(source)) {
       const target = resolve(specifier, file);
-      if (target === undefined || target === file) continue;
-      if (!importers.has(target)) importers.set(target, new Set());
-      importers.get(target).add(file);
+      if (target !== undefined && target !== file) link(importers, file, target);
+    }
+    for (const named of namedFilesOf(source, file, byBase, byStem, fileSet)) {
+      if (!importers.get(named)?.has(file)) link(namers, file, named);
     }
   }
   return {
     files: fileSet,
     sources,
     importers,
+    namers,
     packageDirs: [...packages.values()].map((entry) => entry.dir),
   };
 }
@@ -242,7 +335,7 @@ function packageDirOf(graph, file) {
  * a package also reaches whatever imports that package as a whole. Maps each node to the seed that
  * reached it first.
  */
-function dependents(graph, seeds) {
+function dependents(graph, seeds, { importsOnly = false } = {}) {
   const origin = new Map();
   const queue = [];
   const visit = (node, seed) => {
@@ -257,7 +350,10 @@ function dependents(graph, seeds) {
   }
   for (let index = 0; index < queue.length; index += 1) {
     const node = queue[index];
+    if (CONFIG_FILE.test(node)) continue;
     for (const importer of graph.importers.get(node) ?? []) visit(importer, origin.get(node));
+    if (!importsOnly)
+      for (const namer of graph.namers?.get(node) ?? []) visit(namer, origin.get(node));
   }
   return origin;
 }

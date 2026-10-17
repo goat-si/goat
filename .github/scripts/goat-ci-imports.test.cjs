@@ -131,6 +131,23 @@ describe("buildImportGraph", () => {
     write("apps/server/src/opaque.test.ts", 'import { deep } from "@goat/opaque/not-exported";');
     write("apps/server/src/spawn.test.ts", 'spawn("node", [path.join(dir, "cli/helper.ts")]);');
     write("apps/server/src/cli/helper.ts");
+    write("apps/server/src/loaded.ts");
+    write(
+      "apps/server/src/loader.fixture.mjs",
+      'const app = (name) => import(root + "/src/" + name + ".ts");\nawait app("loaded");',
+    );
+    write(
+      "apps/server/src/loader.test.ts",
+      'const fixture = new URL("./loader.fixture.mjs", import.meta.url);',
+    );
+    write("apps/server/src/prose.ts");
+    write(
+      "apps/server/src/prose.test.ts",
+      '// The old "prose.ts" check moved.\n/* see "prose.ts" */\nexport const url = "https://example.com/prose.ts";',
+    );
+    write("apps/server/vite.config.ts", 'export default { build: { entry: "src/entry.ts" } };');
+    write("apps/server/src/entry.ts", 'import "./esm.ts";');
+    write("apps/server/src/config.test.ts", 'const config = "apps/server/vite.config.ts";');
     write("apps/web/src/lib/thing.ts");
     write("apps/web/src/thing.test.ts", 'import { thing } from "~/lib/thing";');
     write("apps/server/node_modules/ignored/index.ts", 'import "../../src/esm.ts";');
@@ -164,10 +181,28 @@ describe("buildImportGraph", () => {
     assert.ok(![...graph.sources.keys()].some((file) => file.includes("node_modules")));
   });
 
-  it("finds a file that a test names only by path", () => {
-    assert.ok(!reaches("apps/server/src/cli/helper.ts", "apps/server/src/spawn.test.ts"));
+  it("follows a file that a test names only by path, apart from imports", () => {
+    assert.ok(reaches("apps/server/src/cli/helper.ts", "apps/server/src/spawn.test.ts"));
+    assert.ok(
+      !dependents(graph, ["apps/server/src/cli/helper.ts"], { importsOnly: true }).has(
+        "apps/server/src/spawn.test.ts",
+      ),
+    );
     assert.deepEqual(mentionsOf(graph, "apps/server/src/cli/helper.ts"), [
       "apps/server/src/spawn.test.ts",
     ]);
+  });
+
+  it("follows a module that a loader imports by name", () => {
+    assert.ok(reaches("apps/server/src/loaded.ts", "apps/server/src/loader.test.ts"));
+  });
+
+  it("ignores file names in comments", () => {
+    assert.ok(!reaches("apps/server/src/prose.ts", "apps/server/src/prose.test.ts"));
+  });
+
+  it("does not connect files through a config that names a build entry", () => {
+    assert.ok(reaches("apps/server/src/esm.ts", "apps/server/vite.config.ts"));
+    assert.ok(!reaches("apps/server/src/esm.ts", "apps/server/src/config.test.ts"));
   });
 });
