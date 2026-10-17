@@ -711,6 +711,30 @@ const readState = (taskId: ChannelTask["taskId"]) =>
     return JSON.parse(json ?? "{}") as RemoteWorkerState;
   });
 
+/** How many times the task said a machine it left is back; the notice lives on its progress line. */
+const staleNotices = (host: string) =>
+  Effect.gen(function* () {
+    const task = yield* onlyTask;
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly event_json: string }>`
+      SELECT event_json FROM channel_task_events
+      WHERE task_id = ${task.taskId} AND type = 'task.progress'
+    `;
+    let count = 0;
+    for (const row of rows) {
+      const event = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ChannelTaskEvent))(
+        row.event_json,
+      );
+      if (
+        event.type === "task.progress" &&
+        event.payload.summary === REMOTE_COPY.staleMachineBack(host)
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  });
+
 /** Read the persisted event after until has driven the task to its expected state. */
 const readTaskEvent = (task: ChannelTask, type: ChannelTaskEvent["type"]) =>
   Effect.gen(function* () {
@@ -1093,7 +1117,7 @@ describe("copies of remote work and host failover", () => {
       assert.strictEqual((yield* readState(task.taskId)).resumeFrom?.file, first.file);
       assert.deepStrictEqual(yield* fs.readFile(first.file), new Uint8Array(REPLICA_BYTES));
       assert.lengthOf(destination.launches, 1);
-    }).pipe(Effect.provide(harness.layer));
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect(
@@ -1131,13 +1155,10 @@ describe("copies of remote work and host failover", () => {
         assert.strictEqual(machine.interrupts[0]?.threadId, machine.thread(correlationId));
         assert.lengthOf(destination.interrupts, 0);
         yield* runtime.drain;
-        assert.lengthOf(
-          (yield* botMessages).messages.filter((message) =>
-            message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-          ),
-          1,
-        );
-      }).pipe(Effect.provide(harness.layer));
+        assert.strictEqual(yield* staleNotices(machine.host), 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
     },
   );
 
@@ -1165,12 +1186,8 @@ describe("copies of remote work and host failover", () => {
       yield* runtime.drain;
       assert.strictEqual(machine.probeCount - probesBefore, 1);
       assert.lengthOf(machine.interrupts, 0);
-      assert.isFalse(
-        (yield* botMessages).messages.some((message) =>
-          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-        ),
-      );
-    }).pipe(Effect.provide(harness.layer));
+      assert.strictEqual(yield* staleNotices(machine.host), 0);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect("retries a refused interrupt without marking or narrating the stale worker yet", () => {
@@ -1193,11 +1210,7 @@ describe("copies of remote work and host failover", () => {
       assert.lengthOf(machine.interrupts, 2);
       assert.strictEqual((yield* readState(task.taskId)).superseded?.[0]?.noticed, false);
       yield* runtime.drain;
-      assert.isFalse(
-        (yield* botMessages).messages.some((message) =>
-          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-        ),
-      );
+      assert.strictEqual(yield* staleNotices(machine.host), 0);
       machine.refuseInterruptWith = undefined;
       yield* TestClock.adjust(Duration.seconds(10));
       yield* writes.waitFor((_current, state) => state?.superseded?.[0]?.noticed === true);
@@ -1207,13 +1220,8 @@ describe("copies of remote work and host failover", () => {
       yield* workers.ensure(runtime.ownerToken);
       yield* runtime.drain;
       assert.lengthOf(machine.interrupts, 3);
-      assert.lengthOf(
-        (yield* botMessages).messages.filter((message) =>
-          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-        ),
-        1,
-      );
-    }).pipe(Effect.provide(harness.layer));
+      assert.strictEqual(yield* staleNotices(machine.host), 1);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect("marks a stale worker whose interrupt reports thread_not_found as noticed", () => {
@@ -1237,13 +1245,8 @@ describe("copies of remote work and host failover", () => {
       yield* workers.ensure(runtime.ownerToken);
       yield* runtime.drain;
       assert.lengthOf(machine.interrupts, 1);
-      assert.lengthOf(
-        (yield* botMessages).messages.filter((message) =>
-          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-        ),
-        1,
-      );
-    }).pipe(Effect.provide(harness.layer));
+      assert.strictEqual(yield* staleNotices(machine.host), 1);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
 
   it.effect.each([0, 1])(
@@ -1483,13 +1486,7 @@ describe("copies of remote work and host failover", () => {
       yield* (yield* ChannelRemoteWorkers).ensure(runtime.ownerToken);
       yield* runtime.drain;
       assert.lengthOf(machine.interrupts, 1);
-      const messages = (yield* botMessages).messages;
-      assert.lengthOf(
-        messages.filter((message) =>
-          message.text.includes(REMOTE_COPY.staleMachineBack(machine.host)),
-        ),
-        1,
-      );
+      assert.strictEqual(yield* staleNotices(machine.host), 1);
       const sql = yield* SqlClient.SqlClient;
       const premature =
         yield* sql`SELECT event_json FROM channel_task_events WHERE task_id = ${task.taskId} AND type IN ('task.completed', 'task.failed')`;

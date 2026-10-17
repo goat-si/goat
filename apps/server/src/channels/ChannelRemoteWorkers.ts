@@ -2329,7 +2329,8 @@ const make = Effect.gen(function* () {
                       summary: REMOTE_COPY.staleMachineBack(entry.host),
                     },
                   },
-                  { owner, narrate: true, remoteWorker: mark },
+                  // Like the outage notice, this lives on the task's progress line.
+                  { owner, remoteWorker: mark },
                 );
                 if (next !== undefined) return;
               }
