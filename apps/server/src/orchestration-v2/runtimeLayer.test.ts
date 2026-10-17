@@ -96,6 +96,7 @@ const modelSelection = {
   model: "gpt-5.4",
 } satisfies ModelSelection;
 const alternateInstanceId = ProviderInstanceId.make("codex_alternate");
+const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
 
 const layerVcsDriverRegistryTest = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProcess.layer),
@@ -281,7 +282,13 @@ const layerTest = Layer.mergeAll(
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(
+    ServerSettings.layerTest({
+      projectSettingsOverrides: {
+        [prWatchDisabledProjectId]: { pullRequestWatchPolicy: { autoWatch: false } },
+      },
+    }),
+  ),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
@@ -2837,6 +2844,221 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect.each(["agent", "created"] as const)("automatically watches a new %s link", (source) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make(`pr-auto-watch-${source}`);
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`pr-auto-watch-create-${source}`),
+        threadId,
+        projectId: ProjectId.make("pr-auto-watch-project"),
+        title: "Auto watch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make(`pr-auto-watch-link-${source}`),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 7,
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source,
+      });
+      const linked = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0];
+      assert.equal(linked?.source, source);
+      assert.isTrue(linked?.watch?.automatic);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0], linked);
+    }),
+  );
+
+  it.effect.each(["settings", "settled"] as const)(
+    "does not auto-watch when disabled by %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const threadId = ThreadId.make(`pr-auto-watch-disabled-${mode}`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`pr-auto-watch-disabled-create-${mode}`),
+          threadId,
+          projectId:
+            mode === "settings"
+              ? prWatchDisabledProjectId
+              : ProjectId.make("pr-auto-watch-project"),
+          title: "No auto watch",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+        if (mode === "settled") {
+          yield* orchestrator.dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make("pr-auto-watch-disabled-settle"),
+            threadId,
+          });
+        }
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.link",
+          commandId: CommandId.make(`pr-auto-watch-disabled-link-${mode}`),
+          threadId,
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          number: 7,
+          url: "https://github.com/pingdotgg/t3code/pull/7",
+          source: "agent",
+        });
+        const linked = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0];
+        assert.equal(linked?.source, "agent");
+        assert.isUndefined(linked?.watch);
+      }),
+  );
+
+  it.effect("making an automatic watch explicit keeps its progress", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("pr-auto-watch-explicit");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-auto-watch-explicit-create"),
+        threadId,
+        projectId: ProjectId.make("pr-auto-watch-project"),
+        title: "Explicit watch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make("pr-auto-watch-explicit-link"),
+        threadId,
+        ...key,
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source: "agent",
+      });
+      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isTrue(started?.automatic);
+      if (started === undefined) return;
+      const recorded = {
+        ...started,
+        headSha: "abc123",
+        failedChecks: ["lint"],
+        wakes: 1,
+        heldContext: ["Earlier comment"],
+      };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-auto-watch-explicit-record"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: recorded,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-auto-watch-explicit-start"),
+        threadId,
+        ...key,
+        watching: true,
+      });
+      const { automatic: _automatic, ...expected } = recorded;
+      const explicit = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isUndefined(explicit?.automatic);
+      assert.deepEqual(explicit, expected);
+    }),
+  );
+
+  it.effect("records a watch note as a notification without a message or run", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("pr-watch-note");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-note-create"),
+        threadId,
+        projectId: ProjectId.make("pr-watch-note-project"),
+        title: "Watch note",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-note-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/7", source: "agent" },
+      });
+      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isDefined(started);
+      if (started === undefined) return;
+      const commandId = CommandId.make("pr-watch-note-record");
+      const note = {
+        source: { kind: "monitor" as const },
+        outcome: "updated" as const,
+        summary: "#7: new comments, kept as context",
+        detail: "Earlier comment",
+      };
+      const recorded = { ...started, heldContext: ["Earlier comment"] };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId,
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: recorded,
+        note,
+      });
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(projection.messages, []);
+      assert.deepEqual(projection.runs, []);
+      assert.deepEqual(yield* outbox.listByCommandId(commandId), []);
+      assert.lengthOf(projection.turnItems, 1);
+      const item = projection.turnItems[0]!;
+      assert.equal(item.type, "notification");
+      assert.isNull(item.runId);
+      assert.equal(item.status, "completed");
+      assert.equal(item.ordinal, 1);
+      if (item.type !== "notification") return;
+      assert.deepEqual(
+        { source: item.source, outcome: item.outcome, summary: item.summary, detail: item.detail },
+        note,
+      );
+      assert.deepEqual(projection.thread.pullRequests?.[0]?.watch, recorded);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const rebuilt = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(rebuilt.turnItems, projection.turnItems);
+      assert.deepEqual(rebuilt.messages, []);
+      assert.deepEqual(rebuilt.runs, []);
+    }),
+  );
+
   it.effect("starts, records, and stops a pull request watch", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -3131,6 +3353,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () => Effect.die("host unreachable"),
               activity: () => Effect.die("host unreachable"),
@@ -3210,6 +3433,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Effect.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              ServerSettings.layerTest(),
               Layer.mock(PullRequestService.PullRequestService)({
                 detail: () =>
                   Effect.suspend(() => {
@@ -3346,6 +3570,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () =>
                 Effect.sync(() => ({
@@ -3448,6 +3673,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               watchFingerprint: () =>
                 Effect.suspend(() =>
@@ -3657,6 +3883,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () => Effect.succeed(detail),
               activity: () =>
