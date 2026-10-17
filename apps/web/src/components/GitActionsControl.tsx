@@ -41,6 +41,7 @@ import { Spinner } from "~/components/ui/spinner";
 import { Toggle, ToggleGroup } from "~/components/ui/toggle-group";
 import { cn } from "~/lib/utils";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
+import { noteDraftWorkspacePick } from "~/lib/draftWorkspacePicks";
 import {
   buildMenuItems,
   formatGitActionElapsed,
@@ -1094,6 +1095,7 @@ export default function GitActionsControl({
         return;
       }
 
+      if (manualSelection && draftId) noteDraftWorkspacePick(draftId);
       setDraftThreadContext(draftId ?? activeThreadRef, {
         branch,
         worktreePath: activeDraftThread.worktreePath,
