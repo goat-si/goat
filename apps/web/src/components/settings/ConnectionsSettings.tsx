@@ -1,3 +1,7 @@
+import { SshRuntimeSettingsRow } from "./SshRuntimeSettingsRow";
+import { sshRuntime } from "~/state/sshRuntime";
+import { sshRuntimeStatusText } from "@goat/client-runtime/state/sshRuntime";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { SessionPermissions } from "./SessionPermissions";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@goat/shared/authScopeOptions";
 import {
@@ -1441,6 +1445,20 @@ function NetworkAccessDescription({
   );
 }
 
+/** Only saved Desktop SSH profiles can address the Desktop runtime owner. */
+function savedDesktopSshTarget(environment: EnvironmentPresentation) {
+  if (window.desktopBridge === undefined) return null;
+  for (const route of connectionRoutes(environment.entry)) {
+    if (
+      route.target._tag === "SshConnectionTarget" &&
+      Option.isSome(route.profile) &&
+      route.profile.value._tag === "SshConnectionProfile"
+    )
+      return route.profile.value.target;
+  }
+  return null;
+}
+
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
@@ -1505,6 +1523,16 @@ function SavedBackendListRow({
   const enabled = environment.entry.enabled && !unsupported;
   const isConnected = environment.connection.phase === "connected";
   const isRemoving = removingEnvironmentId === environmentId;
+  const savedSshTarget = savedDesktopSshTarget(environment);
+  const runtimeAtom = useMemo(
+    () =>
+      savedSshTarget === null
+        ? Atom.make(null)
+        : sshRuntime.statusAtom({ environmentId, target: savedSshTarget }),
+    [environmentId, savedSshTarget],
+  );
+  const runtimeResult = useAtomValue(runtimeAtom);
+  const runtimeStatus = runtimeResult?.status;
   const errorTraceId = environment.connection.traceId;
   const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
     target: "trace ID",
@@ -1595,6 +1623,11 @@ function SavedBackendListRow({
     environmentTransportLabel(environment, connectedTarget),
     resumingServerUpdate ? "Restarting" : status.text,
     enabled && versionMismatch ? serverVersion : null,
+    savedSshTarget && runtimeStatus
+      ? runtimeStatus.state === "preparing"
+        ? "Setting up runtime"
+        : sshRuntimeStatusText(runtimeStatus)
+      : null,
   ]
     .filter((value): value is string => value !== null)
     .join(" · ");
@@ -1689,7 +1722,13 @@ function SavedBackendListRow({
         </span>
       }
       below={
-        serverUpdateState.status !== "idle" ? (
+        savedSshTarget ? (
+          <SshRuntimeSettingsRow
+            environmentId={environmentId}
+            target={savedSshTarget}
+            enabled={environment.entry.enabled && !isRemoving}
+          />
+        ) : serverUpdateState.status !== "idle" ? (
           <div className="mt-1 max-w-md">
             <ServerUpdateProgress state={serverUpdateState} />
           </div>
@@ -1718,7 +1757,8 @@ function SavedBackendListRow({
         </>
       }
     >
-      {unsupported &&
+      {savedSshTarget === null &&
+      unsupported &&
       environment.entry.serverUpdateRequired === true &&
       serverUpdateState.status !== "running" ? (
         <OutdatedServerUpdateAction
@@ -1729,7 +1769,7 @@ function SavedBackendListRow({
           label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
         />
       ) : null}
-      {showUpdateAction ? (
+      {savedSshTarget === null && showUpdateAction ? (
         <ServerUpdateAction
           environmentId={environmentId}
           serverLabel={`${environment.label} server`}
@@ -2811,6 +2851,8 @@ export function ConnectionsSettings() {
       const environmentId = environment.environmentId;
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
+      const target = savedDesktopSshTarget(environment);
+      if (target) sshRuntime.forget(appAtomRegistry, { environmentId, target });
       const result = await removeEnvironment(environmentId);
       setRemovingSavedEnvironmentId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {

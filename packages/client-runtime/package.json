@@ -279,6 +279,10 @@
       "types": "./src/state/usageProgress.ts",
       "default": "./src/state/usageProgress.ts"
     },
+    "./state/sshRuntime": {
+      "types": "./src/state/sshRuntime.ts",
+      "default": "./src/state/sshRuntime.ts"
+    },
     "./state/server": {
       "types": "./src/state/server.ts",
       "default": "./src/state/server.ts"

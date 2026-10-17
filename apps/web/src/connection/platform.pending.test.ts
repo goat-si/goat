@@ -1,10 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { DesktopBridge, DesktopSshRuntimePendingResult } from "@goat/contracts";
+import type {
+  DesktopBridge,
+  DesktopSshEnvironmentTarget,
+  DesktopSshRuntimePendingResult,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import {
   prepareDesktopSshEnvironment,
   provisionDesktopSshEnvironment,
-  takeSshRuntimeReplacementNotice,
+  readDesktopSshRuntime,
 } from "./platform.ts";
 
 const target = { alias: "box", hostname: "box.test", username: null, port: null };
@@ -21,6 +25,16 @@ describe.each([
   it.effect("connects to a busy runtime whose replacement is scheduled", () =>
     Effect.gen(function* () {
       const bridge = {
+        getSshHostStatus: async () => ({
+          kind: "ok",
+          status: {
+            host: "box",
+            state: "update_waiting",
+            runtimeVersion: "1.2.2",
+            requestedVersion: "1.2.3",
+            detail: "busy",
+          },
+        }),
         ensureSshEnvironment: async () => ({
           target,
           httpBaseUrl: "http://127.0.0.1:3201/",
@@ -43,6 +57,11 @@ describe.each([
       const connected = yield* consumer(bridge, target);
       expect(connected.bearerToken).toBe("bearer");
       expect(connected.bootstrap.pendingReplacement?.requestedVersion).toBe("1.2.3");
+      const ownerStatus = yield* readDesktopSshRuntime(bridge, target);
+      expect(ownerStatus).toMatchObject({
+        kind: "ok",
+        status: { state: "update_waiting", requestedVersion: "1.2.3" },
+      });
     }),
   );
   it.effect("explains a tunnel that answers too slowly as high latency", () =>
@@ -142,33 +161,56 @@ describe.each([
   );
 });
 
-describe("scheduled SSH runtime replacement notice", () => {
-  const host = { alias: "notice-box", hostname: "notice-box.test", username: null, port: null };
-  const pending = {
-    reason: "busy",
-    replacement: "older",
-    requestedVersion: "1.2.3",
-    liveVersion: "1.2.2",
-  } as const;
-
-  it("announces a host's scheduled replacement once, and again when the versions change", () => {
-    expect(takeSshRuntimeReplacementNotice(host, pending)).toBe(
-      "This host runs GOAT 1.2.2. It will be replaced with GOAT 1.2.3 when its current work finishes.",
-    );
-    expect(takeSshRuntimeReplacementNotice(host, pending)).toBeNull();
-    expect(
-      takeSshRuntimeReplacementNotice(host, { ...pending, requestedVersion: "1.2.4" }),
-    ).not.toBeNull();
-  });
-
-  it("names the missing capability when the live runtime cannot grant memory access", () => {
-    expect(
-      takeSshRuntimeReplacementNotice(
-        { ...host, alias: "capability-box" },
-        { ...pending, replacement: "capability" },
-      ),
-    ).toBe(
-      "GOAT 1.2.2 on this host cannot grant memory access to tasks. It will be replaced with GOAT 1.2.3 when its current work finishes.",
-    );
-  });
+describe("Desktop SSH runtime gateway", () => {
+  it.effect("returns a typed unsupported result without the owning desktop bridge", () =>
+    Effect.gen(function* () {
+      expect(yield* readDesktopSshRuntime(undefined, target)).toEqual({
+        kind: "error",
+        code: "unsupported",
+        message: "SSH runtime updates need the desktop app that owns this SSH connection.",
+      });
+    }),
+  );
+  it.effect("routes status and both update modes to the original target", () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = [];
+      const ownerTarget = { alias: "box", hostname: "10.0.0.2", username: "ops", port: 2222 };
+      const reply = {
+        kind: "ok",
+        status: { host: "box", state: "ready", runtimeVersion: "1.2.3", requestedVersion: "1.2.3" },
+      } as const;
+      const bridge = {
+        getSshHostStatus: async (value: DesktopSshEnvironmentTarget) => {
+          calls.push(["status", value]);
+          return reply;
+        },
+        updateSshRuntime: async (
+          value: DesktopSshEnvironmentTarget,
+          mode?: "when_idle" | "now",
+        ) => {
+          calls.push([mode, value]);
+          return reply;
+        },
+      };
+      yield* readDesktopSshRuntime(bridge, ownerTarget);
+      yield* readDesktopSshRuntime(bridge, ownerTarget, "when_idle");
+      yield* readDesktopSshRuntime(bridge, ownerTarget, "now");
+      expect(calls).toEqual([
+        ["status", ownerTarget],
+        ["when_idle", ownerTarget],
+        ["now", ownerTarget],
+      ]);
+    }),
+  );
+  it.effect("does not turn malformed IPC into a ready runtime", () =>
+    Effect.gen(function* () {
+      const bridge = {
+        getSshHostStatus: async () => ({ kind: "ok", status: { state: "ready" } }),
+      } as unknown as DesktopBridge;
+      expect(yield* readDesktopSshRuntime(bridge, target)).toMatchObject({
+        kind: "error",
+        code: "operation_failed",
+      });
+    }),
+  );
 });
