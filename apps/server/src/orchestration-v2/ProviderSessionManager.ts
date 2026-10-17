@@ -303,6 +303,8 @@ export interface ProviderSessionManagerV2LayerOptions {
   readonly maxIdlePinMs?: number;
   /** Test replay harnesses can omit T3's MCP server from provider protocol fixtures. */
   readonly configureMcp?: boolean;
+  /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
+  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
 }
 
 function releaseStatusFor(
@@ -870,7 +872,12 @@ export const layerWithOptions = (
         });
 
       const cancelIdleFiber = (fiber: Fiber.Fiber<void, never> | null) =>
-        fiber === null ? Effect.void : Fiber.interrupt(fiber).pipe(Effect.ignore);
+        fiber === null
+          ? Effect.void
+          : (options.beforeIdleFiberInterrupt ?? Effect.void).pipe(
+              Effect.andThen(Fiber.interrupt(fiber)),
+              Effect.ignore,
+            );
 
       const writeProviderSessionEvents = (input: {
         readonly runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime;

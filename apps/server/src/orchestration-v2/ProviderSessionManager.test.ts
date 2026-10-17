@@ -512,6 +512,7 @@ function layerTest(input: {
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
   readonly maxIdlePinMs?: number;
+  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
   readonly failEventStream?: boolean;
   readonly capabilities?: OrchestrationV2ProviderCapabilities;
   readonly mcpConfigs?: Ref.Ref<
@@ -636,6 +637,9 @@ function layerTest(input: {
     ProviderSessionManager.layerWithOptions({
       idleTimeoutMs: input.idleTimeoutMs,
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
+      ...(input.beforeIdleFiberInterrupt === undefined
+        ? {}
+        : { beforeIdleFiberInterrupt: input.beforeIdleFiberInterrupt }),
     }).pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -3775,6 +3779,7 @@ it.effect("ProviderSessionManagerV2 releases pinned idle sessions once the pin c
 it.effect("ProviderSessionManagerV2 keeps pinned work that reports progress", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);
+    const pendingWorkChecks = yield* Queue.unbounded<void>();
     const effect = Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -3801,10 +3806,19 @@ it.effect("ProviderSessionManagerV2 keeps pinned work that reports progress", ()
       });
       const adapterQueue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
       assert.isDefined(adapterQueue);
+      const subscription = yield* Effect.acquireRelease(
+        runtime.subscribeEvents!,
+        (sub) => sub.close,
+      );
+      const processedFrames = yield* Queue.unbounded<void>();
+      yield* subscription.events.pipe(
+        Stream.runForEach(() => Queue.offer(processedFrames, undefined)),
+        Effect.forkScoped,
+      );
       const step = (duration: Parameters<typeof TestClock.adjust>[0]) =>
         Effect.gen(function* () {
           yield* TestClock.adjust(duration);
-          for (let i = 0; i < 20; i += 1) yield* Effect.yieldNow;
+          yield* Queue.take(pendingWorkChecks);
         });
 
       // A long workflow keeps reporting progress well past the pin cap.
@@ -3815,14 +3829,27 @@ it.effect("ProviderSessionManagerV2 keeps pinned work that reports progress", ()
           driver: CODEX_DRIVER,
           providerSession: runtime.providerSession,
         });
-        for (let i = 0; i < 20; i += 1) yield* Effect.yieldNow;
+        // Delivery follows activity processing and persistence, including
+        // cancellation of the old idle probe and re-arming the idle timer.
+        yield* Queue.take(processedFrames);
       }
       assert.equal((yield* Ref.get(state)).closeCount, 0);
 
-      // Work that goes silent past the cap is still stopped.
-      for (let tick = 0; tick < 6; tick += 1) {
-        yield* step("1 second");
-      }
+      // The first quiet probe starts the pin budget. Observe each re-check
+      // before advancing to the next window, then await the persisted stop.
+      const afterSequence = yield* eventSink.latestSequence({ threadId });
+      yield* step("1 second");
+      yield* step("1 second");
+      yield* step("1 second");
+      yield* TestClock.adjust("1 second");
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.filter(
+          (entry) =>
+            entry.event.type === "provider-session.updated" &&
+            entry.event.payload.status === "stopped",
+        ),
+        Stream.runHead,
+      );
       assert.equal((yield* Ref.get(state)).closeCount, 1);
     });
 
@@ -3832,7 +3859,7 @@ it.effect("ProviderSessionManagerV2 keeps pinned work that reports progress", ()
           state,
           idleTimeoutMs: 1000,
           maxIdlePinMs: 3000,
-          hasPendingBackgroundWork: Effect.succeed(true),
+          hasPendingBackgroundWork: Queue.offer(pendingWorkChecks, undefined).pipe(Effect.as(true)),
         }),
       ),
     );
@@ -3847,6 +3874,7 @@ it.effect(
       const firstCheck = yield* Ref.make(true);
       const checkEntered = yield* Deferred.make<void>();
       const checkGate = yield* Deferred.make<void>();
+      const busyMarked = yield* Deferred.make<void>();
       const effect = Effect.gen(function* () {
         const eventSink = yield* EventSink.EventSinkV2;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -3887,7 +3915,15 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const subscription = yield* Effect.acquireRelease(
+          runtime.subscribeEvents!,
+          (sub) => sub.close,
+        );
+        const terminalProcessed = yield* subscription.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+          Effect.forkScoped,
+        );
         const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
 
         yield* TestClock.adjust("1 second");
@@ -3917,12 +3953,11 @@ it.effect(
             runtimePolicy,
           })
           .pipe(Effect.forkDetach);
-        for (let i = 0; i < 10; i += 1) {
-          yield* Effect.yieldNow;
-        }
+        // markBusy updates the live entry before waiting for the parked
+        // probe to exit. Adapter startTurn cannot be reached until it exits.
+        yield* Deferred.await(busyMarked);
         yield* Deferred.succeed(checkGate, undefined);
         yield* Fiber.join(turnFiber);
-        yield* Effect.yieldNow;
 
         assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
         assert.equal((yield* Ref.get(state)).closeCount, 0);
@@ -3939,8 +3974,17 @@ it.effect(
           failure: null,
           threadDisposition: "reusable",
         });
+        yield* Fiber.join(terminalProcessed);
+        const afterSequence = yield* eventSink.latestSequence({ threadId });
         yield* TestClock.adjust("1 second");
-        yield* Effect.yieldNow;
+        yield* eventSink.stream({ threadId, afterSequence }).pipe(
+          Stream.filter(
+            (entry) =>
+              entry.event.type === "provider-session.updated" &&
+              entry.event.payload.status === "stopped",
+          ),
+          Stream.runHead,
+        );
         assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
         assert.equal((yield* Ref.get(state)).closeCount, 1);
       });
@@ -3950,6 +3994,7 @@ it.effect(
           layerTest({
             state,
             idleTimeoutMs: 1000,
+            beforeIdleFiberInterrupt: Deferred.succeed(busyMarked, undefined).pipe(Effect.asVoid),
             // Uninterruptible so the markBusy-triggered interrupt cannot land
             // inside the check, mirroring an adapter that masks interruption
             // while inspecting its own state.
@@ -3974,6 +4019,7 @@ it.effect("ProviderSessionManagerV2 does not apply a stale idle pin to a replace
     const firstCheck = yield* Ref.make(true);
     const checkEntered = yield* Deferred.make<void>();
     const checkGate = yield* Deferred.make<void>();
+    const entryRemoved = yield* Deferred.make<void>();
     const effect = Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -4008,9 +4054,8 @@ it.effect("ProviderSessionManagerV2 does not apply a stale idle pin to a replace
       // fiber (still uninterruptible). That window lets a replacement open
       // under the same providerSessionId before the stale probe finishes.
       const closeFiber = yield* manager.close(providerSessionId).pipe(Effect.forkDetach);
-      for (let i = 0; i < 20; i += 1) {
-        yield* Effect.yieldNow;
-      }
+      yield* Deferred.await(entryRemoved);
+      assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
       yield* manager.open({
         threadId,
         providerSessionId,
@@ -4022,10 +4067,9 @@ it.effect("ProviderSessionManagerV2 does not apply a stale idle pin to a replace
       // Stale probe reports pending work against the old runtime; the pin
       // stamp must no-op on the replacement (runtime / generation mismatch).
       yield* Deferred.succeed(checkGate, undefined);
+      // close awaits interruption of the old idle fiber: its stale probe
+      // has exited before we inspect the replacement.
       yield* Fiber.join(closeFiber);
-      for (let i = 0; i < 10; i += 1) {
-        yield* Effect.yieldNow;
-      }
 
       assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
       assert.equal((yield* Ref.get(state)).closeCount, 1);
@@ -4033,8 +4077,16 @@ it.effect("ProviderSessionManagerV2 does not apply a stale idle pin to a replace
       // Replacement has no pending background work. After one idle window it
       // must release. A stale pin stamp would have deferred release until
       // maxIdlePinMs.
+      const afterSequence = yield* eventSink.latestSequence({ threadId });
       yield* TestClock.adjust("1 second");
-      yield* Effect.yieldNow;
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.filter(
+          (entry) =>
+            entry.event.type === "provider-session.updated" &&
+            entry.event.payload.status === "stopped",
+        ),
+        Stream.runHead,
+      );
       assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
       assert.equal((yield* Ref.get(state)).closeCount, 2);
     });
@@ -4044,6 +4096,7 @@ it.effect("ProviderSessionManagerV2 does not apply a stale idle pin to a replace
         layerTest({
           state,
           idleTimeoutMs: 1000,
+          beforeIdleFiberInterrupt: Deferred.succeed(entryRemoved, undefined).pipe(Effect.asVoid),
           maxIdlePinMs: 60_000,
           hasPendingBackgroundWork: Effect.uninterruptible(
             Effect.gen(function* () {
