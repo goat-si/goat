@@ -244,7 +244,7 @@ describe("Desktop SSH runtime state", () => {
     expect(registry.get(state.statusAtom(input))).toEqual(ready);
     registry.dispose();
   });
-  it("shows one recovery action per reason", () => {
+  it("adds a recovery line only for archive failures", () => {
     const base = { host: "box", runtimeVersion: null, requestedVersion: "1.2.3" };
     const reasons = [
       "archive_unavailable",
@@ -274,7 +274,7 @@ describe("Desktop SSH runtime state", () => {
       expect(sshRuntimeRecoveryText(status)).toBe(
         reason === "archive_unavailable"
           ? "This build has no published server archive. Install a published GOAT release, or set a release mirror."
-          : "One recovery action",
+          : null,
       );
       expect(sshRuntimeStatusText(status)).not.toContain("Ready");
     }

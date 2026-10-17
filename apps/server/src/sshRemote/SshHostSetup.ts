@@ -46,13 +46,11 @@ const desktopUpdateInstruction =
 const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const status = Effect.fn("SshHostSetup.status")(function* (input: SshHostStatusInput) {
-    return yield* dispatch
-      .runtimeStatus(input.host)
-      .pipe(
-        Effect.catchTags({
-          SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
-        }),
-      );
+    return yield* dispatch.runtimeStatus(input.host).pipe(
+      Effect.catchTags({
+        SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
+      }),
+    );
   });
   const update = Effect.fn("SshHostSetup.update")(function* (
     input: SshRuntimeUpdateInput,
@@ -89,13 +87,11 @@ const make = Effect.gen(function* () {
         fix: { actor: "human", instruction: desktopUpdateInstruction },
       } satisfies SshHostResult;
     }
-    return yield* dispatch
-      .runtimeUpdate(input.host, { confirmReplacement: false })
-      .pipe(
-        Effect.catchTags({
-          SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
-        }),
-      );
+    return yield* dispatch.runtimeUpdate(input.host, { confirmReplacement: false }).pipe(
+      Effect.catchTags({
+        SshRemoteDispatchError: (error) => Effect.succeed(dispatchFailure(error)),
+      }),
+    );
   });
   return SshHostSetup.of({ status, update });
 });
