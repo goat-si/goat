@@ -117,6 +117,7 @@ describe("task transitions", () => {
             interactionMode: "default",
             workspaceStrategy: { type: "root" },
           },
+          briefVersion: 1,
           openQuestions: [{ questionId: "q-old", text: "Continue?", askedAt: NOW }],
         }),
         event("task.moved", payload),
@@ -130,6 +131,8 @@ describe("task transitions", () => {
       assert.isUndefined(moved.task.worker);
       assert.isUndefined(moved.task.target);
       assert.isUndefined(moved.task.projectId);
+      // The next generation freezes a brief of its own when it launches.
+      assert.isUndefined(moved.task.briefVersion);
       assert.deepStrictEqual(moved.task.openQuestions, []);
       assert.deepStrictEqual(moved.task.movedFrom, {
         host: "mac-studio",

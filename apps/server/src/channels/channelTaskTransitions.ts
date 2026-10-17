@@ -208,13 +208,15 @@ export function applyChannelTaskEvent(
     case "task.worker.observed":
       return { ok: true, task: { ...base, observed: event.payload.observed } };
     case "task.moved": {
-      // The new machine resolves its own project and starts a new worker from the copied work.
+      // The new machine resolves its own project and starts a new worker from the copied work,
+      // under a brief of its own, like a retry.
       const {
         proposedCompletion: _proposed,
         worker: _worker,
         target: _target,
         projectId: _projectId,
         observed: _observed,
+        briefVersion: _briefVersion,
         ...rest
       } = base;
       return {
