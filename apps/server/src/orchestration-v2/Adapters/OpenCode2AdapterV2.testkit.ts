@@ -144,6 +144,7 @@ const replayHttpClient = (
   replayGate: ProviderReplayGate | undefined,
   memoryInstructions: ((value: string) => Response) | undefined,
   onInstructions: ((key: string, value: string) => void) | undefined,
+  onHang: ((operation: string) => void) | undefined,
 ) =>
   HttpClient.make((request, url) =>
     Effect.tryPromise({
@@ -207,7 +208,10 @@ const replayHttpClient = (
         // Recorded responses are the raw HTTP bodies; `null` is an empty 204.
         // `{ status, body }` replays an error status and `"<hang>"` never answers.
         const body = await controller.response(operation.type);
-        if (body === "<hang>") return new Promise<Response>(() => {});
+        if (body === "<hang>") {
+          onHang?.(operation.type);
+          return new Promise<Response>(() => {});
+        }
         if (typeof body === "object" && body !== null && "status" in body && "body" in body) {
           return new Response(encodeJson(body.body), {
             status: Number(body.status),
@@ -238,6 +242,8 @@ export const replayServer = (
     readonly replayGate?: ProviderReplayGate;
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
+    /** Called once a recorded "<hang>" answer is taken: the request and its entry were consumed. */
+    readonly onHang?: (operation: string) => void;
   },
 ) =>
   Effect.gen(function* () {
@@ -256,6 +262,7 @@ export const replayServer = (
           options?.replayGate,
           options?.memoryInstructions,
           options?.onInstructions,
+          options?.onHang,
         ),
       ),
     );
@@ -293,6 +300,7 @@ const makeReplayAdapter = (
     readonly replayGate?: ProviderReplayGate;
     /** Counts the connections currently lent out, as the server owner's borrowers. */
     readonly borrowers?: { current: number };
+    readonly onHang?: (operation: string) => void;
   },
 ) =>
   Effect.gen(function* () {
@@ -327,6 +335,7 @@ export const openCode2ReplayRuntime = (
     readonly external?: boolean;
     readonly borrowers?: { current: number };
     readonly replayGate?: ProviderReplayGate;
+    readonly onHang?: (operation: string) => void;
   },
 ) =>
   Effect.gen(function* () {

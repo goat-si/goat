@@ -213,7 +213,7 @@ const withInstructions = (
 
 const openCode2ReplayRuntimeWithInstructions = (
   entries: ReadonlyArray<ProviderReplayEntry>,
-  options?: { readonly external?: boolean },
+  options?: Parameters<typeof openCode2ReplayRuntime>[1],
 ) => openCode2ReplayRuntime(withInstructions(entries), options);
 
 /** What every session sends when it opens: the event stream, then the model list. */
@@ -3925,20 +3925,24 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect("ends a turn before re-reading a model list that never answers", () =>
     Effect.gen(function* () {
+      const reread = yield* Deferred.make<void>();
       // The session opened before the catalog loaded, so the turn's model has no window.
-      const runtime = yield* openCode2ReplayRuntimeWithInstructions([
-        out("event.subscribe"),
-        out("model.list", "<any>"),
-        reply("model.list", { location: { directory: WORK }, data: [] }),
-        out("session.get", { sessionID: SESSION }),
-        replyData("session.get", sessionInfo()),
-        ...noOpenRequests,
-        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
-        promptAccepted,
-        event("session.execution.succeeded", { sessionID: SESSION }),
-        out("model.list", "<any>"),
-        reply("model.list", "<hang>"),
-      ]);
+      const runtime = yield* openCode2ReplayRuntimeWithInstructions(
+        [
+          out("event.subscribe"),
+          out("model.list", "<any>"),
+          reply("model.list", { location: { directory: WORK }, data: [] }),
+          out("session.get", { sessionID: SESSION }),
+          replyData("session.get", sessionInfo()),
+          ...noOpenRequests,
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("model.list", "<any>"),
+          reply("model.list", "<hang>"),
+        ],
+        { onHang: () => Deferred.doneUnsafe(reread, Effect.void) },
+      );
       const thread = yield* runtime.resumeThread({
         providerThread: providerThread(yield* DateTime.now),
         threadId,
@@ -3948,7 +3952,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
       yield* runtime.startTurn(turnInput(thread));
       assert.equal((yield* Fiber.join(terminal))?.status, "completed");
-      // Joining the terminal proves it did not wait on the hung model re-read.
+      // The terminal settled first; the re-read it did not wait on is still unanswered.
+      yield* Deferred.await(reread);
     }).pipe(Effect.scoped),
   );
 
