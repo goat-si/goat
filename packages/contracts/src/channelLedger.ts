@@ -23,6 +23,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 
 /**
@@ -109,6 +110,11 @@ export const ChannelDispatchTarget = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workspaceStrategy: ChannelWorkspaceStrategy,
   remote: Schema.optional(ChannelRemoteTarget),
+  /**
+   * The memory the worker may use, captured from the requester when the target is chosen so
+   * relaunches and remote recovery reuse it and never widen it. Absent means none.
+   */
+  memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
 });
 export type ChannelDispatchTarget = typeof ChannelDispatchTarget.Type;
 

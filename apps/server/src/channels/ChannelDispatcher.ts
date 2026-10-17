@@ -17,6 +17,7 @@ import {
   type ChannelDispatchTarget,
   type ChannelTask,
   type ChannelTaskId,
+  type MemoryTaskGrantCeiling,
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
@@ -38,6 +39,7 @@ import {
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ServerConfig from "../config.ts";
+import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -218,6 +220,28 @@ const make = Effect.gen(function* () {
       );
     });
 
+  /**
+   * The memory a task's worker may use: what the requester was granted, the same rule MCP and
+   * scheduled launches use. A Slack requester is judged by the identity link as it stands now,
+   * so a link narrowed or removed since the message arrived counts.
+   */
+  const requesterMemoryCeiling = (task: ChannelTask) =>
+    Effect.gen(function* () {
+      let scopes = task.requester.grantedScopes;
+      if (task.originAddress.kind === "slack") {
+        const actor = task.requester.externalActorId;
+        if (actor === undefined) return "none" satisfies MemoryTaskGrantCeiling;
+        const linked = yield* ledger.findIdentity({
+          connectionId: task.originAddress.connectionId,
+          externalActorId: actor,
+        });
+        if (linked === undefined) return "none" satisfies MemoryTaskGrantCeiling;
+        scopes = scopes.filter((scope) => linked.grantedScopes.includes(scope));
+      }
+      // A read-only destination still narrows this when the thread starts.
+      return captureMemoryGrantCeiling(scopes, false);
+    });
+
   /** The launch settings for a task, or the question to ask when they cannot be chosen. */
   const resolveTarget = (stored: ChannelLedger.ChannelStoredTask) =>
     Effect.gen(function* () {
@@ -285,6 +309,7 @@ const make = Effect.gen(function* () {
       const isGit = yield* fileSystem
         .exists(path.join(chosen.workspaceRoot, ".git"))
         .pipe(Effect.orElseSucceed(() => false));
+      const memoryGrantCeiling = yield* requesterMemoryCeiling(task);
       const target: ChannelDispatchTarget = {
         environmentId: yield* environment.getEnvironmentId,
         projectId: chosen.id,
@@ -296,6 +321,7 @@ const make = Effect.gen(function* () {
         interactionMode: "default",
         // Each task in a repository gets its own worktree so two tasks never share a checkout.
         workspaceStrategy: isGit ? { type: "worktree", baseRef: "HEAD" } : { type: "root" },
+        ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
       };
       return { type: "target" as const, target };
     });
@@ -321,6 +347,9 @@ const make = Effect.gen(function* () {
             messageId: ids.messageId,
             text: workerInstruction(task, botFiles),
             attachments: [],
+            ...(target.memoryGrantCeiling === undefined
+              ? {}
+              : { memoryGrantCeiling: target.memoryGrantCeiling }),
           },
           createdBy: "system",
           creationSource: "server",
@@ -397,6 +426,7 @@ const make = Effect.gen(function* () {
       const bot = yield* ledger.getBot(stored.ownerId);
       return {
         ...(defaultProjectGone ? { requireNamedProject: true } : {}),
+        memoryGrantCeiling: yield* requesterMemoryCeiling(task),
         localProjects: shells
           .filter((shell) => shell.id !== bot?.bot.projectId)
           .map((shell) => ({ id: shell.id, title: shell.title })),

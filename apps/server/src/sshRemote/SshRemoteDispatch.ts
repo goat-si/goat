@@ -84,6 +84,19 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   readonly launchMayHaveStarted?: boolean | undefined;
 }> {}
 
+/**
+ * remoteCode on a refusal before any launch because the remote cannot verify or apply a task
+ * memory ceiling (an older GOAT). Callers that must not run without the grant fail on it.
+ */
+export const MEMORY_CEILING_UNSUPPORTED = "memory_ceiling_unsupported";
+
+const memoryRefusal = (message: string) =>
+  new SshRemoteDispatchError({
+    reason: "remote_refused",
+    message,
+    remoteCode: MEMORY_CEILING_UNSUPPORTED,
+  });
+
 export interface SshDispatchHost {
   readonly alias: string;
   readonly source: "ssh-config" | "known-hosts";
@@ -616,7 +629,7 @@ const make = Effect.gen(function* () {
           // The remote answered and refused; its message names the runtime and what happens next.
           Effect.mapError((error) =>
             error instanceof SshPairingError && error.reason === "memory-scopes-unsupported"
-              ? failure("remote_refused", error.message)
+              ? memoryRefusal(error.message)
               : error,
           ),
           approvals
@@ -1214,18 +1227,12 @@ const make = Effect.gen(function* () {
     const launchAdmission = Effect.fn("SshRemoteDispatch.launchAdmission")(function* () {
       const { capabilities, declared } = yield* remoteLaunchArguments(remote);
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
-        return yield* failure(
-          "remote_refused",
-          "Remote task memory admission could not be verified.",
-        );
+        return yield* memoryRefusal("Remote task memory admission could not be verified.");
       if (
         memoryGrantCeiling !== "none" &&
         capabilities?.declared.has("memoryGrantCeiling") !== true
       )
-        return yield* failure(
-          "remote_refused",
-          "Remote GOAT does not accept task memory ceilings.",
-        );
+        return yield* memoryRefusal("Remote GOAT does not accept task memory ceilings.");
       return {
         declared,
         memoryArguments:

@@ -32,6 +32,7 @@ import {
   type ChannelTaskEventId,
   type ChannelTaskId,
   EnvironmentId,
+  type MemoryTaskGrantCeiling,
   type ModelSelection,
   ModelSelection as ModelSelectionSchema,
   PositiveInt,
@@ -105,6 +106,10 @@ export const REMOTE_COPY = {
   projectGone: (host: string) =>
     "That project is no longer on " + host + ". Which one should I use?",
   launchRefused: (host: string) => "GOAT on " + host + " refused to start the work.",
+  memoryUnsupported: (host: string) =>
+    "GOAT on " +
+    host +
+    " can't apply the memory access this task may use. Update GOAT there and ask again.",
   launchUncertain: (host: string) =>
     "I can't tell whether the work started on " +
     host +
@@ -272,6 +277,8 @@ export class ChannelRemoteWorkers extends Context.Service<
           | ReadonlyArray<{ readonly id: string; readonly title: string }>
           | undefined;
         readonly runtimeMode: RuntimeMode;
+        /** The memory the worker may use, captured from the requester on this machine. */
+        readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | undefined;
         /** The local project the task named, to find its counterpart on the other machine. */
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
@@ -307,6 +314,8 @@ export class ChannelRemoteWorkers extends Context.Service<
           | ReadonlyArray<{ readonly id: string; readonly title: string }>
           | undefined;
         readonly runtimeMode: RuntimeMode;
+        /** The memory the worker may use, captured from the requester on this machine. */
+        readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | undefined;
         readonly title?: string | undefined;
         readonly canonicalKey?: string | undefined;
       },
@@ -634,6 +643,9 @@ const make = Effect.gen(function* () {
             ? { type: "worktree" }
             : { type: "root" },
         remote: { host, cwd: chosen.workspaceRoot },
+        ...(local.memoryGrantCeiling === undefined || local.memoryGrantCeiling === "none"
+          ? {}
+          : { memoryGrantCeiling: local.memoryGrantCeiling }),
       };
       return { type: "target", target } as const;
     });
@@ -889,6 +901,10 @@ const make = Effect.gen(function* () {
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.
             callerRuntimeMode: task.requester.runtimeModeCeiling,
+            // Omitted when none: an older remote refuses any ceiling it cannot verify.
+            ...(target.memoryGrantCeiling === undefined
+              ? {}
+              : { memoryGrantCeiling: target.memoryGrantCeiling }),
             interactionMode: target.interactionMode,
             report: {
               correlationId: state.correlationId,
@@ -943,6 +959,16 @@ const make = Effect.gen(function* () {
           state,
           seen.success.threadId,
           seen.success.latestRunId,
+        );
+      }
+      // An older remote that cannot apply the task's memory grant refused before launching.
+      // Running without the grant would silently drop it, so the task fails and says why.
+      if (remoteCode(error) === SshRemoteDispatch.MEMORY_CEILING_UNSUPPORTED) {
+        return yield* failTask(
+          owner,
+          stored,
+          "memory_unsupported",
+          REMOTE_COPY.memoryUnsupported(state.host),
         );
       }
       if (remoteCode(seen.failure) !== "capability_denied") return;
