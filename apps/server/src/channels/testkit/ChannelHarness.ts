@@ -111,6 +111,9 @@ export class WorkerWorld {
     >
   >();
   readonly commands: Array<OrchestrationV2ServerCommand> = [];
+  /** Worker threads whose shell read fails, and whose commands the orchestrator refuses. */
+  readonly shellFailures = new Set<string>();
+  readonly dispatchFailures = new Set<string>();
   readonly launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
   readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
 
@@ -295,6 +298,14 @@ export function makeHarness(
         }) as typeof real.getThreadRecords,
         getThreadShell: (threadId) => {
           if (!isWorker(threadId)) return real.getThreadShell(threadId);
+          if (world.shellFailures.has(threadId)) {
+            return Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: CommandId.make("shell-read"),
+                commandType: "thread.shell.read",
+              }),
+            );
+          }
           return Effect.succeed({
             id: threadId,
             latestRunId: world.latestRun(threadId)?.id ?? null,
@@ -304,6 +315,14 @@ export function makeHarness(
         dispatch: (command) => {
           if (!("threadId" in command) || !isWorker(command.threadId)) {
             return real.dispatch(command);
+          }
+          if (world.dispatchFailures.has(command.threadId)) {
+            return Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+              }),
+            );
           }
           return Effect.sync(() => {
             world.commands.push(command);

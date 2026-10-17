@@ -2404,6 +2404,94 @@ describe("completion (scenario 5)", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "arms recovery for a usage-limited run even when a follow-up is queued behind it",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse("2026-10-12T00:00:00.000Z"));
+        const { task, threadId, runtime } = yield* startTask();
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const resetAt = "2026-10-12T01:00:00.000Z";
+        const limitedRunId = task.worker!.runId!;
+        harness.world.setStatus(threadId, 1, "failed");
+        const queued = harness.world.addRun(threadId, MessageId.make("queued-follow-up"));
+        harness.world.setStatus(threadId, queued.ordinal, "queued");
+        // The shell names the run that blocks the queue, as the projection does.
+        harness.world.shells.set(threadId, {
+          latestRunId: limitedRunId,
+          lastErrorClass: "usage_limit",
+          usageLimitResetAt: resetAt,
+        });
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* reports.reconcile(runtime.ownerToken);
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "running");
+        assert.strictEqual(waiting.worker?.runId, queued.id);
+        assert.deepStrictEqual(waiting.observed, {
+          pullRequests: [],
+          needsYou: [],
+          usageLimitResetAt: resetAt,
+        });
+        assert.lengthOf(harness.world.commands, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("decides nothing about a failed run while its thread cannot be read", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      harness.world.setStatus(threadId, 1, "failed");
+      harness.world.shells.set(threadId, {
+        latestRunId: task.worker!.runId!,
+        lastErrorClass: "usage_limit",
+      });
+      harness.world.shellFailures.add(threadId);
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* onlyTask).status, "running");
+      harness.world.shellFailures.delete(threadId);
+      yield* reports.reconcile(runtime.ownerToken);
+      const paused = yield* onlyTask;
+      assert.strictEqual(paused.status, "running");
+      assert.deepStrictEqual(
+        paused.observed?.needsYou.map((item) => item.kind),
+        ["usage_limit"],
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps a usage limit on the person when recovery cannot be armed", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-12T00:00:00.000Z"));
+      const { task, threadId, runtime } = yield* startTask();
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const resetAt = "2026-10-12T01:00:00.000Z";
+      harness.world.setStatus(threadId, 1, "failed");
+      harness.world.shells.set(threadId, {
+        latestRunId: task.worker!.runId!,
+        lastErrorClass: "usage_limit",
+        usageLimitResetAt: resetAt,
+      });
+      harness.world.dispatchFailures.add(threadId);
+      yield* reports.reconcile(runtime.ownerToken);
+      const refused = yield* onlyTask;
+      assert.strictEqual(refused.status, "running");
+      assert.strictEqual(refused.observed?.usageLimitResetAt, resetAt);
+      assert.deepStrictEqual(
+        refused.observed?.needsYou.map((item) => item.kind),
+        ["usage_limit"],
+      );
+      harness.world.dispatchFailures.delete(threadId);
+      yield* reports.reconcile(runtime.ownerToken);
+      const armed = yield* onlyTask;
+      assert.deepStrictEqual(armed.observed?.needsYou, []);
+      assert.lengthOf(harness.world.commands, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect.each(["failed", "cancelled"] as const)(
     "ends a task waiting for an answer when its worker run %s",
     (status) => {
