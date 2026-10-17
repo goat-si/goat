@@ -241,6 +241,14 @@ this device** in **Git actions**, or search for it in the command palette. The r
 shows a local ref you can inspect in the original repository. See
 [Fetch a branch from an SSH worktree](./source-control.md#fetch-a-branch-from-an-ssh-worktree).
 
+To move a thread you already started, choose **Continue on SSH host…** in the thread's
+menu or the command palette, pick the saved host, and optionally say what to do next.
+GOAT copies the thread's worktree the same way, including uncommitted changes, starts a
+new thread on that host with a summary of the conversation, and leaves a note in the
+original thread pointing to it. Wait for the current turn to finish first; a running
+thread cannot be moved. Your local worktree is left as it was, so you can keep working
+here or fetch the remote branch back later.
+
 SSH worktree creation and fetch-back are available in the desktop app. The remote
 thread can also be followed through an existing web or mobile connection.
 
@@ -252,6 +260,8 @@ machine's `~/.ssh/config` and `known_hosts`, browses folders and Git worktrees o
 the one you name, and starts a thread there in that folder or in a new worktree.
 The folder becomes a project on that machine, and the thread runs in that
 machine's own GOAT, which is started the same way as above if needed.
+An agent can also move a thread there, uncommitted changes included, when you ask
+it to "continue this on mini"; it does so as the last step of its turn.
 
 Only SSH keys or a running ssh-agent are used; a host that asks for a password
 is refused. Starting a thread needs a full-access thread or a full-access
