@@ -119,7 +119,7 @@ export function openCodexRouteSummary(route: ServerProvider["codexRoute"]): stri
     case "home":
       return "This machine is your OpenCodex Home.";
     case "reconnecting":
-      return "Home temporarily unavailable. Check OpenCodex and try again.";
+      return "Reconnecting to Home…";
     case "failed":
       return `Home link failed: ${route.reason ?? "Check OpenCodex and try again."}`;
     case "not_linked":
@@ -142,14 +142,13 @@ export function openCodexHomeHandoff(input: {
       }
     : {
         title: "Stop using OpenCodex Home",
-        instruction:
-          "This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` to do that.",
+        instruction: `This instance goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on ${input.environmentLabel} to disconnect it.`,
         command: "ocx disconnect",
       };
 }
 
 export const CODEX_ROUTE_BUSY_MESSAGE =
-  "End this instance's active sessions before changing its model route.";
+  "Wait for this instance's active turns to finish before changing its model route.";
 
 export function codexRouteErrorMessage(error: unknown): string {
   if (

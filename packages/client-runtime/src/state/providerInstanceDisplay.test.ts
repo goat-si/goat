@@ -162,7 +162,7 @@ describe("OpenCodex Home routing", () => {
   it.each([
     ["connected", "Home connected (home-mac)"],
     ["home", "This machine is your OpenCodex Home."],
-    ["reconnecting", "Home temporarily unavailable. Check OpenCodex and try again."],
+    ["reconnecting", "Reconnecting to Home…"],
     ["failed", "Home link failed: Login required"],
     ["not_linked", "Not linked to Home."],
     ["not_running", "OpenCodex isn't running on this machine."],
@@ -199,13 +199,13 @@ describe("OpenCodex Home routing", () => {
       {
         command: "ocx disconnect",
         instruction:
-          "This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` to do that.",
+          "This instance goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on vps-1 to disconnect it.",
       },
     );
   });
   it("shows the recovery line for a server busy rejection", () => {
     expect(codexRouteErrorMessage({ code: "provider_instance_busy" })).toBe(
-      "End this instance's active sessions before changing its model route.",
+      "Wait for this instance's active turns to finish before changing its model route.",
     );
   });
 });

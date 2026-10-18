@@ -1052,7 +1052,9 @@ export function EnvironmentProviderSettings({
               canRefresh={canRefreshProviders}
               onChange={async (route) => {
                 if (!readEnvironmentScope(environmentId, AuthProvidersManageScope))
-                  throw new Error("Provider management permission is required.");
+                  throw new Error(
+                    "This device can't change providers on this environment. Ask its owner for full access.",
+                  );
                 await updateProviderInstance(
                   row,
                   {
@@ -1081,6 +1083,10 @@ export function EnvironmentProviderSettings({
                       const baseUrl =
                         providerConfigString(row.instance.config, "opencodexBaseUrl") ||
                         DEFAULT_OPENCODEX_BASE_URL;
+                      if (!URL.canParse(baseUrl))
+                        throw new Error(
+                          "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
+                        );
                       const url = new URL(baseUrl);
                       if (
                         url.protocol !== "http:" ||
@@ -1088,7 +1094,9 @@ export function EnvironmentProviderSettings({
                         url.username ||
                         url.password
                       )
-                        throw new Error("Use a loopback OpenCodex URL on this machine.");
+                        throw new Error(
+                          "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
+                        );
                       await ensureLocalApi().shell.openExternal(url.origin);
                     }
                   : undefined

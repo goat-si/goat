@@ -960,7 +960,8 @@ export function ProviderInstanceCard({
     ) : (
       <>
         {statusDotNode}
-        <span>{routeSummary ?? summary.headline}</span>
+        <span>{summary.headline}</span>
+        {routeSummary ? <span>· {routeSummary}</span> : null}
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
         ) : null}

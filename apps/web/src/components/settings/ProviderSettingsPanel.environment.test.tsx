@@ -414,6 +414,38 @@ describe("EnvironmentProviderSettings routing", () => {
     }
   });
 
+  it.each(["not a URL", "https://example.com/v1", "http://user:secret@localhost:10100/v1"])(
+    "explains the local address requirement for %s",
+    async (opencodexBaseUrl) => {
+      commands.localDesktop = true;
+      settingsState.value = {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerInstances: {
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            config: { modelRoute: "opencodex", opencodexBaseUrl },
+          },
+        },
+      };
+      vi.stubGlobal("window", { desktopBridge: {} });
+      try {
+        const route = visitElements(
+          renderPanel(),
+          (entry) =>
+            entry.props.instanceId === codexId &&
+            typeof entry.props.onRefresh === "function" &&
+            typeof entry.props.onAddInstance === "function",
+        );
+        await expect((route!.props.onOpenDashboard as () => Promise<void>)()).rejects.toThrow(
+          "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
+        );
+        expect(commands.openExternal).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("writes the Home route to the selected environment with its permission", async () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
@@ -464,7 +496,9 @@ describe("EnvironmentProviderSettings routing", () => {
     commands.canManageProviders = false;
     await expect(
       change({ modelRoute: "opencodex", opencodexBaseUrl: "http://127.0.0.1:10100/v1" }),
-    ).rejects.toThrow("Provider management permission");
+    ).rejects.toThrow(
+      "This device can't change providers on this environment. Ask its owner for full access.",
+    );
     expect(settingsState.mutateProviderInstance).toHaveBeenCalledTimes(1);
   });
 

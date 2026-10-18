@@ -15,6 +15,14 @@ import {
 import { useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import {
+  AlertDialog,
+  AlertDialogPopup,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+} from "../ui/alert-dialog";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export interface CodexHomeRouteSectionProps {
@@ -53,6 +61,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
     usesHome && observed?.state === "not_running"
       ? `OpenCodex isn't running on ${props.environmentLabel}.`
       : openCodexRouteSummary(observed ?? { modelRoute: props.settings.modelRoute });
+  const canConnect = observed?.state === "not_linked" || observed?.state === "failed";
   const handoff = openCodexHomeHandoff({
     environmentLabel: props.environmentLabel,
     action: confirmRoute === "default" ? "disconnect" : "connect",
@@ -120,14 +129,14 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
           ) : null}
           {!props.readOnly && usesHome && baseUrl !== props.settings.opencodexBaseUrl ? (
             <SettingsRow
-              title="Apply endpoint change"
+              title="OpenCodex address"
               control={
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   disabled={disabled}
                   onClick={() => setConfirmRoute("opencodex")}
                 >
-                  Use OpenCodex Home
+                  Save URL
                 </Button>
               }
             />
@@ -137,16 +146,18 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
               title="Home connection"
               control={
                 <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() => setShowInstructions(true)}
-                  >
-                    Connect to Home
-                  </Button>
+                  {canConnect ? (
+                    <Button
+                      variant="ghost"
+                      disabled={pending}
+                      onClick={() => setShowInstructions(true)}
+                    >
+                      Connect to Home
+                    </Button>
+                  ) : null}
                   {props.onOpenDashboard ? (
                     <Button
-                      variant="outline"
+                      variant="ghost"
                       disabled={pending}
                       onClick={() => void run(props.onOpenDashboard!)}
                     >
@@ -154,7 +165,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
                     </Button>
                   ) : null}
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     disabled={pending || props.canRefresh === false}
                     onClick={() => void run(props.onRefresh)}
                   >
@@ -164,7 +175,7 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
               }
             />
           ) : null}
-          {showInstructions ? (
+          {showInstructions && canConnect ? (
             <SettingsRow
               title="Connect to Home"
               description={
@@ -177,48 +188,63 @@ export function CodexHomeRouteSection(props: CodexHomeRouteSectionProps) {
           ) : null}
           {props.active ? <SettingsRow title={CODEX_ROUTE_BUSY_MESSAGE} /> : null}
           {confirmRoute !== null && !props.readOnly ? (
-            <div
-              role="alertdialog"
-              aria-label={
-                confirmRoute === "default" ? "Stop using OpenCodex Home" : "Use OpenCodex Home"
-              }
-              className="space-y-3 p-4"
+            <AlertDialog
+              open
+              onOpenChange={(open) => {
+                if (!open && !inFlight.current) setConfirmRoute(null);
+              }}
             >
-              <p className="text-sm text-muted-foreground">
-                {confirmRoute === "default"
-                  ? handoff.instruction
-                  : `Use OpenCodex Home on ${props.environmentLabel} for this Codex instance?`}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  disabled={disabled}
-                  onClick={() => {
-                    if (props.readOnly || props.active) return;
-                    const modelRoute = confirmRoute;
-                    void run(async () => {
-                      await props.onChange({
-                        modelRoute,
-                        opencodexBaseUrl:
-                          modelRoute === "default"
-                            ? props.settings.opencodexBaseUrl
-                            : baseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL,
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {confirmRoute === "default"
+                      ? "Stop using OpenCodex Home"
+                      : "Use OpenCodex Home"}
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {confirmRoute === "default"
+                      ? handoff.instruction
+                      : `Codex on ${props.environmentLabel} will send model requests through OpenCodex Home and use its accounts. If Home is unavailable, this instance stops working instead of switching accounts.`}
+                  </AlertDialogDescription>
+                  {error ? (
+                    <p role="alert" className="text-sm text-destructive">
+                      {error}
+                    </p>
+                  ) : null}
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <Button
+                    disabled={disabled}
+                    onClick={() => {
+                      if (props.readOnly || props.active) return;
+                      const modelRoute = confirmRoute;
+                      void run(async () => {
+                        await props.onChange({
+                          modelRoute,
+                          opencodexBaseUrl:
+                            modelRoute === "default"
+                              ? props.settings.opencodexBaseUrl
+                              : baseUrl.trim() || DEFAULT_OPENCODEX_BASE_URL,
+                        });
+                        setConfirmRoute(null);
+                        await props.onRefresh();
                       });
-                      setConfirmRoute(null);
-                      await props.onRefresh();
-                    });
-                  }}
-                >
-                  {confirmRoute === "default" ? "Stop using OpenCodex Home" : "Use OpenCodex Home"}
-                </Button>
-                <Button variant="ghost" disabled={pending} onClick={() => setConfirmRoute(null)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
+                    }}
+                  >
+                    {confirmRoute === "default"
+                      ? "Stop using OpenCodex Home"
+                      : "Use OpenCodex Home"}
+                  </Button>
+                  <Button variant="ghost" disabled={pending} onClick={() => setConfirmRoute(null)}>
+                    Cancel
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
           ) : null}
         </>
       )}
-      {error ? (
+      {error && (confirmRoute === null || props.readOnly) ? (
         <p role="alert" className="p-4 text-sm text-destructive">
           {error}
         </p>

@@ -503,7 +503,9 @@ describe("OpenCodex Home approval", () => {
       });
       expect(harness.refresh).not.toHaveBeenCalled();
       await render({ ...request, state: "completed" });
-      expect(container.textContent).toContain("Review the model route in Settings");
+      expect(container.textContent).toContain("Approved");
+      expect(container.textContent).not.toContain("in Settings");
+      expect(container.textContent).not.toContain("Waiting for GOAT to apply the route");
       expect(container.textContent).not.toContain("is ready for agents");
     },
   );

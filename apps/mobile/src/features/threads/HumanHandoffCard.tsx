@@ -129,7 +129,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     });
     if (result._tag === "Failure")
       setRouteCheck(codexRouteErrorMessage(squashAtomCommandFailure(result)));
-    else setRouteCheck("Provider status refreshed. Review the model route in Settings.");
+    else setRouteCheck(null);
   };
   const [human, setHuman] = useState<HandoffHuman | null>(null);
   const [busy, setBusy] = useState(false);
@@ -287,10 +287,11 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
       )}
       {isProviderHome && handoff.state === "completed" && !props.inherited ? (
         <View className="gap-2">
-          <Text className="text-sm text-foreground-muted">
-            {routeCheck ??
-              "Approval recorded. Check the provider's model route in Settings to confirm it was applied."}
-          </Text>
+          {routeCheck ? (
+            <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+              {routeCheck}
+            </Text>
+          ) : null}
           <RequestActionButton
             label="Check provider status"
             disabled={busy || !canRefresh}
