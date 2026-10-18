@@ -67,7 +67,7 @@ export const ProviderDiagnosisReason = Schema.Literals([
 export type ProviderDiagnosisReason = typeof ProviderDiagnosisReason.Type;
 
 export const ProviderDiagnosisCheck = Schema.Struct({
-  /** What was checked: instance, enabled, sibling, environment, executable, version, auth, cloud, readiness, repository. */
+  /** What was checked: instance, enabled, sibling, environment, executable, version, auth, cloud, readiness, repository, opencodex_route. */
   id: TrimmedNonEmptyString,
   status: ProviderDiagnosisCheckStatus,
   reason: Schema.optionalKey(ProviderDiagnosisReason),

@@ -3,11 +3,18 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import type { CommandId, ProjectId } from "./baseSchemas.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { DEFAULT_OPENCODEX_BASE_URL } from "./codexRoute.ts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderInstanceMutation,
+} from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  CodexSettings,
+  ServerSettingsError,
   DEFAULT_SERVER_SETTINGS,
   implicitDefaultInstance,
   isDevinAcpRegistryInstance,
@@ -1408,4 +1415,75 @@ it("keeps process-neutral memory disabled and reserves automatic provenance from
   expect(decoded.memoryHub).toEqual({ mode: "disabled" });
   expect(decoded).not.toHaveProperty("memoryHubProvenance");
   expect(() => decodeServerSettingsPatch({ memoryHubProvenance: null })).toThrow();
+});
+
+const decodeCodexSettings = Schema.decodeUnknownSync(CodexSettings);
+const mutationCodec = Schema.toCodecJson(ProviderInstanceMutation);
+const decodeInstanceMutation = Schema.decodeUnknownSync(mutationCodec);
+const encodeInstanceMutation = Schema.encodeSync(mutationCodec);
+const settingsErrorCodec = Schema.toCodecJson(ServerSettingsError);
+const decodeSettingsError = Schema.decodeUnknownSync(settingsErrorCodec);
+const encodeSettingsError = Schema.encodeSync(settingsErrorCodec);
+
+describe("OpenCodex Home routing", () => {
+  it("decodes legacy Codex settings as default", () => {
+    expect(decodeCodexSettings({ launchArgs: "--enable feature" })).toMatchObject({
+      modelRoute: "default",
+      opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+      launchArgs: "--enable feature",
+    });
+    expect(decodeCodexSettings({ opencodexBaseUrl: "  " }).opencodexBaseUrl).toBe("");
+  });
+
+  it.each(["default", "opencodex"])(
+    "round-trips both Codex route fields through an instance mutation (%s)",
+    (modelRoute) => {
+      const config = decodeCodexSettings({
+        setupMode: "existing",
+        modelRoute,
+        opencodexBaseUrl: "http://127.0.0.1:10101/v1",
+        launchArgs: "--enable feature",
+      });
+      const mutation = decodeInstanceMutation({
+        operation: "upsert",
+        instanceId: "codex_home",
+        instance: { driver: "codex", displayName: "Codex · OpenCodex Home", config },
+      });
+      const restored = decodeInstanceMutation(
+        JSON.parse(JSON.stringify(encodeInstanceMutation(mutation))),
+      );
+      expect(restored).toEqual(mutation);
+      if (restored.operation === "remove") throw new Error("Expected an upsert mutation.");
+      expect(decodeCodexSettings(restored.instance.config)).toEqual(config);
+    },
+  );
+
+  it("rejects an unknown Codex model route", () => {
+    expect(() => decodeCodexSettings({ modelRoute: "direct" })).toThrow();
+  });
+
+  it("round-trips provider_instance_busy errors", () => {
+    const error = new ServerSettingsError({
+      settingsPath: "/sandbox/settings.json",
+      operation: "write-file",
+      providerInstanceId: "codex_home",
+      code: "provider_instance_busy",
+    });
+    const restored = decodeSettingsError(JSON.parse(JSON.stringify(encodeSettingsError(error))));
+    expect(restored.code).toBe("provider_instance_busy");
+    expect(restored.providerInstanceId).toBe("codex_home");
+    expect(restored.message).toBe(
+      "End this instance's active sessions before changing its model route.",
+    );
+  });
+
+  it("preserves legacy settings errors without a code", () => {
+    const restored = decodeSettingsError({
+      _tag: "ServerSettingsError",
+      settingsPath: "/sandbox/settings.json",
+      operation: "write-file",
+    });
+    expect(restored.code).toBeUndefined();
+    expect(restored.message).toBe("Server settings write-file failed at /sandbox/settings.json.");
+  });
 });

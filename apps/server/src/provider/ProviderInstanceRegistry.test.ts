@@ -28,6 +28,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_OPENCODEX_BASE_URL,
   EnvironmentId,
   type ClaudeSettings,
   type CodexSettings,
@@ -109,6 +110,8 @@ const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPol
 });
 
 const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
+  modelRoute: "default",
+  opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
   enabled: false,
   binaryPath: "codex",
   homePath: "",

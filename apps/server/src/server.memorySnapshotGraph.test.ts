@@ -58,6 +58,8 @@ const hydration = Layer.effect(
         shadowHomePath: "",
         launchArgs: "",
         customModels: [],
+        modelRoute: "default",
+        opencodexBaseUrl: M.DEFAULT_OPENCODEX_BASE_URL,
       }),
       environment: {},
       clientFactory: { open: () => Effect.die("fixture must never open a provider") },
