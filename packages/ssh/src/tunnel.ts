@@ -1906,6 +1906,11 @@ acquire_replacement_lock || { printf 'Another client is replacing the remote run
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
+# Forget may stop only an owned runtime; external/unknown state belongs to another owner.
+if [ @@GOAT_STOP_OWNED_ONLY@@ = 1 ] && [ "$REMOTE_MANAGED" != managed ]; then
+  printf '{"stopped":false,"activity":"unknown"}\\n'
+  exit 0
+fi
 ownership_unverified() {
   printf 'GOAT ownership could not be verified for PID %s; process and ownership files were preserved.\\n' "$REMOTE_PID" >&2
   exit 1
@@ -2837,9 +2842,13 @@ export const prepareRemoteRuntime = (
     Effect.withSpan("ssh.prepareRemoteRuntime"),
   );
 
-export function buildRemoteStopScript(stateKey: string): string {
+export function buildRemoteStopScript(
+  stateKey: string,
+  options: { readonly ownedOnly?: boolean } = {},
+): string {
   return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
     GOAT_STATE_KEY: stateKey,
+    GOAT_STOP_OWNED_ONLY: options.ownedOnly === true ? "1" : "0",
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
@@ -3117,7 +3126,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
 
 const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   target: DesktopSshEnvironmentTarget,
-  input?: SshAuth.SshAuthOptions,
+  input?: SshAuth.SshAuthOptions & { readonly ownedOnly?: boolean },
 ): Effect.fn.Return<
   void,
   SshCommandError | SshInvalidTargetError,
@@ -3130,7 +3139,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   });
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
-    stdin: buildRemoteStopScript(stateKey),
+    stdin: buildRemoteStopScript(stateKey, { ownedOnly: input?.ownedOnly === true }),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -5502,7 +5511,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         if (disconnectSuperseded(ticket)) return;
         if (forgetOptions.stopRuntime === "if_idle") {
           const stopped = yield* Effect.result(
-            stopRemoteServer(resolvedTarget, { batchMode: "yes", interactiveAuth: false }),
+            stopRemoteServer(resolvedTarget, {
+              batchMode: "yes",
+              interactiveAuth: false,
+              ownedOnly: true,
+            }),
           );
           if (stopped._tag === "Failure")
             result = {

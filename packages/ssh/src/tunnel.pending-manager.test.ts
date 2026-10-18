@@ -57,6 +57,7 @@ const fixture = Effect.gen(function* () {
       );
     });
   const forwarded = yield* Deferred.make<void>();
+  const staleProbeEntered = yield* Deferred.make<void>();
   const launchEntered = yield* Deferred.make<void>();
   const releaseLaunch = yield* Deferred.make<void>();
   const count = { launches: 0, forwards: 0, pairings: 0, stops: 0, kills: 0, prompts: 0 };
@@ -199,7 +200,7 @@ const fixture = Effect.gen(function* () {
       HttpClient.HttpClient,
       HttpClient.make((request) =>
         stale
-          ? Effect.never
+          ? Deferred.succeed(staleProbeEntered, undefined).pipe(Effect.andThen(Effect.never))
           : Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
       ),
     ),
@@ -235,6 +236,7 @@ const fixture = Effect.gen(function* () {
       liveProbe = true;
     },
     forwarded,
+    staleProbeEntered,
     launchEntered,
     releaseLaunch,
     setMode: (value: typeof mode) => {
@@ -591,7 +593,11 @@ describe("SSH pending replacement reconciliation", () => {
               ? manager.disconnectEnvironment(uploadTarget)
               : manager.ensureEnvironment(uploadTarget);
           }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.forkChild);
-          if (action === "stale") yield* TestClock.adjust("2 seconds");
+          if (action === "stale") {
+            // ssh -G and managed-pin checks now await real file I/O before the probe starts.
+            yield* Deferred.await(f.staleProbeEntered);
+            yield* TestClock.adjust("2 seconds");
+          }
           assert.isTrue(Exit.isFailure(yield* Fiber.await(closing)));
           assert.isTrue(interrupted);
           assert.equal(f.count.kills, 1);
@@ -633,6 +639,7 @@ describe("SSH pending replacement reconciliation", () => {
         const reconnect = yield* Effect.forkChild(
           Effect.result(manager.ensureEnvironment(uploadTarget)),
         );
+        yield* Deferred.await(f.staleProbeEntered);
         yield* TestClock.adjust("2 seconds");
         assert.isTrue(Result.isFailure(yield* Fiber.join(reconnect)));
         yield* manager.disconnectEnvironment(uploadTarget);
