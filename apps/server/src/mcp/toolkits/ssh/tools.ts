@@ -87,36 +87,40 @@ const SshHostListTool = Tool.make(agentSurfaceRegistry["ssh.host_list"].name, {
   success: Schema.Struct({ hosts: Schema.Array(SshHost) }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_list"]));
 
+// HandoffSummary contains DateTime.Utc. MCP structuredContent accepts JSON values,
+// so encode the domain result through its JSON codec before CallToolResult validates it.
+const SshHostResultJson = Schema.toCodecJson(SshHostResult);
+
 const SshHostStatusTool = Tool.make(agentSurfaceRegistry["ssh.host_status"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_status"].description,
   parameters: SshHostStatusInput,
-  success: SshHostResult,
+  success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_status"]));
 
 const SshHostAddTool = Tool.make(agentSurfaceRegistry["ssh.host_add"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_add"].description,
   parameters: SshHostAddInput,
-  success: SshHostResult,
+  success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_add"]));
 const SshHostPrepareTool = Tool.make(agentSurfaceRegistry["ssh.host_prepare"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_prepare"].description,
   parameters: SshHostPrepareInput,
-  success: SshHostResult,
+  success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_prepare"]));
 const SshHostForgetTool = Tool.make(agentSurfaceRegistry["ssh.host_forget"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.host_forget"].description,
   parameters: SshHostForgetInput,
-  success: SshHostResult,
+  success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.host_forget"]));
 const SshRuntimeUpdateTool = Tool.make(agentSurfaceRegistry["ssh.runtime_update"].name, {
   ...shared,
   description: agentSurfaceRegistry["ssh.runtime_update"].description,
   parameters: SshRuntimeUpdateInput,
-  success: SshHostResult,
+  success: SshHostResultJson,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.runtime_update"]));
 
 const SshBrowseTool = Tool.make(agentSurfaceRegistry["ssh.browse"].name, {

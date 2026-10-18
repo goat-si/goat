@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
+import * as ErrorReporter from "effect/ErrorReporter";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { FetchHttpClient } from "effect/http";
 import {
@@ -50,7 +53,13 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as SshHandlers from "./handlers.ts";
 import { SshToolkit } from "./tools.ts";
 
-const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
+const decodeSshHostResult = Schema.decodeUnknownEffect(Schema.toCodecJson(SshHostResult));
+const decodeStructuredJson = Schema.decodeUnknownEffect(Schema.Json);
+const decodeFailureText = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodedMcpFailure = (response: McpSchema.CallToolResult) =>
+  response.content.map((item) =>
+    item.type === "text" ? Option.getOrElse(decodeFailureText(item.text), () => item.text) : item,
+  );
 
 type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["register"]>[0];
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
@@ -1160,6 +1169,13 @@ const runtimeFixture = (
 ) => {
   const updates: { host: string; confirmReplacement: boolean }[] = [];
   let statusReads = 0;
+  const defects: string[] = [];
+  const reporter: ErrorReporter.ErrorReporter = {
+    [ErrorReporter.TypeId]: ErrorReporter.TypeId,
+    report: ({ cause }) => {
+      defects.push(Cause.pretty(cause));
+    },
+  };
   const handoffs: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
   const run = projection.runs[0]!;
   const callerProjection = {
@@ -1231,6 +1247,7 @@ const runtimeFixture = (
         }),
       ),
     ),
+    Layer.provide(ErrorReporter.layer([reporter])),
     Layer.provide(dependencies),
   );
   const call = (
@@ -1251,7 +1268,7 @@ const runtimeFixture = (
       Effect.provideService(McpSchema.McpServerClient, client),
       Effect.provide(registered),
     );
-  return { registered, call, updates, handoffs, statusReads: () => statusReads };
+  return { registered, call, updates, handoffs, defects, statusReads: () => statusReads };
 };
 
 it.effect("discovers both runtime tools", () =>
@@ -1354,7 +1371,16 @@ it.effect.each([false, true])(
           ...(insideThread ? { ...scope, environmentId: EnvironmentId.make("owner") } : {}),
         },
       );
-      expect(response.isError, JSON.stringify(response.content)).toBe(false);
+      expect(
+        response.isError,
+        JSON.stringify({ failure: decodedMcpFailure(response), defects: f.defects }),
+      ).toBe(false);
+      if (insideThread) {
+        expect(response.structuredContent).toMatchObject({
+          handoff: { expiresAt: expect.any(String) },
+        });
+        yield* decodeStructuredJson(response.structuredContent);
+      }
       const result = yield* decodeSshHostResult(response.structuredContent);
       expect(result).toMatchObject(
         insideThread
