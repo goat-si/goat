@@ -1,3 +1,6 @@
+import * as Context from "effect/Context";
+import * as FileSystem from "effect/FileSystem";
+import * as ServerConfig from "../config.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import { AuthSessionId, type AuthClientSession } from "@goat/contracts";
 import * as Environment from "../environment/ServerEnvironment.ts";
@@ -503,7 +506,16 @@ it.effect(
   () =>
     withHarness(({ orchestrator, worker }) =>
       Effect.gen(function* () {
-        const stored = new Map<string, Uint8Array>();
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-handoff-store-" });
+        const store = Context.get(
+          yield* Layer.build(
+            SecretStore.layer.pipe(
+              Layer.provide(ServerConfig.layerTest(home, { prefix: "ssh-handoff-store-" })),
+            ),
+          ),
+          SecretStore.ServerSecretStore,
+        );
         const now = yield* DateTime.now;
         const sessionId = AuthSessionId.make("ssh-reviewer");
         let permissions: AuthClientSession["scopes"] = [
@@ -540,28 +552,7 @@ it.effect(
               ]),
           }),
           Layer.mock(SecretRequests.SecretRequests)({}),
-          Layer.mock(SecretStore.ServerSecretStore)({
-            get: (name) => Effect.sync(() => Option.fromNullishOr(stored.get(name))),
-            set: (name, value) =>
-              Effect.sync(() => {
-                stored.set(name, value);
-              }),
-            create: (name, value) =>
-              Effect.sync(() => {
-                assert.isFalse(stored.has(name));
-                stored.set(name, value);
-              }),
-            getOrCreateRandom: (name, size) =>
-              Effect.sync(() => {
-                const bytes = stored.get(name) ?? new Uint8Array(size).fill(5);
-                stored.set(name, bytes);
-                return bytes;
-              }),
-            remove: (name) =>
-              Effect.sync(() => {
-                stored.delete(name);
-              }),
-          }),
+          Layer.succeed(SecretStore.ServerSecretStore, store),
         );
         const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
         const environmentId = EnvironmentId.make("ssh-origin");
@@ -609,7 +600,9 @@ it.effect(
           assert.lengthOf(yield* service.completedSshContinuations, 0);
           assert.deepEqual(yield* service.readSshProgressBinding(input, sessionId), binding);
           assert.isNull((yield* service.open(input, sessionId)).human);
-          for (const value of stored.values()) {
+          assert.isDefined(store.directory);
+          for (const file of yield* fs.readDirectory(store.directory!)) {
+            const value = yield* fs.readFile(`${store.directory!}/${file}`);
             assert.notInclude(new TextDecoder().decode(value), "private-review");
             assert.notInclude(new TextDecoder().decode(value), "private-args");
           }

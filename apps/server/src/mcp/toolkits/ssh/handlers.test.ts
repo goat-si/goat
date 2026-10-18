@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
+import * as DateTime from "effect/DateTime";
+import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { FetchHttpClient } from "effect/http";
 import {
   dependencies as setupDependencies,
@@ -17,6 +19,8 @@ import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  TurnItemId,
+  handoffSummary,
   EnvironmentAuthorizationError,
   ProjectId,
   ProviderInstanceId,
@@ -1156,12 +1160,41 @@ const runtimeFixture = (
 ) => {
   const updates: { host: string; confirmReplacement: boolean }[] = [];
   let statusReads = 0;
+  const handoffs: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
+  const run = projection.runs[0]!;
+  const callerProjection = {
+    ...projection,
+    thread: { ...projection.thread, id: threadId },
+    runs: projection.runs.map((entry) => ({ ...entry, threadId })),
+  };
   const dependencies = Layer.mergeAll(
     setupDependencies,
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadSnapshot: () =>
-        Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection }),
-      getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
+        Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection: callerProjection }),
+      getThreadShell: () => Effect.succeed(liveThreadShell(threadId, { activeRunId: run.id })),
+    }),
+    Layer.mock(Handoffs.Handoffs)({
+      create: (input) =>
+        Effect.gen(function* () {
+          handoffs.push(input);
+          expect(input.requestedBy.threadId).toBe(threadId);
+          expect(input.runId).toBe(run.id);
+          expect(input.nodeId).toBe(run.rootNodeId);
+          return handoffSummary({
+            handoffId: TurnItemId.make("runtime-approval"),
+            kind: input.kind,
+            title: input.title,
+            reason: input.reason,
+            requestedBy: input.requestedBy,
+            target: input.target,
+            dedupeKey: "runtime-approval",
+            state: "pending",
+            expiresAt: input.expiresAt ?? null,
+            createdAt: yield* DateTime.now,
+            actor: { type: "agent", threadId },
+          });
+        }),
     }),
     Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
       publishSetupOutcome: () => Effect.succeed(true),
@@ -1188,7 +1221,16 @@ const runtimeFixture = (
   );
   const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
     Layer.provideMerge(McpServer.McpServer.layer),
-    Layer.provide(SshHostSetup.layer),
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          // The approval producer reads managed alias metadata; never consult the runner's real SSH home.
+          const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-runtime-tools-" });
+          return Layer.effect(SshHostSetup.SshHostSetup, SshHostSetup.make({ home }));
+        }),
+      ),
+    ),
     Layer.provide(dependencies),
   );
   const call = (
@@ -1209,7 +1251,7 @@ const runtimeFixture = (
       Effect.provideService(McpSchema.McpServerClient, client),
       Effect.provide(registered),
     );
-  return { registered, call, updates, statusReads: () => statusReads };
+  return { registered, call, updates, handoffs, statusReads: () => statusReads };
 };
 
 it.effect("discovers both runtime tools", () =>
@@ -1309,10 +1351,10 @@ it.effect.each([false, true])(
         { host: "box", mode: "now" },
         {
           ...runtimeScope,
-          ...(insideThread ? { thread: scope.thread, client: undefined } : {}),
+          ...(insideThread ? { ...scope, environmentId: EnvironmentId.make("owner") } : {}),
         },
       );
-      expect(response.isError).toBe(false);
+      expect(response.isError, JSON.stringify(response.content)).toBe(false);
       const result = yield* decodeSshHostResult(response.structuredContent);
       expect(result).toMatchObject(
         insideThread
@@ -1326,6 +1368,15 @@ it.effect.each([false, true])(
               },
             },
       );
+      expect(f.handoffs).toHaveLength(insideThread ? 1 : 0);
+      if (insideThread)
+        expect(f.handoffs[0]).toMatchObject({
+          kind: "approval",
+          target: { environmentId: EnvironmentId.make("owner"), path: "ssh.runtime_update" },
+          requestedBy: { threadId },
+          runId: projection.runs[0]!.id,
+          nodeId: projection.runs[0]!.rootNodeId,
+        });
       expect(f.updates).toEqual([]);
       expect(f.statusReads()).toBe(insideThread ? 1 : 0);
     }),
