@@ -20,6 +20,7 @@ export const fixture = (
     readonly credential?: string;
     readonly modelsStatus?: number;
     readonly cliPid?: number;
+    readonly cliOutput?: string;
     readonly linkRole?: string;
     readonly ready?: string;
     readonly response?: () => Response;
@@ -83,7 +84,7 @@ export const fixture = (
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
-          stdout: Stream.encodeText(Stream.make(stdout)),
+          stdout: Stream.encodeText(Stream.make(options.cliOutput ?? stdout)),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,

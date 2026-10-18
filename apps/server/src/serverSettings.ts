@@ -2237,17 +2237,25 @@ const make = Effect.gen(function* () {
                 return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
               yield* routeState.value.validate(current, current, approval);
             }
-            if (
+            // Retry comparison uses the same envelope shape as a committed
+            // instance: legacy config.enabled lives on the envelope after save.
+            const canonicalInstance =
+              mutation.operation === "create"
+                ? foldProviderInstanceEnabledFlags(applyProviderInstanceMutation(current, mutation))
+                    .providerInstances[mutation.instanceId]
+                : undefined;
+            const effectiveMutation =
               mutation.operation === "create" &&
               current.providerInstances[mutation.instanceId] !== undefined &&
+              canonicalInstance !== undefined &&
               CodexRoute.instanceFingerprint(current.providerInstances[mutation.instanceId]) ===
-                CodexRoute.instanceFingerprint(mutation.instance)
-            )
-              mutation = { ...mutation, operation: "upsert" };
+                CodexRoute.instanceFingerprint(canonicalInstance)
+                ? { ...mutation, operation: "upsert" as const, instance: canonicalInstance }
+                : mutation;
             yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-            yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
+            yield* ensureProviderInstanceMutationAllowed(current, effectiveMutation, settingsPath);
             const patched = applyServerSettingsPatch(current, patch);
-            return applyProviderInstanceMutation(patched, mutation);
+            return applyProviderInstanceMutation(patched, effectiveMutation);
           }),
         [mutation.instanceId],
       ),

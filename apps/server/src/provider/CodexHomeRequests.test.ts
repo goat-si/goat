@@ -1,6 +1,12 @@
+import * as HostProcess from "@goat/shared/HostProcess";
+import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
   CodexSettings,
+  MessageId,
+  NodeId,
+  RunId,
+  handoffSummary,
   Handoff,
   ProviderDriverKind,
   ThreadId,
@@ -79,12 +85,51 @@ const approval = (action: ProviderHomeRequestAction) =>
     const read = yield* Deferred.make<void>();
     const resume = yield* Deferred.make<void>();
     let finished = 0;
+    const created: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
+    const threadId = handoff.requestedBy.threadId;
+    const projection = {
+      ...idleThreadProjection(liveThreadShell(threadId)),
+      runs: [
+        {
+          id: RunId.make("request-run"),
+          threadId,
+          ordinal: 1,
+          providerInstanceId: instanceId,
+          modelSelection: { instanceId, model: "test" },
+          providerThreadId: null,
+          userMessageId: MessageId.make("request-message"),
+          rootNodeId: NodeId.make("request-node"),
+          activeAttemptId: null,
+          status: "running" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+          memoryGrantCeiling: "none" as const,
+        },
+      ],
+    };
     const dependencies = Layer.mergeAll(
       Layer.succeed(Environment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(environmentId),
       }),
-      Layer.mock(Threads.ThreadManagementService)({}),
+      Layer.mock(Threads.ThreadManagementService)({
+        getThreadSnapshot: () =>
+          Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection }),
+      }),
       Layer.mock(Handoffs.Handoffs)({
+        create: (input) =>
+          Effect.sync(() => {
+            created.push(input);
+            return handoffSummary({
+              ...handoff,
+              kind: input.kind,
+              title: input.title,
+              state: "pending",
+              expiresAt: input.expiresAt ?? null,
+            });
+          }),
         completedProviderHomeContinuations: Effect.succeed([
           { handoff, args, approvedBySessionId: sessionId },
         ]),
@@ -105,7 +150,7 @@ const approval = (action: ProviderHomeRequestAction) =>
       yield* Layer.build(HomeRequests.layer.pipe(Layer.provide(dependencies))),
       HomeRequests.CodexHomeRequests,
     );
-    return { routes, requests, read, resume, instance, finished: () => finished };
+    return { routes, requests, read, resume, instance, created, finished: () => finished };
   });
 it.effect(
   "preserves a competing UI edit when approval admission resumes after the executor read",
@@ -174,4 +219,48 @@ it.effect("rejects an outside-thread request without creating a fake approval", 
     if (result.kind === "error") assert.equal(result.code, "unsupported");
     assert.equal(f.finished(), 0);
   }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each(["connect", "disconnect"] as const)(
+  "explains the exact %s account consequence before creating an approval",
+  (action) =>
+    Effect.gen(function* () {
+      const f = yield* approval(action);
+      const before = yield* f.routes.capture(instanceId);
+      const result = yield* f.requests
+        .request(
+          { instanceId, action },
+          {
+            environmentId,
+            readOnly: false,
+            capabilities: new Set(["orchestration"]),
+            issuedAt: 0,
+            requestNamespace: "approval-copy",
+            thread: {
+              threadId: ThreadId.make("owner-thread"),
+              providerInstanceId: instanceId,
+              providerSessionId: "source-session",
+            },
+            client: undefined,
+            grantedScopes: ["orchestration:operate"],
+            reauthorize: () => Effect.void,
+          },
+        )
+        .pipe(Effect.provideService(HostProcess.Hostname, "vps-1"));
+      assert.equal(result.kind, "needs_human");
+      assert.equal(f.created.length, 1);
+      assert.equal(
+        f.created[0]?.reason,
+        action === "connect"
+          ? "An agent asked to route this Codex instance through OpenCodex Home."
+          : "An agent asked to stop routing this Codex instance through OpenCodex Home.",
+      );
+      assert.equal(
+        f.created[0]?.human.location,
+        action === "connect"
+          ? "Approved A on vps-1 will send model requests through OpenCodex Home and use its accounts. If Home is unavailable, it stops instead of switching accounts."
+          : "Approved A on vps-1 goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on vps-1 to disconnect it.",
+      );
+      assert.deepStrictEqual(yield* f.routes.capture(instanceId), before);
+    }).pipe(Effect.provide(layer)),
 );

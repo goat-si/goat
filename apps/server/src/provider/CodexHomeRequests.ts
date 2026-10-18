@@ -112,13 +112,18 @@ const make = Effect.gen(function* () {
         expectedRevision: snapshot.revision,
         environmentId: scope.environmentId,
       };
+      const name = snapshot.instance.displayName ?? input.instanceId;
+      const host = yield* HostProcess.Hostname;
       const handoff = yield* handoffs.create({
         kind: "approval",
         title:
           input.action === "connect"
             ? "Use OpenCodex Home for this Codex instance?"
             : "Stop using OpenCodex Home?",
-        reason: "Review the Codex instance and execution host before changing its model route.",
+        reason:
+          input.action === "connect"
+            ? "An agent asked to route this Codex instance through OpenCodex Home."
+            : "An agent asked to stop routing this Codex instance through OpenCodex Home.",
         requestedBy: {
           threadId: scope.thread.threadId,
           providerInstanceId: scope.thread.providerInstanceId,
@@ -128,7 +133,10 @@ const make = Effect.gen(function* () {
         runId: run.id,
         nodeId: run.rootNodeId,
         human: {
-          location: `${snapshot.instance.displayName ?? input.instanceId} on ${yield* HostProcess.Hostname}: ${config.modelRoute} → ${input.action === "connect" ? "opencodex" : "default"}. ${input.action === "connect" ? "Connect OpenCodex on this host first. GOAT does not store link keys." : "This doesn't disconnect OpenCodex from Home. Run ocx disconnect on this host to do that."}`,
+          location:
+            input.action === "connect"
+              ? `${name} on ${host} will send model requests through OpenCodex Home and use its accounts. If Home is unavailable, it stops instead of switching accounts.`
+              : `${name} on ${host} goes back to Codex's own settings. OpenCodex stays connected to Home; run ocx disconnect on ${host} to disconnect it.`,
         },
         args: intent,
         expiresAt: DateTime.add(yield* DateTime.now, { minutes: 15 }),

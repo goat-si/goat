@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -7,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import * as HomeRoute from "./OpenCodexRoute.ts";
 import { fixture } from "./OpenCodexRoute.testkit.ts";
+const isRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 it.effect.each(["missing", "changed"])(
   "accepts a source-derived disconnected Home with %s client credentials through actual route verification",
   (credential) =>
@@ -46,7 +48,14 @@ it.effect.each([
   ({ expected, ...options }) =>
     Effect.gen(function* () {
       const { service, input } = yield* fixture(options);
-      assert.equal((yield* service.inspect(input)).state, expected);
+      const status = yield* service.inspect(input);
+      assert.equal(status.state, expected);
+      if (expected === "reconnecting") assert.equal(status.reason, "Reconnecting to Home…");
+      if (options.cliPid !== undefined)
+        assert.equal(
+          status.reason,
+          "OpenCodex on this machine uses a different address. Update the URL, then check status.",
+        );
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 it.effect(
@@ -150,16 +159,33 @@ it.effect("does not compose a Home route for managed Codex or probe default sett
     assert.deepStrictEqual(calls, []);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
-it.each([
+it.effect.each([
+  "not a URL",
   "http://127.0.0.1:0/v1",
   "http://127.0.0.1:10100/other",
   "https://127.0.0.1:10100/v1",
   "http://example.com/v1",
   "http://user:password@localhost:10100/v1",
   "http://localhost:10100/v1?token=hidden",
-])("rejects a non-loopback or credential-bearing Home URL: %s", (url) => {
-  assert.throws(() => HomeRoute.normalizeOpenCodexBaseUrl(url));
-});
+])("rejects a non-loopback or credential-bearing Home URL: %s", (url) =>
+  Effect.gen(function* () {
+    const result = yield* Effect.try({
+      try: () => HomeRoute.normalizeOpenCodexBaseUrl(url),
+      catch: (error) =>
+        isRouteUnavailable(error)
+          ? error
+          : new HomeRoute.OpenCodexRouteUnavailable({
+              detail: "Unexpected address validation error",
+            }),
+    }).pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure")
+      assert.equal(
+        result.failure.detail,
+        "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.",
+      );
+  }),
+);
 
 it.effect("shares in-flight probes and keeps explicit refresh fresh", () =>
   Effect.gen(function* () {
@@ -223,5 +249,51 @@ it.effect("cancels a models body that does not finish before its deadline", () =
     yield* TestClock.adjust("16 seconds");
     assert.equal((yield* Fiber.join(probe)).state, "failed");
     assert.isTrue(cancelled);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { name: "redirect", response: () => new Response(null, { status: 302 }) },
+  { name: "HTTP rejection", response: () => new Response("{}", { status: 401 }) },
+  { name: "failed readiness", response: () => new Response("{}", { status: 503 }) },
+  { name: "invalid JSON", response: () => new Response("invalid response") },
+  { name: "invalid model structure", response: () => new Response('{"data":[{}]}') },
+  {
+    name: "oversized response",
+    response: () =>
+      new Response("", { headers: { "content-length": String(128 * 1024 * 1024 + 1) } }),
+  },
+])("uses one endpoint recovery reason for $name", ({ response }) =>
+  Effect.gen(function* () {
+    const f = yield* fixture({ response });
+    const status = yield* f.service.inspect(f.input);
+    assert.equal(status.state, "failed");
+    assert.equal(
+      status.reason,
+      "OpenCodex didn't answer correctly at http://127.0.0.1:10100/v1. Check that OpenCodex is running, then check status.",
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("explains unavailable CLI status without exposing parser details", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture({ cliOutput: "invalid CLI status" });
+    const status = yield* f.service.inspect(f.input);
+    assert.equal(status.state, "failed");
+    assert.equal(
+      status.reason,
+      "Couldn't read OpenCodex status. Check that OpenCodex is running, then check status.",
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+it.effect("uses the endpoint recovery reason when readiness reports failure", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture({ ready: "failed" });
+    const status = yield* f.service.inspect(f.input);
+    assert.equal(status.state, "failed");
+    assert.equal(
+      status.reason,
+      "OpenCodex didn't answer correctly at http://127.0.0.1:10100/v1. Check that OpenCodex is running, then check status.",
+    );
   }).pipe(Effect.provide(NodeServices.layer)),
 );

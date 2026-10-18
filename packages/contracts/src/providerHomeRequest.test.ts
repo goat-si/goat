@@ -6,7 +6,11 @@ import * as Schema from "effect/Schema";
 import { ProviderHomeRequestInput, ProviderHomeRequestResultJson } from "./providerHomeRequest.ts";
 
 const inputCodec = Schema.toCodecJson(ProviderHomeRequestInput);
-const decodeInput = Schema.decodeUnknownSync(inputCodec);
+// Excess-property handling is a decoder option, not a schema annotation.
+const decodeInput = Schema.decodeUnknownSync(inputCodec, { onExcessProperty: "error" });
+const decodeRawInput = Schema.decodeUnknownSync(ProviderHomeRequestInput, {
+  onExcessProperty: "error",
+});
 const encodeInput = Schema.encodeSync(inputCodec);
 const decodeResult = Schema.decodeUnknownSync(ProviderHomeRequestResultJson);
 const encodeResult = Schema.encodeSync(ProviderHomeRequestResultJson);
@@ -52,9 +56,9 @@ describe("OpenCodex Home approval request codecs", () => {
         { expectedFingerprint: "server-private" },
         { expectedRevision: "server-private" },
       ]) {
-        expect(() =>
-          decodeInput({ instanceId: "codex_home", action: "connect", ...extra }),
-        ).toThrow();
+        const input = { instanceId: "codex_home", action: "connect", ...extra };
+        expect(() => decodeInput(input)).toThrow();
+        expect(() => decodeRawInput(input)).toThrow();
       }
       expect(() => decodeInput({ action: "connect" })).toThrow();
       expect(() => decodeInput({ instanceId: "codex_home", action: "approve" })).toThrow();

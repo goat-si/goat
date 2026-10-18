@@ -45,6 +45,11 @@ export const instanceFingerprint = (instance: unknown) =>
       ) ?? "null",
     )
     .digest("hex");
+class ProviderInstanceBusyError extends ServerSettingsError {
+  override get message() {
+    return "Wait for this instance's active turns to finish before changing its model route.";
+  }
+}
 class RouteSettingsError extends ServerSettingsError {
   declare readonly explanation: string;
   static explained(explanation: string) {
@@ -180,7 +185,7 @@ const makeState = Effect.gen(function* () {
             routeKey(current.providerInstances[id]) !== routeKey(next.providerInstances[id]) &&
             (leases.get(id) ?? 0) > 0
           )
-            return yield* new ServerSettingsError({
+            return yield* new ProviderInstanceBusyError({
               settingsPath: "<provider-route>",
               operation: "normalize",
               providerInstanceId: id,

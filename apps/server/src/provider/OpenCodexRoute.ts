@@ -49,15 +49,25 @@ const connectionRefused = (error: unknown, depth = 0): boolean => {
       ))
   );
 };
-const STATUS_UNAVAILABLE = "Could not read OpenCodex status";
-const MISMATCH = "OpenCodex status does not match the selected endpoint";
-const TEMPORARY = "Home temporarily unavailable. Check OpenCodex and try again";
+const STATUS_UNAVAILABLE =
+  "Couldn't read OpenCodex status. Check that OpenCodex is running, then check status.";
+const MISMATCH =
+  "OpenCodex on this machine uses a different address. Update the URL, then check status.";
+const TEMPORARY = "Reconnecting to Home…";
+const INVALID_ADDRESS = "Enter a local OpenCodex address such as http://127.0.0.1:10100/v1.";
+const endpointFailureReason = (baseUrl: string) =>
+  `OpenCodex didn't answer correctly at ${baseUrl}. Check that OpenCodex is running, then check status.`;
 const CATALOG_MISSING = "Could not find OpenCodex's model catalog";
 const CONFIG_UNVERIFIED = "Could not verify the effective Codex endpoint.";
 
 /** Only a host-local, credential-free API can be used as a Home route. */
 export function normalizeOpenCodexBaseUrl(value: string): string {
-  const url = new URL(value.trim() || DEFAULT_OPENCODEX_BASE_URL);
+  let url: URL;
+  try {
+    url = new URL(value.trim() || DEFAULT_OPENCODEX_BASE_URL);
+  } catch {
+    throw unavailable(INVALID_ADDRESS);
+  }
   if (
     url.protocol !== "http:" ||
     !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
@@ -68,7 +78,7 @@ export function normalizeOpenCodexBaseUrl(value: string): string {
     !["/v1", "/v1/"].includes(url.pathname) ||
     Number(url.port || 80) === 0
   )
-    throw unavailable("OpenCodex Home needs a loopback HTTP URL without credentials");
+    throw unavailable(INVALID_ADDRESS);
   return url.toString().replace(/\/+$/, "");
 }
 export const codexRouteEnvironment = (
@@ -102,7 +112,7 @@ export const resolveCodexRouteContext = (input: {
     );
     const environment = yield* Effect.try({
       try: () => codexRouteEnvironment(input.settings, { ...input.environment, CODEX_HOME: home }),
-      catch: (error) => (isUnavailable(error) ? error : unavailable("Invalid OpenCodex Home URL")),
+      catch: (error) => (isUnavailable(error) ? error : unavailable(INVALID_ADDRESS)),
     });
     return {
       settings: input.settings,
@@ -303,7 +313,7 @@ const make = Effect.gen(function* () {
       Effect.timeout("5 seconds"),
       Effect.mapError(() => unavailable(STATUS_UNAVAILABLE)),
     );
-  const json = (url: string, models = false) =>
+  const json = (url: string, baseUrl: string, models = false) =>
     Effect.scoped(
       Effect.gen(function* () {
         const response = yield* http.execute(HttpClientRequest.get(url)).pipe(
@@ -360,27 +370,35 @@ const make = Effect.gen(function* () {
               : "OpenCodex endpoint rejected the request",
           );
         }
+        if (models)
+          yield* decodeModels(body).pipe(
+            Effect.mapError(() => unavailable("OpenCodex response was invalid")),
+          );
+        else
+          yield* decodeHealth(body).pipe(
+            Effect.mapError(() => unavailable("OpenCodex response was invalid")),
+          );
         return body;
       }),
     ).pipe(
       Effect.timeout(models ? "15 seconds" : "5 seconds"),
-      Effect.mapError((error) =>
-        isUnavailable(error)
-          ? error
-          : connectionRefused(error)
-            ? new OpenCodexRouteUnavailable({
-                detail: "Could not read the selected OpenCodex endpoint",
-                code: "connection_refused",
-              })
-            : unavailable("Could not read the selected OpenCodex endpoint"),
-      ),
+      Effect.catch((error) => {
+        if (isUnavailable(error) && error.detail === TEMPORARY) return Effect.fail(error);
+        const failure = new OpenCodexRouteUnavailable({
+          detail: endpointFailureReason(baseUrl),
+          ...(connectionRefused(error) ? { code: "connection_refused" as const } : {}),
+        });
+        return Effect.logDebug("OpenCodex endpoint probe failed", {
+          detail: isUnavailable(error) ? error.detail : "Endpoint transport or response failed",
+        }).pipe(Effect.andThen(Effect.fail(failure)));
+      }),
     );
   const launchArgs = (input: RouteInput) =>
     Effect.gen(function* () {
       if (input.settings.modelRoute !== "opencodex") return [];
       const baseUrl = yield* Effect.try({
         try: () => normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl),
-        catch: () => unavailable("Invalid OpenCodex Home URL"),
+        catch: () => unavailable(INVALID_ADDRESS),
       });
       const selected = yield* catalog(input);
       return [
@@ -397,11 +415,11 @@ const make = Effect.gen(function* () {
       if (input.settings.modelRoute !== "opencodex") return { modelRoute: "default" as const };
       const base = yield* Effect.try({
         try: () => normalizeOpenCodexBaseUrl(input.settings.opencodexBaseUrl),
-        catch: () => unavailable("Invalid OpenCodex Home URL"),
+        catch: () => unavailable(INVALID_ADDRESS),
       });
       const origin = new URL(base).origin;
       const selected = yield* catalog(input);
-      const observed = yield* json(`${origin}/healthz`).pipe(
+      const observed = yield* json(`${origin}/healthz`, base).pipe(
         Effect.flatMap(decodeHealth),
         Effect.result,
       );
@@ -429,7 +447,7 @@ const make = Effect.gen(function* () {
         return yield* error;
       }
       const health = observed.success;
-      const ready = yield* json(`${origin}/readyz`).pipe(Effect.flatMap(decodeHealth));
+      const ready = yield* json(`${origin}/readyz`, base).pipe(Effect.flatMap(decodeHealth));
       if (
         health.pid !== ready.pid ||
         health.port !== ready.port ||
@@ -439,7 +457,11 @@ const make = Effect.gen(function* () {
         health.port !== Number(new URL(base).port || 80)
       )
         return yield* unavailable(MISMATCH);
-      if (ready.status !== "ready") return yield* unavailable(TEMPORARY);
+      if (ready.status === "pending") return yield* unavailable(TEMPORARY);
+      if (ready.status !== "ready")
+        return yield* Effect.logDebug("OpenCodex endpoint probe failed", {
+          detail: "OpenCodex readiness failed",
+        }).pipe(Effect.andThen(Effect.fail(unavailable(endpointFailureReason(base)))));
       const key = encodeCacheKey([
         origin,
         health.pid,
@@ -491,8 +513,8 @@ const make = Effect.gen(function* () {
             reason: "OpenCodex is not linked to Home",
           };
       }
-      yield* json(`${base}/models`, true).pipe(Effect.flatMap(decodeModels));
-      const after = yield* json(`${origin}/healthz`).pipe(Effect.flatMap(decodeHealth));
+      yield* json(`${base}/models`, base, true).pipe(Effect.flatMap(decodeModels));
+      const after = yield* json(`${origin}/healthz`, base).pipe(Effect.flatMap(decodeHealth));
       if (
         after.pid !== health.pid ||
         after.port !== health.port ||

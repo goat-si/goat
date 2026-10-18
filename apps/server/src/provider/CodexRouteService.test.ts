@@ -1,3 +1,4 @@
+import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
@@ -65,7 +66,13 @@ it.effect("rejects route changes with provider_instance_busy while a Codex sessi
       )
       .pipe(Effect.result);
     assert.equal(result._tag, "Failure");
-    if (result._tag === "Failure") assert.equal(result.failure.code, "provider_instance_busy");
+    if (result._tag === "Failure") {
+      assert.equal(result.failure.code, "provider_instance_busy");
+      assert.equal(
+        result.failure.message,
+        "Wait for this instance's active turns to finish before changing its model route.",
+      );
+    }
     assert.equal(yield* fs.readFileString(config.settingsPath), before);
     yield* Scope.close(scope, Exit.void);
     const saved = yield* commitAndApply(
@@ -215,13 +222,46 @@ it.effect(
         (yield* Effect.scoped(routes.reserveUse(instanceId)).pipe(Effect.result))._tag,
         "Failure",
       );
-      const retry = yield* create.pipe(Effect.forkScoped);
       if (Option.isNone(event)) return;
+      const retryWaiting = yield* Deferred.make<
+        void,
+        import("@goat/contracts").ServerSettingsError
+      >();
+      const retryFinished = yield* Deferred.make<void>();
+      const awaitApplied = state.awaitApplied;
+      const observedWait = vi
+        .spyOn(state, "awaitApplied")
+        .mockImplementation((ids) =>
+          Deferred.succeed(retryWaiting, undefined).pipe(Effect.andThen(awaitApplied(ids))),
+        );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          observedWait.mockRestore();
+        }),
+      );
+      const retry = yield* create.pipe(
+        Effect.tapError((error) => Deferred.fail(retryWaiting, error)),
+        Effect.tap(() => Deferred.succeed(retryFinished, undefined)),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(retryWaiting);
+      assert.isFalse(yield* Deferred.isDone(retryFinished));
+      assert.deepStrictEqual(state.revision(), event.value.revision);
+      yield* state.applied({
+        ...event.value.revision,
+        sequence: event.value.revision.sequence + 1,
+      });
+      assert.isFalse(yield* Deferred.isDone(retryFinished));
       yield* state.applied(event.value.revision);
       assert.equal(
         (yield* Fiber.join(retry)).providerInstances[instanceId]?.displayName,
         base.displayName,
       );
+      assert.deepStrictEqual(state.revision(), event.value.revision);
+      observedWait.mockRestore();
+      const alreadyApplied = yield* create;
+      assert.equal(alreadyApplied.providerInstances[instanceId]?.displayName, base.displayName);
+      assert.deepStrictEqual(state.revision(), event.value.revision);
     }).pipe(Effect.provide(layer)),
 );
 
@@ -251,16 +291,27 @@ it.effect("rechecks expiry and client permissions at commit before writing setti
       .pipe(Effect.result);
     assert.equal(expired._tag, "Failure");
     let checks = 0;
+    const checkingCommit = yield* Deferred.make<void>();
+    const resumeCommitCheck = yield* Deferred.make<void>();
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* Config.ServerConfig;
+    const before = yield* fs.readFileString(config.settingsPath);
     const restricted = Context.get(
       yield* Layer.build(
-        Routes.layer.pipe(
+        Layer.fresh(Routes.layer).pipe(
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(Sessions.SessionStore)({
                 cookieName: "test",
                 legacyCookieName: undefined,
                 listActive: () =>
-                  DateTime.now.pipe(Effect.map((now) => (++checks === 1 ? [session(now)] : []))),
+                  Effect.gen(function* () {
+                    checks++;
+                    if (checks === 1) return [session(yield* DateTime.now)];
+                    yield* Deferred.succeed(checkingCommit, undefined);
+                    yield* Deferred.await(resumeCommitCheck);
+                    return [];
+                  }),
               }),
               Layer.succeed(Environment.ServerEnvironmentIdentity, {
                 getEnvironmentId: Effect.succeed(environmentId),
@@ -271,7 +322,8 @@ it.effect("rechecks expiry and client permissions at commit before writing setti
       ),
       Routes.CodexRouteService,
     );
-    const denied = yield* restricted
+    assert.notStrictEqual(restricted, routes);
+    const denial = yield* restricted
       .mutateProviderInstance(
         {
           mutation: {
@@ -282,10 +334,38 @@ it.effect("rechecks expiry and client permissions at commit before writing setti
         },
         caller,
       )
-      .pipe(Effect.result);
-    assert.equal(denied._tag, "Failure");
+      .pipe(Effect.result, Effect.forkScoped);
+    yield* Deferred.await(checkingCommit);
     assert.equal(checks, 2);
+    assert.equal(yield* fs.readFileString(config.settingsPath), before);
+    yield* Deferred.succeed(resumeCommitCheck, undefined);
+    const denied = yield* Fiber.join(denial);
+    assert.equal(denied._tag, "Failure");
+    assert.equal(yield* fs.readFileString(config.settingsPath), before);
     assert.deepStrictEqual((yield* routes.capture(instanceId)).revision, approved.revision);
     assert.equal((yield* routes.capture(instanceId)).instance.displayName, base.displayName);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("rejects a conflicting create instead of replacing a canonical committed instance", () =>
+  Effect.gen(function* () {
+    const routes = yield* seed;
+    const before = yield* routes.capture(instanceId);
+    const conflict = yield* routes
+      .mutateProviderInstance(
+        {
+          mutation: {
+            operation: "create",
+            instanceId,
+            instance: { ...base, displayName: "Different create" },
+          },
+        },
+        caller,
+      )
+      .pipe(Effect.result);
+    assert.equal(conflict._tag, "Failure");
+    if (conflict._tag === "Failure")
+      assert.equal(conflict.failure.operation, "create-provider-instance");
+    assert.deepStrictEqual(yield* routes.capture(instanceId), before);
   }).pipe(Effect.provide(layer)),
 );

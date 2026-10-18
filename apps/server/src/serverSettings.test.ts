@@ -3186,7 +3186,12 @@ it.effect("preserves combined route and unrelated config updates in one settings
       ),
     );
     assert.equal(saved.worktreesDirectory, "/explicit-worktrees");
-    assert.deepStrictEqual(saved.providerInstances[HomeRouteFixture.instanceId]?.config, config);
+    const { enabled, ...expectedConfig } = config;
+    assert.equal(saved.providerInstances[HomeRouteFixture.instanceId]?.enabled, enabled);
+    assert.deepStrictEqual(
+      saved.providerInstances[HomeRouteFixture.instanceId]?.config,
+      expectedConfig,
+    );
   }).pipe(Effect.provide(HomeRouteFixture.layer)),
 );
 it.effect("rejects endpoint changes through a raw settings patch while a session is active", () =>

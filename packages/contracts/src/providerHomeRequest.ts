@@ -13,7 +13,7 @@ export const ProviderHomeRequestInput = Schema.Struct({
   instanceId: ProviderInstanceId,
   action: ProviderHomeRequestAction,
   opencodexBaseUrl: Schema.optionalKey(TrimmedString),
-}).annotate({ parseOptions: { onExcessProperty: "error" } });
+});
 export type ProviderHomeRequestInput = typeof ProviderHomeRequestInput.Type;
 
 /** Public summary only; approval sessions and mutation preconditions remain private. */
