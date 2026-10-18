@@ -1,4 +1,9 @@
-import { EnvironmentId, ProviderDriverKind, type AcpRegistrySearchAgent } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  DEFAULT_OPENCODEX_BASE_URL,
+  type AcpRegistrySearchAgent,
+} from "@goat/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
@@ -421,5 +426,89 @@ describe("AddProviderInstanceDialog environment routing", () => {
     await Promise.resolve();
     expect(settingsHooks.mutate).toHaveBeenCalledOnce();
     expect(actions.onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("OpenCodex Home routing", () => {
+  function homeDialog() {
+    hooks.beginRender();
+    return AddProviderInstanceDialog({
+      open: true,
+      environmentId: remoteEnvironmentId,
+      environmentLabel: "Remote device",
+      onOpenChange: actions.onOpenChange,
+      initialCodexRoute: "opencodex",
+    });
+  }
+  beforeEach(() => {
+    hooks.reset();
+    actions.canManageProviders = true;
+    actions.onOpenChange.mockReset();
+    actions.toast.mockReset();
+    settingsHooks.read.mockReset().mockReturnValue({ providerInstances: {} });
+    settingsHooks.mutate.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+    settingsHooks.useMutation.mockReset().mockReturnValue(settingsHooks.mutate);
+  });
+  it("creates the Home preset in the selected environment", async () => {
+    let tree = homeDialog();
+    (button(tree, "Next").props.onClick as () => void)();
+    tree = homeDialog();
+    (button(tree, "Add instance").props.onClick as () => void)();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
+    expect(settingsHooks.mutate).toHaveBeenCalledExactlyOnceWith({
+      operation: "create",
+      instanceId: "codex_home",
+      instance: {
+        driver: "codex",
+        enabled: true,
+        displayName: "Codex · OpenCodex Home",
+        config: {
+          setupMode: "existing",
+          modelRoute: "opencodex",
+          opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+        },
+      },
+    });
+  });
+  it("keeps the user home and rejects a duplicate instance id", async () => {
+    settingsHooks.read.mockReturnValue({
+      providerInstances: { codex_home: { driver: "codex", enabled: true } },
+    });
+    let tree = homeDialog();
+    (button(tree, "Next").props.onClick as () => void)();
+    expect(settingsHooks.mutate).not.toHaveBeenCalled();
+    tree = homeDialog();
+    const id = visitElements(tree, (entry) => entry.props.id === "add-provider-instance-id");
+    if (!id) throw new Error("Missing instance id input");
+    (id.props.onChange as (event: { target: { value: string } }) => void)({
+      target: { value: "codex_home_2" },
+    });
+    tree = homeDialog();
+    (button(tree, "Next").props.onClick as () => void)();
+    tree = homeDialog();
+    const form = visitElements(tree, (entry) => entry.props.idPrefix === "add-provider-codex");
+    if (!form) throw new Error("Missing Codex config editor");
+    (form.props.onChange as (config: Record<string, unknown>) => void)({
+      ...(form.props.value as Record<string, unknown>),
+      homePath: "/home/person/.codex",
+    });
+    tree = homeDialog();
+    (button(tree, "Add instance").props.onClick as () => void)();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settingsHooks.mutate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        instanceId: "codex_home_2",
+        instance: expect.objectContaining({
+          config: expect.objectContaining({
+            setupMode: "existing",
+            modelRoute: "opencodex",
+            homePath: "/home/person/.codex",
+          }),
+        }),
+      }),
+    );
   });
 });

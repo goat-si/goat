@@ -2,6 +2,9 @@ import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  openCodexRouteSummary,
+  openCodexHomeHandoff,
+  codexRouteErrorMessage,
   normalizeProviderAccentColor,
   providerInstanceInitials,
   resolveProviderInstanceDisplayName,
@@ -132,5 +135,77 @@ describe("shouldShowInstanceBadge", () => {
     const entry = { driverKind: codex, accentColor: undefined };
     const other = { driverKind: claude, accentColor: undefined };
     expect(shouldShowInstanceBadge(entry, [entry, other])).toBe(false);
+  });
+});
+
+describe("OpenCodex Home routing", () => {
+  it("keeps the Home route visible beside a custom name", () => {
+    expect(
+      resolveProviderInstanceDisplayName({
+        instanceId: ProviderInstanceId.make("codex_work"),
+        driver: codex,
+        displayName: "Work",
+        codexRoute: { modelRoute: "opencodex", state: "connected" },
+      }),
+    ).toBe("Work · OpenCodex Home");
+  });
+  it("does not duplicate the Home suffix", () => {
+    expect(
+      resolveProviderInstanceDisplayName({
+        instanceId: ProviderInstanceId.make("codex_home"),
+        driver: codex,
+        displayName: "Codex · OpenCodex Home",
+        codexRoute: { modelRoute: "opencodex" },
+      }),
+    ).toBe("Codex · OpenCodex Home");
+  });
+  it.each([
+    ["connected", "Home connected (home-mac)"],
+    ["home", "This machine is your OpenCodex Home."],
+    ["reconnecting", "Home temporarily unavailable. Check OpenCodex and try again."],
+    ["failed", "Home link failed: Login required"],
+    ["not_linked", "Not linked to Home."],
+    ["not_running", "OpenCodex isn't running on this machine."],
+  ] as const)("uses the adopted status copy: %s", (state, copy) => {
+    expect(
+      openCodexRouteSummary({
+        modelRoute: "opencodex",
+        state,
+        homeLabel: "home-mac",
+        reason: "Login required",
+      }),
+    ).toBe(copy);
+  });
+  it("shows the actual endpoint with Codex own settings", () => {
+    expect(
+      openCodexRouteSummary({
+        modelRoute: "default",
+        effectiveBaseUrl: "http://127.0.0.1:10100/v1",
+      }),
+    ).toBe("Uses Codex's own settings · http://127.0.0.1:10100/v1");
+    expect(openCodexRouteSummary({ modelRoute: "default" })).toContain("Endpoint not verified");
+  });
+  it("does not infer connected from a missing observation", () => {
+    expect(openCodexRouteSummary({ modelRoute: "opencodex" })).toBe(
+      "OpenCodex Home status not checked. Check status.",
+    );
+    expect(openCodexRouteSummary(undefined)).toBeUndefined();
+  });
+  it("hands connection setup to the named execution host", () => {
+    expect(
+      openCodexHomeHandoff({ environmentLabel: "vps-1", action: "connect" }).instruction,
+    ).toContain("On vps-1, open a terminal");
+    expect(openCodexHomeHandoff({ environmentLabel: "vps-1", action: "disconnect" })).toMatchObject(
+      {
+        command: "ocx disconnect",
+        instruction:
+          "This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` to do that.",
+      },
+    );
+  });
+  it("shows the recovery line for a server busy rejection", () => {
+    expect(codexRouteErrorMessage({ code: "provider_instance_busy" })).toBe(
+      "End this instance's active sessions before changing its model route.",
+    );
   });
 });

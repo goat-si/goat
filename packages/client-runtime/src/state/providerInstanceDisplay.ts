@@ -36,16 +36,21 @@ function humanizeSlug(slug: string): string {
  *   3. The snapshot's `displayName`, or the brand label from contracts.
  */
 export function resolveProviderInstanceDisplayName(
-  snapshot: Pick<ServerProvider, "instanceId" | "driver" | "displayName">,
+  snapshot: Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "codexRoute">,
 ): string {
   const trimmedSnapshotName = snapshot.displayName?.trim();
   const kindLabel = PROVIDER_DISPLAY_NAMES[snapshot.driver] ?? humanizeSlug(snapshot.driver);
-  if (trimmedSnapshotName && trimmedSnapshotName !== kindLabel) return trimmedSnapshotName;
-  if (snapshot.instanceId !== defaultInstanceIdForDriver(snapshot.driver)) {
-    const humanized = humanizeSlug(snapshot.instanceId);
-    if (humanized.length > 0) return humanized;
-  }
-  return trimmedSnapshotName || kindLabel;
+  const label =
+    trimmedSnapshotName && trimmedSnapshotName !== kindLabel
+      ? trimmedSnapshotName
+      : snapshot.instanceId !== defaultInstanceIdForDriver(snapshot.driver)
+        ? humanizeSlug(snapshot.instanceId) || trimmedSnapshotName || kindLabel
+        : trimmedSnapshotName || kindLabel;
+  return snapshot.driver === "codex" &&
+    snapshot.codexRoute?.modelRoute === "opencodex" &&
+    !label.endsWith("OpenCodex Home")
+    ? `${label} · OpenCodex Home`
+    : label;
 }
 
 /**
@@ -100,4 +105,61 @@ export function shouldShowInstanceBadge(
     if (++sharedProviderCount > 1) return true;
   }
   return false;
+}
+
+/** Observed route status; a missing snapshot never implies a working Home link. */
+export function openCodexRouteSummary(route: ServerProvider["codexRoute"]): string | undefined {
+  if (!route) return undefined;
+  if (route.modelRoute === "default") {
+    return `Uses Codex's own settings · ${route.effectiveBaseUrl ?? "Endpoint not verified"}`;
+  }
+  switch (route.state) {
+    case "connected":
+      return route.homeLabel ? `Home connected (${route.homeLabel})` : "Home connected";
+    case "home":
+      return "This machine is your OpenCodex Home.";
+    case "reconnecting":
+      return "Home temporarily unavailable. Check OpenCodex and try again.";
+    case "failed":
+      return `Home link failed: ${route.reason ?? "Check OpenCodex and try again."}`;
+    case "not_linked":
+      return "Not linked to Home.";
+    case "not_running":
+      return "OpenCodex isn't running on this machine.";
+    default:
+      return "OpenCodex Home status not checked. Check status.";
+  }
+}
+
+export function openCodexHomeHandoff(input: {
+  readonly environmentLabel: string;
+  readonly action: "connect" | "disconnect";
+}): { readonly title: string; readonly instruction: string; readonly command?: string } {
+  return input.action === "connect"
+    ? {
+        title: "Connect to Home",
+        instruction: `On ${input.environmentLabel}, open a terminal and complete OpenCodex's Remote Link setup for this host. Then return here and check status.`,
+      }
+    : {
+        title: "Stop using OpenCodex Home",
+        instruction:
+          "This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` to do that.",
+        command: "ocx disconnect",
+      };
+}
+
+export const CODEX_ROUTE_BUSY_MESSAGE =
+  "End this instance's active sessions before changing its model route.";
+
+export function codexRouteErrorMessage(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "provider_instance_busy"
+  )
+    return CODEX_ROUTE_BUSY_MESSAGE;
+  return error instanceof Error
+    ? error.message
+    : "Could not update the model route. Check status and try again.";
 }

@@ -1,3 +1,4 @@
+import { CodexHomeRouteStatus, includesProviderAccount } from "./CodexHomeRouteStatus";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -41,23 +42,24 @@ export function SettingsProviderAccountsRouteScreen() {
             selectedTargets.map((environment) => (
               <SettingsSection key={environment.environmentId} title={environment.label}>
                 {environment.serverConfig.providers
-                  .filter(
-                    (provider) =>
-                      provider.setup?.canAuthenticate ||
-                      (provider.driver === "acpRegistry" && provider.installed),
-                  )
-                  .map((provider) => (
-                    <ProviderAccount
-                      key={provider.instanceId}
-                      environment={environment}
-                      provider={provider}
-                    />
-                  ))}
-                {!environment.serverConfig.providers.some(
-                  (provider) =>
-                    provider.setup?.canAuthenticate ||
-                    (provider.driver === "acpRegistry" && provider.installed),
-                ) ? (
+                  .filter(includesProviderAccount)
+                  .map((provider) =>
+                    provider.driver === "codex" &&
+                    provider.codexRoute?.modelRoute === "opencodex" ? (
+                      <CodexHomeRouteStatus
+                        key={provider.instanceId}
+                        environment={environment}
+                        provider={provider}
+                      />
+                    ) : (
+                      <ProviderAccount
+                        key={provider.instanceId}
+                        environment={environment}
+                        provider={provider}
+                      />
+                    ),
+                  )}
+                {!environment.serverConfig.providers.some(includesProviderAccount) ? (
                   <Text className="p-4 text-foreground-muted">
                     Configure a provider with in-app sign-in in web or desktop Settings.
                   </Text>

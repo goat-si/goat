@@ -7,6 +7,8 @@ import { CheckIcon } from "~/components/solar";
 import { useMemo, useState } from "react";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
+  DEFAULT_OPENCODEX_BASE_URL,
+  type CodexModelRoute,
   type AcpRegistrySearchAgent,
   AuthProvidersManageScope,
   ProviderInstanceId,
@@ -101,6 +103,7 @@ interface AddProviderInstanceDialogProps {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly onOpenChange: (open: boolean) => void;
+  readonly initialCodexRoute?: CodexModelRoute | undefined;
   readonly onCreated?: (instanceId: ProviderInstanceId) => void;
 }
 
@@ -110,16 +113,26 @@ export function AddProviderInstanceDialog({
   environmentLabel,
   onOpenChange,
   onCreated,
+  initialCodexRoute,
 }: AddProviderInstanceDialogProps) {
   const settings = useEnvironmentSettings(environmentId);
   const persistProviderInstance = usePersistEnvironmentProviderInstanceMutation(environmentId);
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
 
-  const [wizardStep, setWizardStep] = useState(0);
+  const homePreset = initialCodexRoute === "opencodex";
+  const [wizardStep, setWizardStep] = useState(homePreset ? 1 : 0);
   const [addingChatGptAccount, setAddingChatGptAccount] = useState(false);
   const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
   const [identityByDriver, setIdentityByDriver] = useState<Record<string, ProviderIdentityDraft>>(
-    {},
+    homePreset
+      ? {
+          codex: {
+            label: "Codex · OpenCodex Home",
+            accentColor: "",
+            instanceIdOverride: "codex_home",
+          },
+        }
+      : {},
   );
   const [selectedAcp, setSelectedAcp] = useState<AcpRegistrySearchAgent | null>(null);
   const [localEnvironment, setLocalEnvironment] = useState<
@@ -130,12 +143,61 @@ export function AddProviderInstanceDialog({
   const [isPreparingRegistryAgent, setIsPreparingRegistryAgent] = useState(false);
   // Driver-specific config drafts keyed by driver so toggling between drivers
   // during the same dialog session does not lose in-progress input.
-  const [configByDriver, setConfigByDriver] = useState<Record<string, Record<string, unknown>>>({});
+  const [configByDriver, setConfigByDriver] = useState<Record<string, Record<string, unknown>>>(
+    homePreset
+      ? {
+          codex: {
+            setupMode: "existing",
+            modelRoute: "opencodex",
+            opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+          },
+        }
+      : {},
+  );
   // Errors are suppressed until the user has tried to submit once. After that
   // they update live so fixing the problem clears the message in place.
   const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [createdInstanceId, setCreatedInstanceId] = useState<ProviderInstanceId | null>(null);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setWizardStep(homePreset ? 1 : 0);
+      setAddingChatGptAccount(false);
+      setDriver(DEFAULT_DRIVER_KIND);
+      setIdentityByDriver(
+        homePreset
+          ? {
+              codex: {
+                label: "Codex · OpenCodex Home",
+                accentColor: "",
+                instanceIdOverride: "codex_home",
+              },
+            }
+          : {},
+      );
+      setConfigByDriver(
+        homePreset
+          ? {
+              codex: {
+                setupMode: "existing",
+                modelRoute: "opencodex",
+                opencodexBaseUrl: DEFAULT_OPENCODEX_BASE_URL,
+              },
+            }
+          : {},
+      );
+      setSelectedAcp(null);
+      setLocalEnvironment([]);
+      setIsManualAcpConfiguration(false);
+      setIsRegistryLoading(false);
+      setIsPreparingRegistryAgent(false);
+      setHasAttemptedSubmit(false);
+      setIsSaving(false);
+      setCreatedInstanceId(null);
+    }
+    onOpenChange(nextOpen);
+  };
 
   // Codex and Claude run at their default slots before they are configured, so
   // those ids stay reserved; other unconfigured default slots are free to take.
@@ -359,20 +421,20 @@ export function AddProviderInstanceDialog({
       title: "Provider instance added",
       description: `${driverOption.label} instance '${instanceId}' was added.`,
     });
-    onOpenChange(false);
+    handleOpenChange(false);
   };
 
   if (addingChatGptAccount) {
     return (
       <AddManagedCodexAccountDialog
         environmentId={environmentId}
-        onClose={() => onOpenChange(false)}
+        onClose={() => handleOpenChange(false)}
       />
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <WizardPopup size="wide">
         <WizardHeader
           title="Add provider"
@@ -405,7 +467,7 @@ export function AddProviderInstanceDialog({
             environmentId={environmentId}
             environmentLabel={environmentLabel}
             instanceId={createdInstanceId}
-            onFinish={() => onOpenChange(false)}
+            onFinish={() => handleOpenChange(false)}
           />
         ) : (
           <>
@@ -666,7 +728,7 @@ export function AddProviderInstanceDialog({
                 disabled={isSaving || isPreparingRegistryAgent}
                 onClick={() => {
                   if (wizardStep === 0) {
-                    onOpenChange(false);
+                    handleOpenChange(false);
                     return;
                   }
                   setWizardStep((step) => Math.max(0, step - 1));

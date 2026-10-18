@@ -18,28 +18,48 @@ const harness = vi.hoisted(() => ({
   open: vi.fn(),
   respond: vi.fn(),
   refresh: vi.fn(),
+  refreshProviders: vi.fn(),
+  scopeAllowed: true,
+  manage: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
   publish: (_registry: AtomRegistry.AtomRegistry, _value: SshHandoffProgressResult) => {},
 }));
 vi.mock("../../state/server", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   const allowed = Atom.make(true);
+  const canManage = Atom.make(true);
+  harness.manage = (registry, value) => {
+    harness.scopeAllowed = value;
+    registry.set(canManage, value);
+  };
   const progress = Atom.make<AtomAsyncResult.AsyncResult<SshHandoffProgressResult, never>>(
     AsyncResult.initial(),
   );
   harness.publish = (registry, value) => registry.set(progress, AsyncResult.success(value));
   return {
     serverEnvironment: Object.fromEntries(
-      ["openHandoff", "respondHandoff", "trustSshHost", "prepareSshHost"].map((label) => [
+      [
+        "openHandoff",
+        "respondHandoff",
+        "trustSshHost",
+        "prepareSshHost",
+        "mutateProviderInstance",
+        "refreshProviders",
+      ].map((label) => [
         label,
-        { label, permissionAtom: () => allowed },
+        { label, permissionAtom: () => (label === "mutateProviderInstance" ? canManage : allowed) },
       ]),
     ),
     sshHost: { handoffProgress: () => progress, refreshHandoffProgress: harness.refresh },
   };
 });
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => harness.scopeAllowed }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: { label: string }) =>
-    command.label === "openHandoff" ? harness.open : harness.respond,
+    command.label === "openHandoff"
+      ? harness.open
+      : command.label === "refreshProviders"
+        ? harness.refreshProviders
+        : harness.respond,
 }));
 import { HandoffCard } from "./HandoffCard";
 
@@ -93,7 +113,9 @@ beforeEach(() => {
     value: { human: { location: "Review vps-1 as ops", fingerprint: "SHA256:test-host-key" } },
   });
   harness.respond.mockReset().mockResolvedValue({ _tag: "Success", value: handoff });
+  harness.scopeAllowed = true;
   harness.refresh.mockReset();
+  harness.refreshProviders.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
 });
 afterEach(async () => {
   if (mounted) await act(async () => root.unmount());
@@ -414,3 +436,77 @@ it.each([
     expect(container.textContent).not.toContain("This approval expired.");
   },
 );
+
+describe("OpenCodex Home approval", () => {
+  const request = {
+    ...handoff,
+    title: "Use OpenCodex Home",
+    state: "pending" as const,
+    target: { environmentId: EnvironmentId.make("vps"), path: "provider.home_request" },
+  };
+  it.each(["connect", "disconnect"] as const)(
+    "reviews private %s instructions and refreshes the target without claiming application",
+    async (action) => {
+      harness.open.mockResolvedValue({
+        _tag: "Success",
+        value: { human: { location: `${action} on vps-1` } },
+      });
+      await render(request);
+      expect(container.textContent).not.toContain(`${action} on vps-1`);
+      await click("Review request");
+      expect(container.textContent).toContain(`${action} on vps-1`);
+      await click("Approve");
+      expect(harness.respond).toHaveBeenCalledWith({
+        environmentId,
+        input: {
+          threadId: handoff.requestedBy.threadId,
+          handoffId: handoff.handoffId,
+          action: "completed",
+        },
+      });
+      expect(harness.refreshProviders).toHaveBeenCalledWith({
+        environmentId: "vps",
+        input: { fresh: true, refreshModels: true },
+      });
+      expect(harness.refresh).not.toHaveBeenCalled();
+      await render({ ...request, state: "completed" });
+      expect(container.textContent).toContain("Review the model route in Settings");
+      expect(container.textContent).not.toContain("is ready for agents");
+    },
+  );
+  it.each([
+    ["Decline", "declined"],
+    ["Cancel request", "cancelled"],
+  ] as const)("sends %s without refreshing or applying a route", async (label, action) => {
+    await render(request);
+    await click(label);
+    expect(harness.respond).toHaveBeenCalledWith({
+      environmentId,
+      input: { threadId: handoff.requestedBy.threadId, handoffId: handoff.handoffId, action },
+    });
+    expect(harness.refreshProviders).not.toHaveBeenCalled();
+  });
+  it("removes private approval instructions after target permission is revoked", async () => {
+    await render(request);
+    await click("Review request");
+    expect(container.textContent).toContain("SHA256:test-host-key");
+    await act(async () => harness.manage(registry, false));
+    expect(container.textContent).not.toContain("SHA256:test-host-key");
+    await click("Review request");
+    expect(harness.open).toHaveBeenCalledTimes(1);
+    expect(harness.respond).not.toHaveBeenCalled();
+  });
+  it.each(["expired", "declined", "cancelled", "failed"] as const)(
+    "does not offer approval for a %s request",
+    async (state) => {
+      await render({ ...request, state });
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (button) => button.textContent === "Review request",
+        ),
+      ).toBe(false);
+      expect(harness.respond).not.toHaveBeenCalled();
+      expect(harness.refresh).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -14,6 +14,8 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import {
+  DEFAULT_OPENCODEX_BASE_URL,
+  type CodexModelRoute,
   defaultInstanceIdForDriver,
   implicitDefaultInstance,
   CLOUD_SIBLING_DRIVERS,
@@ -57,7 +59,7 @@ import {
 } from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useEnvironmentSessionState } from "../../state/session";
-import { useProjects, useServerConfigs } from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { getRelativeTimeState } from "../../timestampFormat";
 import {
@@ -91,6 +93,9 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { ensureLocalApi } from "../../localApi";
+import { readPrimaryEnvironmentTarget } from "../../environments/primary/target";
+import { CodexHomeRouteSection } from "./CodexHomeRouteSection";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
@@ -577,6 +582,14 @@ export function EnvironmentProviderSettings({
   readonly readOnly?: boolean;
 }) {
   const settings = useEnvironmentSettings(environmentId);
+  const threadShells = useThreadShells();
+  const { environments: routeEnvironments } = useEnvironments();
+  const routeEnvironment = routeEnvironments.find((entry) => entry.environmentId === environmentId);
+  const canOpenHomeDashboard =
+    routeEnvironment?.entry.target._tag === "PrimaryConnectionTarget" &&
+    typeof window !== "undefined" &&
+    window.desktopBridge !== undefined &&
+    readPrimaryEnvironmentTarget()?.source === "desktop-managed";
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
   const canRefreshProviders = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
@@ -607,6 +620,7 @@ export function EnvironmentProviderSettings({
   });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [initialCodexRoute, setInitialCodexRoute] = useState<CodexModelRoute | undefined>();
   const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | null>(
     targetInstanceId ?? null,
   );
@@ -840,6 +854,7 @@ export function EnvironmentProviderSettings({
     row: InstanceRow,
     next: ProviderInstanceConfig,
     options?: {
+      readonly throwOnFailure?: boolean;
       readonly textGenerationModelSelection?: Parameters<
         typeof buildProviderInstanceUpdatePatch
       >[0]["textGenerationModelSelection"];
@@ -857,6 +872,7 @@ export function EnvironmentProviderSettings({
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
+      if (options?.throwOnFailure) throw error;
       toastManager.add({
         type: "error",
         title: "Could not update provider instance",
@@ -1008,6 +1024,82 @@ export function EnvironmentProviderSettings({
           ) : undefined
         }
         canWriteSettings={canWriteSettings}
+        homeRoute={
+          mode === "editor" && row.driver === "codex" ? (
+            <CodexHomeRouteSection
+              key={row.instanceId}
+              environmentId={environmentId}
+              environmentLabel={environmentLabel}
+              instanceId={row.instanceId}
+              settings={{
+                setupMode: readCodexSetupMode(row.instance.config),
+                modelRoute:
+                  providerConfigString(row.instance.config, "modelRoute") === "opencodex"
+                    ? "opencodex"
+                    : "default",
+                opencodexBaseUrl:
+                  providerConfigString(row.instance.config, "opencodexBaseUrl") ??
+                  DEFAULT_OPENCODEX_BASE_URL,
+              }}
+              status={liveProvider?.codexRoute}
+              readOnly={readOnly}
+              active={threadShells.some(
+                (thread) =>
+                  thread.environmentId === environmentId &&
+                  thread.providerInstanceId === row.instanceId &&
+                  thread.runtime?.activeRunId != null,
+              )}
+              canRefresh={canRefreshProviders}
+              onChange={async (route) => {
+                if (!readEnvironmentScope(environmentId, AuthProvidersManageScope))
+                  throw new Error("Provider management permission is required.");
+                await updateProviderInstance(
+                  row,
+                  {
+                    ...row.instance,
+                    config: {
+                      ...(row.instance.config !== null && typeof row.instance.config === "object"
+                        ? row.instance.config
+                        : {}),
+                      ...route,
+                    },
+                  },
+                  { throwOnFailure: true },
+                );
+              }}
+              onRefresh={async () => {
+                const result = await refreshServerProviders({
+                  environmentId,
+                  input: { instanceId: row.instanceId, fresh: true, refreshModels: true },
+                });
+                if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+                  throw squashAtomCommandFailure(result);
+              }}
+              onOpenDashboard={
+                canOpenHomeDashboard
+                  ? async () => {
+                      const baseUrl =
+                        providerConfigString(row.instance.config, "opencodexBaseUrl") ||
+                        DEFAULT_OPENCODEX_BASE_URL;
+                      const url = new URL(baseUrl);
+                      if (
+                        url.protocol !== "http:" ||
+                        !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+                        url.username ||
+                        url.password
+                      )
+                        throw new Error("Use a loopback OpenCodex URL on this machine.");
+                      await ensureLocalApi().shell.openExternal(url.origin);
+                    }
+                  : undefined
+              }
+              onAddInstance={() => {
+                setInitialCodexRoute("opencodex");
+                setIsAddInstanceDialogOpen(true);
+              }}
+            />
+          ) : undefined
+        }
         setup={
           mode === "editor" && row.driver === "antigravity" ? (
             <ProviderSetupSection
@@ -1386,7 +1478,11 @@ export function EnvironmentProviderSettings({
           open
           environmentId={environmentId}
           environmentLabel={environmentLabel}
-          onOpenChange={setIsAddInstanceDialogOpen}
+          initialCodexRoute={initialCodexRoute}
+          onOpenChange={(open) => {
+            setIsAddInstanceDialogOpen(open);
+            if (!open) setInitialCodexRoute(undefined);
+          }}
           onCreated={setSelectedInstanceId}
         />
       ) : null}

@@ -26,6 +26,8 @@ const commands = vi.hoisted(() => ({
   updateProvider: vi.fn(),
   uninstall: vi.fn(),
   acceptUrlAuth: vi.fn(),
+  localDesktop: false,
+  openExternal: vi.fn(),
   canManageProviders: true,
   canWriteSettings: true,
 }));
@@ -140,7 +142,24 @@ vi.mock("../../state/session", () => ({
 
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
+  useThreadShells: () => [],
   useServerConfigs: () => new Map(),
+}));
+
+vi.mock("../../state/environments", () => ({
+  useEnvironments: () => ({
+    environments: commands.localDesktop
+      ? [{ environmentId, entry: { target: { _tag: "PrimaryConnectionTarget" } } }]
+      : [],
+    isReady: true,
+  }),
+  usePrimaryEnvironmentId: () => environmentId,
+}));
+vi.mock("../../environments/primary/target", () => ({
+  readPrimaryEnvironmentTarget: () => ({ source: "desktop-managed" }),
+}));
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({ shell: { openExternal: commands.openExternal } }),
 }));
 
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
@@ -229,6 +248,8 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.mutateProviderInstance
       .mockReset()
       .mockResolvedValue({ _tag: "Success", value: {} });
+    commands.localDesktop = false;
+    commands.openExternal.mockReset().mockResolvedValue(undefined);
     commands.canManageProviders = true;
     commands.canWriteSettings = true;
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
@@ -368,6 +389,83 @@ describe("EnvironmentProviderSettings routing", () => {
         (element) => element.props.instanceId === "grok" && element.props.mode === "list",
       ),
     ).not.toBeNull();
+  });
+
+  it("opens a dashboard only for a local desktop environment", async () => {
+    vi.stubGlobal("window", { desktopBridge: {} });
+    try {
+      const findRoute = () =>
+        visitElements(
+          renderPanel(),
+          (entry) =>
+            entry.props.instanceId === codexId &&
+            typeof entry.props.onRefresh === "function" &&
+            typeof entry.props.onAddInstance === "function",
+        );
+      expect(findRoute()?.props.onOpenDashboard).toBeUndefined();
+      commands.localDesktop = true;
+      const route = findRoute();
+      await (route!.props.onOpenDashboard as () => Promise<void>)();
+      expect(commands.openExternal).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:10100");
+      vi.stubGlobal("window", {});
+      expect(findRoute()?.props.onOpenDashboard).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("writes the Home route to the selected environment with its permission", async () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Work",
+          config: { homePath: "/home/person/.codex", customOption: 42 },
+        },
+      },
+    };
+    const panel = renderPanel({ targetInstanceId: customId });
+    const route = visitElements(
+      panel,
+      (entry) =>
+        entry.props.instanceId === customId &&
+        typeof entry.props.onRefresh === "function" &&
+        typeof entry.props.onAddInstance === "function",
+    );
+    expect(route).not.toBeNull();
+    const change = route!.props.onChange as (value: {
+      modelRoute: "opencodex";
+      opencodexBaseUrl: string;
+    }) => Promise<void>;
+    await change({ modelRoute: "opencodex", opencodexBaseUrl: "http://127.0.0.1:10100/v1" });
+    expect(settingsState.mutationEnvironmentIds).toContain(environmentId);
+    expect(settingsState.mutateProviderInstance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "upsert",
+        instanceId: customId,
+        instance: expect.objectContaining({
+          displayName: "Work",
+          config: {
+            homePath: "/home/person/.codex",
+            customOption: 42,
+            modelRoute: "opencodex",
+            opencodexBaseUrl: "http://127.0.0.1:10100/v1",
+          },
+        }),
+      }),
+      expect.anything(),
+    );
+    await (route!.props.onRefresh as () => Promise<void>)();
+    expect(commands.refresh).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId: customId, fresh: true, refreshModels: true },
+    });
+    commands.canManageProviders = false;
+    await expect(
+      change({ modelRoute: "opencodex", opencodexBaseUrl: "http://127.0.0.1:10100/v1" }),
+    ).rejects.toThrow("Provider management permission");
+    expect(settingsState.mutateProviderInstance).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces a nullable provider snapshot before rendering array-backed UI", () => {

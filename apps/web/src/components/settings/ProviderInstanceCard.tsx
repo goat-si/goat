@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  openCodexRouteSummary,
+  resolveProviderInstanceDisplayName,
+} from "@goat/client-runtime/state/provider-instance-display";
+
 import { Spinner } from "~/components/ui/spinner";
 
 import {
@@ -623,6 +628,7 @@ interface ProviderInstanceCardProps {
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
   readonly runtime?: ReactNode;
+  readonly homeRoute?: ReactNode;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -689,6 +695,7 @@ export function ProviderInstanceCard({
   headerAction,
   setup,
   runtime,
+  homeRoute,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -759,8 +766,26 @@ export function ProviderInstanceCard({
       ? onInstallRecommended
       : onRunUpdate;
   const urlAuthAction = liveProvider?.auth.action;
-  const displayName =
-    instance.displayName?.trim() || driverOption?.label || String(instance.driver);
+  const configuredRoute =
+    instance.config !== null &&
+    typeof instance.config === "object" &&
+    "modelRoute" in instance.config &&
+    instance.config.modelRoute === "opencodex"
+      ? "opencodex"
+      : "default";
+  const codexRoute =
+    instance.driver === "codex"
+      ? liveProvider?.codexRoute?.modelRoute === configuredRoute
+        ? liveProvider.codexRoute
+        : ({ modelRoute: configuredRoute } as const)
+      : undefined;
+  const displayName = resolveProviderInstanceDisplayName({
+    instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName?.trim() || driverOption?.label || String(instance.driver),
+    ...(codexRoute ? { codexRoute } : {}),
+  });
+  const routeSummary = instance.driver === "codex" ? openCodexRouteSummary(codexRoute) : undefined;
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
@@ -935,7 +960,7 @@ export function ProviderInstanceCard({
     ) : (
       <>
         {statusDotNode}
-        <span>{summary.headline}</span>
+        <span>{routeSummary ?? summary.headline}</span>
         {inlineStatusDetail ? (
           <span className="min-w-0 [overflow-wrap:anywhere]">· {inlineStatusDetail}</span>
         ) : null}
@@ -1256,6 +1281,8 @@ export function ProviderInstanceCard({
           }
         />
       </SettingsSection>
+
+      {homeRoute}
 
       {setup || environmentFields.length > 0 ? (
         <SettingsSection title="Setup">
