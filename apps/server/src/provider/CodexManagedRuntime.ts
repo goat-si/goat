@@ -39,6 +39,12 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
   readonly environment: NodeJS.ProcessEnv;
   readonly config: CodexSettings;
 }) {
+  if (options.config.modelRoute === "opencodex")
+    return yield* new ProviderSetupError({
+      instanceId: options.instanceId,
+      operation: "runtime",
+      detail: "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+    });
   const installation = yield* CodexInstallation.CodexInstallation;
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -105,6 +111,7 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
       config: decodeSettings({
         enabled: options.enabled,
         setupMode: "managed",
+        modelRoute: "default",
         binaryPath: executable.executablePath,
         homePath,
         launchArgs: managedCodexLaunchArgs,

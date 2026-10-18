@@ -1,3 +1,5 @@
+import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
+import * as Context from "effect/Context";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Queue from "effect/Queue";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
@@ -10360,4 +10362,208 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
     );
   });
+});
+
+describe("OpenCodex Home routing", () => {
+  it.effect(
+    "reads the actual session config after initialize and checks Home before a goal command",
+    () =>
+      Effect.gen(function* () {
+        const preamble = codexReplayPreamble({
+          nativeThreadId: "home-thread",
+          nativeTurnId: "unused",
+          prompt: "unused",
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario: "actual-home-config",
+          entries: [
+            ...preamble.slice(0, 3),
+            {
+              type: "expect_outbound",
+              label: "actual-config",
+              frame: {
+                id: 2,
+                method: "config/read",
+                params: { cwd: "/workspace", includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "actual-config",
+              frame: {
+                id: 2,
+                result: {
+                  config: {
+                    model_provider: "openai",
+                    openai_base_url: "http://127.0.0.1:10100/v1",
+                    model_catalog_json: "/route-catalog.json",
+                  },
+                  origins: {},
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "thread-config",
+              frame: {
+                id: 3,
+                method: "config/read",
+                params: { cwd: "/workspace", includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "thread-config",
+              frame: {
+                id: 3,
+                result: {
+                  config: {
+                    model_provider: "openai",
+                    openai_base_url: "http://127.0.0.1:10100/v1",
+                    model_catalog_json: "/route-catalog.json",
+                  },
+                  origins: {},
+                },
+              },
+            },
+            ...preamble.slice(3, 5).map((entry) => withReplayRequestId(entry, 4)),
+            {
+              type: "expect_outbound",
+              label: "existing-context-config",
+              frame: {
+                id: 5,
+                method: "config/read",
+                params: { cwd: "/workspace", includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "existing-context-config",
+              frame: {
+                id: 5,
+                result: {
+                  config: {
+                    model_provider: "openai",
+                    openai_base_url: "http://127.0.0.1:10100/v1",
+                    model_catalog_json: "/route-catalog.json",
+                  },
+                  origins: {},
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "second-cwd-config",
+              frame: {
+                id: 6,
+                method: "config/read",
+                params: { cwd: "/second-project", includeLayers: false },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "second-cwd-config",
+              frame: {
+                id: 6,
+                result: {
+                  config: {
+                    model_provider: "openai",
+                    openai_base_url: "http://127.0.0.1:10101/v1",
+                    model_catalog_json: "/route-catalog.json",
+                  },
+                  origins: {},
+                },
+              },
+            },
+          ],
+        });
+        const driver = yield* CodexReplay.makeReplayDriver(transcript);
+        let disconnected = false;
+        let opens = 0;
+        const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
+          instanceId: CODEX_TEST_MODEL_SELECTION.instanceId,
+          settings: {
+            ...DEFAULT_CODEX_SETTINGS,
+            modelRoute: "opencodex",
+            homePath: "/execution-home",
+          },
+          environment: {},
+          clientFactory: {
+            open: () =>
+              Effect.gen(function* () {
+                opens++;
+                const context = yield* Layer.build(CodexReplay.layerReplayWithDriver(driver));
+                return Context.get(context, CodexClient.CodexAppServerClient);
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
+                      driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+                      providerSessionId: ProviderSessionId.make("home-session"),
+                      cause,
+                    }),
+                ),
+              ),
+          },
+          crypto: yield* Crypto.Crypto,
+          fileSystem: yield* FileSystem.FileSystem,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          serverConfig: yield* makeReplayServerConfig("actual-home-config").pipe(Effect.orDie),
+        }).pipe(
+          Effect.provideService(HomeRoute.OpenCodexRoute, {
+            inspect: () => Effect.die("unused"),
+            launchArgs: () =>
+              Effect.succeed([
+                "-c",
+                'model_provider="openai"',
+                "-c",
+                'openai_base_url="http://127.0.0.1:10100/v1"',
+                "-c",
+                'model_catalog_json="/route-catalog.json"',
+              ]),
+            requireAvailable: () =>
+              disconnected
+                ? Effect.fail(
+                    new HomeRoute.OpenCodexRouteUnavailable({ detail: "Home disconnected" }),
+                  )
+                : Effect.void,
+          }),
+        );
+        const threadId = ThreadId.make("actual-home-owner");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("home-session"),
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        });
+        const mismatch = yield* runtime
+          .ensureThread({
+            threadId: ThreadId.make("second-project-owner"),
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, cwd: "/second-project" },
+          })
+          .pipe(Effect.result);
+        assert.equal(mismatch._tag, "Failure");
+        disconnected = true;
+        const result = yield* runtime
+          .startTurn(
+            makeCodexTestTurnInput({
+              threadId,
+              providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("home-goal-attempt"),
+              text: "/goal keep working",
+            }),
+          )
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.equal(opens, 1);
+        assert.equal(runtime.instanceId, CODEX_TEST_MODEL_SELECTION.instanceId);
+      }).pipe(Effect.provide(layerAdapterTest)),
+  );
 });

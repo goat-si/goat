@@ -1,3 +1,5 @@
+import * as HomeRoute from "./OpenCodexRoute.ts";
+import * as FileSystem from "effect/FileSystem";
 /**
  * The server's provider diagnosis: refreshes a targeted instance's readiness
  * through the registry, then runs the read-only checks in ProviderDiagnosis.
@@ -33,6 +35,8 @@ export class ProviderDiagnosisService extends Context.Service<
 const make = Effect.gen(function* () {
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const context = yield* Effect.context<
+    | HomeRoute.OpenCodexRoute
+    | FileSystem.FileSystem
     | ProviderHost.ProviderHost
     | Path.Path
     | ChildProcessSpawner.ChildProcessSpawner

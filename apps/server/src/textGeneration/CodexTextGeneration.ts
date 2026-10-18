@@ -1,3 +1,4 @@
+import * as HomeRoute from "../provider/OpenCodexRoute.ts";
 import { ProviderDriverKind } from "@goat/contracts";
 import {
   withMemoryExecution,
@@ -98,6 +99,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   >,
   memoryRunnerContext?: MemoryGenerationRunnerContext,
 ) {
+  const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -393,9 +395,40 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         ...effectiveEnvironment,
         ...(codexHome ? { CODEX_HOME: codexHome } : {}),
       };
+      const routeInput = yield* HomeRoute.resolveCodexRouteContext({
+        settings: effectiveConfig,
+        binaryPath: binary,
+        home: codexHome,
+        cwd: workingDirectory,
+        environment: env,
+        configArgv: codexExecLaunchArgs(launchArgs),
+      }).pipe(
+        Effect.provideService(Path.Path, path),
+        Effect.mapError((cause) => new TextGenerationError({ operation, detail: cause.message })),
+      );
+      const routeArgs =
+        effectiveConfig.modelRoute === "opencodex"
+          ? yield* Effect.gen(function* () {
+              if (Option.isNone(homeRoute))
+                return yield* new HomeRoute.OpenCodexRouteUnavailable({
+                  detail: "Could not read OpenCodex status",
+                });
+              yield* homeRoute.value.requireAvailable(routeInput);
+              yield* homeRoute.value.launchArgs(routeInput);
+              // No installed Codex version has a primary-source certified exec/profile
+              // precedence proof yet. A mock app-server cannot certify the exec loader.
+              return yield* new HomeRoute.OpenCodexRouteUnavailable({
+                detail: "Could not verify the effective Codex endpoint.",
+              });
+            }).pipe(
+              Effect.mapError(
+                (cause) => new TextGenerationError({ operation, detail: cause.message }),
+              ),
+            )
+          : [];
       const execLaunchArgs = isChannelReception
-        ? [...CODEX_CHANNEL_RECEPTION_ARGS]
-        : codexExecLaunchArgs(launchArgs);
+        ? [...CODEX_CHANNEL_RECEPTION_ARGS, ...routeArgs]
+        : codexExecLaunchArgs(launchArgs, routeArgs);
       const mcpServersOff = yield* listEnabledMcpServers({
         binary,
         cwd: workingDirectory,
@@ -422,6 +455,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
+          ...routeArgs,
           "--output-schema",
           schemaPath,
           "--output-last-message",

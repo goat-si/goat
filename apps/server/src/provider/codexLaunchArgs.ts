@@ -9,12 +9,13 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
-export const codexAppServerArgs = (launchArgs?: string) => [
+export const codexAppServerArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
   "app-server",
   ...codexLaunchArgv(launchArgs),
+  ...routeArgs,
 ];
 
-export const codexExecLaunchArgs = (launchArgs?: string) => {
+export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => {
   const args = codexLaunchArgv(launchArgs);
   const execArgs: Array<string> = [];
 
@@ -24,16 +25,27 @@ export const codexExecLaunchArgs = (launchArgs?: string) => {
 
     if (arg === "--strict-config" || arg.startsWith("--config=") || arg.startsWith("-c=")) {
       execArgs.push(arg);
-    } else if (arg === "--config" || arg === "-c" || arg === "--enable" || arg === "--disable") {
+    } else if (
+      arg === "--config" ||
+      arg === "-c" ||
+      arg === "--enable" ||
+      arg === "--disable" ||
+      arg === "--profile" ||
+      arg === "-p"
+    ) {
       const value = args[index + 1];
       if (value !== undefined && !value.startsWith("-")) {
         execArgs.push(arg, value);
         index++;
       }
-    } else if (arg.startsWith("--enable=") || arg.startsWith("--disable=")) {
+    } else if (
+      arg.startsWith("--enable=") ||
+      arg.startsWith("--disable=") ||
+      arg.startsWith("--profile=")
+    ) {
       execArgs.push(arg);
     }
   }
 
-  return execArgs;
+  return [...execArgs, ...routeArgs];
 };

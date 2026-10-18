@@ -1,3 +1,4 @@
+import * as HomeRoute from "../OpenCodexRoute.ts";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
 /**
@@ -140,6 +141,17 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
   usage: codexUsageReader,
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
+      if (config.setupMode === "managed" && config.modelRoute === "opencodex")
+        return yield* new ProviderDriverError({
+          driver: DRIVER_KIND,
+          instanceId,
+          detail: "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+        });
+      const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
+      const provideHomeRoute = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Option.isSome(homeRoute)
+          ? effect.pipe(Effect.provideService(HomeRoute.OpenCodexRoute, homeRoute.value))
+          : effect;
       if (config.setupMode === "managed")
         return yield* makeManagedCodexProvider({
           instanceId,
@@ -148,7 +160,17 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
           environment,
           enabled,
           config,
-        });
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: "Could not prepare managed Codex.",
+                cause,
+              }),
+          ),
+        );
       const host = yield* ProviderHost.ProviderHost;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
@@ -242,7 +264,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
       const checkProvider = modelCatalog.refreshInBackground.pipe(
         Effect.andThen(
           Effect.zipWith(
-            checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+            checkCodexProviderStatus(effectiveConfig, undefined, processEnv).pipe(provideHomeRoute),
             currentCatalog,
             (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
             { concurrent: true },
@@ -302,13 +324,26 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              probeCodexSkillsForCwd({
-                binaryPath: effectiveConfig.binaryPath,
-                homePath: effectiveConfig.homePath,
-                launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-                cwd,
-                environment: processEnv,
+              Effect.gen(function* () {
+                const route = yield* HomeRoute.resolveCodexRouteContext({
+                  settings: effectiveConfig,
+                  binaryPath: effectiveConfig.binaryPath,
+                  home: effectiveConfig.homePath,
+                  cwd,
+                  environment: processEnv,
+                  configArgv: [],
+                });
+                return yield* probeCodexSkillsForCwd({
+                  binaryPath: effectiveConfig.binaryPath,
+                  homePath: effectiveConfig.homePath,
+                  launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+                  cwd,
+                  environment: route.execution.environment,
+                  route,
+                });
               }).pipe(
+                provideHomeRoute,
+                Effect.provideService(Path.Path, pathService),
                 Effect.scoped,
                 Effect.timeout("20 seconds"),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -400,7 +435,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
         enabled,
         snapshot,
         snapshotForCwd,
-        consumeResetCredit,
+        ...(config.modelRoute === "opencodex" ? {} : { consumeResetCredit }),
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;

@@ -1,3 +1,4 @@
+import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { MemoryContextSnapshot } from "@goat/contracts";
 import type { RunId } from "@goat/contracts";
@@ -123,7 +124,11 @@ import {
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
+import {
+  codexAppServerArgs,
+  codexExecLaunchArgs,
+  resolveCodexLaunchArgs,
+} from "../../provider/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -160,6 +165,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 
+const decodeRouteCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
@@ -1343,6 +1349,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly threadId: ThreadId;
     readonly providerSessionId: OrchestrationV2ProviderSession["id"];
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+    readonly routeArgs?: ReadonlyArray<string>;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
   }) => Effect.Effect<
@@ -1603,7 +1610,9 @@ export const layerAppServerClientFactory: Layer.Layer<
             command: input.settings.binaryPath || "codex",
             args: codexAppServerArgs(
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
+              input.routeArgs,
             ),
+            cwd: input.runtimePolicy.cwd ?? undefined,
             env: environment,
             threadId: input.threadId,
           }).pipe(Effect.provideService(AgentScope, agentScope));
@@ -1785,6 +1794,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const path = yield* Path.Path.pipe(Effect.provide(NodePath.layer));
+  const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const memorySnapshots = Option.getOrUndefined(
@@ -1839,13 +1849,58 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const launchSettings = resolvedRuntime?.config ?? adapterOptions.settings;
+        const routeInput = yield* HomeRoute.resolveCodexRouteContext({
+          settings: launchSettings,
+          binaryPath: launchSettings.binaryPath,
+          home: launchSettings.homePath,
+          cwd: input.runtimePolicy.cwd ?? process.cwd(),
+          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          configArgv: codexExecLaunchArgs(
+            resolveCodexLaunchArgs(
+              launchSettings.launchArgs,
+              resolvedRuntime?.environment ?? adapterOptions.environment,
+            ),
+          ),
+        }).pipe(
+          Effect.provideService(Path.Path, path),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: CODEX_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
+        const routeArgs =
+          launchSettings.modelRoute === "opencodex"
+            ? yield* Effect.gen(function* () {
+                if (Option.isNone(homeRoute))
+                  return yield* new HomeRoute.OpenCodexRouteUnavailable({
+                    detail: "Could not read OpenCodex status",
+                  });
+                yield* homeRoute.value.requireAvailable(routeInput);
+                return yield* homeRoute.value.launchArgs(routeInput);
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
+                      driver: CODEX_PROVIDER,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              )
+            : [];
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: routeInput.execution.environment,
+          routeArgs,
         });
         const memoryByThread = new Map<
           string,
@@ -2003,10 +2058,33 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         // starting their own; a failed handshake leaves the flag unset so the
         // next caller retries.
         const initializePermit = yield* Semaphore.make(1);
+        const verifySessionRoute = (cwd = routeInput.execution.cwd) =>
+          Effect.gen(function* () {
+            if (routeInput.settings.modelRoute !== "opencodex") return;
+            if (Option.isNone(homeRoute))
+              return yield* new HomeRoute.OpenCodexRouteUnavailable({
+                detail: "Could not read OpenCodex status",
+              });
+            const context = { ...routeInput, execution: { ...routeInput.execution, cwd } };
+            yield* homeRoute.value.requireAvailable(context);
+            const actual = yield* client.request("config/read", { cwd, includeLayers: false });
+            const value = routeArgs.find((arg) => arg.startsWith("model_catalog_json="));
+            const expected: unknown = value
+              ? decodeRouteCatalogArg(value.slice("model_catalog_json=".length))
+              : undefined;
+            if (typeof expected !== "string")
+              return yield* new HomeRoute.OpenCodexRouteUnavailable({
+                detail: "Could not verify the effective Codex endpoint.",
+              });
+            yield* HomeRoute.verifyEffectiveCodexRoute(context, actual.config, expected).pipe(
+              Effect.provideService(Path.Path, path),
+            );
+          });
         const ensureInitialized = initializePermit.withPermit(
           Effect.gen(function* () {
             const alreadyInitialized = yield* Ref.get(initialized);
             if (alreadyInitialized) {
+              yield* verifySessionRoute();
               return;
             }
 
@@ -2028,6 +2106,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               );
             yield* client.notify("initialized", undefined);
+            yield* verifySessionRoute();
             yield* Ref.set(initialized, true);
           }),
         );
@@ -7014,6 +7093,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }),
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
+              Effect.andThen(
+                threadInput.runtimePolicy.cwd &&
+                  threadInput.runtimePolicy.cwd !== routeInput.execution.cwd
+                  ? verifySessionRoute(threadInput.runtimePolicy.cwd)
+                  : Effect.void,
+              ),
               Effect.andThen(readMcpSession(threadInput.threadId)),
               Effect.flatMap((mcpSession) =>
                 client
@@ -7207,21 +7292,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
               ),
             ),
-          startTurn: (turnInput) => {
-            const goalCommand =
-              turnInput.message.attachments.length === 0 &&
-              turnInput.restartContinuationOfRunId === undefined
-                ? parseCodexGoalCommand(turnInput.message.text)
-                : null;
-            if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
-            return Effect.gen(function* () {
-              yield* startNativeTurn(
-                turnInput,
-                turnInput.restartContinuationOfRunId === undefined
-                  ? yield* toCodexInput(turnInput)
-                  : [],
-              );
-            }).pipe(
+          startTurn: (turnInput) =>
+            verifySessionRoute(turnInput.runtimePolicy.cwd ?? routeInput.execution.cwd).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterTurnStartError({
@@ -7232,8 +7304,36 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     cause,
                   }),
               ),
-            );
-          },
+              Effect.andThen(
+                Effect.suspend(() => {
+                  const goalCommand =
+                    turnInput.message.attachments.length === 0 &&
+                    turnInput.restartContinuationOfRunId === undefined
+                      ? parseCodexGoalCommand(turnInput.message.text)
+                      : null;
+                  if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
+                  return Effect.gen(function* () {
+                    yield* startNativeTurn(
+                      turnInput,
+                      turnInput.restartContinuationOfRunId === undefined
+                        ? yield* toCodexInput(turnInput)
+                        : [],
+                    );
+                  }).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderAdapter.ProviderAdapterTurnStartError({
+                          driver: CODEX_PROVIDER,
+                          threadId: turnInput.threadId,
+                          providerThreadId: turnInput.providerThread.id,
+                          runId: turnInput.runId,
+                          cause,
+                        }),
+                    ),
+                  );
+                }),
+              ),
+            ),
           steerTurn: (turnInput) =>
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
@@ -7995,6 +8095,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ),
             ),
         };
+        if (routeInput.settings.modelRoute === "opencodex")
+          yield* ensureInitialized.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
         return runtime;
       }).pipe(
         Effect.mapError(

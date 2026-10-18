@@ -57,3 +57,27 @@ describe("codexExecLaunchArgs", () => {
     ]);
   });
 });
+
+describe("OpenCodex Home routing", () => {
+  const route = [
+    "-c",
+    'model_provider="openai"',
+    "-c",
+    'openai_base_url="http://127.0.0.1:10100/v1"',
+    "-c",
+    'model_catalog_json="/execution/home/opencodex-catalog.json"',
+  ];
+  it("keeps the Home endpoint and catalog when environment arguments override instance arguments", () => {
+    const selected = resolveCodexLaunchArgs('-c openai_base_url="wrong-instance"', {
+      GOAT_CODEX_LAUNCH_ARGS: '-c openai_base_url="wrong-env"',
+    });
+    NodeAssert.deepStrictEqual(codexAppServerArgs(selected, route).slice(-route.length), route);
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs(selected, route).slice(-route.length), route);
+  });
+  it("passes the same endpoint and catalog to app-server and exec", () => {
+    NodeAssert.deepStrictEqual(
+      codexAppServerArgs("--profile work --enable feature", route).slice(1),
+      codexExecLaunchArgs("--profile work --enable feature", route),
+    );
+  });
+});

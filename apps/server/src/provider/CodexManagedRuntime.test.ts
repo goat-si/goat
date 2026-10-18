@@ -221,3 +221,36 @@ it.effect.each(
       ),
     ),
 );
+
+it.effect(
+  "does not compose a Home route for managed Codex before acquiring installation or credentials",
+  () =>
+    makeCodexManagedRuntime({
+      instanceId: ProviderInstanceId.make("managed-home"),
+      enabled: true,
+      environment: {},
+      config: decodeSettings({ setupMode: "managed", modelRoute: "opencodex" }),
+    }).pipe(
+      Effect.result,
+      Effect.map((result) => {
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure")
+          assert.equal(
+            result.failure.message,
+            "OpenCodex routing needs a Codex instance that uses your Codex CLI.",
+          );
+      }),
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "unused" }),
+          ServerConfig.layerTest(process.cwd(), { prefix: "managed-home-reject-" }),
+          Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+          Layer.mock(ServerEnvironment.ServerEnvironmentIdentity)({}),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("No HTTP before managed route rejection")),
+          ),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
+);

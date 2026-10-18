@@ -1,3 +1,8 @@
+import { resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
+import * as HomeRoute from "./OpenCodexRoute.ts";
+import { checkCodexProviderStatus } from "./CodexProvider.ts";
+import { CodexSettings } from "@goat/contracts";
+import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 /**
  * Read-only provider diagnosis behind `goat_provider_diagnose` and
  * `goat provider diagnose`. For each provider instance it says why the
@@ -53,6 +58,7 @@ const DEVIN_CLOUD = ProviderDriverKind.make("devinCloud");
 /** Drivers diagnosed live, and diagnosed even when no instance exists. */
 export const LIVE_DIAGNOSIS_DRIVERS: ReadonlySet<string> = new Set([CLAUDE_CLOUD, DEVIN_CLOUD]);
 const SETTINGS = "Settings → Providers";
+const decodeCodex = Schema.decodeUnknownOption(CodexSettings);
 const decodeClaudeCloud = Schema.decodeUnknownOption(ClaudeCloudSettings);
 const decodeDevinCloud = Schema.decodeUnknownOption(DevinCloudSettings);
 /** One instance to diagnose: what settings say about it and what the registry last reported. */
@@ -993,6 +999,78 @@ export const diagnoseProviders = Effect.fn("ProviderDiagnosis.diagnose")(functio
             checks: [...diagnosis.checks, repository],
             ready: diagnosis.ready && repository.status !== "fail",
           };
+        }
+        if (target.driver === "codex" && (target.entry || target.snapshot)) {
+          const config = decodeCodex(target.entry?.config ?? {});
+          if (Option.isNone(config))
+            return finish(target, true, [
+              check("opencodex_route", "fail", "Invalid Codex settings.", "provider_error"),
+            ]);
+          const environment = yield* mergeProviderInstanceEnvironment(target.entry?.environment);
+          const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
+          const home = yield* resolveCodexHomeLayout(config.value);
+          const snapshot = Option.isSome(routes)
+            ? yield* checkCodexProviderStatus(
+                { ...config.value, homePath: home.effectiveHomePath ?? home.sharedHomePath },
+                undefined,
+                environment,
+              ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, routes.value))
+            : target.snapshot;
+          const checks = snapshot
+            ? [
+                ...snapshotChecks(
+                  { ...snapshot, driver: target.driver, instanceId: target.instanceId },
+                  options.checkedBy === "cli",
+                ),
+              ]
+            : [];
+          const route = snapshot?.codexRoute;
+          if (config.value.modelRoute === "opencodex") {
+            const success = route?.state === "connected" || route?.state === "home";
+            checks.push(
+              check(
+                "opencodex_route",
+                success ? "pass" : "fail",
+                success
+                  ? route.state === "home"
+                    ? "This machine is your OpenCodex Home."
+                    : "Home connected."
+                  : (route?.reason ?? "Could not read OpenCodex status"),
+                config.value.setupMode === "managed"
+                  ? "forbidden_environment"
+                  : success
+                    ? undefined
+                    : "provider_error",
+                success
+                  ? undefined
+                  : route?.state === "reconnecting"
+                    ? agent("Check OpenCodex and retry diagnosis.", { path: "provider.diagnose" })
+                    : human(
+                        config.value.setupMode === "managed"
+                          ? "Add a Codex instance that uses your Codex CLI."
+                          : "Check OpenCodex on the machine where Codex runs. Connect Home there, or request approval to stop GOAT's Home override.",
+                        { path: "provider.home_request", handoff: "terminal" },
+                      ),
+              ),
+            );
+          } else
+            checks.push(
+              check(
+                "opencodex_route",
+                route?.effectiveBaseUrl
+                  ? new URL(route.effectiveBaseUrl).port === "10100"
+                    ? "warn"
+                    : "pass"
+                  : "unknown",
+                route?.effectiveBaseUrl
+                  ? new URL(route.effectiveBaseUrl).port === "10100"
+                    ? "Codex's own configuration still routes through OpenCodex."
+                    : `Uses Codex's own settings · ${route.effectiveBaseUrl}`
+                  : "Could not verify the effective Codex endpoint.",
+                route?.effectiveBaseUrl ? undefined : "not_checked",
+              ),
+            );
+          return finish(target, true, checks);
         }
         if (target.snapshot) {
           return finish(target, true, snapshotChecks(target.snapshot, options.checkedBy === "cli"));

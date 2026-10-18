@@ -1,3 +1,5 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as HomeRoute from "./OpenCodexRoute.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -34,7 +36,11 @@ import {
   formatCodexModelName,
 } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
-import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import {
+  codexAppServerArgs,
+  codexExecLaunchArgs,
+  resolveCodexLaunchArgs,
+} from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -52,6 +58,8 @@ import {
 } from "./codexUsageLimits.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
+const decodeCatalogArg = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
+const isHomeRouteUnavailable = Schema.is(HomeRoute.OpenCodexRouteUnavailable);
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
 
@@ -80,6 +88,7 @@ const CODEX_PRESENTATION = {
 } as const;
 
 export interface CodexAppServerProviderSnapshot {
+  readonly effectiveBaseUrl?: string;
   readonly account: CodexSchema.V2GetAccountResponse;
   readonly rateLimits?: CodexRateLimitsProbe;
   readonly version: string | undefined;
@@ -424,69 +433,117 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
  * the caller's scope closes. Shared by the status probe, the skills probe,
  * and account-level requests such as reset-credit redemption.
  */
-export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(function* (input: {
-  readonly binaryPath: string;
-  readonly homePath?: string | undefined;
-  readonly launchArgs?: string | undefined;
-  readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv | undefined;
-}) {
-  // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
-  // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
-  // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
-  // Expand here for parity with `CodexTextGeneration`.
-  const resolvedHomePath = input.homePath
-    ? expandHomePath(input.homePath, yield* HostProcess.HomeDirectory)
-    : undefined;
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = {
-    ...codexAppServerEnvironment(input.environment),
-    ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
-  };
-  const spawnCommand = yield* resolveSpawnCommand(
-    input.binaryPath,
-    codexAppServerArgs(input.launchArgs),
-    { env: environment, extendEnv: true },
-  );
-  const child = yield* spawner
-    .spawn(
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        cwd: input.cwd,
-        env: environment,
-        extendEnv: true,
-        forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
-        shell: spawnCommand.shell,
-      }),
-    )
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new CodexErrors.CodexAppServerSpawnError({
-            command: `${input.binaryPath} app-server`,
-            cause,
-          }),
-      ),
+export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
+  function* (input: {
+    readonly binaryPath: string;
+    readonly homePath?: string | undefined;
+    readonly launchArgs?: string | undefined;
+    readonly routeArgs?: ReadonlyArray<string>;
+    readonly route?: HomeRoute.RouteInput;
+    readonly cwd: string;
+    readonly environment?: NodeJS.ProcessEnv | undefined;
+  }) {
+    // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
+    // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
+    // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
+    // Expand here for parity with `CodexTextGeneration`.
+    const resolvedHomePath = input.homePath
+      ? expandHomePath(input.homePath, yield* HostProcess.HomeDirectory)
+      : undefined;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const environment = {
+      ...codexAppServerEnvironment(input.environment),
+      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+    };
+    const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
+    const routeArgs =
+      input.route?.settings.modelRoute === "opencodex"
+        ? Option.isSome(routes)
+          ? yield* routes.value.launchArgs(input.route)
+          : yield* Effect.fail(
+              new HomeRoute.OpenCodexRouteUnavailable({
+                detail: "Could not read OpenCodex status",
+              }),
+            )
+        : (input.routeArgs ?? []);
+    if (input.route?.settings.modelRoute === "opencodex" && Option.isSome(routes))
+      yield* routes.value.requireAvailable(input.route);
+    const spawnCommand = yield* resolveSpawnCommand(
+      input.binaryPath,
+      codexAppServerArgs(input.launchArgs, routeArgs),
+      { env: environment, extendEnv: true },
     );
-  const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
-  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-    Effect.provide(clientContext),
-  );
-  const initialize = yield* client.request("initialize", buildCodexInitializeParams());
-  yield* client.notify("initialized", undefined);
-  return { client, initialize };
-});
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.cwd,
+          env: environment,
+          extendEnv: true,
+          forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
+          shell: spawnCommand.shell,
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new CodexErrors.CodexAppServerSpawnError({
+              command: `${input.binaryPath} app-server`,
+              cause,
+            }),
+        ),
+      );
+    const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
+    const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+      Effect.provide(clientContext),
+    );
+    const initialize = yield* client.request("initialize", buildCodexInitializeParams());
+    yield* client.notify("initialized", undefined);
+    let effectiveBaseUrl: string | undefined;
+    if (input.route || input.routeArgs) {
+      const read = yield* client
+        .request("config/read", { cwd: input.cwd, includeLayers: false })
+        .pipe(Effect.result);
+      if (Result.isFailure(read) && input.route?.settings.modelRoute === "opencodex")
+        return yield* read.failure;
+      const config = Result.isSuccess(read) ? read.success.config : undefined;
+      effectiveBaseUrl = HomeRoute.readEffectiveBaseUrl(config, environment);
+      if (input.route?.settings.modelRoute === "opencodex") {
+        const pointerIndex = routeArgs.findIndex((arg) => arg.startsWith("model_catalog_json="));
+        const expected: unknown =
+          pointerIndex < 0
+            ? undefined
+            : decodeCatalogArg(routeArgs[pointerIndex]!.slice("model_catalog_json=".length));
+        if (typeof expected !== "string")
+          return yield* new HomeRoute.OpenCodexRouteUnavailable({
+            detail: "Could not verify the effective Codex endpoint.",
+          });
+        yield* HomeRoute.verifyEffectiveCodexRoute(input.route, config, expected).pipe(
+          Effect.provide(NodePath.layer),
+        );
+      }
+    }
+    return { client, initialize, effectiveBaseUrl };
+  },
+  Effect.mapError((error) =>
+    isHomeRouteUnavailable(error)
+      ? new CodexErrors.CodexAppServerSpawnError({ command: "codex app-server", cause: error })
+      : error,
+  ),
+);
 
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly launchArgs?: string;
+  readonly routeArgs?: ReadonlyArray<string>;
+  readonly route?: HomeRoute.RouteInput;
   readonly cwd: string;
   readonly customModels?: ReadonlyArray<CustomModelSetting>;
   readonly environment?: NodeJS.ProcessEnv;
   readonly skipNativeUsage?: boolean;
 }) {
   const spawnedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
-  const { client, initialize } = yield* withCodexAppServerClient(input);
+  const { client, initialize, effectiveBaseUrl } = yield* withCodexAppServerClient(input);
 
   // Extract the version string after the first '/' in userAgent, up to the next space or the end
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
@@ -495,6 +552,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const accountResponse = yield* client.request("account/read", {});
   if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
     return {
+      ...(effectiveBaseUrl ? { effectiveBaseUrl } : {}),
       account: accountResponse,
       version,
       models: appendCustomCodexModels([], input.customModels ?? []),
@@ -538,6 +596,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   );
 
   return {
+    ...(effectiveBaseUrl ? { effectiveBaseUrl } : {}),
     account: accountResponse,
     ...(rateLimits ? { rateLimits } : {}),
     version,
@@ -552,6 +611,8 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
   readonly binaryPath: string;
   readonly homePath?: string;
   readonly launchArgs?: string;
+  readonly routeArgs?: ReadonlyArray<string>;
+  readonly route?: HomeRoute.RouteInput;
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
@@ -643,6 +704,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly binaryPath: string;
     readonly homePath?: string;
     readonly launchArgs?: string;
+    readonly routeArgs?: ReadonlyArray<string>;
+    readonly route?: HomeRoute.RouteInput;
     readonly cwd: string;
     readonly customModels: ReadonlyArray<CustomModelSetting>;
     readonly environment?: NodeJS.ProcessEnv;
@@ -661,10 +724,15 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  let routeStatus: import("@goat/contracts").CodexRouteStatus | undefined;
+  const buildStatus = (input: Parameters<typeof buildServerProvider>[0]) => ({
+    ...buildServerProvider(input),
+    ...(routeStatus ? { codexRoute: routeStatus } : {}),
+  });
   const emptyModels = emptyCodexModelsFromSettings(codexSettings);
 
   if (!codexSettings.enabled) {
-    return buildServerProvider({
+    return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: false,
       checkedAt,
@@ -680,13 +748,62 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     });
   }
 
+  const routeInput = yield* HomeRoute.resolveCodexRouteContext({
+    settings: codexSettings,
+    binaryPath: codexSettings.binaryPath,
+    home: codexSettings.homePath,
+    cwd: process.cwd(),
+    environment: resolvedEnvironment,
+    configArgv: codexExecLaunchArgs(
+      resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
+    ),
+  }).pipe(Effect.result);
+  if (Result.isFailure(routeInput))
+    return buildStatus({
+      presentation: CODEX_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: emptyModels,
+      skills: [],
+      probe: {
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: routeInput.failure.message,
+      },
+    });
+  const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
+  if (codexSettings.modelRoute === "opencodex") {
+    routeStatus = Option.isSome(routes)
+      ? yield* routes.value.inspect(routeInput.success)
+      : { modelRoute: "opencodex", state: "failed", reason: "Could not read OpenCodex status" };
+    if (routeStatus.state !== "connected" && routeStatus.state !== "home")
+      return buildStatus({
+        presentation: CODEX_PRESENTATION,
+        enabled: true,
+        checkedAt,
+        models: emptyModels,
+        skills: [],
+        probe: {
+          installed: true,
+          version: null,
+          status: "error",
+          auth: { status: "unknown" },
+          message: new HomeRoute.OpenCodexRouteUnavailable({
+            detail: routeStatus.reason ?? "OpenCodex is unavailable",
+          }).message,
+        },
+      });
+  }
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
-    environment: resolvedEnvironment,
+    environment: routeInput.success.execution.environment,
+    route: routeInput.success,
     ...(managedAuth ? { skipNativeUsage: true } : {}),
   }).pipe(
     Effect.scoped,
@@ -696,8 +813,10 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
 
   if (Result.isFailure(probeResult)) {
     const error = probeResult.failure;
-    const installed = !isCodexAppServerSpawnError(error);
-    return buildServerProvider({
+    const routeFailure =
+      "cause" in error && isHomeRouteUnavailable(error.cause) ? error.cause : undefined;
+    const installed = routeFailure !== undefined || !isCodexAppServerSpawnError(error);
+    return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
       checkedAt,
@@ -708,18 +827,20 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: installed
-          ? `Codex app-server provider probe failed: ${error.message}.`
-          : `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
-            (codexSettings.binaryPath === "codex"
-              ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
-              : " Make sure the configured executable exists and can be run."),
+        message: routeFailure
+          ? routeFailure.message
+          : installed
+            ? `Codex app-server provider probe failed: ${error.message}.`
+            : `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
+              (codexSettings.binaryPath === "codex"
+                ? " Installing ChatGPT or Codex desktop may not add codex to PATH."
+                : " Make sure the configured executable exists and can be run."),
       },
     });
   }
 
   if (Option.isNone(probeResult.success)) {
-    return buildServerProvider({
+    return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
       checkedAt,
@@ -736,6 +857,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
+  if (codexSettings.modelRoute === "default")
+    routeStatus = {
+      modelRoute: "default",
+      ...(snapshot.effectiveBaseUrl ? { effectiveBaseUrl: snapshot.effectiveBaseUrl } : {}),
+      ...(!snapshot.effectiveBaseUrl
+        ? { reason: "Could not verify the effective Codex endpoint." }
+        : {}),
+    };
   const accountStatus = managedAuth
     ? { status: "ready" as const, auth: managedAuth, message: undefined }
     : accountProbeStatus(snapshot);
@@ -755,7 +884,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
             checkedAt,
           });
 
-  return buildServerProvider({
+  return buildStatus({
     presentation: CODEX_PRESENTATION,
     enabled: codexSettings.enabled,
     checkedAt,

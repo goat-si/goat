@@ -1,3 +1,4 @@
+import * as HomeRoute from "./OpenCodexRoute.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -557,3 +558,51 @@ it("judges other drivers from their readiness snapshot", () => {
     reasons(snapshot({ status: "error", message: "Codex app-server exited during startup." })),
   ).toEqual([["provider_error", "human"]]);
 });
+
+it.effect.each(["failed", "reconnecting"] as const)(
+  "adds a failing opencodex_route check with an explicit fix for %s",
+  (state) =>
+    Effect.gen(function* () {
+      let inspections = 0;
+      const { result } = yield* diagnose(
+        { instanceId: id("codex-home") },
+        {
+          instances: {
+            "codex-home": { driver: driver("codex"), config: { modelRoute: "opencodex" } },
+          },
+        },
+      ).pipe(
+        Effect.provideService(HomeRoute.OpenCodexRoute, {
+          inspect: () =>
+            Effect.sync(() => {
+              inspections++;
+              return { modelRoute: "opencodex", state, reason: "Home unavailable" };
+            }),
+          launchArgs: () => Effect.die("No launch after failed inspect"),
+          requireAvailable: () => Effect.die("No launch after failed inspect"),
+        }),
+      );
+      const diagnosis = only(result.diagnoses);
+      expect(diagnosis.ready).toBe(false);
+      expect(checkOf(diagnosis, "opencodex_route")).toMatchObject({
+        status: "fail",
+        fix: {
+          actor: state === "reconnecting" ? "agent" : "human",
+          path: state === "reconnecting" ? "provider.diagnose" : "provider.home_request",
+        },
+      });
+      expect(inspections).toBe(1);
+    }),
+);
+it.effect("does not probe Home for another driver", () =>
+  Effect.gen(function* () {
+    const { result } = yield* diagnose({ driver: driver("claudeCloud") }).pipe(
+      Effect.provideService(HomeRoute.OpenCodexRoute, {
+        inspect: () => Effect.die("Unrelated driver must not probe Home"),
+        launchArgs: () => Effect.die("unused"),
+        requireAvailable: () => Effect.die("unused"),
+      }),
+    );
+    expect(only(result.diagnoses).ready).toBe(true);
+  }),
+);

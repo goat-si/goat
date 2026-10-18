@@ -1,3 +1,4 @@
+import * as HomeRoute from "../provider/OpenCodexRoute.ts";
 /**
  * `goat provider diagnose`: why provider instances cannot run, read-only.
  *
@@ -90,7 +91,7 @@ const readSavedSnapshots = Effect.fn("cli.provider.readSavedSnapshots")(function
 });
 
 /** A ProviderHost over a settings snapshot read from disk. It has no credentials and does no background work. */
-const readOnlyHost = (
+export const readOnlyHost = (
   paths: ServerConfig.ServerDerivedPaths,
   baseDir: string,
   cwd: string,
@@ -193,7 +194,7 @@ const providerDiagnoseCommand = Command.make("diagnose", {
       const host = readOnlyHost(paths, baseDir, process.cwd(), settings);
       const result = yield* diagnoseProviders({ input, snapshots, checkedBy: "cli" }).pipe(
         Effect.provide(
-          DevinCloudCli.layer.pipe(
+          Layer.mergeAll(DevinCloudCli.layer, HomeRoute.layer).pipe(
             Layer.provide(AcpRegistrySupport.layerFromHost),
             Layer.provide(FetchHttpClient.layer),
             Layer.provideMerge(Layer.succeed(ProviderHost.ProviderHost, host)),
