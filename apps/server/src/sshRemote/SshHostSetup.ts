@@ -1,3 +1,4 @@
+import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import {
   EnvironmentAuthorizationError,
   SshHostProbeError,
@@ -174,6 +175,7 @@ export const make = (options: { readonly home?: string } = {}) =>
     const dispatch = yield* Dispatch.SshRemoteDispatch;
     const sessions = yield* SessionStore.SessionStore;
     const handoffs = yield* Handoffs.Handoffs;
+    const providerHomeRequests = yield* Effect.serviceOption(HomeRequests.CodexHomeRequests);
     const threads = yield* Threads.ThreadManagementService;
     const environment = yield* Environment.ServerEnvironment;
     const diagnosis = yield* Diagnosis.ProviderDiagnosisRouting;
@@ -1225,7 +1227,7 @@ export const make = (options: { readonly home?: string } = {}) =>
         yield* work.pipe(Effect.forkIn(serviceScope));
       }
     });
-    const respondHandoff: SshHostSetup["Service"]["respondHandoff"] = (input, sessionId) =>
+    const respondExisting = (input: HandoffRespondInput, sessionId: AuthSessionId) =>
       handoffs
         .respond(input, sessionId)
         .pipe(
@@ -1237,6 +1239,18 @@ export const make = (options: { readonly home?: string } = {}) =>
               : Effect.void,
           ),
         );
+    const respondHandoff: SshHostSetup["Service"]["respondHandoff"] = (input, sessionId) =>
+      Option.isNone(providerHomeRequests)
+        ? respondExisting(input, sessionId)
+        : handoffs
+            .read(input)
+            .pipe(
+              Effect.flatMap((record) =>
+                record.target.path === "provider.home_request"
+                  ? providerHomeRequests.value.respond(input, sessionId)
+                  : respondExisting(input, sessionId),
+              ),
+            );
     const handoffProgress: SshHostSetup["Service"]["handoffProgress"] = (input, caller) =>
       Effect.gen(function* () {
         yield* authorize(caller, "orchestration:read");

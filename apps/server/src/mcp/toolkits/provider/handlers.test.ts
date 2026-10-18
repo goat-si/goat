@@ -1,3 +1,6 @@
+import * as DateTime from "effect/DateTime";
+import { ThreadId, ProviderInstanceId, TurnItemId } from "@goat/contracts";
+import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, OrchestratorMcpFailure } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -35,6 +38,7 @@ it.effect.each([undefined, "box"])("uses one routing entry point for host=%s", (
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),
+      Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
       Layer.provide(
         Layer.mock(Routing.ProviderDiagnosisRouting)({
           diagnose: (input, caller) =>
@@ -71,6 +75,7 @@ it.effect(
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(liveThreadsLayer),
+        Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
         Layer.provide(
           Layer.mock(Routing.ProviderDiagnosisRouting)({
             diagnose: () =>
@@ -99,5 +104,69 @@ it.effect(
           expect.objectContaining({ text: expect.stringContaining("goat_ssh_host_prepare") }),
         ]),
       );
+    }),
+);
+
+it.effect(
+  "requests human Home approval once and encodes DateTime through the JSON success codec",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const callingScope: Invocation.McpInvocationScope = {
+        ...scope,
+        client: undefined,
+        thread: {
+          threadId: ThreadId.make("home-request-owner"),
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        grantedScopes: ["orchestration:operate"],
+        reauthorize: () => Effect.void,
+      };
+      let requests = 0;
+      const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(liveThreadsLayer),
+        Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
+        Layer.provide(
+          Layer.mock(HomeRequests.CodexHomeRequests)({
+            request: (input, authenticated) =>
+              Effect.sync(() => {
+                requests++;
+                expect(input).toEqual({ instanceId: "codex-home", action: "connect" });
+                expect(authenticated).toBe(callingScope);
+                return {
+                  kind: "needs_human" as const,
+                  handoff: {
+                    handoffId: TurnItemId.make("home-approval"),
+                    kind: "approval" as const,
+                    title: "Review Codex Home",
+                    state: "pending" as const,
+                    targetPath: "provider.home_request",
+                    expiresAt: DateTime.add(now, { minutes: 15 }),
+                  },
+                  next: { after: "approval" as const, call: "goat_provider_diagnose" as const },
+                };
+              }),
+          }),
+        ),
+      );
+      const result = yield* McpServer.McpServer.pipe(
+        Effect.flatMap((server) =>
+          server.callTool({
+            name: "goat_provider_home_request",
+            arguments: { instanceId: "codex-home", action: "connect" },
+          }),
+        ),
+        Effect.provideService(Invocation.McpInvocationContext, callingScope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+        Effect.provide(registered),
+      );
+      expect(result.isError).toBe(false);
+      expect(requests).toBe(1);
+      expect(result.structuredContent).toMatchObject({
+        kind: "needs_human",
+        handoff: { expiresAt: expect.any(String) },
+      });
     }),
 );

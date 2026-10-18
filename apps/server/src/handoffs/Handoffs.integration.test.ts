@@ -672,3 +672,136 @@ it.effect(
       assert.equal(ordinary.state, "expired");
     }),
 );
+
+it.effect(
+  "provider Home approvals retain private intent and approver across restart without entering SSH continuations",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-provider-handoff-" });
+        const store = Context.get(
+          yield* Layer.build(
+            SecretStore.layer.pipe(
+              Layer.provide(ServerConfig.layerTest(home, { prefix: "provider-home-private-" })),
+            ),
+          ),
+          SecretStore.ServerSecretStore,
+        );
+        const reviewer = AuthSessionId.make("provider-home-reviewer");
+        const now = yield* DateTime.now;
+        const dependencies = Layer.mergeAll(
+          Layer.succeed(SecretStore.ServerSecretStore, store),
+          Layer.mock(Environment.ServerEnvironment)({
+            getEnvironmentId: Effect.succeed(EnvironmentId.make("provider-home-host")),
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            dispatch: orchestrator.dispatch,
+            getThreadRecords: orchestrator.getThreadRecords,
+          }),
+          Layer.mock(SessionStore.SessionStore)({
+            cookieName: "test",
+            legacyCookieName: undefined,
+            listActive: () =>
+              Effect.succeed([
+                {
+                  sessionId: reviewer,
+                  subject: "test",
+                  method: "browser-session-cookie",
+                  scopes: ["orchestration:operate", "providers:manage"],
+                  client: { label: "Human reviewer", deviceType: "unknown" },
+                  issuedAt: now,
+                  expiresAt: DateTime.add(now, { days: 2 }),
+                  lastConnectedAt: now,
+                  connected: true,
+                  current: true,
+                },
+              ]),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+        );
+        const service = Context.get(
+          yield* Layer.build(Handoffs.layer.pipe(Layer.provide(dependencies))),
+          Handoffs.Handoffs,
+        );
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const args = {
+          version: 1,
+          expectedFingerprint: "private-fingerprint",
+          expectedRevision: { epoch: "private-epoch", sequence: 2 },
+          originalConfig: "human-only",
+        };
+        const summary = yield* service.create({
+          kind: "approval",
+          title: "Use Home",
+          reason: "Review the instance route",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "provider.home_request" },
+          target: {
+            environmentId: EnvironmentId.make("provider-home-host"),
+            path: "provider.home_request",
+          },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Connect OpenCodex on this host first." },
+          args,
+        });
+        assert.isNotNull(summary.expiresAt);
+        const address = { threadId, handoffId: summary.handoffId };
+        yield* service.respond({ ...address, action: "completed" }, reviewer);
+        const restarted = Context.get(
+          yield* Layer.build(Layer.fresh(Handoffs.layer).pipe(Layer.provide(dependencies))),
+          Handoffs.Handoffs,
+        );
+        const continuations = yield* restarted.completedProviderHomeContinuations;
+        assert.equal(continuations.length, 1);
+        assert.deepStrictEqual(continuations[0]?.args, args);
+        assert.equal(continuations[0]?.approvedBySessionId, reviewer);
+        assert.deepStrictEqual(yield* restarted.completedSshContinuations, []);
+        const publicRecord = yield* encodeHandoff(yield* restarted.read(address));
+        assert.notInclude(JSON.stringify(publicRecord), "private-fingerprint");
+        assert.notInclude(JSON.stringify(publicRecord), reviewer);
+        yield* restarted.finishProviderHomeContinuation(address);
+        assert.deepStrictEqual(yield* restarted.completedProviderHomeContinuations, []);
+      }),
+    ),
+);
+it.effect(
+  "provider Home approval survives its requesting run and expires after fifteen minutes",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const record: Handoff = {
+        handoffId: TurnItemId.make("provider-home-ttl"),
+        kind: "approval",
+        title: "Use Home",
+        reason: "Review",
+        requestedBy: { threadId, providerInstanceId: instanceId, path: "provider.home_request" },
+        target: { environmentId: EnvironmentId.make("host"), path: "provider.home_request" },
+        dedupeKey: "private-hash",
+        state: "pending",
+        createdAt: now,
+        expiresAt: DateTime.add(now, { minutes: 15 }),
+        actor: { type: "agent", threadId },
+      };
+      assert.equal(
+        (yield* transitionHandoff(
+          record,
+          "opened",
+          { type: "client", label: "Human" },
+          DateTime.add(now, { minutes: 1 }),
+          true,
+        )).state,
+        "opened",
+      );
+      assert.equal(
+        (yield* transitionHandoff(
+          record,
+          "completed",
+          { type: "client", label: "Human" },
+          DateTime.add(now, { minutes: 16 }),
+          false,
+        )).state,
+        "expired",
+      );
+    }),
+);

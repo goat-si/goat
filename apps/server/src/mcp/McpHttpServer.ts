@@ -1005,7 +1005,8 @@ export const layerHostStatusToolkit = catalogRegistrations.hostStatus;
 
 /**
  * goat_provider_diagnose. Composed beside `layer` by the server, which provides
- * ProviderDiagnosisService from the provider registry, host, and ACP catalog.
+ * ProviderDiagnosisService and CodexHomeRequests are shared application services.
+ * The approval tool uses the same mutation singleton as authenticated Settings.
  */
 export const layerProviderToolkit = catalogRegistrations.provider;
 

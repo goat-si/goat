@@ -1,3 +1,6 @@
+import * as HomeRoute from "./provider/OpenCodexRoute.ts";
+import * as CodexRoutes from "./provider/CodexRouteService.ts";
+import * as HomeRequests from "./provider/CodexHomeRequests.ts";
 import { resolveCommandPath } from "@goat/shared/shell";
 import * as HostProcess from "@goat/shared/HostProcess";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the closed import factory requires a synchronous UUID callback.
@@ -1263,6 +1266,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // The coordinator re-arms watches after a relayed send, so the store comes after it.
   Layer.provide(layerSshWorkspace),
   Layer.provide(SshHostSetup.layer),
+  Layer.provide(HomeRequests.layer.pipe(Layer.provideMerge(CodexRoutes.layer))),
   Layer.provide(
     ProviderDiagnosisRouting.layer.pipe(
       Layer.provide(ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer))),
@@ -1665,6 +1669,7 @@ const layerMakeServer = Layer.unwrap(
         ),
       ),
       Layer.provide(layerApplicationObservability),
+      Layer.provide(HomeRoute.layer),
       Layer.provideMerge(FetchHttpClient.layer),
       // PR reads, Git operations, and WebSocket discovery share one process limiter.
       Layer.provide(VcsProcess.layer),
@@ -1673,7 +1678,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerPlatformServices),
     );
   }),
-).pipe(Layer.provide(ProcessRunner.layer));
+).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));
 
 // Keep the CLI boundary requirements explicit: cross-module inference widens this large
 // composed layer to any when the memory/provider dependency graph is included.

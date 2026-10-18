@@ -2516,6 +2516,21 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { title: "Read browser diagnostics", idempotentHint: true, openWorldHint: true },
   }),
+  "provider.home_request": entry({
+    resource: "provider",
+    verb: "home_request",
+    name: "goat_provider_home_request",
+    toolkit: "provider",
+    summary: "Request approval for a Codex Home route",
+    description:
+      "Ask a person in this target environment's thread to approve connecting a Codex instance to OpenCodex Home, or disconnecting GOAT's override to use Codex's own settings. Link setup and unlinking remain with the person and OpenCodex. This creates an approval request and never grants an agent providers:manage or permission to approve itself. Host routing is unsupported; ask in a thread on the target environment.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: ["approval"],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  }),
   "provider.diagnose": entry({
     resource: "provider",
     verb: "diagnose",
@@ -2523,7 +2538,7 @@ export const agentSurfaceRegistry = {
     toolkit: "provider",
     summary: "Diagnose provider readiness",
     description:
-      'Diagnose why a provider instance cannot run, without changing anything. Returns checks per instance; a failed check has a reason and a fix whose actor says who acts: agent (something you can do now, such as calling another tool) or human (a person must change provider settings, install or update a CLI, or sign in; tell the user the instruction and never try to sign in or read credentials yourself). Cursor Cloud, Claude Cloud, and Devin Cloud appear automatically and follow their local Cursor, Claude, or Devin provider; sign in to or enable that provider. Custom cloud instances can still be added. If multiple Devin ACP providers qualify, choose one in Devin Cloud settings. Claude Cloud and Devin Cloud are checked live: sibling, executable, version, cloud support, and sign-in. Other providers report their readiness snapshot, refreshed first when instanceId is passed. Pass driver:"claudeCloud" or driver:"devinCloud" to diagnose an automatic cloud provider. Pass cwd to also check that project\'s repository remote. Pass host to diagnose providers on a ready SSH runtime. If it needs preparation, call goat_ssh_host_prepare, then goat_ssh_host_status until setup completes, and retry the diagnosis. Sign-in commands must run there. fix.path names the agent-surface step that will automate the fix (provider.setup and provider.login_start are not callable yet).',
+      'Diagnose why a provider instance cannot run, without changing anything. Returns checks per instance; a failed check has a reason and a fix whose actor says who acts: agent (something you can do now, such as calling another tool) or human (a person must change provider settings, install or update a CLI, or sign in; tell the user the instruction and never try to sign in or read credentials yourself). Cursor Cloud, Claude Cloud, and Devin Cloud appear automatically and follow their local Cursor, Claude, or Devin provider; sign in to or enable that provider. Custom cloud instances can still be added. If multiple Devin ACP providers qualify, choose one in Devin Cloud settings. Claude Cloud and Devin Cloud are checked live: sibling, executable, version, cloud support, and sign-in. Codex Home routes freshly check the selected endpoint health, readiness and models on the machine where Codex runs. Use goat_provider_home_request in that environment’s thread for a person’s approval to change the route; GOAT never stores link keys. Diagnosis never installs or starts an SSH runtime. Other providers report their readiness snapshot, refreshed first when instanceId is passed. Pass driver:"claudeCloud" or driver:"devinCloud" to diagnose an automatic cloud provider. Pass cwd to also check that project\'s repository remote. Pass host to diagnose providers on a ready SSH runtime. If it needs preparation, call goat_ssh_host_prepare, then goat_ssh_host_status until setup completes, and retry the diagnosis. Sign-in commands must run there. fix.path names the agent-surface step that will automate the fix (provider.setup and provider.login_start are not callable yet).',
     effect: "read",
     hostRoutable: true,
     requires: "either",

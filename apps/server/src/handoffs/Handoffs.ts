@@ -53,6 +53,7 @@ const ContinuationPayload = Schema.Struct({
   args: Schema.Record(Schema.String, Schema.Unknown),
   approvedBySessionId: Schema.optional(AuthSessionId),
   sshProgress: Schema.optional(SshProgressBinding),
+  namespace: Schema.optional(Schema.Literal("provider.home_request")),
 });
 const PrivatePayload = Schema.fromJsonString(
   Schema.Union([
@@ -129,6 +130,17 @@ export class Handoffs extends Context.Service<
       ReadonlyArray<{ readonly handoff: Handoff; readonly sshProgress: SshProgressBinding }>,
       HandoffError
     >;
+    readonly completedProviderHomeContinuations: Effect.Effect<
+      ReadonlyArray<{
+        readonly handoff: Handoff;
+        readonly args: Readonly<Record<string, unknown>>;
+        readonly approvedBySessionId: AuthSessionId;
+      }>,
+      HandoffError
+    >;
+    readonly finishProviderHomeContinuation: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<void, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -244,7 +256,7 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
-    if (record.target.path.startsWith("ssh.")) {
+    if (record.target.path.startsWith("ssh.") || record.target.path === "provider.home_request") {
       if (Option.isNone(environment)) return yield* new HandoffError({ reason: "unavailable" });
       const origin = yield* environment.value.getEnvironmentId;
       if (record.target.environmentId !== origin)
@@ -277,7 +289,7 @@ const make = Effect.gen(function* () {
     const record = yield* read(input);
     if (
       input.action === "completed" &&
-      record.target.path.startsWith("ssh.") &&
+      (record.target.path.startsWith("ssh.") || record.target.path === "provider.home_request") &&
       isHandoffPending(record.state)
     ) {
       const payload = yield* loadPrivate(input.handoffId);
@@ -354,7 +366,9 @@ const make = Effect.gen(function* () {
         dedupeKey,
         state: "pending",
         expiresAt:
-          input.kind === "approval" && !input.target.path.startsWith("ssh.")
+          input.kind === "approval" &&
+          !input.target.path.startsWith("ssh.") &&
+          input.target.path !== "provider.home_request"
             ? null
             : (input.expiresAt ?? DateTime.add(now, { minutes: 15 })),
         createdAt: now,
@@ -363,6 +377,9 @@ const make = Effect.gen(function* () {
       yield* savePrivate(handoff.handoffId, {
         version: 1,
         kind: "continuation",
+        ...(input.target.path === "provider.home_request"
+          ? { namespace: "provider.home_request" as const }
+          : {}),
         human: input.human,
         args: input.args,
         ...(input.sshProgress === undefined ? {} : { sshProgress: input.sshProgress }),
@@ -405,6 +422,7 @@ const make = Effect.gen(function* () {
           DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
         (handoff.kind === "approval" &&
           !handoff.target.path.startsWith("ssh.") &&
+          handoff.target.path !== "provider.home_request" &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
         const input = yield* decodeAddress({
@@ -415,40 +433,57 @@ const make = Effect.gen(function* () {
       }
     }
   });
-  const completedSshContinuations = Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    const rows = yield* sql<{
-      handoff_json: string;
-    }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
+  const completedContinuations = (namespace: "ssh" | "provider.home_request") =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const rows = yield* sql<{
+        handoff_json: string;
+      }>`SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items WHERE type = 'human_handoff' AND status = 'completed'
       AND updated_at > ${DateTime.formatIso(DateTime.subtract(now, { hours: 24 }))}`.pipe(
-      Effect.mapError(unavailable),
-    );
-    const results: Array<{
-      handoff: Handoff;
-      args: Readonly<Record<string, unknown>>;
-      approvedBySessionId: AuthSessionId;
-      sshProgress?: SshProgressBinding;
-    }> = [];
-    for (const row of rows) {
-      const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
-      if (!handoff.target.path.startsWith("ssh.")) continue;
-      const payload = yield* loadPrivate(handoff.handoffId);
-      if (
-        payload !== null &&
-        "kind" in payload &&
-        payload.kind === "continuation" &&
-        payload.approvedBySessionId !== undefined
-      )
-        results.push({
-          handoff,
-          args: payload.args,
-          approvedBySessionId: payload.approvedBySessionId,
-          ...(payload.sshProgress === undefined ? {} : { sshProgress: payload.sshProgress }),
-        });
-    }
-    return results;
-  });
+        Effect.mapError(unavailable),
+      );
+      const results: Array<{
+        handoff: Handoff;
+        args: Readonly<Record<string, unknown>>;
+        approvedBySessionId: AuthSessionId;
+        sshProgress?: SshProgressBinding;
+      }> = [];
+      for (const row of rows) {
+        const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
+        if (
+          namespace === "ssh"
+            ? !handoff.target.path.startsWith("ssh.")
+            : handoff.target.path !== "provider.home_request"
+        )
+          continue;
+        const payload = yield* loadPrivate(handoff.handoffId);
+        if (
+          payload !== null &&
+          "kind" in payload &&
+          payload.kind === "continuation" &&
+          (namespace !== "provider.home_request" ||
+            payload.namespace === "provider.home_request") &&
+          payload.approvedBySessionId !== undefined
+        )
+          results.push({
+            handoff,
+            args: payload.args,
+            approvedBySessionId: payload.approvedBySessionId,
+            ...(payload.sshProgress === undefined ? {} : { sshProgress: payload.sshProgress }),
+          });
+      }
+      return results;
+    });
+  const completedSshContinuations = completedContinuations("ssh");
+  const completedProviderHomeContinuations = completedContinuations("provider.home_request");
+  const finishProviderHomeContinuation = (input: HandoffReadInput) =>
+    Effect.gen(function* () {
+      const handoff = yield* read(input);
+      if (handoff.target.path !== "provider.home_request" || isHandoffPending(handoff.state))
+        return;
+      yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+    }).pipe(lock.withPermits(1));
   const resolvedSshOutcomes = Effect.gen(function* () {
     const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }));
     const rows = yield* sql<{
@@ -590,6 +625,8 @@ const make = Effect.gen(function* () {
     sweep,
     answerSecret,
     completedSshContinuations,
+    completedProviderHomeContinuations,
+    finishProviderHomeContinuation,
     resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,

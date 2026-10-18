@@ -397,6 +397,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "environment-update",
   ),
   goat_host_status: tool(["Read", "Reading", "Read", "host status"], "host-status"),
+  goat_provider_home_request: tool(
+    ["Request", "Requesting", "Requested", "Codex Home approval"],
+    "provider-diagnose",
+  ),
   goat_provider_diagnose: tool(
     ["Diagnose", "Diagnosing", "Diagnosed", "a provider"],
     "provider-diagnose",

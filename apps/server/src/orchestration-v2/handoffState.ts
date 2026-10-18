@@ -30,7 +30,10 @@ export function transitionHandoff(
   const expired =
     (record.expiresAt !== null &&
       DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
-    (record.kind === "approval" && !record.target.path.startsWith("ssh.") && runEnded);
+    (record.kind === "approval" &&
+      !record.target.path.startsWith("ssh.") &&
+      record.target.path !== "provider.home_request" &&
+      runEnded);
   const next = expired ? "expired" : state;
   if (next === "pending" || (next === "expired" && !expired))
     return Effect.fail(new HandoffError({ reason: "conflict" }));

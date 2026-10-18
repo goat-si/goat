@@ -1,3 +1,4 @@
+import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
@@ -1347,6 +1348,7 @@ const layerWsRpc = (
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const handoffs = yield* Handoffs.Handoffs;
       const sshHostSetup = yield* SshHostSetup.SshHostSetup;
+      const codexRoutes = yield* CodexRoutes.CodexRouteService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2724,7 +2726,10 @@ const layerWsRpc = (
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
             const settings = yield* providerInstanceMutation === undefined
               ? serverSettings.updateSettings(nextPatch)
-              : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
+              : codexRoutes.mutateProviderInstance(
+                  { mutation: providerInstanceMutation, patch: nextPatch },
+                  { kind: "client", sessionId: currentSessionId },
+                );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
@@ -3498,6 +3503,7 @@ export const layer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshHostSetup = yield* SshHostSetup.SshHostSetup;
+    const codexRoutes = yield* CodexRoutes.CodexRouteService;
     const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
@@ -3571,6 +3577,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(SshWorkspaceSync.SshWorkspaceSync, sshWorkspace)),
               Layer.provide(Layer.succeed(SshHostSetup.SshHostSetup, sshHostSetup)),
+              Layer.provide(Layer.succeed(CodexRoutes.CodexRouteService, codexRoutes)),
               Layer.provide(OtlpEndpointCheck.layer),
               // Shared like the pull request service, so concurrent generations single-flight.
               Layer.provide(

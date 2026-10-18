@@ -1,7 +1,10 @@
+import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   OrchestratorMcpFailure,
+  ProviderHomeRequestInput,
+  ProviderHomeRequestResultJson,
   ProviderDiagnoseOnHostInput,
   ProviderDiagnoseOnHostResult,
 } from "@goat/contracts";
@@ -24,4 +27,16 @@ const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"]
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.diagnose"]));
 
-export const ProviderToolkit = Toolkit.make(ProviderDiagnoseTool);
+const ProviderHomeRequestTool = Tool.make(agentSurfaceRegistry["provider.home_request"].name, {
+  description: agentSurfaceRegistry["provider.home_request"].description,
+  parameters: ProviderHomeRequestInput,
+  success: ProviderHomeRequestResultJson,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HomeRequests.CodexHomeRequests,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.home_request"]));
+export const ProviderToolkit = Toolkit.make(ProviderDiagnoseTool, ProviderHomeRequestTool);
