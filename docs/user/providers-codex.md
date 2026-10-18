@@ -25,6 +25,44 @@ GOAT can use your installed Codex and its existing login. Run `codex login`
 on the environment's machine to sign in. [Provider setup](./install.md#providers)
 covers installation and custom configuration.
 
+## Use OpenCodex Home
+
+Install and connect OpenCodex on the machine where Codex runs. GOAT uses that
+machine's local OpenCodex service; a remote GOAT server needs its own Child.
+On your Home machine, GOAT shows “This machine is your OpenCodex Home.”
+
+In **Settings → Providers**, select the environment and add a Codex instance
+that uses your Codex CLI. Name it **Codex · OpenCodex Home**, then choose
+**OpenCodex Home** as its model route. The default address is
+`http://127.0.0.1:10100/v1` on that environment's machine. Instances connected
+through GOAT's ChatGPT sharing need a separate instance that uses your Codex CLI.
+On mobile, add the instance in web or desktop Settings first.
+
+Choose this instance in the thread's model picker. Instances using the same
+**CODEX_HOME path** can continue compatible threads. GOAT reports the Home link
+status and stops with an explicit error if it becomes unavailable. GOAT never
+automatically switches the selected account, instance, model, or route on failure.
+Check OpenCodex on the named machine, refresh provider status, and try again.
+OpenCodex manages its own account selection within Home.
+
+Use **Connect to Home** to follow the connection steps on the named host.
+Use **Stop using OpenCodex Home** to return this instance to Codex's own settings.
+This doesn't disconnect OpenCodex from Home. Run `ocx disconnect` on that
+machine to do that. Your own Codex settings may still point at OpenCodex;
+check the displayed endpoint before starting work.
+
+When an agent asks to use or stop using Home, review the execution host,
+Codex instance, current route, and requested route in the approval request.
+Approving lets GOAT change that instance's model route; it does not install
+OpenCodex, connect or disconnect its Home link, or give the agent permission
+to manage providers. Complete any OpenCodex connection steps on that host first.
+Declining leaves the route unchanged. After approving, check provider status
+for the result; approval alone does not mean the change succeeded. If the request
+expired or the instance changed while you reviewed it, ask the agent to request
+approval again.
+
+End this instance's active sessions and turns before changing its route.
+
 ## Use multiple accounts
 
 Add another ChatGPT account in **Settings → Providers**, then select the account

@@ -143,6 +143,11 @@ in `apps/server/src/orchestration-v2/CloudTaskSourceService.ts`.
 `docs/internals/providers.md` and `docs/internals/adding-a-provider.md` are the contributor
 procedures. This page is the inventory.
 
+Codex Home routing belongs to `apps/server/src/provider/OpenCodexRoute.ts`.
+It observes OpenCodex on the Codex execution host. OpenCodex owns link keys
+and tunnel lifecycle; GOAT's route selection stays on the Codex instance.
+The shared status contract is `packages/contracts/src/codexRoute.ts`.
+
 ## Source control
 
 Pull requests and repository operations go through `apps/server/src/sourceControl/`.

@@ -144,6 +144,7 @@
         "apps/server/src/checkpointing/CheckpointStore.ts",
         "apps/server/src/checkpointing/Utils.ts",
         "apps/server/src/vcs/GitVcsDriver.ts",
+        "apps/server/src/provider/OpenCodexRoute.ts",
         "apps/server/src/provider/builtInDrivers.ts",
         "apps/server/src/provider/Drivers/CodexDriver.ts",
         "apps/server/src/provider/Drivers/ClaudeDriver.ts",
@@ -177,7 +178,8 @@
         "packages/source-control-gitcafe",
         "packages/source-control-core",
         "packages/source-control-testing",
-        "packages/contracts"
+        "packages/contracts",
+        "packages/contracts/src/codexRoute.ts"
       ]
     },
     {
