@@ -1,3 +1,7 @@
+import * as HomeRoutes from "./provider/CodexRouteService.ts";
+import * as HomeRouteFixture from "./provider/CodexRouteService.testkit.ts";
+import * as Scope from "effect/Scope";
+import { CodexSettings } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -58,6 +62,7 @@ it.effect("translates a persisted environment theme on load", () =>
 );
 // goat-rename: legacy-end
 
+const decodeHomeCodex = Schema.decodeSync(CodexSettings);
 const decodeHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
@@ -3151,4 +3156,72 @@ it.effect("deleted provider settings retain the committed disabled policy and ep
       assert.strictEqual(yield* fs.exists(config.settingsPath), false);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("preserves combined route and unrelated config updates in one settings commit", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const routes = yield* HomeRoutes.CodexRouteService;
+    yield* service.start;
+    const config = decodeHomeCodex({
+      modelRoute: "opencodex",
+      homePath: "/selected-home",
+      launchArgs: "--profile work",
+    });
+    const saved = yield* HomeRouteFixture.commitAndApply(
+      routes.mutateProviderInstance(
+        {
+          mutation: {
+            operation: "create",
+            instanceId: HomeRouteFixture.instanceId,
+            instance: {
+              driver: ProviderDriverKind.make("codex"),
+              displayName: "Codex · OpenCodex Home",
+              config,
+            },
+          },
+          patch: { worktreesDirectory: "/explicit-worktrees" },
+        },
+        HomeRouteFixture.caller,
+      ),
+    );
+    assert.equal(saved.worktreesDirectory, "/explicit-worktrees");
+    assert.deepStrictEqual(saved.providerInstances[HomeRouteFixture.instanceId]?.config, config);
+  }).pipe(Effect.provide(HomeRouteFixture.layer)),
+);
+it.effect("rejects endpoint changes through a raw settings patch while a session is active", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const routes = yield* HomeRoutes.CodexRouteService;
+    yield* service.start;
+    const instance = {
+      driver: ProviderDriverKind.make("codex"),
+      config: decodeHomeCodex({ modelRoute: "opencodex" }),
+    };
+    yield* HomeRouteFixture.commitAndApply(
+      routes.mutateProviderInstance(
+        { mutation: { operation: "create", instanceId: HomeRouteFixture.instanceId, instance } },
+        HomeRouteFixture.caller,
+      ),
+    );
+    const before = yield* service.getSettings;
+    const scope = yield* Scope.make();
+    yield* routes
+      .reserveUse(HomeRouteFixture.instanceId)
+      .pipe(Effect.provideService(Scope.Scope, scope));
+    const result = yield* service
+      .updateSettings({
+        providerInstances: {
+          [HomeRouteFixture.instanceId]: {
+            ...instance,
+            config: { ...instance.config, opencodexBaseUrl: "http://127.0.0.1:10101/v1" },
+          },
+        },
+      })
+      .pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.equal(result.failure.code, "provider_instance_busy");
+    assert.deepStrictEqual(yield* service.getSettings, before);
+    yield* Scope.close(scope, Exit.void);
+  }).pipe(Effect.provide(HomeRouteFixture.layer)),
 );

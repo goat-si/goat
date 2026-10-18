@@ -1,3 +1,5 @@
+import * as CodexRoutes from "../provider/CodexRouteService.ts";
+import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as MemoryContracts from "@goat/contracts";
@@ -7095,4 +7097,111 @@ it.effect.each(turnStartMemoryCases)(
         ),
       );
     }).pipe(Effect.scoped),
+);
+
+it.effect("keeps an idle instance reserved until native session close completes", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const routes = yield* CodexRoutes.CodexRouteState;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const threadId = ThreadId.make("home-route-session-lease");
+      const providerSessionId = yield* allocator.allocate.providerSession({
+        threadId,
+        providerInstanceId: modelSelection.instanceId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator: allocator,
+            threadId,
+            now: yield* DateTime.now,
+          }),
+        ],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      const current = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [modelSelection.instanceId]: { driver: ProviderDriverKind.make("codex"), config: {} },
+        },
+      };
+      const next = {
+        ...current,
+        providerInstances: {
+          [modelSelection.instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            config: { modelRoute: "opencodex" },
+          },
+        },
+      };
+      const busy = yield* routes.validate(current, next).pipe(Effect.result);
+      assert.equal(busy._tag, "Failure");
+      if (busy._tag === "Failure") assert.equal(busy.failure.code, "provider_instance_busy");
+      yield* manager.close(providerSessionId);
+      yield* routes.validate(current, next);
+    }).pipe(
+      Effect.provide(
+        layerTest({ state, idleTimeoutMs: 60_000 }).pipe(
+          Layer.provideMerge(CodexRoutes.layerState),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("drops a Home instance reservation after open fails", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const routes = yield* CodexRoutes.CodexRouteState;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const threadId = ThreadId.make("home-open-failure");
+      const providerSessionId = yield* allocator.allocate.providerSession({
+        threadId,
+        providerInstanceId: modelSelection.instanceId,
+      });
+      yield* eventSink.write({
+        events: [
+          yield* makeThreadCreatedEvent({
+            idAllocator: allocator,
+            threadId,
+            now: yield* DateTime.now,
+          }),
+        ],
+      });
+      const outcome = yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(outcome));
+      const current = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [modelSelection.instanceId]: { driver: ProviderDriverKind.make("codex"), config: {} },
+        },
+      };
+      const next = {
+        ...current,
+        providerInstances: {
+          [modelSelection.instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            config: { modelRoute: "opencodex" },
+          },
+        },
+      };
+      yield* routes.validate(current, next);
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 60_000,
+          beforeOpen: () => Effect.die("Simulated native open failure"),
+        }).pipe(Layer.provideMerge(CodexRoutes.layerState)),
+      ),
+    );
+  }),
 );

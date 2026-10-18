@@ -1,3 +1,4 @@
+import * as CodexRoute from "./provider/CodexRouteService.ts";
 /**
  * ServerSettings - Server-authoritative settings service.
  *
@@ -825,10 +826,16 @@ export class ServerSettingsService extends Context.Service<
     readonly updateProviderInstance: (
       mutation: ProviderInstanceMutation,
       patch?: ServerSettingsPatch,
+      approval?: CodexRoute.ApprovedInstancePrecondition,
+      authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Run an effect against a settings snapshot while settings writes are paused. */
     readonly withSettingsSnapshot: <A, E, R>(
+      use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | ServerSettingsError, R>;
+
+    readonly withStoredSettingsSnapshot?: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
 
@@ -841,6 +848,14 @@ export class ServerSettingsService extends Context.Service<
      * snapshot and a lazily started stream must not be lost.
      */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
+    readonly subscribeProviderChanges?: Effect.Effect<
+      Stream.Stream<
+        { readonly settings: ServerSettings; readonly revision: CodexRoute.SettingsRevision },
+        ServerSettingsError
+      >,
+      never,
+      Scope.Scope
+    >;
   }
 >()("goat/serverSettings/ServerSettingsService") {
   /** @deprecated Import and use `layerTest` from this module. */
@@ -1365,6 +1380,7 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
+  const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
   const providerPolicy = yield* makeMemoryProviderPolicy;
   const ownerPublication = yield* makeOwnerPolicyPublication;
@@ -1399,13 +1415,24 @@ const make = Effect.gen(function* () {
     }));
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+  const providerChangesPubSub = yield* PubSub.unbounded<{
+    readonly settings: ServerSettings;
+    readonly revision: CodexRoute.SettingsRevision;
+  }>();
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
   const emitChange = (settings: ServerSettings) =>
-    PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+    Effect.gen(function* () {
+      yield* PubSub.publish(changesPubSub, settings);
+      if (Option.isSome(routeState))
+        yield* PubSub.publish(providerChangesPubSub, {
+          settings,
+          revision: routeState.value.revision(),
+        });
+    });
 
   const readConfigExists = fs.exists(settingsPath).pipe(
     Effect.tapError(() => retainCommittedHub("settings_unavailable")),
@@ -1968,6 +1995,11 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const current = yield* getSettingsFromCache;
       const updated = yield* update(current);
+      if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
+      if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))
+        return yield* materializeSettingsSecrets(current).pipe(
+          Effect.map(resolveTextGenerationProvider),
+        );
       const persisted = yield* persistSettingsSecrets(current, updated);
       const next = yield* normalizeServerSettings(persisted.settings);
       const materialized = yield* Effect.uninterruptibleMask(() =>
@@ -1986,6 +2018,7 @@ const make = Effect.gen(function* () {
           if (transition) yield* Ref.set(hubMarkerRef, transition);
           // Once the file commits, cancellation must not leave the CAS cache or subscribers behind.
           yield* Cache.set(settingsCache, cacheKey, next);
+          if (Option.isSome(routeState)) yield* routeState.value.committed(current, next);
           yield* emitChange(next);
           return materializedExit.value;
         }),
@@ -1995,7 +2028,34 @@ const make = Effect.gen(function* () {
 
   const updateAndPersistSettings = <E, R>(
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, E | ServerSettingsError, R>,
-  ) => writeSemaphore.withPermits(1)(updateSettingsWhileLocked(update));
+    targetIds: ReadonlyArray<ProviderInstanceId> = [],
+  ) => {
+    if (Option.isNone(routeState))
+      return writeSemaphore.withPermits(1)(updateSettingsWhileLocked(update));
+    const routes = routeState.value;
+    const commit = writeSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* getSettingsFromCache;
+        const settings = yield* updateSettingsWhileLocked(update);
+        const changed = [
+          ...new Set([
+            ...Object.keys(current.providerInstances),
+            ...Object.keys(settings.providerInstances),
+          ]),
+        ]
+          .map((id) => id as ProviderInstanceId)
+          .filter(
+            (id) =>
+              CodexRoute.instanceFingerprint(current.providerInstances[id]) !==
+              CodexRoute.instanceFingerprint(settings.providerInstances[id]),
+          );
+        return { settings, applied: routes.awaitApplied([...new Set([...changed, ...targetIds])]) };
+      }),
+    );
+    return routes.admission
+      .withPermits(1)(commit)
+      .pipe(Effect.flatMap(({ settings, applied }) => applied.pipe(Effect.as(settings))));
+  };
   const applyHubLocked: MemoryHubSettingsTransitions["Service"]["applyMemoryHubTransition"] = (
     input,
     permit,
@@ -2160,19 +2220,36 @@ const make = Effect.gen(function* () {
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
-      updateAndPersistSettings((current) =>
-        rejectMemoryHubSettingsPatch(patch, settingsPath).pipe(
-          Effect.map(() => applyServerSettingsPatch(current, patch)),
-        ),
+      updateAndPersistSettings(
+        (current) =>
+          rejectMemoryHubSettingsPatch(patch, settingsPath).pipe(
+            Effect.map(() => applyServerSettingsPatch(current, patch)),
+          ),
+        Object.keys(patch.providerInstances ?? {}).map((id) => id as ProviderInstanceId),
       ),
-    updateProviderInstance: (mutation, patch = {}) =>
-      updateAndPersistSettings((current) =>
-        Effect.gen(function* () {
-          yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
-          yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
-          return applyProviderInstanceMutation(patched, mutation);
-        }),
+    updateProviderInstance: (mutation, patch = {}, approval, authorizeAtCommit) =>
+      updateAndPersistSettings(
+        (current) =>
+          Effect.gen(function* () {
+            if (authorizeAtCommit) yield* authorizeAtCommit;
+            if (approval) {
+              if (Option.isNone(routeState))
+                return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
+              yield* routeState.value.validate(current, current, approval);
+            }
+            if (
+              mutation.operation === "create" &&
+              current.providerInstances[mutation.instanceId] !== undefined &&
+              CodexRoute.instanceFingerprint(current.providerInstances[mutation.instanceId]) ===
+                CodexRoute.instanceFingerprint(mutation.instance)
+            )
+              mutation = { ...mutation, operation: "upsert" };
+            yield* rejectMemoryHubSettingsPatch(patch, settingsPath);
+            yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
+            const patched = applyServerSettingsPatch(current, patch);
+            return applyProviderInstanceMutation(patched, mutation);
+          }),
+        [mutation.instanceId],
       ),
     applyMemoryHubTransition: (input, permit) =>
       writeSemaphore.withPermits(1)(applyHubLocked(input, permit)),
@@ -2191,6 +2268,25 @@ const make = Effect.gen(function* () {
       readPublication: Ref.get(committedHubRef).pipe(Effect.map((s) => s.publication)),
     },
     withSettingsSnapshot,
+    withStoredSettingsSnapshot: <A, E, R>(
+      use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
+    ) => writeSemaphore.withPermits(1)(getSettingsFromCache.pipe(Effect.flatMap(use))),
+    get subscribeProviderChanges() {
+      return PubSub.subscribe(providerChangesPubSub).pipe(
+        Effect.map((subscription) =>
+          Stream.fromSubscription(subscription).pipe(
+            Stream.mapEffect((event) =>
+              materializeSettingsSecrets(event.settings).pipe(
+                Effect.map((settings) => ({
+                  ...event,
+                  settings: resolveTextGenerationProvider(settings),
+                })),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
     get streamChanges() {
       return materializeChanges(Stream.fromPubSub(changesPubSub));
     },

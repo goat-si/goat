@@ -1,3 +1,13 @@
+import { it as effectIt } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Routes from "./CodexRouteService.ts";
+import * as RouteFixture from "./CodexRouteService.testkit.ts";
+import * as Settings from "../serverSettings.ts";
+import * as Mutator from "./ProviderInstanceRegistryMutator.ts";
+import { layerSettingsWatcher } from "./ProviderInstanceRegistryHydration.ts";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
@@ -220,3 +230,59 @@ describe("deriveProviderInstanceConfigMap", () => {
     });
   });
 });
+
+effectIt.effect(
+  "acknowledges only after reconciliation completes and preserves the committed revision",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const finished = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        const routes = yield* Routes.CodexRouteService;
+        yield* settings.start;
+        const mutation = yield* routes
+          .mutateProviderInstance(
+            {
+              mutation: {
+                operation: "create",
+                instanceId: RouteFixture.instanceId,
+                instance: {
+                  driver: ProviderDriverKind.make("codex"),
+                  displayName: "Hydrated Home",
+                  config: { modelRoute: "opencodex" },
+                },
+              },
+            },
+            RouteFixture.caller,
+          )
+          .pipe(
+            Effect.tap(() => Deferred.succeed(finished, undefined)),
+            Effect.forkScoped,
+          );
+        yield* Deferred.await(started);
+        expect(yield* Deferred.isDone(finished)).toBe(false);
+        yield* Deferred.succeed(resume, undefined);
+        expect(
+          (yield* Fiber.join(mutation)).providerInstances[RouteFixture.instanceId]?.displayName,
+        ).toBe("Hydrated Home");
+      }).pipe(
+        Effect.provide(
+          layerSettingsWatcher.pipe(
+            Layer.provide(
+              Layer.succeed(Mutator.ProviderInstanceRegistryMutator, {
+                reconcile: (config) =>
+                  config[RouteFixture.instanceId]
+                    ? Deferred.succeed(started, undefined).pipe(
+                        Effect.andThen(Deferred.await(resume)),
+                      )
+                    : Effect.void,
+              }),
+            ),
+            Layer.provideMerge(RouteFixture.layer),
+          ),
+        ),
+      );
+    }),
+);

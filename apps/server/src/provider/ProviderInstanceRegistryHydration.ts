@@ -1,3 +1,5 @@
+import * as CodexRoute from "./CodexRouteService.ts";
+import * as Option from "effect/Option";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 /**
  * ProviderInstanceRegistryHydration — derive a `ProviderInstanceConfigMap`
@@ -121,25 +123,61 @@ export const deriveProviderInstanceConfigMap = (
  * configs, so the only way the watcher could fail is a settings stream
  * tear-down, which logs and exits cleanly.
  */
-const layerSettingsWatcher = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
-    const serverSettings = yield* Settings.ServerSettingsService;
-    const settingsChanges = yield* serverSettings.subscribeChanges;
-    yield* settingsChanges.pipe(
-      Stream.runForEach((next) =>
-        mutator
-          .reconcile(deriveProviderInstanceConfigMap(next))
-          .pipe(
+const settingsWatcher = (
+  suppliedChanges?: Stream.Stream<
+    {
+      readonly settings: ServerSettings;
+      readonly revision: CodexRoute.SettingsRevision | undefined;
+    },
+    import("@goat/contracts").ServerSettingsError
+  >,
+) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
+      const serverSettings = yield* Settings.ServerSettingsService;
+      const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
+      const settingsChanges: Stream.Stream<
+        {
+          readonly settings: ServerSettings;
+          readonly revision: CodexRoute.SettingsRevision | undefined;
+        },
+        import("@goat/contracts").ServerSettingsError
+      > =
+        suppliedChanges ??
+        (serverSettings.subscribeProviderChanges
+          ? yield* serverSettings.subscribeProviderChanges
+          : (yield* serverSettings.subscribeChanges).pipe(
+              Stream.map((settings) => ({ settings, revision: undefined })),
+            ));
+      yield* settingsChanges.pipe(
+        Stream.runForEach((next) =>
+          mutator.reconcile(deriveProviderInstanceConfigMap(next.settings)).pipe(
+            Effect.tap(() =>
+              Option.isSome(routeState) && next.revision
+                ? routeState.value.applied(next.revision)
+                : Effect.void,
+            ),
+            Effect.tapCause(() =>
+              Option.isSome(routeState) && next.revision
+                ? routeState.value.applied(next.revision, true)
+                : Effect.void,
+            ),
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
             ),
           ),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
+        ),
+        Effect.onExit(() =>
+          Option.isSome(routeState) ? routeState.value.watcherStopped : Effect.void,
+        ),
+        Effect.catchCause((cause) => Effect.logError("Provider settings watcher stopped", cause)),
+        Effect.forkScoped,
+      );
+    }),
+  );
+
+export const layerSettingsWatcher = settingsWatcher();
 
 /**
  * Hydrate `ProviderInstanceRegistry` from `ServerSettings` and keep it in
@@ -164,6 +202,18 @@ export const layer: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* Settings.ServerSettingsService;
+    const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
+    const changes: Stream.Stream<
+      {
+        readonly settings: ServerSettings;
+        readonly revision: CodexRoute.SettingsRevision | undefined;
+      },
+      import("@goat/contracts").ServerSettingsError
+    > = serverSettings.subscribeProviderChanges
+      ? yield* serverSettings.subscribeProviderChanges
+      : (yield* serverSettings.subscribeChanges).pipe(
+          Stream.map((settings) => ({ settings, revision: undefined })),
+        );
     const admission = yield* ProviderOrchestrationAdapterInfrastructure.ProviderMemoryAdmission;
     const sessions = yield* McpProviderSessions.McpProviderSessions;
     // Override only the adapter construction context. The manager retains the raw slot.
@@ -171,13 +221,18 @@ export const layer: Layer.Layer<
       ...sessions,
       read: (threadId) => sessions.read(threadId).pipe(Effect.flatMap(admission.fence)),
     });
-    const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
+    const initial = yield* serverSettings
+      .withSettingsSnapshot((settings) =>
+        Effect.sync(() => ({
+          settings,
+          revision: Option.isSome(routeState) ? routeState.value.revision() : undefined,
+        })),
+      )
+      .pipe(Effect.orElseSucceed(() => undefined));
     const initialConfigMap =
-      initialSettings === undefined
+      initial === undefined
         ? ({} as ProviderInstanceConfigMap)
-        : deriveProviderInstanceConfigMap(initialSettings);
+        : deriveProviderInstanceConfigMap(initial.settings);
 
     const layerMutable = ProviderInstanceRegistry.layer({
       drivers: BUILT_IN_DRIVERS,
@@ -195,7 +250,23 @@ export const layer: Layer.Layer<
       Layer.provide(ProviderHostLive.layer),
     );
 
-    return layerSettingsWatcher.pipe(Layer.provideMerge(layerMutable));
+    const afterInitial = changes.pipe(
+      Stream.filter(
+        (event) =>
+          event.revision === undefined ||
+          initial?.revision === undefined ||
+          event.revision.epoch !== initial.revision.epoch ||
+          event.revision.sequence > initial.revision.sequence,
+      ),
+    );
+    return settingsWatcher(afterInitial).pipe(
+      Layer.provideMerge(layerMutable),
+      Layer.tap(() =>
+        Option.isSome(routeState) && initial?.revision
+          ? routeState.value.applied(initial.revision)
+          : Effect.void,
+      ),
+    );
   }),
 ).pipe(
   Layer.provide(ProviderOrchestrationAdapterInfrastructure.layerMemoryAdmission),
