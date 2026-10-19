@@ -135,7 +135,10 @@ export const make = Effect.gen(function* () {
   const observeRun = Effect.fn("ObservedCheckService.observeRun")(
     function* (threadId: ThreadId, runId: RunId) {
       const thread = yield* projections.getThreadShell(threadId);
-      if (thread === null) return;
+      // A completed run's event repeats when its delegated work changes or the
+      // thread is deleted; only the latest run, with nothing running after it,
+      // owns the worktree as it was left.
+      if (thread === null || thread.latestRunId !== runId || thread.activeRunId !== null) return;
       const project = Option.getOrUndefined(
         yield* projects.getById(ProjectId.make(thread.projectId)),
       );
@@ -170,46 +173,61 @@ export const make = Effect.gen(function* () {
       }
 
       const tail: Array<string> = [];
-      const started = yield* runner.runForThread({
-        threadId,
-        projectId: project.id,
-        worktreePath: worktreePath ?? project.workspaceRoot,
-        ...(worktreePath === null ? { cwd: project.workspaceRoot } : {}),
-        trigger: "check",
-        observeCompletion: {
-          onOutputLine: (line) => Effect.sync(() => appendOutputTail(tail, line)),
-        },
-      });
-      if (started.status !== "started" || started.completion === undefined) {
-        // The script went away between reading settings and starting it.
+      let terminalId: string | null = null;
+      // Once claimed, the row must leave `running`: a failure to start or an
+      // interrupt (such as shutdown) records the check as interrupted.
+      const interrupted = Effect.gen(function* () {
+        if (terminalId !== null) {
+          yield* terminals.close({ threadId, terminalId }).pipe(Effect.ignore);
+        }
         yield* sql`
-          DELETE FROM thread_run_observed_checks
+          UPDATE thread_run_observed_checks SET status = 'interrupted'
           WHERE thread_id = ${threadId} AND run_id = ${runId} AND status = 'running'
-        `;
-        return;
-      }
-      const result = yield* started.completion.pipe(
-        Effect.timeoutOption(OBSERVED_CHECK_TIMEOUT_MS),
-      );
-      if (Option.isNone(result)) {
-        yield* terminals.close({ threadId, terminalId: started.terminalId }).pipe(Effect.ignore);
-      }
-      yield* finish({
-        threadId,
-        runId,
-        ...(Option.isSome(result)
-          ? {
-              status: "completed" as const,
-              exitCode: result.value.exitCode,
-              durationMs: result.value.durationMs,
-            }
-          : {
-              status: "timed_out" as const,
-              exitCode: null,
-              durationMs: OBSERVED_CHECK_TIMEOUT_MS,
-            }),
-        outputTail: tail.join("\n"),
+        `.pipe(Effect.ignore);
       });
+      yield* Effect.gen(function* () {
+        const started = yield* runner.runForThread({
+          threadId,
+          projectId: project.id,
+          worktreePath: worktreePath ?? project.workspaceRoot,
+          ...(worktreePath === null ? { cwd: project.workspaceRoot } : {}),
+          trigger: "check",
+          observeCompletion: {
+            onOutputLine: (line) => Effect.sync(() => appendOutputTail(tail, line)),
+          },
+        });
+        if (started.status !== "started" || started.completion === undefined) {
+          // The script went away between reading settings and starting it.
+          yield* sql`
+            DELETE FROM thread_run_observed_checks
+            WHERE thread_id = ${threadId} AND run_id = ${runId} AND status = 'running'
+          `;
+          return;
+        }
+        terminalId = started.terminalId;
+        const result = yield* started.completion.pipe(
+          Effect.timeoutOption(OBSERVED_CHECK_TIMEOUT_MS),
+        );
+        if (Option.isNone(result)) {
+          yield* terminals.close({ threadId, terminalId: started.terminalId }).pipe(Effect.ignore);
+        }
+        yield* finish({
+          threadId,
+          runId,
+          ...(Option.isSome(result)
+            ? {
+                status: "completed" as const,
+                exitCode: result.value.exitCode,
+                durationMs: result.value.durationMs,
+              }
+            : {
+                status: "timed_out" as const,
+                exitCode: null,
+                durationMs: OBSERVED_CHECK_TIMEOUT_MS,
+              }),
+          outputTail: tail.join("\n"),
+        });
+      }).pipe(Effect.onError(() => interrupted));
     },
     (effect, threadId, runId) =>
       effect.pipe(
@@ -232,11 +250,14 @@ export const make = Effect.gen(function* () {
     `.pipe(
       Effect.catchCause((cause) => Effect.logWarning("observed check recovery failed", { cause })),
     );
+    // Checks belong to this worker's scope, so shutdown interrupts them and
+    // their rows are recorded as interrupted.
+    const scope = yield* Effect.scope;
     yield* forkParked(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
         event.type === "run.updated" && event.payload.status === "completed"
           ? observeRun(event.payload.threadId, event.payload.id).pipe(
-              Effect.forkDetach,
+              Effect.forkIn(scope),
               Effect.asVoid,
             )
           : Effect.void,

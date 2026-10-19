@@ -38,6 +38,9 @@ interface Harness {
   readonly worktreePath: string | null;
   readonly scripts: ReadonlyArray<ProjectScript>;
   readonly worktreeExists?: boolean;
+  readonly latestRunId?: RunId;
+  readonly activeRunId?: RunId | null;
+  readonly runnerFails?: boolean;
   /** Output lines and exit code the fake script produces; undefined never finishes. */
   readonly outcome?: { readonly lines: ReadonlyArray<string>; readonly exitCode: number | null };
 }
@@ -55,6 +58,8 @@ const makeLayer = (harness: Harness) => {
               id: threadId,
               projectId,
               worktreePath: harness.worktreePath,
+              latestRunId: harness.latestRunId ?? runId,
+              activeRunId: harness.activeRunId ?? null,
             } as never),
         }),
         Layer.mock(ProjectService.ProjectService)({
@@ -64,7 +69,7 @@ const makeLayer = (harness: Harness) => {
             ),
         }),
         ServerSettings.ServerSettingsService.layerTest(),
-        Layer.mock(FileSystem.FileSystem)({
+        FileSystem.layerNoop({
           exists: () => Effect.succeed(harness.worktreeExists ?? true),
         }),
         Layer.mock(TerminalManager.TerminalManager)({
@@ -72,8 +77,18 @@ const makeLayer = (harness: Harness) => {
         }),
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: (input) =>
-            Effect.sync(() => {
+            Effect.suspend(() => {
               runs.push(input);
+              if (harness.runnerFails) {
+                return Effect.fail(
+                  new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                    threadId,
+                    worktreePath: input.worktreePath,
+                    operation: "openTerminal",
+                    cause: new Error("no pty"),
+                  }),
+                );
+              }
               const outcome = harness.outcome;
               const completion =
                 outcome === undefined
@@ -82,7 +97,7 @@ const makeLayer = (harness: Harness) => {
                       outcome.lines,
                       (line) => input.observeCompletion?.onOutputLine?.(line) ?? Effect.void,
                     ).pipe(Effect.as({ exitCode: outcome.exitCode, durationMs: 1_250 }));
-              return {
+              return Effect.succeed({
                 status: "started",
                 scriptId: "test",
                 scriptName: "Test",
@@ -91,7 +106,7 @@ const makeLayer = (harness: Harness) => {
                 cwd: input.cwd ?? input.worktreePath,
                 async: true,
                 completion,
-              } as const;
+              } as const);
             }),
         }),
       ),
@@ -174,6 +189,45 @@ describe("ObservedCheckService", () => {
       yield* TestClock.adjust(ObservedCheckService.OBSERVED_CHECK_TIMEOUT_MS);
       const result = yield* Fiber.join(fiber);
       assert.deepInclude(result, { status: "timed_out", exitCode: null });
+      assert.deepStrictEqual(harness.closed, ["check-test-1"]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("ignores a completed event for a run that is no longer the thread's latest", () => {
+    const superseded = makeLayer({
+      worktreePath,
+      scripts: [checkScript()],
+      latestRunId: RunId.make("run-check-2"),
+    });
+    const busy = makeLayer({
+      worktreePath,
+      scripts: [checkScript()],
+      activeRunId: RunId.make("run-check-2"),
+    });
+    return Effect.gen(function* () {
+      assert.isNull(yield* observe.pipe(Effect.provide(superseded.layer)));
+      assert.isNull(yield* observe.pipe(Effect.provide(busy.layer)));
+      assert.strictEqual(superseded.runs.length + busy.runs.length, 0);
+    });
+  });
+
+  it.effect("records a check that failed to start as interrupted", () => {
+    const harness = makeLayer({ worktreePath, scripts: [checkScript()], runnerFails: true });
+    return Effect.gen(function* () {
+      assert.deepInclude(yield* observe, { status: "interrupted", exitCode: null });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("records a check cut off by shutdown as interrupted and closes its terminal", () => {
+    const harness = makeLayer({ worktreePath, scripts: [checkScript()] });
+    return Effect.gen(function* () {
+      const service = yield* ObservedCheckService.ObservedCheckService;
+      const fiber = yield* Effect.forkChild(service.observeRun(threadId, runId));
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+      assert.deepInclude(yield* ObservedCheckService.readObservedCheck(threadId, runId), {
+        status: "interrupted",
+      });
       assert.deepStrictEqual(harness.closed, ["check-test-1"]);
     }).pipe(Effect.provide(harness.layer));
   });
