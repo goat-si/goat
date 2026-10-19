@@ -26,6 +26,7 @@ interface BranchToolbarEnvironmentSelectorProps {
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
+  environmentsWithoutProject?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
 }
 
@@ -35,6 +36,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   envLocked,
   environmentId,
   availableEnvironments,
+  environmentsWithoutProject = [],
   onEnvironmentChange,
 }: BranchToolbarEnvironmentSelectorProps) {
   const composerFloatingLayerProps = useComposerMenuProps();
@@ -140,6 +142,17 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
               <span className="inline-flex items-center gap-1.5">
                 <EnvironmentMachineIcon kind={env.machine} className="size-3" />
                 {env.label}
+              </span>
+            </SelectItem>
+          ))}
+          {environmentsWithoutProject.map((env) => (
+            <SelectItem key={env.environmentId} value={env.environmentId} disabled>
+              <span className="inline-flex items-center gap-1.5">
+                <EnvironmentMachineIcon kind={env.machine} className="size-3" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate">{env.label}</span>
+                  <span className="text-muted-foreground text-xs">Project not added here</span>
+                </span>
               </span>
             </SelectItem>
           ))}

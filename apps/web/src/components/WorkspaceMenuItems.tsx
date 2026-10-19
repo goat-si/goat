@@ -24,6 +24,9 @@ export interface WorkspaceMenuItemsProps {
   onSshDestinationChange: (destination: DraftSshDestination) => void;
 }
 export function WorkspaceMenuItems(props: WorkspaceMenuItemsProps) {
+  const sharedReason =
+    props.sshDisabledReason ??
+    (props.forceNewWorktree ? "Choose one model before sending to SSH." : null);
   return (
     <MenuGroup>
       <MenuGroupLabel>Workspace</MenuGroupLabel>
@@ -47,28 +50,36 @@ export function WorkspaceMenuItems(props: WorkspaceMenuItemsProps) {
       </MenuRadioGroup>
       {props.sshOptions.length > 0 ? (
         <MenuSub>
-          <MenuSubTrigger
-            disabled={props.locked || props.forceNewWorktree || props.sshDisabledReason !== null}
-            title={props.sshDisabledReason ?? undefined}
-          >
-            Worktree on SSH
-          </MenuSubTrigger>
+          {/* The submenu stays openable while blocked so the hosts and the reason stay visible. */}
+          <MenuSubTrigger disabled={props.locked}>Work on SSH</MenuSubTrigger>
           <MenuSubPopup>
-            {props.sshOptions.map((option) => (
-              <MenuItem
-                key={`${option.destination.environmentId}:${option.destination.connectionId}`}
-                disabled={option.disabledReason !== null}
-                closeOnClick
-                title={option.disabledReason ?? undefined}
-                onClick={() => props.onSshDestinationChange(option.destination)}
-              >
-                <span>{option.label}</span>
-                {option.destination.connectionId === props.sshDestination?.connectionId &&
-                option.destination.environmentId === props.sshDestination?.environmentId ? (
-                  <span aria-label="Selected"> ✓</span>
-                ) : null}
-              </MenuItem>
-            ))}
+            {sharedReason ? (
+              <p className="max-w-64 px-2 py-1.5 text-muted-foreground text-xs">{sharedReason}</p>
+            ) : null}
+            {props.sshOptions.map((option) => {
+              const reason = sharedReason ? null : option.disabledReason;
+              return (
+                <MenuItem
+                  key={`${option.destination.environmentId}:${option.destination.connectionId}`}
+                  disabled={sharedReason !== null || option.disabledReason !== null}
+                  closeOnClick
+                  onClick={() => props.onSshDestinationChange(option.destination)}
+                >
+                  <span className="flex min-w-0 max-w-64 flex-col">
+                    <span className="truncate">
+                      {option.label}
+                      {option.destination.connectionId === props.sshDestination?.connectionId &&
+                      option.destination.environmentId === props.sshDestination?.environmentId ? (
+                        <span aria-label="Selected"> ✓</span>
+                      ) : null}
+                    </span>
+                    {reason ? (
+                      <span className="text-muted-foreground text-xs">{reason}</span>
+                    ) : null}
+                  </span>
+                </MenuItem>
+              );
+            })}
           </MenuSubPopup>
         </MenuSub>
       ) : null}

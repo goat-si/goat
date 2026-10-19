@@ -48,6 +48,7 @@ export interface ThreadDetailsPanelProps
   isGitRepo: boolean;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
+  environmentsWithoutProject: readonly EnvironmentOption[];
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
@@ -131,6 +132,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   layout="panel"
                   panelSection="workspace"
                   availableEnvironments={props.availableEnvironments}
+                  environmentsWithoutProject={props.environmentsWithoutProject}
                   onEnvironmentChange={props.onEnvironmentChange}
                   autoEnvironmentLabel={props.autoEnvironmentLabel}
                   onAutoEnvironment={props.onAutoEnvironment}

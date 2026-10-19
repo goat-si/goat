@@ -282,6 +282,6 @@ export function resolveSshWorkspaceLabel(input: {
   savedLabel: string | null;
 }): string {
   return input.sshSelected
-    ? `Worktree · ${input.savedLabel ?? "unavailable SSH connection"}`
+    ? `SSH · ${input.savedLabel ?? "unavailable connection"}`
     : input.workspaceLabel;
 }

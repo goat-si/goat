@@ -381,7 +381,7 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
 
     await renderSsh();
     await userEvent.click(workspaceTrigger(layout));
-    await activate("Worktree on SSH", "{ArrowRight}");
+    await activate("Work on SSH", "{ArrowRight}");
     await activate("Build host", "{Enter}");
     expect(session(draftId)).toMatchObject({
       sshDestination: sshOption.destination,
@@ -392,7 +392,7 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
     });
     await renderSsh();
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
-    expect(workspaceTrigger(layout).textContent).toBe("Worktree · Build host");
+    expect(workspaceTrigger(layout).textContent).toBe("SSH · Build host");
 
     await userEvent.click(workspaceTrigger(layout));
     await userEvent.click(page.getByRole("menuitemradio", { name: "New worktree", exact: true }));
@@ -400,10 +400,11 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
 
     await renderSsh([{ ...sshOption, disabledReason: "Enable host" }]);
     await userEvent.click(workspaceTrigger(layout));
-    await userEvent.click(page.getByRole("menuitem", { name: "Worktree on SSH" }));
-    await vi.waitFor(() => expect(menuItem("Build host")).toBeDefined());
-    expect(menuItem("Build host")!.getAttribute("aria-disabled")).toBe("true");
-    menuItem("Build host")!.click();
+    await userEvent.click(page.getByRole("menuitem", { name: "Work on SSH" }));
+    // The host's own reason is printed on its row.
+    await vi.waitFor(() => expect(menuItem("Build hostEnable host")).toBeDefined());
+    expect(menuItem("Build hostEnable host")!.getAttribute("aria-disabled")).toBe("true");
+    menuItem("Build hostEnable host")!.click();
     expect(session(draftId)?.sshDestination).toBeNull();
 
     // The first Escape closes the host submenu, the second its parent menu.
@@ -413,7 +414,7 @@ it.each(LAYOUTS.flatMap((layout) => [[layout, "mouse"] as const, [layout, "keybo
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
     await userEvent.click(workspaceTrigger(layout));
     await expect.element(page.getByRole("menu")).toBeVisible();
-    expect(menuItem("Worktree on SSH")).toBeUndefined();
+    expect(menuItem("Work on SSH")).toBeUndefined();
   },
 );
 
@@ -445,7 +446,7 @@ it("does not auto-pick a local base branch or open the branch keybinding while S
   expect(document.querySelector('[role="combobox"]')?.getAttribute("aria-expanded")).toBe("false");
 });
 
-it.each(LAYOUTS)("disables SSH with source and model reasons in %s", async (layout) => {
+it.each(LAYOUTS)("keeps blocked SSH hosts visible with the reason in %s", async (layout) => {
   state.serverThread = false;
   const draftId = DraftId.make("blocked-ssh");
   const environmentId = EnvironmentId.make("local");
@@ -461,7 +462,7 @@ it.each(LAYOUTS)("disables SSH with source and model reasons in %s", async (layo
   const select = vi.fn();
   for (const reason of [
     "SSH worktrees need a new draft.",
-    "Choose Local in Run on before sending to SSH.",
+    "Add this project on this device to copy it over SSH.",
     "Choose one model before sending to SSH.",
     "This connection cannot copy code and start SSH threads.",
   ]) {
@@ -501,15 +502,20 @@ it.each(LAYOUTS)("disables SSH with source and model reasons in %s", async (layo
       ),
     );
     await userEvent.click(workspaceTrigger(layout));
-    await vi.waitFor(() => expect(menuItem("Worktree on SSH")).toBeDefined());
-    const submenu = menuItem("Worktree on SSH")!;
-    expect(submenu.getAttribute("aria-disabled")).toBe("true");
-    expect(submenu.title).toBe(reason);
-    submenu.click();
+    await vi.waitFor(() => expect(menuItem("Work on SSH")).toBeDefined());
+    const submenu = menuItem("Work on SSH")!;
+    expect(submenu.getAttribute("aria-disabled")).not.toBe("true");
     await act(async () => submenu.focus());
     await userEvent.keyboard("{ArrowRight}");
+    await vi.waitFor(() => expect(menuItem("Build host")).toBeDefined());
+    const host = menuItem("Build host")!;
+    expect(host.getAttribute("aria-disabled")).toBe("true");
+    expect(host.closest('[role="menu"]')?.textContent).toContain(reason);
+    host.click();
     expect(select).not.toHaveBeenCalled();
     expect(session(draftId)?.sshDestination).toBeNull();
+    // The first Escape closes the host submenu, the second its parent menu.
+    await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
     await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeNull());
   }

@@ -834,7 +834,7 @@ it("shows the saved SSH label before transfer", () => {
       sshSelected: true,
       savedLabel: "Saved host",
     }),
-  ).toBe("Worktree · Saved host");
+  ).toBe("SSH · Saved host");
   expect(
     resolveSshWorkspaceLabel({ workspaceLabel: "Local", sshSelected: false, savedLabel: null }),
   ).toBe("Local");
@@ -846,5 +846,5 @@ it("shows unavailable SSH rather than a local worktree after profile removal", (
       sshSelected: true,
       savedLabel: null,
     }),
-  ).toBe("Worktree · unavailable SSH connection");
+  ).toBe("SSH · unavailable connection");
 });

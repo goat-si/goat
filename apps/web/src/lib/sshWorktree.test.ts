@@ -11,6 +11,7 @@ import {
   sshThreadHandoffBlockReason,
   savedSshWorktreeOptions,
   findSavedSshWorktreeOption,
+  sshWorktreeSelectionBlockReason,
   sshWorktreeSendBlockReason,
 } from "./sshWorktree";
 
@@ -143,6 +144,21 @@ describe("saved SSH worktrees", () => {
     expect(
       sshWorktreeSendBlockReason({ ...valid, selected: false, draftAvailable: false }),
     ).toBeNull());
+  it("lets a draft on another machine pick a host only when this device has the project", () => {
+    const selection = {
+      draftAvailable: true,
+      sourceOnThisDevice: true,
+      sourceProjectAvailable: true,
+      sourceIsGitRepo: true,
+      desktopAvailable: true,
+      canLaunch: true,
+      multipleModels: false,
+    };
+    expect(sshWorktreeSelectionBlockReason(selection)).toBeNull();
+    expect(sshWorktreeSelectionBlockReason({ ...selection, sourceOnThisDevice: false })).toBe(
+      "Add this project on this device to copy it over SSH.",
+    );
+  });
 });
 
 describe("continuing an existing thread on SSH", () => {

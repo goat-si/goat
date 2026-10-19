@@ -98,9 +98,11 @@ export function sshWorktreeSendBlockReason(input: {
 
 // Selection has the source restrictions, but attachments and catalog-route availability
 // are send-time checks so disabled saved hosts remain inspectable in the submenu.
+// A draft running on another machine can still pick a host: selection moves it to
+// this device's copy of the project, so only a missing local copy blocks it.
 export function sshWorktreeSelectionBlockReason(input: {
   draftAvailable: boolean;
-  sourceIsPrimary: boolean;
+  sourceOnThisDevice: boolean;
   sourceProjectAvailable: boolean;
   sourceIsGitRepo: boolean;
   desktopAvailable: boolean;
@@ -109,8 +111,8 @@ export function sshWorktreeSelectionBlockReason(input: {
 }): string | null {
   if (!input.draftAvailable) return "SSH worktrees need a new draft.";
   if (!input.desktopAvailable) return "SSH worktrees are available in the desktop app.";
-  if (!input.sourceIsPrimary) return "Choose Local in Run on before sending to SSH.";
   if (!input.sourceProjectAvailable) return "Choose a local project before sending to SSH.";
+  if (!input.sourceOnThisDevice) return "Add this project on this device to copy it over SSH.";
   if (!input.sourceIsGitRepo) return "SSH worktrees need a Git project.";
   if (!input.canLaunch) return "This connection cannot copy code and start SSH threads.";
   if (input.multipleModels) return "Choose one model before sending to SSH.";

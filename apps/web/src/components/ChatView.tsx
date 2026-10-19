@@ -98,6 +98,7 @@ import {
   ProviderInteractionMode,
   ProviderDriverKind,
   resolveProjectProviderInstanceEnabled,
+  resolveEnvironmentMachineKind,
   RuntimeMode,
 } from "@goat/contracts";
 import { type EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
@@ -464,6 +465,7 @@ import { canOpenSideChat, parseSideChatCommand } from "./sideChat/sideChat.logic
 import { useSideChatStore } from "./sideChat/sideChatStore";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
+  type EnvironmentOption,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
@@ -2170,6 +2172,36 @@ export default function ChatView(props: ChatViewProps) {
     activeProjectIsScratch && draftId !== null,
   );
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
+  // Connected machines without this project. Run on lists them disabled so a
+  // missing machine reads as "no copy here" instead of disappearing.
+  const listedEnvironmentIds = new Set(
+    logicalProjectEnvironments.map(({ environmentId }) => environmentId),
+  );
+  const environmentsWithoutProject: EnvironmentOption[] =
+    !activeProject || activeProjectIsScratch
+      ? []
+      : environments
+          .filter(({ environmentId }) => !listedEnvironmentIds.has(environmentId))
+          .map((environment) => ({
+            environmentId: environment.environmentId,
+            projectId: null,
+            label: environment.label,
+            isPrimary: environment.environmentId === primaryEnvironmentId,
+            machine: resolveEnvironmentMachineKind(environment.serverConfig ?? null),
+          }))
+          .toSorted((a, b) => a.label.localeCompare(b.label));
+  // Run on opens when there is a choice or a machine to explain; keyboard cycling
+  // and auto balance still need two machines with the project.
+  const canPickEnvironment = hasMultipleEnvironments || environmentsWithoutProject.length > 0;
+  // This device's copy of the active project: the source an SSH worktree copies.
+  const sshSourceProjectId =
+    activeProject?.environmentId === primaryEnvironmentId
+      ? activeProject.id
+      : activeProjectIsScratch
+        ? null
+        : (logicalProjectEnvironments.find(
+            ({ environmentId }) => environmentId === primaryEnvironmentId,
+          )?.projectId ?? null);
   const canAutoBalanceEnvironments = hasMultipleEnvironments && !activeProjectIsScratch;
   const activeEnvironmentOption =
     logicalProjectEnvironments.find(
@@ -2177,7 +2209,7 @@ export default function ChatView(props: ChatViewProps) {
     ) ?? null;
   const showComposerEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasMultipleEnvironments,
+    canPickEnvironment,
   });
   const openPullRequestDialog = (reference?: string) => {
     if (!canCheckoutPullRequestIntoThread) {
@@ -3219,6 +3251,17 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  // SSH copies this device's checkout, so its Git status decides, not the selected machine's.
+  const sshSourceIsGitRepo =
+    environmentId === primaryEnvironmentId || primaryEnvironmentId === null
+      ? isGitRepo
+      : (recallCheckoutIsRepo(
+          primaryEnvironmentId,
+          allProjects.find(
+            (project) =>
+              project.environmentId === primaryEnvironmentId && project.id === sshSourceProjectId,
+          )?.workspaceRoot ?? null,
+        ) ?? true);
   const sshCatalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const sshDestination = draftThread?.sshDestination ?? null;
   const sshOptions = savedSshWorktreeOptions(
@@ -3226,15 +3269,14 @@ export default function ChatView(props: ChatViewProps) {
     window.desktopBridge !== undefined,
   );
   const selectedSshOption = findSavedSshWorktreeOption(sshOptions, sshDestination);
-  const canLaunchSsh = useAtomValue(
-    sshWorkspaceLaunchCommand.permissionAtom(draftThread?.environmentId ?? null),
-  );
+  const canLaunchSsh = useAtomValue(sshWorkspaceLaunchCommand.permissionAtom(primaryEnvironmentId));
   const sshGuardInput = {
     selected: true,
     draftAvailable: isLocalDraftThread,
     sourceIsPrimary: draftThread?.environmentId === primaryEnvironmentId,
+    sourceOnThisDevice: sshSourceProjectId !== null,
     sourceProjectAvailable: activeProject !== null,
-    sourceIsGitRepo: isGitRepo,
+    sourceIsGitRepo: sshSourceIsGitRepo,
     desktopAvailable: window.desktopBridge !== undefined,
     catalogReady: sshCatalog.isReady,
     option: selectedSshOption,
@@ -8129,15 +8171,17 @@ export default function ChatView(props: ChatViewProps) {
       envLocked ||
       sendInFlightRef.current ||
       !activeProject ||
-      activeProject.environmentId !== primaryEnvironmentId ||
-      !isGitRepo ||
+      !primaryEnvironmentId ||
+      sshSourceProjectId === null ||
+      !sshSourceIsGitRepo ||
       multipleModelSelections !== null
     )
       return;
     const current = getDraftSession(draftId);
     if (
       !current ||
-      current.environmentId !== primaryEnvironmentId ||
+      current.promotedTo ||
+      current.environmentId !== activeProject.environmentId ||
       current.projectId !== activeProject.id
     )
       return;
@@ -8149,10 +8193,17 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !option ||
       option.disabledReason ||
-      !appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(current.environmentId))
+      !appAtomRegistry.get(sshWorkspaceLaunchCommand.permissionAtom(primaryEnvironmentId))
     )
       return;
+    // A draft on another machine moves to this device's copy in the same
+    // update, and any machine switch still in flight is dropped.
+    environmentChangeRef.current = null;
+    setBusyEnvironmentChange(null);
     setDraftThreadContext(draftId, {
+      ...(current.environmentId !== primaryEnvironmentId
+        ? { projectRef: scopeProjectRef(primaryEnvironmentId, sshSourceProjectId) }
+        : {}),
       sshDestination: destination,
       envMode: "worktree",
       branch: null,
@@ -9085,7 +9136,7 @@ export default function ChatView(props: ChatViewProps) {
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialogStable }
                                   : {})}
-                                {...(hasMultipleEnvironments
+                                {...(canPickEnvironment
                                   ? { onEnvironmentChange: onEnvironmentChangeStable }
                                   : {})}
                                 autoEnvironmentLabel={autoEnvironmentLabel}
@@ -9098,6 +9149,7 @@ export default function ChatView(props: ChatViewProps) {
                                     : undefined
                                 }
                                 availableEnvironments={logicalProjectEnvironments}
+                                environmentsWithoutProject={environmentsWithoutProject}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
                               />
@@ -9163,6 +9215,7 @@ export default function ChatView(props: ChatViewProps) {
                 isGitRepo={isGitRepo && !isGlobalAgentActive && !isCloudThread}
                 envLocked={envLocked}
                 availableEnvironments={logicalProjectEnvironments}
+                environmentsWithoutProject={environmentsWithoutProject}
                 autoEnvironmentLabel={autoEnvironmentLabel}
                 onAutoEnvironment={
                   draftId &&
