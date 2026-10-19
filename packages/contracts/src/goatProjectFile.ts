@@ -47,6 +47,18 @@ export const GoatProjectFileScript = Schema.Struct({
         "When true, the script runs in the thread's worktree each time the thread settles, for example to delete build output. Threads without their own worktree skip it.",
     }),
   ),
+  runAsCheck: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "When true, the script runs in the thread's worktree each time a run completes, and GOAT stores its exit code beside the tests the agent reported. Threads in the shared checkout skip it unless checkInSharedCheckout is also true.",
+    }),
+  ),
+  checkInSharedCheckout: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "Only for runAsCheck scripts. When true, the check also runs for threads in the project's shared checkout.",
+    }),
+  ),
   async: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:

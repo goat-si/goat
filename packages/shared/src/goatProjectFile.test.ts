@@ -47,10 +47,12 @@ describe("buildGoatProjectFileJsonSchema", () => {
     expect(Object.keys(script?.properties ?? {}).sort()).toEqual([
       "async",
       "autoOpenPreview",
+      "checkInSharedCheckout",
       "command",
       "icon",
       "name",
       "previewUrl",
+      "runAsCheck",
       "runOnSettle",
       "runOnWorktreeCreate",
     ]);

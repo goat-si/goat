@@ -4,6 +4,7 @@ import {
   type RunId,
   type ThreadId,
   type ThreadResult,
+  type ThreadResultObservedCheck,
   type ThreadResultPullRequest,
   ThreadResultReport,
 } from "@goat/contracts";
@@ -15,6 +16,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { readObservedCheck } from "./ObservedCheckService.ts";
 
 export class ThreadResultError extends Schema.TaggedError<ThreadResultError>()(
   "ThreadResultError",
@@ -44,6 +46,7 @@ export function buildThreadResult(input: {
   readonly thread: Pick<OrchestrationV2AppThread, "branch" | "pullRequests" | "linkedPullRequest">;
   readonly run: Pick<OrchestrationV2Run, "id" | "status">;
   readonly stored: StoredThreadResultReport | null;
+  readonly observedCheck?: ThreadResultObservedCheck | null;
 }): ThreadResult {
   const report = input.stored?.report;
   const pullRequests: Array<ThreadResultPullRequest> = [];
@@ -81,6 +84,7 @@ export function buildThreadResult(input: {
     ...(report?.summary === undefined ? {} : { summary: report.summary }),
     pullRequests,
     ...(report?.tests === undefined ? {} : { tests: report.tests }),
+    ...(input.observedCheck == null ? {} : { observedCheck: input.observedCheck }),
     commits: report?.commits ?? [],
     branch: report?.branch ?? input.thread.branch,
   };
@@ -143,6 +147,11 @@ const make = Effect.gen(function* () {
     readStoredThreadResultReport(threadId, runId).pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
     );
+  const observedCheck = (threadId: ThreadId, runId: RunId) =>
+    readObservedCheck(threadId, runId).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.mapError(storage),
+    );
 
   const forRun = Effect.fn("ThreadResultService.forRun")(function* (
     threadId: ThreadId,
@@ -158,6 +167,7 @@ const make = Effect.gen(function* () {
       thread: records.thread,
       run,
       stored: yield* storedReport(threadId, run.id),
+      observedCheck: yield* observedCheck(threadId, run.id),
     });
   });
 
@@ -183,6 +193,7 @@ const make = Effect.gen(function* () {
       thread: records.thread,
       run,
       stored: { report: input, reportedAt },
+      observedCheck: yield* observedCheck(threadId, run.id),
     });
   });
 

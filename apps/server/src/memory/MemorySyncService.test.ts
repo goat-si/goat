@@ -2152,6 +2152,7 @@ it.effect.each([
               [85, "MemoryCheckpointLifecycle"],
               [86, "FleetGoals"],
               [87, "FleetHealth"],
+              [88, "ThreadRunObservedChecks"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(

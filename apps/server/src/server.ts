@@ -56,6 +56,7 @@ import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
+import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
@@ -1013,6 +1014,10 @@ const layerThreadSettlementWorker = Layer.effectDiscard(
   ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
 
+const layerObservedCheckWorker = Layer.effectDiscard(
+  ObservedCheckService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer), Layer.provide(RuntimeLayer.layerProjectService));
+
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
@@ -1061,6 +1066,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
+  layerObservedCheckWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),

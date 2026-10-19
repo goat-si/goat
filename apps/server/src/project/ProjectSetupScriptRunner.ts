@@ -1,6 +1,7 @@
 import { ProjectId, type ProjectScript } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
+  checkProjectScript,
   projectScriptRuntimeEnv,
   projectScriptTerminalInput,
   resolveProjectScripts,
@@ -58,7 +59,12 @@ export interface ProjectSetupScriptRunnerInput {
   readonly projectCwd?: string;
   readonly worktreePath: string;
   readonly preferredTerminalId?: string;
-  readonly trigger?: "setup" | "settle";
+  readonly trigger?: "setup" | "settle" | "check";
+  /**
+   * Runs the script in the shared checkout at this path instead of a thread worktree;
+   * `worktreePath` then only labels errors.
+   */
+  readonly cwd?: string;
   readonly project?: {
     readonly id: ProjectId;
     readonly workspaceRoot: string;
@@ -339,7 +345,11 @@ export const make = Effect.gen(function* () {
     const trigger = input.trigger ?? "setup";
     const scripts = resolveProjectScripts(settings, project);
     const script =
-      trigger === "settle" ? settleProjectScript(scripts) : setupProjectScript(scripts);
+      trigger === "settle"
+        ? settleProjectScript(scripts)
+        : trigger === "check"
+          ? checkProjectScript(scripts)
+          : setupProjectScript(scripts);
     if (!script) {
       return {
         status: "no-script",
@@ -350,14 +360,15 @@ export const make = Effect.gen(function* () {
     // may still be busy; typing into it would feed its foreground program.
     const terminalId =
       input.preferredTerminalId ??
-      (trigger === "settle"
-        ? `settle-${script.id}-${(yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8)}`
+      (trigger === "settle" || trigger === "check"
+        ? `${trigger}-${script.id}-${(yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8)}`
         : `setup-${script.id}`);
-    const cwd = input.worktreePath;
+    const cwd = input.cwd ?? input.worktreePath;
+    const threadWorktreePath = input.cwd === undefined ? input.worktreePath : null;
     const env = {
       ...projectScriptRuntimeEnv({
         project: { cwd: project.workspaceRoot },
-        worktreePath: input.worktreePath,
+        worktreePath: threadWorktreePath,
       }),
       // Setup can run before a client attaches. Truecolor probes in tools such
       // as Vite+ wait for terminal replies that nobody can send at that point.
@@ -381,7 +392,7 @@ export const make = Effect.gen(function* () {
         threadId: input.threadId,
         terminalId,
         cwd,
-        worktreePath: input.worktreePath,
+        worktreePath: threadWorktreePath,
         env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
       })
       .pipe(
