@@ -1141,10 +1141,14 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
-    /** This machine and connected SSH hosts; each silent host is cut off at 10s on the server. */
+    /**
+     * This machine and connected SSH hosts; each silent host is cut off at 10s on the server.
+     * Views refresh it on their own 15s period. The idle TTL covers that period, so a view or
+     * derived atom that stops reading for a moment does not rebuild it and send an unplanned read.
+     */
     hostStatus: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-status",
-      idleTtlMs: 0,
+      idleTtlMs: 15_000,
       staleTimeMs: 5_000,
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostStatus>) =>
         request(WS_METHODS.serverGetHostStatus, input).pipe(Effect.timeout("30 seconds")),

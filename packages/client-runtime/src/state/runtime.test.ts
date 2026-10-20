@@ -93,6 +93,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
   {
     refreshTrigger,
     idleTtlMs,
+    staleTimeMs,
     persistence,
     initialState,
     isFinal,
@@ -100,6 +101,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
     readonly refreshTrigger?: Atom.Atom<unknown>;
     readonly isFinal?: (value: A) => boolean;
     readonly idleTtlMs?: number;
+    readonly staleTimeMs?: number;
     readonly persistence?: QueryPersistence<A>;
     readonly initialState?: SupervisorConnectionState;
   } = {},
@@ -137,7 +139,7 @@ const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeHarness"
   );
   const family = createEnvironmentQueryAtomFamily(runtime, {
     label: "test.environment-query",
-    staleTimeMs: 60_000,
+    staleTimeMs: staleTimeMs ?? 60_000,
     ...(persistence === undefined ? {} : { persistence }),
     execute: () => execute,
     ...(refreshTrigger === undefined ? {} : { refreshTrigger: () => refreshTrigger }),
@@ -983,6 +985,74 @@ describe("environment query lifecycle", () => {
         expect(yield* read).toBe(2);
       }),
     ),
+  );
+
+  /**
+   * A derived reader that drops the query for one recompute and reads it again.
+   * With an idle TTL the node survives that gap, so the second read is not a new
+   * request. With no idle TTL the registry removes the node and the next read
+   * runs again, outside the refresh gate.
+   */
+  const executionsAfterDerivedGap = (idleTtlMs: number) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        let executions = 0;
+        const harness = yield* makeEnvironmentQueryHarness(
+          Effect.sync(() => {
+            executions += 1;
+            return executions;
+          }),
+          { idleTtlMs, staleTimeMs: 5_000 },
+        );
+        const registry = AtomRegistry.make({ timeoutResolution: 100 });
+        yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+        const toggle = Atom.make(0).pipe(Atom.keepAlive);
+        const derived = Atom.make((get) => (get(toggle) === 1 ? null : get(harness.atom)));
+        const unmount = registry.mount(derived);
+        yield* Effect.addFinalizer(() => Effect.sync(unmount));
+        const read = AtomRegistry.getResult(
+          registry,
+          derived as Atom.Atom<AsyncResult.AsyncResult<number, unknown>>,
+          { suspendOnWaiting: true },
+        ).pipe(Effect.tap(() => Effect.yieldNow));
+
+        expect(yield* read).toBe(1);
+        expect(executions).toBe(1);
+
+        yield* Effect.yieldNow;
+        vi.advanceTimersByTime(15_000);
+        yield* Effect.yieldNow;
+        registry.refresh(harness.atom);
+        expect(yield* read).toBe(2);
+        expect(executions).toBe(2);
+
+        yield* Effect.yieldNow;
+        vi.advanceTimersByTime(9_000);
+        yield* Effect.yieldNow;
+        registry.set(toggle, 1);
+        expect(registry.get(derived)).toBeNull();
+        yield* Effect.yieldNow;
+        vi.advanceTimersByTime(10);
+        yield* Effect.yieldNow;
+        registry.set(toggle, 2);
+        yield* Effect.yieldNow;
+        yield* read;
+        return executions;
+      }),
+    );
+
+  it.effect("does not re-execute a query a derived atom drops and rereads inside its idle TTL", () =>
+    Effect.gen(function* () {
+      expect(yield* executionsAfterDerivedGap(15_000)).toBe(2);
+    }),
+  );
+
+  it.effect("re-executes a query a derived atom drops and rereads when its idle TTL is zero", () =>
+    Effect.gen(function* () {
+      expect(yield* executionsAfterDerivedGap(0)).toBe(3);
+    }),
   );
 });
 
