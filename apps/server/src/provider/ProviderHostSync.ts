@@ -49,10 +49,13 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
-import { clientRuntimeModeCeiling } from "../mcp/McpInvocationContext.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthorization.ts";
+import {
+  authorizeApprovalRequest,
+  authorizeSshHost,
+  type SshHostCaller,
+} from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
@@ -206,36 +209,23 @@ export const make = Effect.gen(function* () {
     );
 
   /**
-   * Installing software on a machine is a full-access act. A person needs a
-   * live providers:manage grant; an outside MCP client needs that grant or a
-   * full-access ceiling, which is what another machine's approved sync sends.
-   * Thread agents never pass: they get an approval handoff instead.
+   * Installing software on a machine is a full-access act, so every caller
+   * needs a live providers:manage grant. Another machine's approved sync
+   * arrives as an outside client whose session carries that grant only
+   * because the person who approved it holds it there. Thread agents never
+   * pass: they get an approval handoff instead.
    */
   const writeCeiling = (caller: SshHostCaller): Effect.Effect<RuntimeMode, Failure> => {
-    if (caller.kind === "client")
-      return authorizeSshHost(sessions, caller, "providers:manage").pipe(
-        Effect.as("full-access" as RuntimeMode),
-      );
-    const { scope: mcp } = caller;
-    if (mcp.thread !== undefined || mcp.client === undefined)
+    if (caller.kind === "mcp" && (caller.scope.thread !== undefined || !caller.scope.client))
       return Effect.fail(
         new EnvironmentAuthorizationError({
           requiredScope: "providers:manage",
           message: "Installing a provider needs a person's approval.",
         }),
       );
-    const ceiling = clientRuntimeModeCeiling(mcp.client);
-    const grant = mcp.grantedScopes?.includes("providers:manage")
-      ? ("providers:manage" as const)
-      : ("orchestration:operate" as const);
-    if (grant === "orchestration:operate" && ceiling !== "full-access")
-      return Effect.fail(
-        new EnvironmentAuthorizationError({
-          requiredScope: "providers:manage",
-          message: "Installing a provider needs providers:manage or a full-access client.",
-        }),
-      );
-    return authorizeSshHost(sessions, caller, grant).pipe(Effect.as("full-access" as RuntimeMode));
+    return authorizeSshHost(sessions, caller, "providers:manage").pipe(
+      Effect.as("full-access" as RuntimeMode),
+    );
   };
 
   const ownerSession = (caller: SshHostCaller): string =>
@@ -329,6 +319,8 @@ export const make = Effect.gen(function* () {
           writes: call.writes,
           timeoutMs: call.timeoutMs,
           approvals: false,
+          // Only reached after writeCeiling, so the caller holds providers:manage here.
+          ...(call.writes || call.asOwner === true ? { providersManage: true } : {}),
           requireReady: true,
         },
         call.writes || call.asOwner === true ? writeCeiling(caller) : readCeiling(caller),
@@ -872,7 +864,7 @@ export const make = Effect.gen(function* () {
       const environmentId = yield* environment.getEnvironmentId;
       if (caller.scope.environmentId !== environmentId)
         return yield* fail("invalid_request", "Ask again in a thread on this environment.");
-      yield* authorizeSshHost(sessions, caller, "orchestration:operate");
+      yield* authorizeApprovalRequest(caller.scope);
       const run = (yield* threads
         .getThreadSnapshot(thread.threadId)
         .pipe(
@@ -972,9 +964,10 @@ export const make = Effect.gen(function* () {
   ) {
     const operation = yield* find(input.syncId);
     // An agent may stop a sync it asked for; anyone else needs to manage providers.
-    if (operation.owners.has(callerKey(caller)))
-      yield* authorizeSshHost(sessions, caller, "orchestration:operate");
-    else yield* writeCeiling(caller);
+    if (!operation.owners.has(callerKey(caller))) yield* writeCeiling(caller);
+    else if (caller.kind === "mcp" && caller.scope.thread !== undefined)
+      yield* authorizeApprovalRequest(caller.scope);
+    else yield* authorizeSshHost(sessions, caller, "orchestration:operate");
     yield* Effect.forEach(operation.fibers, Fiber.interrupt, { discard: true });
     yield* Effect.forEach(
       operation.hosts.filter((task) => !task.finished),

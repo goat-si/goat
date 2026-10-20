@@ -226,6 +226,12 @@ export interface SshHostToolCall {
    * to a session with fewer permissions.
    */
   readonly approvals?: boolean;
+  /**
+   * The caller holds a live `providers:manage`, so the remote session carries
+   * it too and the remote can attribute a provider write to a person allowed
+   * to make it. Like approvals, it never falls back to a narrower session.
+   */
+  readonly providersManage?: boolean;
   readonly requireReady?: true;
 }
 
@@ -350,8 +356,9 @@ const sessionKey = (
   ceiling: RuntimeMode,
   approvals: boolean,
   memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
+  providersManage = false,
 ) =>
-  `${targetConnectionKey(target)}\u0000${ceiling}\u0000${memoryGrantCeiling}${approvals ? "\u0000approvals" : ""}`;
+  `${targetConnectionKey(target)}\u0000${ceiling}\u0000${memoryGrantCeiling}${approvals ? "\u0000approvals" : ""}${providersManage ? "\u0000providers" : ""}`;
 const decodeRemoteCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
 
 const decodeRemoteProject = Schema.decodeUnknownEffect(Schema.Struct({ id: ProjectId }));
@@ -906,8 +913,9 @@ const make = Effect.gen(function* () {
     approvals = false,
     memoryGrantCeiling: import("@goat/contracts").MemoryTaskGrantCeiling = "none",
     requireReady?: true,
+    providersManage = false,
   ) {
-    const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling);
+    const key = sessionKey(target, ceiling, approvals, memoryGrantCeiling, providersManage);
     const gate = sessionLocks.get(key) ?? Semaphore.makeUnsafe(1);
     sessionLocks.set(key, gate);
     const work = Effect.gen(function* () {
@@ -918,10 +926,11 @@ const make = Effect.gen(function* () {
       const issued = yield* withRuntime(
         manager.issueMcpClientSession(target, {
           ...(requireReady === undefined ? {} : { requireReady }),
-          label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""})`,
+          label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""})`,
           ttl: SESSION_TTL,
           runtimeModeCeiling: ceiling,
           ...(approvals ? { approvals: true } : {}),
+          ...(providersManage ? { providersManage: true } : {}),
           memoryScopes:
             memoryGrantCeiling === "none"
               ? []
@@ -945,7 +954,16 @@ const make = Effect.gen(function* () {
                     `${target.alias} could not issue a GOAT session that may answer approvals: ${describe(error)}. Update GOAT there, or let the user answer in that thread.`,
                   ),
             )
-          : sshFailed(target.alias),
+          : providersManage
+            ? Effect.mapError((error) =>
+                error instanceof SshRemoteDispatchError
+                  ? error
+                  : failure(
+                      "remote_refused",
+                      `${target.alias} could not issue a GOAT session that may manage providers: ${describe(error)}. Update GOAT there, or manage providers in Settings on ${target.alias}.`,
+                    ),
+              )
+            : sshFailed(target.alias),
       );
       const parsedExpiry = issued.expiresAt === null ? Number.NaN : Date.parse(issued.expiresAt);
       const session = {
@@ -1892,6 +1910,7 @@ const make = Effect.gen(function* () {
           call.approvals === true,
           "none",
           call.requireReady,
+          call.providersManage === true,
         ).pipe(unavailable(target.alias));
         attemptedToken = session.token;
         if (call.writes && !session.ceilingApplied) {
@@ -1929,7 +1948,7 @@ const make = Effect.gen(function* () {
             // Revoked or expired on the remote: issue a fresh session once.
             if (attemptedToken !== undefined) {
               invalidateSession(
-                sessionKey(target, ceiling, call.approvals === true),
+                sessionKey(target, ceiling, call.approvals === true, "none", call.providersManage === true),
                 attemptedToken,
               );
             }

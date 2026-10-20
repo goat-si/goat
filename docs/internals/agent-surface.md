@@ -652,11 +652,19 @@ Sign-in details are visible only to the requester, approver, or a
 [ProviderHostSync](../../apps/server/src/provider/ProviderHostSync.ts) and its
 [installer and login rules](../../apps/server/src/provider/ProviderHostSyncRecipes.ts).
 
-SSH-issued remote sessions do not carry `providers:manage`. Consequently, the
-remote accepts an outside client with a `full-access` ceiling plus
-`orchestration:operate`, as sent by an approved sync from another machine. The
-origin enforces `providers:manage`; a follow-up issue tracks carrying that grant
-to the remote.
+Every provider write needs a live `providers:manage` grant, on the remote too.
+The origin asks the remote for an SSH-issued session carrying
+`providers:manage` only for calls it has already authorized against the
+caller's (or approver's) live `providers:manage`, so the remote can attribute
+the write instead of trusting any full-access outside client. A remote too old
+to issue that scope fails the call rather than falling back.
+
+Requesting an approval card (provider setup, login, sync, Codex home, SSH host
+trust, SSH runtime update now) needs only a running, writable thread
+credential, which carries `orchestration:read` and never
+`orchestration:operate`. What runs after approval is authorized against the
+approving person's session. See
+[authorizeApprovalRequest](../../apps/server/src/sshRemote/SshHostAuthorization.ts).
 
 **Single environment.** Five entries add providers and sign in on the caller's own
 environment:

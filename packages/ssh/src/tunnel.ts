@@ -692,6 +692,8 @@ export interface RemoteMcpClientSessionOptions {
   readonly runtimeModeCeiling: string | null;
   /** Also grant `orchestration:approve`. A remote CLI that predates it fails the issue. */
   readonly approvals?: boolean;
+  /** Also grant `providers:manage`, only for a caller that holds it live on this machine. */
+  readonly providersManage?: boolean;
   /** Explicit task memory grants; an older CLI must refuse rather than omit them. */
   readonly memoryScopes?: ReadonlyArray<"memory:read" | "memory:write">;
 }
@@ -2704,6 +2706,7 @@ export function buildRemoteMcpSessionScript(
     GOAT_MEMORY_SCOPES: (options.memoryScopes?.length ?? 0) > 0 ? "required" : "none",
     GOAT_EXTRA_SCOPES:
       (options.approvals === true ? "--scope orchestration:approve " : "") +
+      (options.providersManage === true ? "--scope providers:manage " : "") +
       (options.memoryScopes ?? []).map((scope) => `--scope ${shellSingleQuote(scope)} `).join(""),
     GOAT_RUNNER_SETUP: buildRemoteRunnerSetupScript(input, {
       ...selection,
