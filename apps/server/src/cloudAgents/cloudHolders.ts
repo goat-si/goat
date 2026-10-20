@@ -4,6 +4,8 @@ import type {
   CloudHolderName,
   ProviderDiagnosis,
   ProviderDiagnosisReason,
+  ProviderHostCloudCell,
+  ProviderHostCloudReadiness,
 } from "@goat/contracts";
 
 /**
@@ -110,6 +112,52 @@ export function holderFromDiagnoses(input: {
             failed.reason === undefined ? "A readiness check failed." : REASON_TEXT[failed.reason],
         }),
     ...(command === undefined ? {} : { command }),
+  };
+}
+
+const cloudCell = (holder: CloudHolder): ProviderHostCloudCell => ({
+  ready: holder.ready,
+  ...(holder.instanceId === undefined ? {} : { instanceId: holder.instanceId }),
+  ...(holder.accountLabel === undefined ? {} : { accountLabel: holder.accountLabel }),
+  ...(holder.reason === undefined ? {} : { reason: holder.reason }),
+  ...(holder.command === undefined ? {} : { command: holder.command }),
+  ...(holder.activeRuns === undefined ? {} : { activeRuns: holder.activeRuns }),
+});
+
+/** The matrix column for one machine: one cell per cloud driver, from `holderFromDiagnoses`. */
+export function cloudReadinessFromHolders(
+  holders: ReadonlyArray<CloudHolder>,
+): ProviderHostCloudReadiness {
+  const cell = (provider: CloudAgentProvider): ProviderHostCloudCell => {
+    const holder = holders.find((item) => item.provider === provider);
+    return holder === undefined
+      ? { ready: false, reason: `No ${CLOUD_AGENT_LABELS[provider]} instance here.` }
+      : cloudCell(holder);
+  };
+  return {
+    claudeCloud: cell("claudeCloud"),
+    cursorCloud: cell("cursorCloud"),
+    devinCloud: cell("devinCloud"),
+  };
+}
+
+/** A matrix cell placed back on a host. Runtime is the caller's, not the cell's. */
+export function holderFromCloudCell(input: {
+  readonly provider: CloudAgentProvider;
+  readonly host: string | null;
+  readonly runtime: CloudHolder["runtime"];
+  readonly cell: ProviderHostCloudCell;
+}): CloudHolder {
+  return {
+    provider: input.provider,
+    host: input.host,
+    runtime: input.runtime,
+    ...cloudCell({
+      provider: input.provider,
+      host: input.host,
+      runtime: input.runtime,
+      ...input.cell,
+    }),
   };
 }
 

@@ -5,7 +5,10 @@ import {
   type AuthEnvironmentScope,
   type AuthClientSession,
   EnvironmentId,
+  ProviderDriverKind,
+  ProviderHostMatrixResult,
   ProviderInstanceId,
+  type ProviderDiagnosisReason,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -13,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
@@ -25,6 +29,7 @@ import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ProviderAuth from "./ProviderAuthService.ts";
+import * as Diagnosis from "./ProviderDiagnosisService.ts";
 import * as HostSync from "./ProviderHostSync.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -57,13 +62,43 @@ interface Harness {
   readonly calls: Array<{ readonly call: Call; readonly ceiling: string }>;
   readonly spawned: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>;
   readonly handoffs: Array<unknown>;
+  readonly diagnoses: Array<string>;
 }
+
+const cloudDriver = (driver: string, ready: boolean, reason?: ProviderDiagnosisReason) => ({
+  checkedBy: "server" as const,
+  diagnoses: [
+    {
+      instanceId: ProviderInstanceId.make(driver),
+      driver: ProviderDriverKind.make(driver),
+      configured: true,
+      ready,
+      checks: ready
+        ? [{ id: "auth", status: "pass" as const, summary: "Ready." }]
+        : [
+            {
+              id: "auth",
+              status: "fail" as const,
+              summary: "Not ready.",
+              ...(reason === undefined ? {} : { reason }),
+            },
+          ],
+    },
+  ],
+});
 
 const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
+  readonly providers?: ReadonlyArray<unknown>;
+  readonly cloud?: Partial<
+    Record<
+      "claudeCloud" | "cursorCloud" | "devinCloud",
+      { readonly ready: boolean; readonly reason?: ProviderDiagnosisReason }
+    >
+  >;
 }) => {
-  const state: Harness = { calls: [], spawned: [], handoffs: [] };
+  const state: Harness = { calls: [], spawned: [], handoffs: [], diagnoses: [] };
   const spawner = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
@@ -121,8 +156,18 @@ const harness = (options: {
             ) as never,
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
+          getProviders: Effect.succeed((options.providers ?? []) as never),
           refreshInstance: () => Effect.succeed([]) as never,
+        }),
+        Layer.mock(Diagnosis.ProviderDiagnosisService)({
+          diagnose: (input) => {
+            const driver = String(input.driver ?? "");
+            state.diagnoses.push(driver);
+            const cloud = options.cloud?.[driver as "claudeCloud"];
+            return Effect.succeed(
+              cloudDriver(driver, cloud?.ready === true, cloud?.reason ?? "not_signed_in"),
+            );
+          },
         }),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           listInstances: Effect.succeed([]),
@@ -178,7 +223,7 @@ const threadScope: McpInvocationScope = {
 };
 
 it.effect("reports old, stopped, and mismatched hosts instead of failing the matrix", () => {
-  const { layer } = harness({
+  const { layer, state } = harness({
     answer: (call) =>
       call.host === "old"
         ? Effect.fail(
@@ -203,11 +248,79 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     const result = yield* sync.matrix({}, { kind: "client", sessionId: viewer });
     const byHost = Object.fromEntries(result.rows.map((row) => [row.host ?? "local", row]));
     expect(byHost.local?.status).toBe("ok");
+    expect(byHost.local).not.toHaveProperty("cloud");
+    expect(state.diagnoses).toEqual([]);
+    expect(
+      state.calls.map(({ call }) => ({ arguments: call.arguments, timeoutMs: call.timeoutMs })),
+    ).toEqual([
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+      { arguments: { localOnly: true }, timeoutMs: 20_000 },
+    ]);
     expect(byHost.local?.providers.map((provider) => provider.driver)).toContain("codex");
     expect(byHost.old?.status).toBe("update_runtime");
     expect(byHost.stopped?.status).toBe("not_ready");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reports cloud readiness from diagnosis, not from the CLI signed-in flag", () => {
+  const { layer, state } = harness({
+    providers: [
+      {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude",
+        installed: true,
+        version: "1.2.3",
+        auth: { status: "authenticated", label: "api-key", profileId: "sk-live-SECRETPROFILE" },
+        setup: { canAuthenticate: true },
+      },
+      {
+        instanceId: ProviderInstanceId.make("cursorCloud"),
+        driver: ProviderDriverKind.make("cursorCloud"),
+        executionLocation: "cloud",
+        auth: { status: "authenticated", label: "Jun", profileId: "sk-live-SECRETPROFILE" },
+      },
+    ],
+    cloud: {
+      cursorCloud: { ready: true },
+      claudeCloud: { ready: false, reason: "forbidden_environment" },
+      devinCloud: { ready: false, reason: "not_signed_in" },
+    },
+    answer: () => Effect.succeed({ rows: [{ host: null, status: "ok", providers: [] }] }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { localOnly: true, cloud: true },
+      {
+        kind: "client",
+        sessionId: viewer,
+      },
+    );
+    const decoded = yield* Schema.decodeUnknownEffect(ProviderHostMatrixResult)(result);
+    const row = decoded.rows[0];
+    expect(row?.providers.find((provider) => provider.driver === "claudeAgent")?.auth).toBe(
+      "signed_in",
+    );
+    expect(row?.cloud).toMatchObject({
+      claudeCloud: {
+        ready: false,
+        reason:
+          "The provider's environment overrides its sign-in (API key, proxy or Git variables).",
+      },
+      cursorCloud: { ready: true, instanceId: "cursorCloud", accountLabel: "Jun", activeRuns: 0 },
+      devinCloud: { ready: false, reason: "Not signed in.", command: "devin auth login" },
+    });
+    expect(row?.cloud?.claudeCloud).not.toHaveProperty("command");
+    expect(JSON.stringify(decoded)).not.toContain("SECRETPROFILE");
+    expect([...state.diagnoses].sort()).toEqual(["claudeCloud", "cursorCloud", "devinCloud"]);
+    yield* sync.matrix({ hosts: ["box"], cloud: true }, { kind: "client", sessionId: viewer });
+    expect(
+      state.calls.map(({ call }) => ({ arguments: call.arguments, timeoutMs: call.timeoutMs })),
+    ).toEqual([{ arguments: { localOnly: true, cloud: true }, timeoutMs: 120_000 }]);
   }).pipe(Effect.provide(layer));
 });
 

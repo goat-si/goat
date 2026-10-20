@@ -2879,7 +2879,7 @@ export const agentSurfaceRegistry = {
     toolkit: "provider",
     summary: "Read which machines have each provider CLI",
     description:
-      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
+      "Read the provider × host matrix: for this machine and each connected SSH host, which coding-agent CLIs (Codex, Claude, Cursor, Grok, OpenCode, Pi) are installed, their versions, whether they are signed in, and how GOAT would install and sign in to each there. The cloud field is present only when cloud:true is passed: Claude Cloud, Cursor Cloud, and Devin Cloud readiness from the same checks as goat_cloud_holders, which is slower because it diagnoses those three on every machine, and is not the same as the CLI being signed in. Pass hosts to choose machines; omit it for connected hosts and the aliases in ssh config. A host row with status update_runtime runs a GOAT too old to answer; tell the user to update GOAT there (goat_ssh_runtime_update). not_ready means its runtime is stopped; call goat_ssh_host_prepare first. versionMismatch means the host runs another GOAT build. Reading never installs, signs in, or starts a runtime, and never returns credentials.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -2939,7 +2939,7 @@ export const agentSurfaceRegistry = {
     toolkit: "provider",
     summary: "List cloud agent credential holders",
     description:
-      'Which connected environments can launch and follow Claude Cloud, Cursor Cloud, or Devin Cloud runs with their own login: this one and every connected SSH host. Each holder checks itself and answers only ready, a non-secret account label, why not, and the sign-in command a person runs there; no credential leaves its machine. runtime "update_required" means the host answered through its provider diagnosis but its GOAT is too old to take routed launches; "unreachable" means it did not answer. Answers are reused for a minute; pass refresh:true to check again. Pass local:true to check only this environment.',
+      'Which connected environments can launch and follow Claude Cloud, Cursor Cloud, or Devin Cloud runs with their own login: this one and every connected SSH host. Readiness is each machine\'s provider × host matrix cloud column (the same diagnosis as goat_provider_diagnose), reduced to ready, a non-secret account label, why not, and the sign-in command a person runs there; no credential leaves its machine. A host whose matrix has no cloud column is read the older way. runtime "update_required" means the host answered through its provider diagnosis but its GOAT is too old to take routed launches; "unreachable" means it did not answer. Answers are reused for a minute; pass refresh:true to check again. Pass local:true to check only this environment.',
     effect: "read",
     hostRoutable: false,
     requires: "either",

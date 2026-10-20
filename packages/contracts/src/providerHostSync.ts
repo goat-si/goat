@@ -6,10 +6,16 @@
  * installer and login. Results never carry credentials, tokens, environment
  * values, or installer output; a device code and its verification page are
  * the only sign-in data relayed, because the person must type them elsewhere.
+ *
+ * `cloud` on a row, present only when the request sets `cloud: true`, is whether
+ * that machine can launch Claude Cloud, Cursor Cloud, and Devin Cloud. It is the
+ * holder diagnosis, not the CLI `signed_in` flag: an API key or a `GIT_*`
+ * override can be signed in and still not launch. Settings omits it.
  */
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, SshHostAlias, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { CloudHolder } from "./cloudAgents.ts";
 import { HandoffSummary } from "./handoff.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -50,6 +56,29 @@ export const ProviderHostProviderState = Schema.Struct({
 export type ProviderHostProviderState = typeof ProviderHostProviderState.Type;
 
 /**
+ * One cloud driver's readiness on this machine. Same fields `goat_cloud_holders`
+ * reports for a holder, without host or runtime: those belong to the row.
+ * Absent keys are omitted; older GOAT rows omit `cloud` entirely.
+ */
+const holderField = CloudHolder.fields;
+export const ProviderHostCloudCell = Schema.Struct({
+  instanceId: holderField.instanceId,
+  ready: holderField.ready,
+  accountLabel: holderField.accountLabel,
+  reason: holderField.reason,
+  command: holderField.command,
+  activeRuns: holderField.activeRuns,
+});
+export type ProviderHostCloudCell = typeof ProviderHostCloudCell.Type;
+
+export const ProviderHostCloudReadiness = Schema.Struct({
+  claudeCloud: ProviderHostCloudCell,
+  cursorCloud: ProviderHostCloudCell,
+  devinCloud: ProviderHostCloudCell,
+});
+export type ProviderHostCloudReadiness = typeof ProviderHostCloudReadiness.Type;
+
+/**
  * ok: the host answered. update_runtime: its GOAT predates this tool.
  * not_ready: its runtime is not running; prepare it first. unreachable: SSH
  * or GOAT there did not answer.
@@ -74,6 +103,8 @@ export const ProviderHostRow = Schema.Struct({
   versionMismatch: Schema.optionalKey(Schema.Boolean),
   message: Schema.optionalKey(TrimmedNonEmptyString),
   providers: Schema.Array(ProviderHostProviderState),
+  /** Present when this GOAT can say whether the machine launches cloud runs. */
+  cloud: Schema.optionalKey(ProviderHostCloudReadiness),
 });
 export type ProviderHostRow = typeof ProviderHostRow.Type;
 
@@ -84,6 +115,10 @@ export const ProviderHostMatrixInput = Schema.Struct({
   }),
   localOnly: Schema.optional(Schema.Boolean).annotate({
     description: "Report only this machine. Another machine asking a host sets this.",
+  }),
+  cloud: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Include each row's cloud column; slower because it diagnoses Claude Cloud, Cursor Cloud and Devin Cloud on every machine.",
   }),
 });
 export type ProviderHostMatrixInput = typeof ProviderHostMatrixInput.Type;

@@ -1295,7 +1295,13 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
           Layer.provide(MaintenanceAudit.layer),
-          Layer.provideMerge(ProviderHostSync.layer),
+          Layer.provideMerge(
+            ProviderHostSync.layer.pipe(
+              Layer.provide(
+                ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer)),
+              ),
+            ),
+          ),
         ),
       ),
     ),
@@ -1309,8 +1315,9 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     Layer.mergeAll(
       ProviderDiagnosisRouting.layer,
-      // Cloud launches route to a credential holder with the same diagnosis and host reads.
+      // Cloud launches read readiness from the provider × host matrix.
       CloudAgentService.layer.pipe(
+        Layer.provide(ProviderHostSync.layer),
         Layer.provide(
           ThreadLaunchMcpService.layer.pipe(
             Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),

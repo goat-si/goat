@@ -2,7 +2,12 @@ import type { CloudHolder, ProviderDiagnosis } from "@goat/contracts";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { chooseHolder, holderFromDiagnoses } from "./cloudHolders.ts";
+import {
+  chooseHolder,
+  cloudReadinessFromHolders,
+  holderFromCloudCell,
+  holderFromDiagnoses,
+} from "./cloudHolders.ts";
 
 const holder = (overrides: Partial<CloudHolder>): CloudHolder => ({
   provider: "cursorCloud",
@@ -93,6 +98,61 @@ const diagnosis = (overrides: Partial<ProviderDiagnosis>): ProviderDiagnosis => 
   ready: true,
   checks: [],
   ...overrides,
+});
+
+describe("cloud readiness column", () => {
+  it("keeps the holder answer and drops host and runtime", () => {
+    const source = holderFromDiagnoses({
+      provider: "claudeCloud",
+      host: "box",
+      runtime: "current",
+      activeRuns: 2,
+      diagnoses: [
+        diagnosis({
+          ready: false,
+          checks: [
+            {
+              id: "auth",
+              status: "fail",
+              reason: "forbidden_environment",
+              summary: "ANTHROPIC_API_KEY is set.",
+            },
+          ],
+        }),
+      ],
+    });
+    const column = cloudReadinessFromHolders([
+      source,
+      holderFromDiagnoses({
+        provider: "cursorCloud",
+        host: "box",
+        runtime: "current",
+        diagnoses: [diagnosis({ driver: ProviderDriverKind.make("cursorCloud") })],
+      }),
+      holderFromDiagnoses({
+        provider: "devinCloud",
+        host: "box",
+        runtime: "current",
+        diagnoses: [],
+      }),
+    ]);
+    expect(column.claudeCloud).toEqual({
+      ready: false,
+      instanceId: "claudeCloud",
+      activeRuns: 2,
+      reason: "The provider's environment overrides its sign-in (API key, proxy or Git variables).",
+    });
+    expect(column.cursorCloud.ready).toBe(true);
+    expect(JSON.stringify(column)).not.toContain("box");
+    expect(
+      holderFromCloudCell({
+        provider: "claudeCloud",
+        host: "other",
+        runtime: "update_required",
+        cell: column.claudeCloud,
+      }),
+    ).toMatchObject({ host: "other", runtime: "update_required", ready: false });
+  });
 });
 
 describe("holderFromDiagnoses", () => {

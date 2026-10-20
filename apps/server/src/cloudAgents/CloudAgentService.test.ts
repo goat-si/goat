@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  EnvironmentAuthorizationError,
   EnvironmentId,
   EventId,
   type OrchestrationV2AppThread,
@@ -9,6 +10,7 @@ import {
   ProjectId,
   type ProviderDiagnosis,
   ProviderDriverKind,
+  ProviderHostSyncError,
   ProviderInstanceId,
   ProviderThreadId,
   ThreadId,
@@ -34,7 +36,6 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Project from "../project/ProjectService.ts";
-import * as Diagnosis from "../provider/ProviderDiagnosisService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SshDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as CloudAgents from "./CloudAgentService.ts";
@@ -61,25 +62,35 @@ const ready = (driver: string): ProviderDiagnosis => ({
   ready: true,
   checks: [{ id: "auth", status: "pass", summary: "Signed in." }],
 });
-const signedOut = (driver: string): ProviderDiagnosis => ({
-  ...ready(driver),
-  ready: false,
-  checks: [
-    {
-      id: "auth",
-      status: "fail",
-      reason: "not_signed_in",
-      summary: "Not signed in.",
-      fix: { actor: "human", instruction: "Sign in.", command: "claude auth login --claudeai" },
-    },
-  ],
+const cloudCell = (driver: string, ready: boolean, activeRuns = 0) =>
+  ready
+    ? {
+        ready: true,
+        instanceId: ProviderInstanceId.make(driver),
+        ...(driver === "cursorCloud" ? { accountLabel: "Jun" } : {}),
+        activeRuns,
+      }
+    : { ready: false, reason: "Not signed in." };
+
+const localCloud = (readyDrivers: ReadonlySet<string>) => ({
+  claudeCloud: cloudCell("claudeCloud", readyDrivers.has("claudeCloud")),
+  cursorCloud: cloudCell("cursorCloud", readyDrivers.has("cursorCloud")),
+  devinCloud: cloudCell("devinCloud", readyDrivers.has("devinCloud")),
 });
 
 interface World {
   readonly readyDrivers: Set<string>;
   readonly hosts: Array<string>;
-  diagnoses: number;
-  readonly hostReads: Array<{ host: string; tool: string }>;
+  matrixFailure: "settings" | "auth" | undefined;
+  readonly matrixCalls: Array<{
+    readonly localOnly: boolean | undefined;
+    readonly cloud: boolean | undefined;
+  }>;
+  readonly hostReads: Array<{
+    host: string;
+    tool: string;
+    arguments: Record<string, unknown>;
+  }>;
   readonly hostWrites: Array<{ host: string; tool: string; arguments: Record<string, unknown> }>;
   readonly launches: Array<{
     input: Record<string, unknown>;
@@ -91,7 +102,8 @@ interface World {
 const makeWorld = (): World => ({
   readyDrivers: new Set(["cursorCloud"]),
   hosts: [],
-  diagnoses: 0,
+  matrixFailure: undefined,
+  matrixCalls: [],
   hostReads: [],
   hostWrites: [],
   launches: [],
@@ -180,16 +192,31 @@ const storeCloudThread = (input: {
 const layerFor = (world: World) => {
   const store = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
   const deps = Layer.mergeAll(
-    Layer.mock(Diagnosis.ProviderDiagnosisService)({
-      diagnose: (input) =>
-        Effect.sync(() => {
-          world.diagnoses++;
-          const driver = input.driver!;
-          return {
-            checkedBy: "server" as const,
-            diagnoses: [world.readyDrivers.has(driver) ? ready(driver) : signedOut(driver)],
-          };
-        }),
+    Layer.mock(HostSync.ProviderHostSync)({
+      matrix: (input) => {
+        world.matrixCalls.push({ localOnly: input.localOnly, cloud: input.cloud });
+        if (world.matrixFailure === "auth")
+          return Effect.fail(
+            new EnvironmentAuthorizationError({
+              message: "Installing a provider needs a person's approval.",
+              requiredScope: "providers:manage",
+            }),
+          );
+        if (world.matrixFailure === "settings")
+          return Effect.fail(
+            new ProviderHostSyncError({ code: "unavailable", detail: "The matrix is down." }),
+          );
+        return Effect.succeed({
+          rows: [
+            {
+              host: null,
+              status: "ok" as const,
+              providers: [],
+              cloud: localCloud(world.readyDrivers),
+            },
+          ],
+        });
+      },
     }),
     Layer.mock(ProviderRegistry.ProviderRegistry)({
       getProviders: Effect.succeed([
@@ -203,11 +230,25 @@ const layerFor = (world: World) => {
     Layer.mock(HostThreads.HostThreadsMcpService)({
       readOnHost: (_scope, input, decode) =>
         Effect.gen(function* () {
-          world.hostReads.push({ host: input.host, tool: input.tool });
+          world.hostReads.push({
+            host: input.host,
+            tool: input.tool,
+            arguments: { ...input.arguments },
+          });
           if (input.host === "down")
             return yield* new OrchestratorMcpFailure({
               code: "host_unavailable",
               message: "down timed out",
+            });
+          if (input.host === "garbled")
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "GOAT on garbled could not read its provider list.",
+            });
+          if (input.host === "old" && input.tool === "goat_provider_host_matrix")
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "GOAT on old does not have goat_provider_host_matrix; it runs 0.1.0.",
             });
           if (input.host === "old" && input.tool === "goat_cloud_holders")
             return yield* new OrchestratorMcpFailure({
@@ -215,19 +256,40 @@ const layerFor = (world: World) => {
               message: "GOAT on old does not have goat_cloud_holders; it runs 0.1.0.",
             });
           const raw =
-            input.tool === "goat_cloud_holders"
-              ? {
-                  holders: [
-                    {
-                      provider: "cursorCloud",
-                      host: null,
-                      ready: true,
-                      runtime: "current",
-                      activeRuns: 3,
-                    },
-                  ],
-                }
-              : { checkedBy: "server", diagnoses: [ready(String(input.arguments.driver))] };
+            input.tool === "goat_provider_host_matrix"
+              ? input.host === "aged"
+                ? { rows: [{ host: null, status: "ok", providers: [] }] }
+                : {
+                    rows: [
+                      {
+                        host: null,
+                        status: "ok",
+                        providers: [],
+                        cloud: {
+                          claudeCloud: { ready: false, reason: "Not signed in." },
+                          cursorCloud: {
+                            ready: true,
+                            instanceId: "cursorCloud",
+                            activeRuns: 3,
+                          },
+                          devinCloud: { ready: false, reason: "Not signed in." },
+                        },
+                      },
+                    ],
+                  }
+              : input.tool === "goat_cloud_holders"
+                ? {
+                    holders: [
+                      {
+                        provider: "cursorCloud",
+                        host: null,
+                        ready: true,
+                        runtime: "current",
+                        activeRuns: input.host === "aged" ? 0 : 3,
+                      },
+                    ],
+                  }
+                : { checkedBy: "server", diagnoses: [ready(String(input.arguments.driver))] };
           const decoded = yield* decode(raw).pipe(Effect.orDie);
           return { ...decoded, host: input.host };
         }),
@@ -340,16 +402,32 @@ it.effect("probes holders once a minute, falls back for old runtimes, and drops 
         );
         assert.equal(first.holders[0]?.accountLabel, "Jun");
         assert.equal(first.holders[2]?.activeRuns, 3);
+        assert.equal(
+          world.matrixCalls.every((call) => call.localOnly === true && call.cloud === true),
+          true,
+        );
+        assert.equal(
+          world.hostReads
+            .filter((read) => read.tool === "goat_provider_host_matrix")
+            .every((read) => read.arguments.localOnly === true && read.arguments.cloud === true),
+          true,
+        );
+        assert.deepEqual(
+          world.hostReads.filter((read) => read.host === "old").map((read) => read.tool),
+          ["goat_provider_host_matrix", "goat_cloud_holders", "goat_provider_diagnose"],
+        );
         const reads = world.hostReads.length;
         yield* service.holders(scope("full-access"), { provider: "cursorCloud" });
-        assert.equal(world.diagnoses, 1);
         // Only the unreachable host is asked again within the minute.
         assert.deepEqual(world.hostReads.slice(reads), [
-          { host: "down", tool: "goat_cloud_holders" },
+          {
+            host: "down",
+            tool: "goat_provider_host_matrix",
+            arguments: { localOnly: true, cloud: true },
+          },
         ]);
         yield* TestClock.adjust("61 seconds");
         yield* service.holders(scope("full-access"), { provider: "cursorCloud", refresh: true });
-        assert.equal(world.diagnoses, 2);
         world.hosts.splice(0, world.hosts.length);
         const alone = yield* service.holders(scope("full-access"), { provider: "cursorCloud" });
         assert.deepEqual(
@@ -359,6 +437,120 @@ it.effect("probes holders once a minute, falls back for old runtimes, and drops 
       }),
     );
   }),
+);
+
+it.effect("routes through the matrix cloud column and falls back when a host omits it", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    world.readyDrivers.clear();
+    world.hosts.push("new", "aged");
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const table = yield* service.holders(scope("full-access"), { provider: "cursorCloud" });
+        assert.deepEqual(
+          table.holders.map((holder) => [
+            holder.host,
+            holder.ready,
+            holder.runtime,
+            holder.activeRuns,
+          ]),
+          [
+            [null, false, "current", undefined],
+            ["aged", true, "current", 0],
+            ["new", true, "current", 3],
+          ],
+        );
+        assert.equal(
+          world.matrixCalls.every((call) => call.localOnly === true && call.cloud === true),
+          true,
+        );
+        assert.deepEqual(
+          world.hostReads.filter((read) => read.host === "aged").map((read) => read.tool),
+          ["goat_provider_host_matrix", "goat_cloud_holders"],
+        );
+        assert.deepEqual(
+          world.hostReads.filter((read) => read.host === "new").map((read) => read.tool),
+          ["goat_provider_host_matrix"],
+        );
+        const dry = yield* service.launch(
+          scope("full-access"),
+          { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Fix the flake", dryRun: true },
+          full,
+        );
+        assert.equal(dry.holder.host, "aged");
+        assert.equal(world.launches.length, 0);
+      }),
+    );
+  }),
+);
+
+it.effect(
+  "reports this environment not ready when its matrix fails, and an unreadable host as unreachable",
+  () =>
+    Effect.gen(function* () {
+      const denied = makeWorld();
+      denied.matrixFailure = "auth";
+      yield* run(
+        denied,
+        Effect.gen(function* () {
+          const service = yield* CloudAgents.CloudAgentService;
+          const error = yield* service
+            .holders(scope("full-access"), { local: true })
+            .pipe(Effect.flip);
+          assert.equal(error.code, "capability_denied");
+        }),
+      );
+      const broken = makeWorld();
+      broken.matrixFailure = "settings";
+      broken.hosts.push("garbled");
+      yield* run(
+        broken,
+        Effect.gen(function* () {
+          const service = yield* CloudAgents.CloudAgentService;
+          const holders = yield* service.holders(scope("full-access"), {});
+          assert.deepEqual(
+            holders.holders.map((holder) => [
+              holder.host,
+              holder.ready,
+              holder.runtime,
+              holder.reason,
+            ]),
+            [
+              [null, false, "current", "Could not read this environment's provider settings."],
+              [null, false, "current", "Could not read this environment's provider settings."],
+              [null, false, "current", "Could not read this environment's provider settings."],
+              [
+                "garbled",
+                false,
+                "unreachable",
+                "GOAT on garbled could not read its provider list.",
+              ],
+              [
+                "garbled",
+                false,
+                "unreachable",
+                "GOAT on garbled could not read its provider list.",
+              ],
+              [
+                "garbled",
+                false,
+                "unreachable",
+                "GOAT on garbled could not read its provider list.",
+              ],
+            ],
+          );
+          assert.deepEqual(broken.hostReads, [
+            {
+              host: "garbled",
+              tool: "goat_provider_host_matrix",
+              arguments: { localOnly: true, cloud: true },
+            },
+          ]);
+        }),
+      );
+    }),
 );
 
 it.effect("launches on the chosen holder: dry run, a preferred host, and this environment", () =>
