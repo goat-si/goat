@@ -191,9 +191,7 @@ export const make = () => {
         );
         if (claimed) return probed;
       }
-      return yield* Effect.fail(
-        cause ?? new NetError({ message: "Failed to reserve loopback port" }),
-      );
+      return yield* cause ?? new NetError({ message: "Failed to reserve loopback port" });
     });
 
   return {

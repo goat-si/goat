@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NetService from "@goat/shared/Net";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -151,7 +152,17 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* fs.makeDirectory(stateDir, { recursive: true });
           const signalPath = path.join(fixture, "signals");
           const cliPath = path.join(fixture, "installed cli.mjs");
-          const args = ["serve", "--host", "127.0.0.1", "--port", "0", "--base-dir", baseDir];
+          // Ownership matches the published port against argv, so the server binds that port.
+          const port = yield* NetService.make().reserveLoopbackPort();
+          const args = [
+            "serve",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            String(port),
+            "--base-dir",
+            baseDir,
+          ];
           yield* fs.writeFileString(
             cliPath,
             `import * as fs from "node:fs";
@@ -190,7 +201,7 @@ server.listen(Number(process.argv[process.argv.indexOf("--port") + 1]), "127.0.0
             ),
           );
           assert.equal(started.pid, child.pid);
-          assert.isAbove(started.port, 0);
+          assert.equal(started.port, port);
           assert.deepEqual(started.args, args);
           const savedState = {
             pid: `${child.pid}\n`,

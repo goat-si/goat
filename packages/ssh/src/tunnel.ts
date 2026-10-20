@@ -1244,8 +1244,18 @@ else
     printf '%s\n' "$process_table" | awk -v p="$1" '$1==p { found=1 } END { print found ? "present" : "absent" }'
   }
   # An exited, unreaped server still passes kill -0; it cannot be reused.
+  # /proc is authoritative for that zombie. ps can return an empty stat under load
+  # and must not turn a dead server back into a live one.
   server_alive() {
     [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1
+    if [ -r "/proc/$1/stat" ]; then
+      alive_state="$(sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{ print $1 }' || true)"
+      case "$alive_state" in
+        Z) return 1 ;;
+        ?*) return 0 ;;
+      esac
+    fi
+    kill -0 "$1" 2>/dev/null || return 1
     case "$(ps -o stat= -p "$1" 2>/dev/null || true)" in *Z*) return 1 ;; esac
   }
   server_kill() { kill "$1" 2>/dev/null; }

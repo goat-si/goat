@@ -26,23 +26,28 @@ const liveOwner = () =>
 const deadOwner = () =>
   `${NodeOS.hostname()}|${process.getuid!()}|2147483647|Mon Jan 1 00:00:00 2000|fixture`;
 
-// The shell blocks in `printf > fifo` until this read opens, so the milestone cannot be missed.
-const readFifo = (file: string) =>
-  Effect.callback<void, NodeJS.ErrnoException>((resume) => {
-    const fd = NodeFS.openSync(file, NodeFS.constants.O_RDONLY | NodeFS.constants.O_NONBLOCK);
+// Open the read end in this fiber before returning. The remote command runs
+// synchronously, so the reader must already be open when `printf > fifo` starts.
+const awaitFifo = (file: string) =>
+  Effect.gen(function* () {
+    // O_RDWR opens without a partner. O_RDONLY|O_NONBLOCK reads as EOF until a
+    // writer arrives, which drops the milestone before the shell prints it.
+    const fd = NodeFS.openSync(file, NodeFS.constants.O_RDWR);
     const stream = NodeFS.createReadStream("", { fd, autoClose: true });
-    let done = false;
-    const finish = (effect: Effect.Effect<void, NodeJS.ErrnoException>) => {
-      if (done) return;
-      done = true;
-      stream.destroy();
-      resume(effect);
-    };
-    stream.on("data", () => finish(Effect.void));
-    stream.on("error", (error) => finish(Effect.fail(error)));
-    return Effect.sync(() => {
-      if (!done) stream.destroy();
-    });
+    return yield* Effect.callback<void>((resume) => {
+      let done = false;
+      const finish = (effect: Effect.Effect<void>) => {
+        if (done) return;
+        done = true;
+        stream.destroy();
+        resume(effect);
+      };
+      stream.on("data", () => finish(Effect.void));
+      stream.on("error", (error) => finish(Effect.die(error)));
+      return Effect.sync(() => {
+        if (!done) stream.destroy();
+      });
+    }).pipe(Effect.forkChild);
   });
 
 const pauseFirstLock = Effect.fn("test.pauseReplacementLock")(function* (
@@ -219,13 +224,15 @@ read -r release < "$HOME/.test/wait-release"
 `,
           );
           yield* f.fs.chmod(`${f.test}/lock-barrier-bin/sleep`, 0o700);
+          const acquired = yield* awaitFifo(`${f.test}/lock-acquired.fifo`);
+          const waiting = yield* awaitFifo(`${f.test}/waiting.fifo`);
           const first = yield* Effect.forkChild(launch(true));
-          yield* readFifo(`${f.test}/lock-acquired.fifo`);
+          yield* Fiber.join(acquired);
           const before = f.remoteCommands.length;
           const second = yield* Effect.forkChild(
             launch(mode === "cold", mode === "cold" ? undefined : baseline.selectedRuntime),
           );
-          yield* readFifo(`${f.test}/waiting.fifo`);
+          yield* Fiber.join(waiting);
           assert.equal(f.remoteCommands.length - before, commands);
           yield* f.fs.writeFileString(`${f.test}/lock-release`, "release\n");
           const firstResult = yield* Fiber.join(first);
@@ -504,10 +511,11 @@ case "$3" in */replacement.lock)
         yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
         const other = { ...uploadTarget, alias: "other-alias" };
         yield* pauseFirstLock(f, "replacement.lock");
+        const acquired = yield* awaitFifo(`${f.test}/lock-acquired.fifo`);
         const first = yield* Effect.forkChild(
           f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true }),
         );
-        yield* readFifo(`${f.test}/lock-acquired.fifo`);
+        yield* Fiber.join(acquired);
         const owner = yield* f.fs.readLink(`${f.home}/.goat/ssh-launch/replacement.lock`);
         const second = yield* SshTunnel.launchOrReuseRemoteServer(
           other,
@@ -543,10 +551,11 @@ case "$3" in */replacement.lock)
         yield* f.fs.symlink(deadOwner(), lock);
         yield* f.fs.writeFileString(`${f.test}/activity`, "busy");
         yield* pauseFirstLock(f, "replacement.recovery");
+        const acquired = yield* awaitFifo(`${f.test}/lock-acquired.fifo`);
         const first = yield* Effect.forkChild(
           f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true }),
         );
-        yield* readFifo(`${f.test}/lock-acquired.fifo`);
+        yield* Fiber.join(acquired);
         const recoveryOwner = yield* f.fs.readLink(recovery);
         const second = yield* f.run("launch", false, {
           refreshOwnedRuntimeOnFirstConnection: true,
@@ -581,6 +590,7 @@ case "$3" in */replacement.lock)
           candidateSignals: { ...current, drain: true },
         });
         yield* pauseFirstLock(f, "replacement.lock");
+        const acquired = yield* awaitFifo(`${f.test}/lock-acquired.fifo`);
         const launch = yield* Effect.forkChild(
           SshTunnel.launchOrReuseRemoteServer(
             uploadTarget,
@@ -588,7 +598,7 @@ case "$3" in */replacement.lock)
             { ...f.runner, refreshOwnedRuntimeOnFirstConnection: true },
           ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport)),
         );
-        yield* readFifo(`${f.test}/lock-acquired.fifo`);
+        yield* Fiber.join(acquired);
         const newer = "9.9.9";
         const directory = `${f.home}/.goat/runtime/goat/versions/${newer}`;
         yield* f.fs.makeDirectory(directory);
