@@ -22,6 +22,11 @@ describe("SSH helper version ordering", () => {
     ["1.2.3-nightly.20261012.2", "1.2.3-nightly.20261012.10", "older"],
     ["1.2.3-preview.20261012.10", "1.2.3-preview.20261012.2", "newer"],
     ["1.2.3", "1.2.3+build", "equal"],
+    // Commit time is in the version, so a later dev build sorts above an earlier
+    // one even when its sha would sort first and no commit-time flag is passed.
+    ["0.1.0-dev.1792000000.gfff881545", "0.1.0-dev.1792000100.g001234567", "older"],
+    ["0.1.0-dev.1792000100.g001234567", "0.1.0-dev.1792000000.gfff881545", "newer"],
+    ["0.1.1-nightly.20261020.4", "0.1.1-nightly.20261019.9", "newer"],
   ])("compares %s with %s", async (live, requested, result) =>
     expect(await compare(live!, requested!)).toBe(result),
   );

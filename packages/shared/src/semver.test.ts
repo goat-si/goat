@@ -85,6 +85,13 @@ describe("semver helpers", () => {
         { version: "0.1.0-dev.84b52e284", commitTime: newer },
         -1,
       ],
+      // `<base>-dev.<commit time>.g<sha>` carries its own order. The sha sorts the
+      // other way ("gfff…" above "g001…") and must not win.
+      [
+        { version: "0.1.0-dev.1792000000.gfff881545" },
+        { version: "0.1.0-dev.1792000100.g001234567" },
+        -1,
+      ],
       // Numbered builds of one train keep SemVer order, stamped or not.
       [{ version: "0.1.0-nightly.20261012.10" }, { version: "0.1.0-nightly.20261012.2" }, 1],
       [
