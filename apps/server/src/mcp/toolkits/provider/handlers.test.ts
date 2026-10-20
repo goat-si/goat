@@ -129,7 +129,7 @@ it.effect(
           providerSessionId: "provider-session",
           providerInstanceId: ProviderInstanceId.make("codex"),
         },
-        grantedScopes: ["orchestration:operate"],
+        grantedScopes: ["orchestration:read"],
         reauthorize: () => Effect.void,
       };
       let requests = 0;

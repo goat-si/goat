@@ -1437,7 +1437,13 @@ it.effect.each([false, true])(
         { host: "box", mode: "now" },
         {
           ...runtimeScope,
-          ...(insideThread ? { ...scope, environmentId: EnvironmentId.make("owner") } : {}),
+          ...(insideThread
+            ? {
+                ...scope,
+                environmentId: EnvironmentId.make("owner"),
+                grantedScopes: ["orchestration:read"],
+              }
+            : {}),
         },
       );
       expect(

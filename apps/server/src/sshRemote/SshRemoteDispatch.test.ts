@@ -560,6 +560,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
         sessionsIssued: 0,
         requests: 0,
         sessionRequests: [] as Array<boolean>,
+        providersManageRequests: [] as Array<boolean>,
       };
       const fetchEndpoint = vi.fn(async (_url: string, init?: RequestInit) => {
         record.requests += 1;
@@ -615,6 +616,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
         revalidateTunnels: () => Effect.void,
         issueMcpClientSession: (_target, sessionOptions) => {
           record.sessionRequests.push(sessionOptions.approvals === true);
+          record.providersManageRequests.push(sessionOptions.providersManage === true);
           return sessionOptions.approvals === true && options.approvalsFail === true
             ? Effect.fail(
                 new SshCommandError({
@@ -910,6 +912,53 @@ describe("SshRemoteDispatch.callHostTool", () => {
         expect(result._tag).toBe("Success");
         expect(record.sessionsIssued).toBe(2);
         expect(record.sessionRequests).toEqual([false, differentKey === "approvals"]);
+      }),
+  );
+
+  it.effect(
+    "issues a providers:manage session separately from a plain session",
+    () =>
+      Effect.gen(function* () {
+        const managed = Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          return yield* dispatch.callHostTool(
+            {
+              host,
+              tool: "goat_provider_sync",
+              arguments: { driver: "opencode" },
+              timeoutMs: 5_000,
+              writes: true,
+              providersManage: true,
+            },
+            Effect.succeed("full-access"),
+          );
+        });
+        const { result, record } = yield* withRemote(
+          {
+            answer: (request) =>
+              initialize(request) ?? { result: { structuredContent: { ok: true } } },
+          },
+          Effect.gen(function* () {
+            const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+            const first = yield* managed;
+            const plain = yield* dispatch.callHostTool(
+              {
+                host,
+                tool: "goat_thread_read",
+                arguments: { threadId: "thread-1" },
+                timeoutMs: 5_000,
+                writes: false,
+              },
+              Effect.succeed("full-access"),
+            );
+            const again = yield* managed;
+            return { first, plain, again };
+          }),
+        );
+        expect(result._tag).toBe("Success");
+        expect(record.providersManageRequests).toEqual([true, false]);
+        expect(record.sessionRequests).toEqual([false, false]);
+        expect(record.sessionsIssued).toBe(2);
       }),
   );
 

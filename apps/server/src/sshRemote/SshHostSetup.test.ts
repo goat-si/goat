@@ -205,6 +205,17 @@ it.effect.each([false, true])(
                   providerInstanceId: ProviderInstanceId.make("codex"),
                 }
               : undefined,
+            ...(insideThread
+              ? {
+                  client: undefined,
+                  grantedScopes: ["orchestration:read" as const],
+                  reauthorize: (required: ReadonlyArray<string>) =>
+                    Effect.sync(() => {
+                      expect(required).toEqual(["orchestration:read"]);
+                      f.events.push("authorize");
+                    }),
+                }
+              : {}),
           },
         },
       );
@@ -223,6 +234,48 @@ it.effect.each([false, true])(
       expect(f.events).toEqual(["authorize"]);
       expect(f.updates).toEqual([]);
       expect(yield* f.setup.status({ host: "box" })).toEqual({ kind: "ok", status: stopped });
+    }),
+);
+
+it.effect(
+  "a thread with only orchestration:read can ask to update now and cannot mutate directly",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const seen: Array<ReadonlyArray<string>> = [];
+      const threadScope: McpInvocationScope = {
+        ...f.scope,
+        client: undefined,
+        readOnly: false,
+        thread: {
+          threadId: ThreadId.make("caller"),
+          providerSessionId: "session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        grantedScopes: ["orchestration:read"],
+        reauthorize: (required) => Effect.sync(() => void seen.push(required)),
+      };
+      const caller = { kind: "mcp" as const, scope: threadScope };
+      expect(yield* f.setup.update({ host: "box", mode: "now" }, caller)).toMatchObject({
+        kind: "needs_human",
+        next: { after: "approval", call: "goat_ssh_host_status" },
+      });
+      expect(seen).toEqual([["orchestration:read"]]);
+      expect(f.updates).toEqual([]);
+
+      expect(
+        yield* f.setup
+          .update({ host: "box", mode: "now" }, { kind: "mcp", scope: { ...threadScope, readOnly: true } })
+          .pipe(Effect.flip),
+      ).toMatchObject({ requiredScope: "orchestration:read" });
+      expect(
+        yield* f.setup.prepare({ host: "box" }, caller).pipe(Effect.flip),
+      ).toMatchObject({ requiredScope: "environment:maintain" });
+      expect(
+        yield* f.setup.update({ host: "box", mode: "when_idle" }, caller).pipe(Effect.flip),
+      ).toMatchObject({ requiredScope: "environment:maintain" });
+      expect(f.updates).toEqual([]);
+      expect(seen).toEqual([["orchestration:read"]]);
     }),
 );
 
@@ -1130,7 +1183,7 @@ it.effect(
               providerInstanceId: ProviderInstanceId.make("codex"),
               providerSessionId: "session",
             },
-            grantedScopes: ["settings:write", "environment:maintain"],
+            grantedScopes: ["orchestration:read", "settings:write", "environment:maintain"],
           },
         };
         yield* setup.add(input, caller);
@@ -1283,7 +1336,8 @@ it.effect.each(["pinned", "key_changed", "expired", "authorization_revoked"] as 
           kind: "mcp",
           scope: {
             ...invocation,
-            grantedScopes: ["settings:write"],
+            client: undefined,
+            grantedScopes: ["orchestration:read"],
             thread: {
               threadId: ThreadId.make("caller"),
               providerInstanceId: ProviderInstanceId.make("codex"),

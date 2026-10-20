@@ -34,7 +34,7 @@ const scope: McpInvocationScope = {
     providerInstanceId: ProviderInstanceId.make("codex"),
     providerSessionId: "provider",
   },
-  grantedScopes: ["settings:write", "environment:maintain"],
+  grantedScopes: ["orchestration:read", "settings:write", "environment:maintain"],
   reauthorize: () => Effect.void,
 };
 const readyPreflight: SshPreflightReport = {
@@ -227,6 +227,41 @@ it.effect("review requests approval and recall reruns preflight before catalog d
     expect(f.calls.filter((call) => call === "prepare")).toEqual([]);
     expect(f.calls).toEqual(["preflight", "approval", "preflight", "broker"]);
   }),
+);
+it.effect(
+  "a thread with only orchestration:read can ask to trust a host and cannot prepare one",
+  () =>
+    Effect.gen(function* () {
+      const seen: Array<ReadonlyArray<string>> = [];
+      const threadOnly: McpInvocationScope = {
+        ...scope,
+        grantedScopes: ["orchestration:read"],
+        reauthorize: (required) => Effect.sync(() => void seen.push(required)),
+      };
+      const trust = yield* fixture({ typed: true, blocked: "needs_review" });
+      expect(yield* trust.call(threadOnly)).toMatchObject({
+        outcome: "needs_human",
+        next: { call: "goat_ssh_host_add", host: "build" },
+      });
+      expect(seen).toEqual([["orchestration:read"]]);
+      expect(trust.calls).toEqual(["preflight", "approval"]);
+
+      const readOnly = yield* fixture({ typed: true, blocked: "needs_review" });
+      expect(yield* readOnly.call({ ...threadOnly, readOnly: true })).toMatchObject({
+        outcome: "capability_denied",
+        saved: false,
+        reason: expect.stringContaining("writable"),
+      });
+      expect(readOnly.calls).toEqual(["preflight"]);
+
+      const prepare = yield* fixture({ catalog: "absent" });
+      expect(yield* prepare.call(threadOnly)).toMatchObject({
+        outcome: "capability_denied",
+        saved: false,
+        reason: expect.stringContaining("environment:maintain"),
+      });
+      expect(prepare.calls).toEqual(["preflight", "broker"]);
+    }),
 );
 it.effect("an absent catalog returns the real preparation result", () =>
   Effect.gen(function* () {
