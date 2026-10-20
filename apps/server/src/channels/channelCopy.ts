@@ -41,4 +41,6 @@ export const CHANNEL_COPY = {
   approvalAlreadyAnswered: "That approval was already answered.",
   approvalFailed:
     "I couldn't pass that approval on. Open the work's thread in GOAT to answer it there.",
+  approvalRemoteRefused:
+    "I couldn't pass that approval on. That machine can't take approvals from here. Update GOAT there, or answer it in the thread.",
 } as const;

@@ -11,8 +11,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
    connection itself, so the app needs no public URL.
 2. Give it an app-level token with `connections:write`, and a bot token with
    `chat:write`, `app_mentions:read`, and `im:history`. Subscribe the bot to
-   the `app_mention` and `message.im` events, then install the app to your
-   workspace.
+   the `app_mention` and `message.im` events. Turn on **Interactivity** —
+   Socket Mode delivers button presses, so the app needs no Request URL — then
+   install the app to your workspace.
 3. In GOAT, open **Settings → GOAT Bot → Slack** for the machine that
    should do the work. Paste both tokens, list the channel IDs where mentions
    may start work, and turn on **Use Slack**. Tokens stay on that machine and
@@ -58,14 +59,17 @@ GOAT Bot screen shows only a chip for the work and its final report.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
 - Work counts as waiting on you when the agent working on it, or a subagent it
-  started in GOAT, needs your approval or an answer. Subagents that run on
-  another service are not counted yet.
-- When work on this machine needs an approval, GOAT Bot sends a card saying
-  what the agent wants to do. Tap Approve or Deny in GOAT, or reply "approve"
-  or "deny" in Slack or iMessage. If several approvals are waiting, add the
-  card's code, such as "approve A2". Only people with the same
-  access as whoever asked for the work can answer. Approvals for work on other
-  machines are still answered in that thread in GOAT.
+  started in GOAT, needs your approval or an answer. That includes a subagent
+  running in GOAT on another machine. Subagents that run on another service
+  are not counted.
+- When work needs an approval, GOAT Bot sends a card saying what the agent
+  wants to do. Tap Approve or Deny in GOAT. In Slack, tap the button or reply
+  with its number (`2` is the second choice), or reply "approve" or "deny".
+  The same number works in iMessage, which has no buttons. If several
+  approvals are waiting, add the card's code, such as "approve A2". Only
+  people with the same access as whoever asked for the work can answer. An
+  approval on another GOAT machine is sent there; if that machine can't take
+  it, answer it in that thread.
 - Ask GOAT Bot to remember a standing rule ("always reply in Korean") and it
   follows it from then on, in Slack and in GOAT. It keeps a note only when the
   message you send asks for it, and each note names the message it came from.
@@ -105,8 +109,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
 ## iMessage (Mac)
 
 GOAT can read direct text messages from allowed iMessage handles on the Mac running its server
-and reply in the same conversation. Group chats and attachments are not supported. Give the app
-that launches the server **Full Disk Access** to read Messages. macOS asks separately for
+and reply in the same conversation. Group chats and attachments are not supported. An approval
+or question lists choices as `1.`, `2.`, and so on; reply with that number to choose it. Give the
+app that launches the server **Full Disk Access** to read Messages. macOS asks separately for
 **Automation** access when GOAT sends through Messages; Messages must be signed in.
 
 Run `goat imessage enable --allow +15551234567` on that Mac, then

@@ -8,6 +8,7 @@ import {
   SlackSdk,
   SlackSdkFailure,
   type SlackAuthIdentity,
+  type SlackBotApi,
   type SlackSocketEnvelope,
   type SlackSocketLifecycle,
   type SlackSocketSession,
@@ -55,17 +56,13 @@ export function makeFakeSlackSdk() {
           callWaiters.push({ call, resolve });
         });
   const sessions: FakeSlackSession[] = [];
-  const posted: Array<{
-    readonly channel: string;
-    readonly threadTs: string;
-    readonly text: string;
-  }> = [];
+  const posted: Array<Parameters<SlackBotApi["postMessage"]>[0]> = [];
   const pendingStarts: PendingStart[] = [];
   let disconnectGate: Promise<void> | undefined;
   const script = {
     authTest: (): Promise<SlackAuthIdentity> =>
       Promise.resolve({ teamId: "T0TEAM", botUserId: "U0BOT", botId: "B0BOT" }),
-    postMessage: (_input: { channel: string; threadTs: string; text: string }) =>
+    postMessage: (_input: Parameters<SlackBotApi["postMessage"]>[0]) =>
       Promise.resolve({ ts: "1760000001.000100" }),
     openConnection: () => Promise.resolve(),
     /** Default: the socket connects as soon as it starts. */

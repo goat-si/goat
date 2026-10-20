@@ -7,6 +7,10 @@
  * Plain channel messages are not part of the subscription, which also keeps one Slack
  * message from being ingested twice through both event types.
  *
+ * Button presses arrive as `interactive` payloads, not events. Only a `goat_choice_`
+ * action is accepted, and only the user id, team, channel, and thread timestamp are
+ * read. The button value is the reply text. Everything else in the payload is ignored.
+ *
  * @module slackEventMapping
  */
 import type {
@@ -18,7 +22,7 @@ import type {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { stripBotMention } from "./slackMessageFormatting.ts";
+import { isSlackChoiceActionId, stripBotMention } from "./slackMessageFormatting.ts";
 
 /** Team, channel and user IDs. */
 const SlackId = Schema.String.check(Schema.isPattern(/^[A-Z0-9]{2,32}$/));
@@ -228,6 +232,97 @@ export function slackReplyAddress(
 /** What Slack told us about the sender. Never a source of permissions. */
 export function slackActor(event: SlackClassifiedMessage): ChannelActorRef {
   return { externalActorId: event.userId };
+}
+
+const SlackBlockActions = Schema.Struct({
+  type: Schema.Literal("block_actions"),
+  team: Schema.Struct({ id: Schema.String }),
+  user: Schema.Struct({ id: Schema.String }),
+  channel: Schema.Struct({ id: Schema.String }),
+  message: Schema.optionalKey(
+    Schema.Struct({
+      ts: Schema.optionalKey(Schema.String),
+      thread_ts: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  container: Schema.optionalKey(
+    Schema.Struct({
+      thread_ts: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  actions: Schema.Array(
+    Schema.Struct({
+      action_id: Schema.optionalKey(Schema.String),
+      value: Schema.optionalKey(Schema.String),
+      action_ts: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+const decodeBlockActions = Schema.decodeUnknownOption(SlackBlockActions);
+
+const slackTsOf = (value: string | undefined): string | undefined =>
+  value !== undefined && isSlackTs(value) ? value : undefined;
+
+/**
+ * A Socket Mode `interactive` payload. `block_actions` on a choice button becomes the same
+ * kind of message an event would. Other interactive payloads are acknowledged and ignored.
+ */
+export function classifySlackInteraction(
+  body: unknown,
+  config: SlackClassifierConfig,
+): SlackEventClassification {
+  const decoded = decodeBlockActions(body);
+  if (Option.isNone(decoded)) return ignored("unsupported_event");
+  const payload = decoded.value;
+  const { id: teamId } = payload.team;
+  if (!isSlackId(teamId)) return ignored("malformed");
+  if (teamId !== config.teamId) return ignored("team_mismatch");
+  const userId = payload.user.id;
+  if (!isSlackId(userId)) return ignored("missing_user");
+  if (userId === config.botUserId) return ignored("own_bot");
+  const channelId = payload.channel.id;
+  if (!isSlackId(channelId)) return ignored("malformed");
+  const isDirectMessage = channelId.startsWith("D");
+  if (!isDirectMessage && !config.allowedChannelIds.has(channelId)) {
+    return ignored("channel_not_allowed");
+  }
+  const action = payload.actions.find(
+    (candidate) =>
+      candidate.action_id !== undefined &&
+      isSlackChoiceActionId(candidate.action_id) &&
+      candidate.value !== undefined &&
+      candidate.value.trim() !== "" &&
+      candidate.value.length <= 2000 &&
+      slackTsOf(candidate.action_ts) !== undefined,
+  );
+  if (
+    action === undefined ||
+    action.action_id === undefined ||
+    action.value === undefined ||
+    action.action_ts === undefined
+  ) {
+    return ignored("unsupported_event");
+  }
+  const actionTs = slackTsOf(action.action_ts);
+  const rootTs =
+    slackTsOf(payload.message?.thread_ts) ??
+    slackTsOf(payload.container?.thread_ts) ??
+    slackTsOf(payload.message?.ts);
+  if (actionTs === undefined || rootTs === undefined) return ignored("malformed");
+  const event: SlackClassifiedMessage = {
+    teamId,
+    channelId,
+    surface: isDirectMessage ? "dm" : "mention",
+    userId,
+    ts: actionTs,
+    rootTs,
+    isReply: rootTs !== actionTs,
+    eventId: "ia:" + actionTs,
+    dedupeKey: `${teamId}:ia:${channelId}:${rootTs}:${userId}:${action.action_id}:${actionTs}`,
+    conversationKey: `${teamId}:${channelId}:${rootTs}`,
+    text: action.value,
+  };
+  return { _tag: "message", event };
 }
 
 export function toSlackInboundMessage(

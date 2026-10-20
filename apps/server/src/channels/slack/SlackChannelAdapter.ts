@@ -5,6 +5,10 @@
  * notice). When the gateway reports `persistence_failed` the envelope is left unacknowledged
  * so Slack redelivers it; the dedupe key keeps that redelivery from running twice.
  *
+ * An `interactive` envelope is a button press. Only `goat_choice_` actions become an inbound
+ * message, with the button value as the text, and the clicking user goes through the same
+ * identity link as someone who typed the message.
+ *
  * @module SlackChannelAdapter
  */
 import { ChannelGatewayError, type ChannelDeliveryErrorCode } from "@goat/contracts";
@@ -18,13 +22,14 @@ import type { ChannelConnectionOwner, ChannelIngressContext } from "../ChannelIn
 import type * as ChannelTransport from "../ChannelTransport.ts";
 import {
   classifySlackEvent,
+  classifySlackInteraction,
   slackActor,
   slackReplyAddress,
   toSlackInboundMessage,
   type SlackClassifierConfig,
   type SlackRevocationEvent,
 } from "./slackEventMapping.ts";
-import { formatSlackOutboundText } from "./slackMessageFormatting.ts";
+import { formatSlackOutboundText, slackChoiceBlocks } from "./slackMessageFormatting.ts";
 import {
   slackCall,
   type SlackBotApi,
@@ -80,7 +85,9 @@ export const handleSlackEnvelope = (
     const classification =
       envelope.type === "events_api"
         ? classifySlackEvent(envelope.body, input.classifier)
-        : ({ _tag: "ignored", reason: "not_event_callback" } as const);
+        : envelope.type === "interactive"
+          ? classifySlackInteraction(envelope.body, input.classifier)
+          : ({ _tag: "ignored", reason: "not_event_callback" } as const);
 
     let handling: SlackEnvelopeHandling;
     let exit: Exit.Exit<unknown, ChannelGatewayError> = Exit.void;
@@ -276,7 +283,16 @@ export function makeSlackChannelTransport(input: {
           text: message.text,
           mentionUserId: message.mentionActorId,
         });
-        const post = { channel: destination.channelId, threadTs: destination.rootTs, text };
+        const blocks =
+          message.options === undefined || message.options.length === 0
+            ? undefined
+            : slackChoiceBlocks(text, message.options);
+        const post = {
+          channel: destination.channelId,
+          threadTs: destination.rootTs,
+          text,
+          ...(blocks === undefined ? {} : { blocks }),
+        };
         const posted = yield* slackCall("chat.postMessage", () =>
           // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack's chat.postMessage, not window.postMessage.
           active.botApi.postMessage(post),

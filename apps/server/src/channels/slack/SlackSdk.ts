@@ -15,6 +15,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { LogLevel, type Logger, SocketModeClient } from "@slack/socket-mode";
+
+import type { SlackChoiceBlock } from "./slackMessageFormatting.ts";
 import {
   WebAPIHTTPError,
   WebAPIPlatformError,
@@ -71,6 +73,8 @@ export interface SlackBotApi {
     readonly channel: string;
     readonly threadTs: string;
     readonly text: string;
+    /** Block Kit for choice buttons. Absent when the message has no options. */
+    readonly blocks?: ReadonlyArray<SlackChoiceBlock> | undefined;
   }) => Promise<{ readonly ts: string }>;
 }
 
@@ -304,13 +308,15 @@ const botApi = ({ botToken }: { readonly botToken: string }): SlackBotApi => {
           botId: nonEmpty(response.bot_id) ? response.bot_id : undefined,
         };
       }, rejectWith("auth.test")),
-    postMessage: ({ channel, threadTs, text }) => {
+    postMessage: ({ channel, threadTs, text, blocks }) => {
       const message = {
         channel,
         thread_ts: threadTs,
         text,
         unfurl_links: false,
         unfurl_media: false,
+        // The port's blocks are the buttons this adapter builds; the Web API accepts them.
+        ...(blocks === undefined || blocks.length === 0 ? {} : { blocks: blocks as never }),
       };
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack's chat.postMessage, not window.postMessage.
       return client.chat.postMessage(message).then((response) => {
