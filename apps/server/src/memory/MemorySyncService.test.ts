@@ -2153,6 +2153,7 @@ it.effect.each([
               [86, "FleetGoals"],
               [87, "FleetHealth"],
               [88, "ThreadRunObservedChecks"],
+              [89, "RemoteDispatchObservation"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(

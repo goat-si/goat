@@ -34,6 +34,7 @@ import Migration0063 from "../persistence/Migrations/067_RemoteDispatches.ts";
 import Migration0065 from "../persistence/Migrations/069_RemoteDispatchQuestions.ts";
 import Migration0068 from "../persistence/Migrations/071_RemoteReportRelay.ts";
 import Migration0073 from "../persistence/Migrations/076_MemoryTaskGrantCeiling.ts";
+import Migration0089 from "../persistence/Migrations/089_RemoteDispatchObservation.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -79,6 +80,7 @@ const fixture = Effect.gen(function* () {
   yield* Migration0068;
   yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
   yield* Migration0073;
+  yield* Migration0089;
   const calls = yield* Queue.unbounded<{
     call: Ssh.SshHostToolCall;
     ceiling: RuntimeMode;
@@ -1115,6 +1117,50 @@ it.effect("a remote task's question wakes the parent once and stays readable unt
       yield* Queue.take(f.commits);
       assert.deepEqual((yield* c.get(launched.correlationId))?.pendingRequestIds, []);
       assert.equal((yield* c.get(launched.correlationId))?.state, "running");
+    }).pipe(Effect.provide(f.layer));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("echoes a remote task observation so an approval releases the wait once", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    yield* Effect.gen(function* () {
+      const c = yield* Coordinator.RemoteDispatchCoordinator;
+      const launched = yield* taskLaunch(c);
+      yield* Queue.take(f.notifications);
+      const observation = {
+        pullRequests: [],
+        needsYou: [
+          {
+            kind: "approval" as const,
+            since: at,
+            approval: { requestId: RuntimeRequestId.make("approval-1"), threadId: remote },
+          },
+        ],
+      };
+      const reported = {
+        ...answer([]),
+        observedRun: {
+          runId,
+          status: "running" as const,
+          summary: null,
+          pendingRequestIds: [],
+          observation,
+        },
+      };
+      yield* Queue.offer((yield* Queue.take(f.calls)).reply, Effect.succeed(reported));
+      yield* Queue.take(f.commits);
+      assert.deepEqual((yield* c.get(launched.correlationId))?.observation, observation);
+      const second = yield* Queue.take(f.calls);
+      assert.deepEqual(second.call.arguments.knownRun, {
+        runId,
+        status: "running",
+        pendingRequestIds: [],
+        observation,
+      });
+      yield* Queue.offer(second.reply, Effect.succeed(reported));
+      yield* Queue.take(f.commits);
+      assert.equal(yield* Queue.size(f.notifications), 0);
     }).pipe(Effect.provide(f.layer));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

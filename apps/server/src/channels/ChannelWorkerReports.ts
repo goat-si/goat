@@ -24,10 +24,12 @@
  */
 import {
   ChannelGatewayError,
+  ChannelWorkerObservation,
   channelWorkerObservationEquals,
   CommandId,
   type ChannelTaskEventId,
   type ChannelTask,
+  type ChannelTaskNeedsYou,
   type ChannelTaskReportInput,
   type ChannelWorkerRunStatus,
   type OrchestrationV2Run,
@@ -38,6 +40,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
@@ -51,8 +54,9 @@ import {
   isThreadMissing,
   newApprovals,
   needsYouFromRuntimeRequests,
-  subagentRequests,
+  scanSubagents,
   observeWorker,
+  withApprovalHost,
   pullRequestsFromLinks,
   usageLimitWait,
   type UsageLimitWait,
@@ -153,10 +157,33 @@ export class ChannelWorkerReports extends Context.Service<
   }
 >()("goat/channels/ChannelWorkerReports") {}
 
+const decodeStoredObservation = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ChannelWorkerObservation),
+);
+const noNeeds: ReadonlyArray<ChannelTaskNeedsYou> = [];
+
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
+
+  /** Needs-you already stored for a remote subagent's dispatch. Reconcile does not open SSH. */
+  const storedRemoteNeeds = (correlationId: string) =>
+    sql<{ readonly observation: string | null }>`
+      SELECT observation FROM remote_dispatches
+      WHERE correlation_id = ${correlationId} AND kind = 'task'
+      LIMIT 1
+    `.pipe(
+      Effect.flatMap((rows) => {
+        const raw = rows[0]?.observation;
+        if (raw == null || raw === "") return Effect.succeed(noNeeds);
+        return decodeStoredObservation(raw).pipe(
+          Effect.map((observation) => observation.needsYou),
+          Effect.orElseSucceed(() => noNeeds),
+        );
+      }),
+      Effect.orElseSucceed(() => noNeeds),
+    );
 
   const lastAssistantText = (threadId: ThreadId, run: OrchestrationV2Run) =>
     threads
@@ -325,17 +352,25 @@ const make = Effect.gen(function* () {
           : undefined;
       if (limitRead === "unknown") return latest !== stored;
       const limit = limitRead;
+      const children = yield* scanSubagents(records.value.subagents, (threadId) =>
+        threads.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
+      );
+      const remoteNeeds = yield* Effect.forEach(
+        children.remote,
+        (child) =>
+          storedRemoteNeeds(child.correlationId).pipe(
+            Effect.map((needs) => withApprovalHost(needs, child.host)),
+          ),
+        { concurrency: 1 },
+      );
       const observed = observeWorker({
         pullRequests: pullRequestsFromLinks(pullRequestLinks),
         needsYou: [
           ...needsYouFromRuntimeRequests(records.value.runtimeRequests, () => worker.threadId),
           // A subagent waiting on an approval or answer blocks the work as much as the worker.
-          ...needsYouFromRuntimeRequests(
-            yield* subagentRequests(records.value.subagents, (threadId) =>
-              threads.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
-            ),
-            (request) => request.threadId,
-          ),
+          ...needsYouFromRuntimeRequests(children.requests, (request) => request.threadId),
+          // A subagent on another GOAT machine: the needs-you list that machine last reported.
+          ...remoteNeeds.flat(),
           ...(limit?.needsYou === undefined ? [] : [limit.needsYou]),
         ],
         usageLimitResetAt: limit?.resetAt,

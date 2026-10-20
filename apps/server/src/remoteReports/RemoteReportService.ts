@@ -37,7 +37,7 @@ import { readStoredThreadResultReport } from "../threadResults/ThreadResultServi
 import {
   completionHoldCount,
   needsYouFromRuntimeRequests,
-  subagentRequests,
+  scanSubagents,
   observeWorker,
   pullRequestsFromLinks,
   usageLimitWait,
@@ -314,6 +314,9 @@ const make = Effect.gen(function* () {
         const afterSequence = yield* orchestrator
           .getThreadEventSequence(binding.threadId)
           .pipe(Effect.mapError(unavailable));
+        // Local subagent threads seen on the read that opened this wait, so a request that
+        // arrives while we wait still wakes it. Captured with afterSequence, before that read.
+        let watchedChildThreadIds: ReadonlyArray<ThreadId> = [];
         // A live run's open questions; what still holds a finished run's thread open; and what
         // the thread shows besides its run status, read as the origin reads a local worker.
         const runState = (run: OrchestrationV2Run, shell: OrchestrationV2ThreadShell) =>
@@ -323,13 +326,21 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(unavailable));
             const pullRequests = pullRequestsFromLinks(shell.pullRequests);
             // A subagent on this machine waiting on a person blocks the work as much as the
-            // worker, so the origin hears about it the same way.
-            const needsYou = needsYouFromRuntimeRequests([
-              ...requests.runtimeRequests,
-              ...(yield* subagentRequests(requests.subagents, (threadId) =>
-                orchestrator.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
-              )),
-            ]);
+            // worker. The approval names that thread, which is a thread on this machine.
+            const children = yield* scanSubagents(requests.subagents, (threadId) =>
+              orchestrator.getThreadRecords(threadId, ["runtimeRequests", "subagents"]),
+            );
+            watchedChildThreadIds = children.localThreadIds;
+            const needsYou = needsYouFromRuntimeRequests(
+              [
+                ...requests.runtimeRequests.map((request) => ({
+                  ...request,
+                  threadId: binding.threadId,
+                })),
+                ...children.requests,
+              ],
+              (request) => request.threadId,
+            );
             if (!isTerminalRunStatus(run.status)) {
               const items = yield* orchestrator
                 .getThreadRecords(binding.threadId, ["turnItems"], {
@@ -469,6 +480,7 @@ const make = Effect.gen(function* () {
         const first = yield* read;
         if (changed(first)) return first;
         if (value.timeoutMs === 0) return { ...first, timedOut: true };
+        const childThreadIds = new Set<string>(watchedChildThreadIds);
         const stream = (eventType: OrchestrationV2DomainEvent["type"]) =>
           orchestrator.streamStoredEventsFrom({
             threadId: binding.threadId,
@@ -503,6 +515,18 @@ const make = Effect.gen(function* () {
             stream("thread.pull-request-link-updated"),
             stream("thread.pull-request-synced"),
             stream("thread.metadata-updated"),
+            // One global stream, filtered, so a live local subagent's approval wakes this wait
+            // without a subscription per child. Empty when this worker has no such thread.
+            ...(childThreadIds.size === 0
+              ? []
+              : [
+                  orchestrator
+                    .streamStoredEventsFrom({
+                      afterSequence,
+                      eventType: "runtime-request.updated",
+                    })
+                    .pipe(Stream.filter((stored) => childThreadIds.has(stored.event.threadId))),
+                ]),
           ],
           { concurrency: "unbounded" },
         ).pipe(

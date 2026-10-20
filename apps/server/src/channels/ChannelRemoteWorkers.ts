@@ -92,7 +92,7 @@ import {
 import { commitTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
 import { readNamedSkills, remoteWorkerMessage } from "./channelWorkerBrief.ts";
 import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
-import { observesUsageLimit } from "./channelWorkerObservation.ts";
+import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
 export const REMOTE_WAIT_MS = 50_000;
@@ -1672,25 +1672,33 @@ const make = Effect.gen(function* () {
       }
 
       // The remote worker's pull requests, native requests and usage-limit wait, for the current
-      // run only. An older remote sends none, and the task shows nothing extra.
+      // run only. An older remote sends none, and the task shows nothing extra. knownRun above
+      // keeps the remote's own observation, so the next wait does not see the host we stamp here.
       stored = yield* ledger.getTask(taskId);
       if (stored === undefined || !sameWorker(stored, state)) return "stop" as const;
       const observation = watched?.observation;
+      const stamped =
+        observation === undefined
+          ? undefined
+          : { ...observation, needsYou: withApprovalHost(observation.needsYou, state.host) };
       if (
-        observation !== undefined &&
+        stamped !== undefined &&
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
         (stored.task.status === "running" || stored.task.status === "waiting_input") &&
-        !channelWorkerObservationEquals(stored.task.observed, observation)
+        !channelWorkerObservationEquals(stored.task.observed, stamped)
       ) {
+        const card =
+          stored.task.requester.originKind !== "mcp" &&
+          newApprovals(stored.task.observed?.needsYou, stamped.needsYou).length > 0;
         yield* commitTransition(
           ledger,
           stored,
           {
             type: "task.worker.observed",
-            payload: { generation: stored.task.generation, observed: observation },
+            payload: { generation: stored.task.generation, observed: stamped },
           },
-          { owner },
+          { owner, ...(card ? { narrate: true } : {}) },
         );
       }
       // A usage limit pauses the worker; the continuation run the remote starts rebinds the task.

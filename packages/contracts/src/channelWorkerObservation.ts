@@ -43,11 +43,13 @@ export type ChannelTaskNeedsYouKind = typeof ChannelTaskNeedsYouKind.Type;
 
 /**
  * The exact approval a person can answer from GOAT Bot: the request and the thread that holds it
- * (the worker or one of its subagents). Reports from other machines leave it out.
+ * (the worker or one of its subagents). `host`, when set, is the machine whose GOAT holds the
+ * request; absent means this machine.
  */
 export const ChannelTaskApprovalRef = Schema.Struct({
   requestId: RuntimeRequestId,
   threadId: ThreadId,
+  host: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelTaskApprovalRef = typeof ChannelTaskApprovalRef.Type;
 
@@ -85,7 +87,9 @@ export const channelWorkerObservationEquals = (
       (item, index) =>
         item.kind === b.needsYou[index]?.kind &&
         item.since === b.needsYou[index]?.since &&
-        item.approval?.requestId === b.needsYou[index]?.approval?.requestId,
+        item.approval?.requestId === b.needsYou[index]?.approval?.requestId &&
+        item.approval?.threadId === b.needsYou[index]?.approval?.threadId &&
+        item.approval?.host === b.needsYou[index]?.approval?.host,
     ) &&
     a.pullRequests.length === b.pullRequests.length &&
     a.pullRequests.every((item, index) => {
