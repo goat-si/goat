@@ -12,6 +12,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { SshLaunchError } from "./errors.ts";
 import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
@@ -66,7 +67,7 @@ const fixture = Effect.fn("test.ghFixture")(function* (
   const commands: ChildProcess.StandardCommand[] = [];
   const uploads: Uint8Array[] = [];
   const staging: string[] = [];
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       assert.equal(command._tag, "StandardCommand");
       if (command._tag !== "StandardCommand") return processHandle();
@@ -353,7 +354,7 @@ describe("SSH archives from locally authenticated gh", () => {
       const state = yield* fixture();
       const emptyPath = `${state.root}/empty-path`;
       yield* state.fs.makeDirectory(emptyPath);
-      const spawner = ChildProcessSpawner.make((command) => {
+      const spawner = lazyChildProcessSpawner((command) => {
         if (command._tag !== "StandardCommand" || command.command !== "gh") {
           return state.spawner.spawn(command);
         }
@@ -539,7 +540,7 @@ describe("SSH archives from locally authenticated gh", () => {
       const root = yield* fs.makeTempDirectoryScoped();
       const entered = yield* Deferred.make<void>();
       let closed = false;
-      const spawner = ChildProcessSpawner.make(() =>
+      const spawner = lazyChildProcessSpawner(() =>
         Effect.gen(function* () {
           yield* Scope.addFinalizer(
             yield* Scope.Scope,

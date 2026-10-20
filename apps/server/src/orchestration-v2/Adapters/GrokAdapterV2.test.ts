@@ -29,6 +29,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as ProjectStore from "../ProjectStore.ts";
@@ -430,7 +431,7 @@ describe("Grok launch permission mode", () => {
   const launchArgs = (runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy) =>
     Effect.gen(function* () {
       const launches: Array<ReadonlyArray<string>> = [];
-      const childProcessSpawner = ChildProcessSpawner.make((command) => {
+      const childProcessSpawner = lazyChildProcessSpawner((command) => {
         if (command._tag === "StandardCommand") launches.push(command.args);
         return Effect.fail(
           PlatformError.systemError({

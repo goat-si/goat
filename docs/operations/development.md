@@ -21,6 +21,8 @@ A new worktree sets itself up. When `git worktree add` creates a checkout, the
 `.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
 or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
+When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
+`npx vite-plus`, and prints which tool it ran.
 
 Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree

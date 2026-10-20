@@ -315,7 +315,6 @@ server.listen(0, "127.0.0.1", () => console.log("opencode server listening on ht
             binaryPath,
             directory: root,
             port: 0,
-            timeoutMs: 2_000,
             environment: {
               ...environment,
               GOAT_TEST_NODE_BINARY: executablePath,

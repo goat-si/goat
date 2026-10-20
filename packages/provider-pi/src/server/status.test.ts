@@ -8,6 +8,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
 
@@ -42,7 +43,7 @@ function processHandle(input: {
 }
 
 function piProbeSpawner(version: string) {
-  return ChildProcessSpawner.make((command) => {
+  return lazyChildProcessSpawner((command) => {
     const args = ChildProcess.isStandardCommand(command) ? command.args : [];
     return Effect.succeed(
       args.includes("--version")
@@ -81,7 +82,7 @@ const piDiscoverySpawner = (inventory: unknown) =>
         }
       }),
     );
-    return ChildProcessSpawner.make((command) => {
+    return lazyChildProcessSpawner((command) => {
       const args = ChildProcess.isStandardCommand(command) ? command.args : [];
       return Effect.succeed(
         args.includes("--version")

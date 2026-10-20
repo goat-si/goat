@@ -26,28 +26,32 @@ const liveOwner = () =>
 const deadOwner = () =>
   `${NodeOS.hostname()}|${process.getuid!()}|2147483647|Mon Jan 1 00:00:00 2000|fixture`;
 
-// A fixture file marks a subprocess milestone; the waiter never polls or sleeps.
-const fileMilestone = (file: string) =>
-  Effect.callback<void>((resume) => {
+// The shell blocks in `printf > fifo` until this read opens, so the milestone cannot be missed.
+const readFifo = (file: string) =>
+  Effect.callback<void, NodeJS.ErrnoException>((resume) => {
+    const fd = NodeFS.openSync(file, NodeFS.constants.O_RDONLY | NodeFS.constants.O_NONBLOCK);
+    const stream = NodeFS.createReadStream("", { fd, autoClose: true });
     let done = false;
-    const finish = () => {
+    const finish = (effect: Effect.Effect<void, NodeJS.ErrnoException>) => {
       if (done) return;
       done = true;
-      watcher.close();
-      resume(Effect.void);
+      stream.destroy();
+      resume(effect);
     };
-    const watcher = NodeFS.watch(file.slice(0, file.lastIndexOf("/")), (_event, name) => {
-      if (String(name) === file.slice(file.lastIndexOf("/") + 1)) finish();
+    stream.on("data", () => finish(Effect.void));
+    stream.on("error", (error) => finish(Effect.fail(error)));
+    return Effect.sync(() => {
+      if (!done) stream.destroy();
     });
-    if (NodeFS.existsSync(file)) finish();
-    return Effect.sync(() => watcher.close());
   });
 
 const pauseFirstLock = Effect.fn("test.pauseReplacementLock")(function* (
   f: Effect.Success<ReturnType<typeof makeProtocolFixture>>,
   name: "replacement.lock" | "replacement.recovery",
 ) {
-  const fifo = yield* f.realSpawner.spawn(ChildProcess.make("mkfifo", [`${f.test}/lock-release`]));
+  const fifo = yield* f.realSpawner.spawn(
+    ChildProcess.make("mkfifo", [`${f.test}/lock-acquired.fifo`, `${f.test}/lock-release`]),
+  );
   assert.equal(Number(yield* fifo.exitCode), 0);
   const bin = `${f.test}/lock-barrier-bin`;
   yield* f.fs.makeDirectory(bin);
@@ -57,7 +61,7 @@ const pauseFirstLock = Effect.fn("test.pauseReplacementLock")(function* (
 /bin/ln "$@" || exit $?
 case "$3" in */${name})
   if mkdir "$HOME/.test/first-lock" 2>/dev/null; then
-    printf acquired > "$HOME/.test/lock-acquired"
+    printf acquired > "$HOME/.test/lock-acquired.fifo"
     read -r release < "$HOME/.test/lock-release"
   fi
 ;; esac
@@ -199,29 +203,29 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (replace) yield* f.fs.writeFileString(`${f.test}/activity`, "idle");
           yield* pauseFirstLock(f, "replacement.lock");
           const fifo = yield* f.realSpawner.spawn(
-            ChildProcess.make("mkfifo", [`${f.test}/wait-release`]),
+            ChildProcess.make("mkfifo", [`${f.test}/wait-release`, `${f.test}/waiting.fifo`]),
           );
           assert.equal(Number(yield* fifo.exitCode), 0);
           f.setScriptPrefix(`sleep() {
-  printf waiting > "$HOME/.test/waiting"
+  printf waiting > "$HOME/.test/waiting.fifo"
   read -r release < "$HOME/.test/wait-release"
 }
 `);
           yield* f.fs.writeFileString(
             `${f.test}/lock-barrier-bin/sleep`,
             `#!/bin/sh
-printf waiting > "$HOME/.test/waiting"
+printf waiting > "$HOME/.test/waiting.fifo"
 read -r release < "$HOME/.test/wait-release"
 `,
           );
           yield* f.fs.chmod(`${f.test}/lock-barrier-bin/sleep`, 0o700);
           const first = yield* Effect.forkChild(launch(true));
-          yield* fileMilestone(`${f.test}/lock-acquired`);
+          yield* readFifo(`${f.test}/lock-acquired.fifo`);
           const before = f.remoteCommands.length;
           const second = yield* Effect.forkChild(
             launch(mode === "cold", mode === "cold" ? undefined : baseline.selectedRuntime),
           );
-          yield* fileMilestone(`${f.test}/waiting`);
+          yield* readFifo(`${f.test}/waiting.fifo`);
           assert.equal(f.remoteCommands.length - before, commands);
           yield* f.fs.writeFileString(`${f.test}/lock-release`, "release\n");
           const firstResult = yield* Fiber.join(first);
@@ -503,7 +507,7 @@ case "$3" in */replacement.lock)
         const first = yield* Effect.forkChild(
           f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true }),
         );
-        yield* fileMilestone(`${f.test}/lock-acquired`);
+        yield* readFifo(`${f.test}/lock-acquired.fifo`);
         const owner = yield* f.fs.readLink(`${f.home}/.goat/ssh-launch/replacement.lock`);
         const second = yield* SshTunnel.launchOrReuseRemoteServer(
           other,
@@ -542,7 +546,7 @@ case "$3" in */replacement.lock)
         const first = yield* Effect.forkChild(
           f.run("launch", false, { refreshOwnedRuntimeOnFirstConnection: true }),
         );
-        yield* fileMilestone(`${f.test}/lock-acquired`);
+        yield* readFifo(`${f.test}/lock-acquired.fifo`);
         const recoveryOwner = yield* f.fs.readLink(recovery);
         const second = yield* f.run("launch", false, {
           refreshOwnedRuntimeOnFirstConnection: true,
@@ -584,7 +588,7 @@ case "$3" in */replacement.lock)
             { ...f.runner, refreshOwnedRuntimeOnFirstConnection: true },
           ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport)),
         );
-        yield* fileMilestone(`${f.test}/lock-acquired`);
+        yield* readFifo(`${f.test}/lock-acquired.fifo`);
         const newer = "9.9.9";
         const directory = `${f.home}/.goat/runtime/goat/versions/${newer}`;
         yield* f.fs.makeDirectory(directory);

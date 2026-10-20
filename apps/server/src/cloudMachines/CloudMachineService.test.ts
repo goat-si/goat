@@ -8,6 +8,8 @@ import {
   type CloudMachineErrorReason,
   type CloudMachineState,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -44,6 +46,12 @@ const makeWorld = () => {
   const invalidated: Array<string> = [];
   const secrets = new Map<string, Uint8Array>();
   const createdFor = new Map<string, BoatSandboxId>();
+  const holds = new Map<string, Deferred.Deferred<void>>();
+  const hold = (name: string) =>
+    Effect.suspend(() => {
+      const gate = holds.get(name);
+      return gate === undefined ? Effect.void : Deferred.await(gate);
+    });
 
   const call = (name: string) =>
     Effect.suspend(() => {
@@ -59,6 +67,7 @@ const makeWorld = () => {
     checkKey: () => call("checkKey"),
     get: (_key, id) =>
       call("get").pipe(
+        Effect.flatMap(() => hold("get")),
         Effect.flatMap(() =>
           missing.has(id)
             ? Effect.fail(new CloudMachineError({ reason: "not_found" }))
@@ -117,6 +126,7 @@ const makeWorld = () => {
     removedHosts,
     invalidated,
     secrets,
+    holds,
     moveEndpoint: () => {
       endpoint = { ...endpoint, host: "198.51.100.7" };
     },
@@ -244,10 +254,21 @@ describe("CloudMachineService.ensureReady", () => {
           expect((yield* service.list()).machines[0]?.lastError).toBe(expired.message);
 
           world.states.set(ID, "provisioning");
+          const gate = yield* Deferred.make<void>();
+          world.holds.set("get", gate);
+          const getsBefore = world.calls.filter((name) => name === "get").length;
           const waiting = yield* service
             .ensureReady(ALIAS, { wake: true })
             .pipe(Effect.flip, Effect.forkChild);
-          for (let second = 0; second < 200; second += 2) yield* TestClock.adjust("2 seconds");
+          // Deadline is captured before boat.get. Hold that call, advance the clock, then release.
+          let spins = 0;
+          while (world.calls.filter((name) => name === "get").length === getsBefore) {
+            if (++spins > 10_000) return yield* Effect.die("ensureReady never reached Boat");
+            yield* Effect.yieldNow;
+          }
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust(Duration.millis(CloudMachineService.READY_DEADLINE_MS));
+          yield* Deferred.succeed(gate, undefined);
           expect((yield* Fiber.join(waiting)).reason).toBe("readiness_timeout");
         }),
       );

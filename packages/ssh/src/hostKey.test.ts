@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { probeHostKey } from "./hostKey.ts";
 import { makeSuccessfulProcess } from "./tunnel.fixture.ts";
@@ -23,7 +24,7 @@ const fixture = Effect.gen(function* () {
   let temporaryFile = "";
   let contents = `[endpoint.example]:2200 ssh-ed25519 ${key}\n`;
   let failFingerprint = false;
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       calls.push({ command: command.command, args: command.args });

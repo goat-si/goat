@@ -13,6 +13,7 @@ import * as TestConsole from "effect/testing/TestConsole";
 import { Command } from "effect/cli";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import { browserCommand, setupBaseDir } from "./browser.ts";
 
@@ -29,7 +30,7 @@ it.effect(
       yield* fs.writeFileString(old, "upstream browser data");
       const realSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       let getentCalls = 0;
-      const spawner = ChildProcessSpawner.make((command) => {
+      const spawner = lazyChildProcessSpawner((command) => {
         assert.equal(command._tag, "StandardCommand");
         if (command._tag !== "StandardCommand") return Effect.die("unexpected pipe");
         assert.equal(command.command, "getent");
@@ -81,7 +82,7 @@ const FONT = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf";
 const fakeSpawner = (host: { readonly font?: string; readonly missingLibrary?: boolean }) => {
   const commands: Array<ReadonlyArray<string>> = [];
   let font = host.font;
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipeline");
       commands.push([command.command, ...command.args]);

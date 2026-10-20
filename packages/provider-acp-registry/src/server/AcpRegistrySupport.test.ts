@@ -18,6 +18,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
@@ -834,7 +835,7 @@ describe("AcpRegistrySupport", () => {
       const path = yield* Path.Path;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-acp-arm-zip-" });
       const commands: Array<string> = [];
-      const spawner = ChildProcessSpawner.make((command) =>
+      const spawner = lazyChildProcessSpawner((command) =>
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
           commands.push(command.command);

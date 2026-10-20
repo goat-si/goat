@@ -13,6 +13,7 @@ import { cliArchiveFileName, cliArchivePlatformKey } from "@goat/shared/cliRelea
 import {
   buildDevRuntimeArchive,
   parseDevRuntimeArchiveArgs,
+  pinSelectedNodeOnPath,
   resolveDevRuntimeArchiveTarget,
   resolveRuntimeArchiveHome,
 } from "./dev-runtime-archive.ts";
@@ -31,7 +32,10 @@ const cp = require('node:child_process');
 const args = process.argv.slice(2);
 const tool = path.basename(process.argv[1]);
 fs.appendFileSync(process.env.TOOL_LOG, JSON.stringify({tool,args,node:process.env.VP_NODE_VERSION})+'\n');
-if (args.join(' ') === 'exec node -p process.version') {
+if (args.join(' ') === 'env which node') {
+  console.log(process.env.WHICH_NODE || ''); process.exit(0);
+}
+if (args.join(' ') === 'exec node -p process.version' || args.join(' ') === 'env exec node -p process.version') {
   console.log(process.env.PROBE_VERSION || 'v'+process.env.VP_NODE_VERSION); process.exit(0);
 }
 if (process.env.FAIL_STEP && (tool === process.env.FAIL_STEP || args.includes(process.env.FAIL_STEP))) process.exit(43);
@@ -63,6 +67,40 @@ if (args.includes('scripts/build-cli-archive.ts')) {
   cp.execFileSync('tar',['-czf',path.join(output,stem+'.tar.gz'),'-C',path.dirname(content),stem]);
 }
 `;
+
+describe("selected Node pinning", () => {
+  it("pins PATH from vp env which node and probes that binary", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", VP_NODE_VERSION: "26.8.2" };
+    const calls: Array<string> = [];
+    const pinned = await pinSelectedNodeOnPath(env, async (command, args) => {
+      calls.push([command, ...args].join(" "));
+      return { stdout: "/opt/node-26/bin/node\n" };
+    });
+    assert.equal(env.PATH, "/opt/node-26/bin" + NodePath.delimiter + "/usr/bin");
+    assert.deepEqual(pinned, {
+      command: "/opt/node-26/bin/node",
+      args: ["-p", "process.version"],
+    });
+    assert.deepEqual(calls, ["vp env which node"]);
+  });
+
+  it("probes with vp env exec when which node is empty or fails", async () => {
+    const empty: NodeJS.ProcessEnv = { PATH: "/tools:/usr/bin" };
+    const emptyPath = empty.PATH;
+    const fromEmpty = await pinSelectedNodeOnPath(empty, async () => ({ stdout: "\n" }));
+    assert.equal(empty.PATH, emptyPath);
+    assert.deepEqual(fromEmpty, {
+      command: "vp",
+      args: ["env", "exec", "node", "-p", "process.version"],
+    });
+    const failed: NodeJS.ProcessEnv = { PATH: "/usr/bin" };
+    const fromFailure = await pinSelectedNodeOnPath(failed, async () => {
+      throw new Error("missing");
+    });
+    assert.equal(failed.PATH, "/usr/bin");
+    assert.equal(fromFailure.command, "vp");
+  });
+});
 
 describe("development runtime archive publication", () => {
   it("generated build tools parse as JavaScript", () => {
@@ -215,7 +253,7 @@ describe("development runtime archive publication", () => {
           .map((line) => JSON.parse(line) as { args: string[]; node: string });
         if (mode === "malformed-selector" || mode === "old-selector") assert.deepEqual(records, []);
         else if (mode === "old-node" || mode === "probe-disagreement")
-          assert.equal(records.length, 1);
+          assert.equal(records.length, 2);
         if (success) assert.isTrue(records.every((record) => record.node === selected));
         assert.deepEqual(
           (await NodeFSP.readdir(archives)).filter((entry) => entry.startsWith(".goat-dev-")),

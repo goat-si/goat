@@ -17,6 +17,7 @@ import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 import * as SshAuth from "./auth.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
@@ -126,7 +127,7 @@ const fixture = Effect.gen(function* () {
     entered: Deferred.Deferred<void>;
     release: Deferred.Deferred<void>;
   } | null = null;
-  const spawner = ChildProcessSpawner.make((command) =>
+  const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       sshCalls.push(command.args);

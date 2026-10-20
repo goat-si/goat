@@ -11,6 +11,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import {
   baseSshArgs,
@@ -89,7 +90,7 @@ describe("ssh command", () => {
       const [stderr, expected] = diagnostic;
       const drained = yield* Deferred.make<void>();
       let answered = 0;
-      const spawner = ChildProcessSpawner.make(() =>
+      const spawner = lazyChildProcessSpawner(() =>
         Effect.succeed({
           ...makeNeverFinishingProcess(),
           stderr: Stream.make(encoder.encode(stderr)).pipe(
@@ -123,7 +124,7 @@ describe("ssh command", () => {
   it.effect("preserves binary stdin bytes", () => {
     const bytes = new Uint8Array([0, 128, 255]);
     const captured: number[] = [];
-    const spawner = ChildProcessSpawner.make((command) =>
+    const spawner = lazyChildProcessSpawner((command) =>
       Effect.gen(function* () {
         assert.equal(command._tag, "StandardCommand");
         if (command._tag === "StandardCommand") {
@@ -168,7 +169,7 @@ describe("ssh command", () => {
         const bytes = new Uint8Array(2 * 1024 * 1024 + 17).fill(251);
         const progress: number[] = [];
         const ready = yield* Deferred.make<ChildProcessSpawner.ChildProcessHandle>();
-        const transport = ChildProcessSpawner.make((command) => {
+        const transport = lazyChildProcessSpawner((command) => {
           assert.isTrue(ChildProcess.isStandardCommand(command));
           if (!ChildProcess.isStandardCommand(command)) return Effect.die("Unexpected pipeline");
           return Effect.gen(function* () {
@@ -255,7 +256,7 @@ process.stderr.write('reader waiting');`,
 
   it.effect("passes an option-shaped alias to ssh as the destination", () => {
     const spawned: Array<ReadonlyArray<string>> = [];
-    const spawner = ChildProcessSpawner.make((command) => {
+    const spawner = lazyChildProcessSpawner((command) => {
       if (ChildProcess.isStandardCommand(command)) spawned.push(command.args);
       return Effect.succeed(makeFailedProcess({ stdout: "", stderr: "bad hostname\n" }));
     });
@@ -288,7 +289,7 @@ process.stderr.write('reader waiting');`,
   );
 
   it.effect("includes stdout in non-zero command failures when stderr is empty", () => {
-    const spawner = ChildProcessSpawner.make(() =>
+    const spawner = lazyChildProcessSpawner(() =>
       Effect.succeed(makeFailedProcess({ stdout: "Pairing token creation failed\n" })),
     );
     const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
@@ -318,7 +319,7 @@ process.stderr.write('reader waiting');`,
   });
 
   it.effect("redacts credentials from stdout in non-zero command failures", () => {
-    const spawner = ChildProcessSpawner.make(() =>
+    const spawner = lazyChildProcessSpawner(() =>
       Effect.succeed(makeFailedProcess({ stdout: '{"credential":"pairing-secret"}\n' })),
     );
     const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
@@ -356,7 +357,7 @@ process.stderr.write('reader waiting');`,
       "Cannot reach devbox over SSH (could not resolve devbox.example.com: nodename nor servname provided, or not known). Check the network or VPN connection to that host.",
     ],
   ] as const)("names the host when ssh cannot connect: %s", ([stderr, message]) => {
-    const spawner = ChildProcessSpawner.make(() =>
+    const spawner = lazyChildProcessSpawner(() =>
       Effect.succeed(
         makeFailedProcess({
           stdout: "",
@@ -390,7 +391,7 @@ process.stderr.write('reader waiting');`,
     ["Logged out.", "Sign in to Tailscale"],
     ["Machine is not yet approved by tailnet admin.", "approve this machine"],
   ] as const)("preserves local proxy banner status: %s", ([banner, fix]) => {
-    const spawner = ChildProcessSpawner.make(() =>
+    const spawner = lazyChildProcessSpawner(() =>
       Effect.succeed(
         makeFailedProcess({
           stdout: "",
@@ -421,7 +422,7 @@ process.stderr.write('reader waiting');`,
   });
 
   it.effect("keeps a remote command's own exit-255 output", () => {
-    const spawner = ChildProcessSpawner.make(() =>
+    const spawner = lazyChildProcessSpawner(() =>
       Effect.succeed(makeFailedProcess({ stdout: "", stderr: "runner failed\n", exitCode: 255 })),
     );
     const layerProcess = Layer.mergeAll(
@@ -525,7 +526,7 @@ process.stderr.write('reader waiting');`,
   ] as const)(
     "times out at the observed SSH stage: %s %s",
     ([stderr, options, message, reason]) => {
-      const spawner = ChildProcessSpawner.make(() =>
+      const spawner = lazyChildProcessSpawner(() =>
         Effect.succeed({
           ...makeNeverFinishingProcess(),
           stderr: Stream.make(encoder.encode(stderr)),

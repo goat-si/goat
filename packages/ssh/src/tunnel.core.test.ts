@@ -376,6 +376,9 @@ describe("ssh tunnel scripts", () => {
       SshTunnel.buildRemoteStopScript(stateKey),
       'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"',
     );
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "did not stop within 2 seconds");
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "STOP_WAIT_INTERVAL=0.1");
+    assert.include(SshTunnel.buildRemoteStopScript(stateKey), "STOP_WAIT_ATTEMPTS=20");
     assert.include(
       launch,
       'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',

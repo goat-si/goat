@@ -43,7 +43,7 @@ export const BOAT_API_KEY_SECRET = "cloud-machines-boat-api-key";
 export const CATALOG_FILE = "cloud-machines.json";
 /** A non-waking check reuses a confirmed SSH mapping this long before asking Boat again. */
 export const QUIET_REFRESH_MS = 60_000;
-const READY_DEADLINE_MS = 180_000;
+export const READY_DEADLINE_MS = 180_000;
 const READY_POLL = "2 seconds";
 /** Boat keeps an Idempotency-Key for 24 hours; an older unresolved create cannot be replayed. */
 const PENDING_CREATE_MAX_AGE_MS = 23 * 60 * 60 * 1000;

@@ -34,6 +34,7 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "./maintenanceResolver.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 const driver = (value: string) => ProviderDriverKind.make(value);
 // These write `#!/bin/sh` stubs and evaluate them with darwin/linux path
@@ -101,7 +102,7 @@ function linkIntoPackage(tempDir: string, name: string, packageSegments: Readonl
   return link;
 }
 
-const noSpawn = ChildProcessSpawner.make(() =>
+const noSpawn = lazyChildProcessSpawner(() =>
   Effect.die("maintenance resolution should not spawn a process here"),
 );
 
@@ -109,7 +110,7 @@ function stdoutSpawner(
   onSpawn: (command: string, args: ReadonlyArray<string>) => string,
   exitCodeOf: (args: ReadonlyArray<string>) => number = () => 0,
 ) {
-  return ChildProcessSpawner.make((command) => {
+  return lazyChildProcessSpawner((command) => {
     const { command: executable, args } = command as unknown as {
       readonly command: string;
       readonly args: ReadonlyArray<string>;

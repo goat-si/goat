@@ -151,9 +151,21 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
   if (contestedPort !== null && pickCount < ${JSON.stringify(signals.contestedAttempts ?? 1)}) {
     fs.writeFileSync(picked, String(pickCount + 1)); console.log(contestedPort); return;
   }
-  const socket = net.createServer(); socket.listen(0, "127.0.0.1", () => {
-const port = socket.address().port; socket.close(() => console.log(port));
-  });
+  const claim = (left) => {
+    if (left <= 0) process.exit(1);
+    const probe = net.createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const port = probe.address().port;
+      probe.close(() => {
+        const check = net.createServer();
+        check.once("error", () => claim(left - 1));
+        check.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+          check.close(() => console.log(port));
+        });
+      });
+    });
+  };
+  claim(32);
 } else if (args[0] === "__ssh-helper" && args[1] === "wait-ready") {
   const proof = path.join(test, "pending-proof");
   if (fs.existsSync(proof)) {

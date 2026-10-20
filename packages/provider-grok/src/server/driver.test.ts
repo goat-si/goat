@@ -10,6 +10,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
@@ -38,13 +39,13 @@ const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
   ),
 );
 
-const noSpawner = ChildProcessSpawner.make(() =>
+const noSpawner = lazyChildProcessSpawner(() =>
   Effect.die("Disabled Grok must not spawn a process"),
 );
 
 /** Answers every spawn with `onSpawn(command, args)` on stdout, like a stub `brew`. */
 function stdoutSpawner(onSpawn: (command: string, args: ReadonlyArray<string>) => string) {
-  return ChildProcessSpawner.make((command) => {
+  return lazyChildProcessSpawner((command) => {
     const { command: executable, args } = command as unknown as {
       readonly command: string;
       readonly args: ReadonlyArray<string>;

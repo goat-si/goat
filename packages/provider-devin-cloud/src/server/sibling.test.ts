@@ -15,6 +15,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Cli from "./cli.ts";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 const id = ProviderInstanceId.make("devin-sibling");
 const hostFor = (settings: ServerSettings) =>
@@ -60,7 +61,7 @@ const catalogFor = (
     inspect,
     resolve,
   });
-const noSpawn = ChildProcessSpawner.make(() => Effect.die("Sibling selection must not spawn"));
+const noSpawn = lazyChildProcessSpawner(() => Effect.die("Sibling selection must not spawn"));
 
 it.effect("inspects before resolve and inherits only the selected executable and profile env", () =>
   Effect.scoped(
@@ -283,7 +284,7 @@ it.effect("readiness probes the selected command/profile without shell or ACP cr
         "--cloud Relay",
         "Logged in (via Devin).\nSynthetic account: example@acme.example",
       ];
-      const spawner = ChildProcessSpawner.make((command) =>
+      const spawner = lazyChildProcessSpawner((command) =>
         Effect.sync(() => {
           assert.equal(command._tag, "StandardCommand");
           if (command._tag === "StandardCommand") {

@@ -129,7 +129,13 @@ export const make = () => {
       );
     });
 
-  const reserveLoopbackPort = (host = "127.0.0.1"): Effect.Effect<number, NetError> =>
+  // listen(0) then close races the next binder. Rebind exclusively and retry so a stolen
+  // port is not returned. The socket is still closed before the caller binds.
+  const bindLoopback = (
+    port: number,
+    host: string,
+    exclusive: boolean,
+  ): Effect.Effect<number, NetError> =>
     Effect.callback<number, NetError>((resume) => {
       const probe = NodeNet.createServer();
       let settled = false;
@@ -141,24 +147,53 @@ export const make = () => {
       };
 
       probe.once("error", (cause) => {
+        closeServer(probe);
         settle(Effect.fail(new NetError({ message: "Failed to reserve loopback port", cause })));
       });
 
-      probe.listen(0, host, () => {
+      const listening = () => {
         const address = probe.address();
-        const port = typeof address === "object" && address !== null ? address.port : 0;
+        const chosen = typeof address === "object" && address !== null ? address.port : 0;
         probe.close(() => {
-          if (port > 0) {
-            settle(Effect.succeed(port));
+          if (chosen > 0) {
+            settle(Effect.succeed(chosen));
             return;
           }
           settle(Effect.fail(new NetError({ message: "Failed to reserve loopback port" })));
         });
-      });
+      };
+
+      if (exclusive) probe.listen({ host, port, exclusive: true }, listening);
+      else probe.listen(port, host, listening);
 
       return Effect.sync(() => {
         closeServer(probe);
       });
+    });
+
+  const reserveLoopbackPort = (host = "127.0.0.1"): Effect.Effect<number, NetError> =>
+    Effect.gen(function* () {
+      let cause: NetError | undefined;
+      for (let attempt = 0; attempt < 32; attempt++) {
+        const probed = yield* bindLoopback(0, host, false).pipe(
+          Effect.catch((error) => {
+            cause = error;
+            return Effect.succeed(0);
+          }),
+        );
+        if (probed <= 0) continue;
+        const claimed = yield* bindLoopback(probed, host, true).pipe(
+          Effect.as(true),
+          Effect.catch((error) => {
+            cause = error;
+            return Effect.succeed(false);
+          }),
+        );
+        if (claimed) return probed;
+      }
+      return yield* Effect.fail(
+        cause ?? new NetError({ message: "Failed to reserve loopback port" }),
+      );
     });
 
   return {

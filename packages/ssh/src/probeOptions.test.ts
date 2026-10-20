@@ -6,6 +6,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { makeSuccessfulProcess } from "./tunnel.fixture.ts";
 import { readOnlyProxyJumpArgs } from "./probeOptions.ts";
 import { runPreflightProcess } from "./preflightProcess.ts";
+import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
 it.effect.each([
   ["bastion", [{ host: "bastion" }]],
@@ -24,7 +25,7 @@ it.effect.each([
     const ssh = `${directory}/ssh with 'quotes'`;
     yield* fs.writeFileString(ssh, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
     yield* fs.chmod(ssh, 0o700);
-    const resolver = ChildProcessSpawner.make((command) => {
+    const resolver = lazyChildProcessSpawner((command) => {
       if (command._tag !== "StandardCommand") return Effect.die("Unexpected pipeline");
       expect(command.args).toContain("-G");
       expect(command.args).toContain("PermitLocalCommand=no");
@@ -91,7 +92,7 @@ it.effect.each(["loop", "depth", "unresolved"] as const)(
   (kind) =>
     Effect.gen(function* () {
       let calls = 0;
-      const resolver = ChildProcessSpawner.make(() => {
+      const resolver = lazyChildProcessSpawner(() => {
         calls++;
         return Effect.succeed({
           ...makeSuccessfulProcess(`proxyjump ${kind === "loop" ? "bastion" : `hop-${calls}`}\n`),
