@@ -23,6 +23,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Ref from "effect/Ref";
@@ -109,7 +110,7 @@ import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
-const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
+const layerThreadToolkitWithoutProviderRegistry = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
   Layer.provide(ServerSettings.layerTest()),
@@ -123,31 +124,35 @@ const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   ),
   Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
   Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
-  Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
   Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+);
+
+const layerThreadToolkit = layerThreadToolkitWithoutProviderRegistry.pipe(
+  Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
 );
 
 it("publishes unique tool names with reference-free object-root inputs", () => {
   const names = new Set<string>();
-  for (const toolkit of [
-    OrchestratorToolkit,
-    PreviewToolkit,
-    WorktreeToolkit,
-    ThreadToolkit,
-    AttachmentToolkit,
-    ProjectToolkit,
-    EnvironmentToolkit,
-    HostStatusToolkit,
-    ProviderToolkit,
-    PreviewControlsToolkit,
-    DeviceToolkit,
-    PullRequestsToolkit,
-    HtmlToolkit,
-    SshToolkit,
-    ConnectionToolkit,
-    RemoteReportToolkit,
-    ChannelToolkit,
-  ]) {
+  const toolkits = {
+    orchestrator: OrchestratorToolkit,
+    preview: PreviewToolkit,
+    worktree: WorktreeToolkit,
+    thread: ThreadToolkit,
+    attachment: AttachmentToolkit,
+    project: ProjectToolkit,
+    environment: EnvironmentToolkit,
+    hostStatus: HostStatusToolkit,
+    provider: ProviderToolkit,
+    previewControls: PreviewControlsToolkit,
+    device: DeviceToolkit,
+    pullRequests: PullRequestsToolkit,
+    html: HtmlToolkit,
+    ssh: SshToolkit,
+    connection: ConnectionToolkit,
+    remoteReport: RemoteReportToolkit,
+    channel: ChannelToolkit,
+  };
+  for (const toolkit of Object.values(toolkits)) {
     for (const tool of Object.values(toolkit.tools)) {
       expect(names.has(tool.name)).toBe(false);
       names.add(tool.name);
@@ -166,100 +171,12 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
       }
     }
   }
-  // Public catalog contract: exactly the renamed tools, with no callable legacy aliases.
-  expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual([
-    "goat_attachment_discard",
-    "goat_attachment_prepare_upload",
-    "goat_cloud_machine_create",
-    "goat_cloud_machine_list",
-    "goat_cloud_machine_resume",
-    "goat_cloud_machine_stop",
-    "goat_connection_add_ssh",
-    "goat_connection_list",
-    "goat_connection_remove",
-    "goat_environment_preferences_update",
-    "goat_environment_read",
-    "goat_host_link_create",
-    "goat_host_link_list",
-    "goat_host_link_remove",
-    "goat_host_status",
-    "goat_origin_report",
-    "goat_origin_reports_wait",
-    "goat_pending_request_list",
-    "goat_pending_request_read",
-    "goat_pending_request_respond",
-    "goat_preview_close",
-    "goat_preview_list",
-    "goat_project_clone",
-    "goat_project_create",
-    "goat_project_delete",
-    "goat_project_list",
-    "goat_project_read",
-    "goat_project_update",
-    "goat_provider_diagnose",
-    "goat_provider_home_request",
-    "goat_provider_host_matrix",
-    "goat_provider_sync",
-    "goat_provider_sync_cancel",
-    "goat_provider_sync_status",
-    "goat_queue_cancel",
-    "goat_queue_edit",
-    "goat_queue_list",
-    "goat_queue_promote_to_steer",
-    "goat_queue_read",
-    "goat_queue_reorder",
-    "goat_review_findings_export",
-    "goat_review_findings_record",
-    "goat_ssh_browse",
-    "goat_ssh_host_add",
-    "goat_ssh_host_forget",
-    "goat_ssh_host_list",
-    "goat_ssh_host_prepare",
-    "goat_ssh_host_status",
-    "goat_ssh_reports",
-    "goat_ssh_runtime_update",
-    "goat_ssh_thread_handoff",
-    "goat_ssh_thread_launch",
-    "goat_thread_configuration",
-    "goat_thread_configure",
-    "goat_thread_fork",
-    "goat_thread_interrupt",
-    "goat_thread_launch",
-    "goat_thread_list",
-    "goat_thread_merge_back",
-    "goat_thread_organize",
-    "goat_thread_read",
-    "goat_thread_report_result",
-    "goat_thread_search",
-    "goat_thread_send",
-    "goat_thread_send_attachments",
-    "goat_thread_status",
-    "goat_thread_transfers",
-    "goat_thread_unwatch",
-    "goat_thread_update",
-    "goat_thread_wait",
-    "goat_thread_watch",
-    "goat_thread_watch_list",
-    "goat_workflow_stop",
-    "goat_worktree_cleanup",
-    "goat_worktree_handoff",
-    "goat_worktree_inventory",
-    "goat_worktree_list",
-    "goat_worktree_remove",
-    "goat_worktree_status",
-  ]);
-  expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([
-    "channel_bot_home",
-    "channel_bot_home_claim",
-    "channel_ingest",
-    "channel_input_get",
-    "channel_task_export",
-    "channel_task_get",
-    "channel_task_list",
-    "channel_task_move",
-    "channel_task_report",
-  ]);
-  expect(names.size).toBe(135);
+  // Compare independent registry metadata with the tools these toolkits actually publish.
+  const registeredNames = Object.values(agentSurfaceRegistry)
+    .filter(({ toolkit }) => Object.hasOwn(toolkits, toolkit))
+    .map(({ name }) => name);
+  expect([...names].sort()).toEqual(registeredNames.sort());
+  expect(names.size).toBe(registeredNames.length);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -556,130 +473,137 @@ it.effect("keeps unexpected handler defects private through the production regis
   ),
 );
 
-it.effect("records the calling agent and the agent a tool acted on", () => {
-  // Recording runs detached from the tool response, so each expected event is awaited.
-  const recorded = [
-    Deferred.makeUnsafe<{ event: string; properties: object }>(),
-    Deferred.makeUnsafe<{ event: string; properties: object }>(),
-  ];
-  let recordedCount = 0;
-  const shell = (id: ThreadId, instanceId: string, model: string) =>
-    ({
-      id,
-      projectId: "mcp-core-project",
-      providerInstanceId: ProviderInstanceId.make(instanceId),
-      modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      archivedAt: null,
-      deletedAt: null,
-      activeRunId: "mcp-core-run",
-      createdBy: "agent",
-      creationSource: "mcp",
-      lineage: {
-        parentThreadId: id === threadId ? ThreadId.make("mcp-core-parent") : null,
-        relationshipToParent: id === threadId ? "subagent" : null,
-        rootThreadId: ThreadId.make("mcp-core-parent"),
-      },
-    }) as never;
-  return Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    yield* server
-      .callTool({ name: "goat_thread_fork", arguments: { sourcePoint: { type: "latest_stable" } } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        Effect.provideService(McpSchema.McpServerClient, client),
+it.effect(
+  "records the calling agent and the agent a tool acted on",
+  () => {
+    // Recording runs detached from the tool response, so each expected event is awaited.
+    const recorded = [
+      Deferred.makeUnsafe<{ event: string; properties: object }>(),
+      Deferred.makeUnsafe<{ event: string; properties: object }>(),
+    ];
+    let recordedCount = 0;
+    const shell = (id: ThreadId, instanceId: string, model: string) =>
+      ({
+        id,
+        projectId: "mcp-core-project",
+        providerInstanceId: ProviderInstanceId.make(instanceId),
+        modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        archivedAt: null,
+        deletedAt: null,
+        activeRunId: "mcp-core-run",
+        createdBy: "agent",
+        creationSource: "mcp",
+        lineage: {
+          parentThreadId: id === threadId ? ThreadId.make("mcp-core-parent") : null,
+          relationshipToParent: id === threadId ? "subagent" : null,
+          rootThreadId: ThreadId.make("mcp-core-parent"),
+        },
+      }) as never;
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      yield* server
+        .callTool({
+          name: "goat_thread_fork",
+          arguments: { sourcePoint: { type: "latest_stable" } },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const { event, properties } = yield* Deferred.await(recorded[0]!);
+      expect(event).toBe("mcp.tool.invoked");
+      expect(properties).toMatchObject({
+        tool: "goat_thread_fork",
+        outcome: "ok",
+        callerProvider: "codex",
+        callerModel: "gpt-5.5",
+        callerOrigin: "agent",
+        callerDepth: 1,
+        targetProvider: "claudeAgent",
+        targetModel: "claude-opus-5-5",
+        targetRuntimeMode: "full-access",
+        targetInteractionMode: "default",
+        crossProvider: true,
+      });
+      expect(properties).toHaveProperty("durationMs");
+      expect(Object.values(properties).some((value) => String(value).includes("mcp-core"))).toBe(
+        false,
       );
-    const { event, properties } = yield* Deferred.await(recorded[0]!);
-    expect(event).toBe("mcp.tool.invoked");
-    expect(properties).toMatchObject({
-      tool: "goat_thread_fork",
-      outcome: "ok",
-      callerProvider: "codex",
-      callerModel: "gpt-5.5",
-      callerOrigin: "agent",
-      callerDepth: 1,
-      targetProvider: "claudeAgent",
-      targetModel: "claude-opus-5-5",
-      targetRuntimeMode: "full-access",
-      targetInteractionMode: "default",
-      crossProvider: true,
-    });
-    expect(properties).toHaveProperty("durationMs");
-    expect(Object.values(properties).some((value) => String(value).includes("mcp-core"))).toBe(
-      false,
-    );
 
-    // Queue tools return only a sequence, so the receiving thread comes from the input.
-    yield* server
-      .callTool({
-        name: "goat_queue_edit",
-        arguments: { threadId: "mcp-core-other", queuedRunId: "mcp-core-queued", text: "secret" },
-      })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-    // The fork recorded a single event, so the next one is the queue edit.
-    expect((yield* Deferred.await(recorded[1]!)).properties).toMatchObject({
-      tool: "goat_queue_edit",
-      outcome: "ok",
-      callerProvider: "codex",
-      targetProvider: "claudeAgent",
-      crossProvider: true,
-    });
-  }).pipe(
-    Effect.provide(
-      layerThreadToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(
-          Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: (id) =>
-              Effect.succeed(
-                id === threadId
-                  ? shell(threadId, "codex", "gpt-5.5")
-                  : shell(id, "claudeAgent", "claude-opus-5-5"),
-              ),
-            getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
-            getProjectThreadRecords: () =>
-              Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
-            dispatch: () => Effect.succeed({ sequence: 1 } as never),
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ProviderRegistry.ProviderRegistry)({
-            getProviders: Effect.succeed([
-              {
-                instanceId: ProviderInstanceId.make("codex"),
-                driver: "codex",
-                models: [{ slug: "gpt-5.5", isCustom: false }],
-              } as never,
-              {
-                instanceId: ProviderInstanceId.make("claudeAgent"),
-                driver: "claudeAgent",
-                models: [{ slug: "claude-opus-5-5", isCustom: false }],
-              } as never,
-            ]),
-          }),
-        ),
-        Layer.provide(
-          Layer.succeed(
-            AnalyticsService.AnalyticsService,
-            AnalyticsService.AnalyticsService.of({
-              record: (event, properties) =>
-                Deferred.succeed(recorded[recordedCount++]!, {
-                  event,
-                  properties: properties ?? {},
-                }).pipe(Effect.asVoid),
-              flush: Effect.void,
+      // Queue tools return only a sequence, so the receiving thread comes from the input.
+      yield* server
+        .callTool({
+          name: "goat_queue_edit",
+          arguments: { threadId: "mcp-core-other", queuedRunId: "mcp-core-queued", text: "secret" },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      // The fork recorded a single event, so the next one is the queue edit.
+      expect((yield* Deferred.await(recorded[1]!)).properties).toMatchObject({
+        tool: "goat_queue_edit",
+        outcome: "ok",
+        callerProvider: "codex",
+        targetProvider: "claudeAgent",
+        crossProvider: true,
+      });
+    }).pipe(
+      Effect.provide(
+        layerThreadToolkitWithoutProviderRegistry.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: (id) =>
+                Effect.succeed(
+                  id === threadId
+                    ? shell(threadId, "codex", "gpt-5.5")
+                    : shell(id, "claudeAgent", "claude-opus-5-5"),
+                ),
+              getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
+              getProjectThreadRecords: () =>
+                Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
+              dispatch: () => Effect.succeed({ sequence: 1 } as never),
             }),
+          ),
+          Layer.provide(
+            Layer.mock(ProviderRegistry.ProviderRegistry)({
+              getProviders: Effect.succeed([
+                {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  driver: "codex",
+                  models: [{ slug: "gpt-5.5", isCustom: false }],
+                } as never,
+                {
+                  instanceId: ProviderInstanceId.make("claudeAgent"),
+                  driver: "claudeAgent",
+                  models: [{ slug: "claude-opus-5-5", isCustom: false }],
+                } as never,
+              ]),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              AnalyticsService.AnalyticsService,
+              AnalyticsService.AnalyticsService.of({
+                record: (event, properties) =>
+                  Deferred.succeed(recorded[recordedCount++]!, {
+                    event,
+                    properties: properties ?? {},
+                  }).pipe(Effect.asVoid),
+                flush: Effect.void,
+              }),
+            ),
           ),
         ),
       ),
-    ),
-  );
-});
+    );
+  },
+  5000,
+);
 
 it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
   const settings = {
