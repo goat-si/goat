@@ -1967,6 +1967,44 @@ describe("orchestrator MCP toolkit", () => {
                 legacyDelegatedRun,
               ),
             ).toBe(false);
+            // goat_thread_send from another thread always steers, so this
+            // follow-up is queued through the orchestrator. Stop holds it.
+            const heldFollowupMessageId = MessageId.make("message:delegated-child-held-followup");
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "agent",
+              creationSource: "mcp",
+              commandId: CommandId.make("command:delegated-child-held-followup"),
+              threadId: delegated.childThreadId,
+              senderThreadId: parentThreadId,
+              messageId: heldFollowupMessageId,
+              text: "This queued follow-up must remain stopped until resumed.",
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+            });
+            const heldFollowupQueued = yield* waitForProjection(
+              orchestrator,
+              delegated.childThreadId,
+              (projection) =>
+                projection.runs.some(
+                  (run) =>
+                    run.userMessageId === heldFollowupMessageId &&
+                    run.status === "queued" &&
+                    run.delegatedTaskId !== undefined,
+                ),
+            );
+            const heldFollowupRun = heldFollowupQueued.runs.find(
+              (run) => run.userMessageId === heldFollowupMessageId,
+            );
+            const heldFollowupTaskId = heldFollowupRun?.delegatedTaskId;
+            if (heldFollowupRun === undefined || heldFollowupTaskId === undefined) {
+              return yield* Effect.die(new Error("Held delegated follow-up was not queued."));
+            }
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+                (task) => task.id === heldFollowupTaskId,
+              ),
+            ).toMatchObject({ status: "pending" });
             const completedTaskCancelCall = yield* invoke("task_cancel", {
               taskId: delegated.taskId,
               reason: "Stop the child's later work too.",
@@ -2006,6 +2044,35 @@ describe("orchestrator MCP toolkit", () => {
               latestTerminalRunId: activeChildFollowup.runId,
               latestTerminalStatus: "interrupted",
             });
+
+            yield* waitForProjection(orchestrator, parentThreadId, (projection) =>
+              projection.subagents.some(
+                (task) => task.id === heldFollowupTaskId && task.status === "idle",
+              ),
+            );
+            expect(
+              (yield* orchestrator.getThreadProjection(delegated.childThreadId)).runs.find(
+                (run) => run.id === heldFollowupRun.id,
+              ),
+            ).toMatchObject({ status: "queued", queueHeld: true, startedAt: null });
+            const cancelHeldCall = yield* invoke("task_cancel", {
+              taskId: heldFollowupTaskId,
+              clientRequestId: "cancel-held-delegated-followup",
+            });
+            expect(
+              (yield* decodeTaskCancelResult(cancelHeldCall.structuredContent).pipe(Effect.orDie))
+                .status,
+            ).toBe("cancel_requested");
+            yield* waitForProjection(orchestrator, parentThreadId, (projection) =>
+              projection.subagents.some(
+                (task) => task.id === heldFollowupTaskId && task.status === "cancelled",
+              ),
+            );
+            expect(
+              (yield* orchestrator.getThreadProjection(delegated.childThreadId)).runs.find(
+                (run) => run.id === heldFollowupRun.id,
+              ),
+            ).toMatchObject({ status: "cancelled", startedAt: null });
 
             expect(childFollowup.taskId).toBeDefined();
             expect(activeChildFollowup.taskId).toBeDefined();
