@@ -219,4 +219,24 @@ it.layer(layerTest)("GrokDriver", (it) => {
       Effect.scoped,
     ),
   );
+
+  it.effect("exposes in-app API key sign-in", () =>
+    Effect.gen(function* () {
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-auth"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [{ name: "XAI_API_KEY", value: "", sensitive: true }],
+        config: GrokDriver.defaultConfig(),
+      });
+      expect(instance.auth?.start).toEqual(expect.any(Function));
+      expect(instance.auth?.logout).toEqual(expect.any(Function));
+      const snapshot = yield* instance.snapshot.getSnapshot;
+      expect(snapshot.setup).toEqual({ canAuthenticate: false, canInstall: false });
+      expect(snapshot.auth.canLogout).toBe(false);
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    ),
+  );
 });

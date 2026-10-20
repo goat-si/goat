@@ -55,7 +55,7 @@ const SIGN_IN: Readonly<Record<string, { readonly kind: ProviderSignInKind }>> =
   devinCloud: { kind: "linked" },
   antigravity: { kind: "browser" },
   acpRegistry: { kind: "agent" },
-  grok: { kind: "environment" },
+  grok: { kind: "credentials" },
   opencode: { kind: "command" },
 };
 

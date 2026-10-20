@@ -45,6 +45,7 @@ import {
   resolveGrokAcpBaseModelId,
 } from "./acpSupport.ts";
 import { sessionModelStateFromInitialize } from "@goat/provider-acp/server/runtimeModel";
+import { GROK_API_KEY_ENV } from "./auth.ts";
 import { discoverGrokSkills } from "./skills.ts";
 import { grokProbeEnvironment } from "./probeEnvironment.ts";
 
@@ -60,8 +61,6 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const GROK_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
-const GROK_API_KEY_ENV = "XAI_API_KEY";
-
 const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: GROK_DEFAULT_MODEL_SLUG,
@@ -529,7 +528,8 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version,
         status: "error",
         auth,
-        message: "Grok CLI is installed but not logged in. Run `grok login`.",
+        message:
+          "Grok CLI is installed but not logged in. Add an xAI API key, or run `grok login`.",
       },
     });
   }

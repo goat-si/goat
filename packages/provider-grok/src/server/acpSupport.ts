@@ -23,9 +23,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { normalizeModelSlug } from "@goat/shared/model";
 
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import { GROK_API_KEY_ENV } from "./auth.ts";
 import { makeXAiPromptCompletionRuntime } from "./xaiAcpExtension.ts";
 
-const GROK_API_KEY_ENV = "XAI_API_KEY";
 const GROK_OAUTH2_REFERRER_ENV = "GROK_OAUTH2_REFERRER";
 const GOAT_OAUTH_REFERRER = "t3code";
 const GROK_AUTH_METHOD_API_KEY = "xai.api_key";
