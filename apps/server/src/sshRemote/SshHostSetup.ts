@@ -61,7 +61,11 @@ import {
   effectiveSettingsMatch,
   type ManagedSshEndpoint,
 } from "../cloudMachines/sshConfig.ts";
-import { authorizeSshHost, type SshHostCaller } from "./SshHostAuthorization.ts";
+import {
+  authorizeApprovalRequest,
+  authorizeSshHost,
+  type SshHostCaller,
+} from "./SshHostAuthorization.ts";
 import * as Dispatch from "./SshRemoteDispatch.ts";
 export type { SshHostCaller } from "./SshHostAuthorization.ts";
 
@@ -1145,11 +1149,15 @@ export const make = (
           return outsideThread(
             "Server client SSH runtime updates are not supported. Choose Update now in Settings → Connections on the desktop app that owns this connection.",
           );
-        yield* authorize(caller, "environment:maintain");
-        if ((input.mode ?? "when_idle") !== "now")
+        if ((input.mode ?? "when_idle") !== "now") {
+          yield* authorize(caller, "environment:maintain");
           return yield* Deferred.await(yield* startJob(input.host, caller, true, false));
-        if (!caller.scope.thread)
+        }
+        if (!caller.scope.thread) {
+          yield* authorize(caller, "environment:maintain");
           return outsideThread("Ask from a GOAT thread so you can approve it there.");
+        }
+        yield* authorizeApprovalRequest(caller.scope);
         const snapshot = yield* status({ host: input.host });
         if (snapshot.kind !== "ok") return snapshot;
         const operation = yield* dispatch
@@ -1168,9 +1176,11 @@ export const make = (
       });
     const add: SshHostSetup["Service"]["add"] = (input, caller) =>
       Effect.gen(function* () {
-        yield* authorize(caller, "settings:write");
-        if (caller.kind !== "mcp" || caller.scope.thread === undefined)
+        if (caller.kind !== "mcp" || caller.scope.thread === undefined) {
+          yield* authorize(caller, "settings:write");
           return outsideThread("Add this host in Settings → Connections.");
+        }
+        yield* authorizeApprovalRequest(caller.scope);
         const challenge = yield* collect(input);
         const pin = yield* readOptional(path.join(directory, `${challenge.host}.known_hosts`)).pipe(
           Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })),

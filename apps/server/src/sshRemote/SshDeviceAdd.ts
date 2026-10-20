@@ -22,7 +22,11 @@ import * as Sessions from "../auth/SessionStore.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
 import { assertFullAccess, assertLiveCaller, readCaller } from "../mcp/threadAccess.ts";
-import { authorizeSshHost, type SshHostCaller } from "./SshHostAuthorization.ts";
+import {
+  authorizeApprovalRequest,
+  authorizeSshHost,
+  type SshHostCaller,
+} from "./SshHostAuthorization.ts";
 import * as Setup from "./SshHostSetup.ts";
 
 export const SshDeviceAddInput = Schema.Struct({
@@ -134,15 +138,15 @@ const make = Effect.gen(function* () {
       // The grant name alone does not tell an agent what to do next.
       const nextStep = (scope: string) =>
         scope === "settings:write"
-          ? " A person must approve this host's key: ask them to add it in Settings → Connections → Add device → SSH, or call goat_ssh_host_add from a GOAT thread with a live settings:write grant so they can approve it there."
+          ? " A person must approve this host's key: ask them to add it in Settings → Connections → Add device → SSH, or call goat_ssh_host_add from a running GOAT thread so they can approve it there."
           : scope === "environment:maintain"
             ? " Ask the person to connect it in Settings → Connections, or use a caller allowed to maintain environments."
             : "";
       return yield* Effect.gen(function* () {
         const requestTrust = (): ReturnType<SshDeviceAdd["Service"]["addDevice"]> =>
           Effect.gen(function* () {
-            yield* authorizeSshHost(sessions, caller, "settings:write");
-            if (!caller.scope.thread)
+            if (!caller.scope.thread) {
+              yield* authorizeSshHost(sessions, caller, "settings:write");
               return {
                 saved: false,
                 preflight,
@@ -152,6 +156,8 @@ const make = Effect.gen(function* () {
                 message: "Add this host in Settings → Connections.",
                 fix: { actor: "human", instruction: "Add this host in Settings → Connections." },
               };
+            }
+            yield* authorizeApprovalRequest(caller.scope);
             const result = yield* setup.add(resolved.input, caller);
             if (result.kind !== "needs_human")
               return {
