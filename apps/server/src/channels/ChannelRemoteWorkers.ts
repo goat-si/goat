@@ -2201,8 +2201,8 @@ const make = Effect.gen(function* () {
               return;
             }
           }
-          // The remote interrupt stops the running run there. Async subagents it started keep
-          // running on that machine until they finish; GOAT has no remote thread stop yet.
+          // Stops the thread there as local Stop does: its queue is held and the tasks it
+          // delegated stop too. An older remote ignores stopCascade and only interrupts.
           const stopped = yield* callHost(
             {
               host: state.host,
@@ -2211,6 +2211,7 @@ const make = Effect.gen(function* () {
                 threadId,
                 reason: "Stopped from GOAT Bot.",
                 clientRequestId: "channel-stop:" + pending.event.eventId,
+                stopCascade: true,
               },
               writes: true,
               timeoutMs: SEND_TIMEOUT_MS,
@@ -2226,6 +2227,14 @@ const make = Effect.gen(function* () {
             });
             return;
           }
+          if (
+            stopped._tag === "Success" &&
+            (stopped.success as { readonly stopCascade?: unknown } | null)?.stopCascade !== true
+          )
+            yield* Effect.logWarning(
+              "remote GOAT only interrupted the worker; its subagents keep running until it is updated",
+              { taskId: stored.task.taskId, host: state.host },
+            );
           yield* done;
         }),
       ),

@@ -3809,6 +3809,43 @@ const make = Effect.gen(function* () {
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
         yield* ensureCloudCancellationSupported(target, "invalid_request", input.runId);
         const key = yield* requestKey(input.clientRequestId);
+        if (input.stopCascade === true) {
+          if (input.runId !== undefined)
+            return yield* failure(
+              "invalid_request",
+              "stopCascade stops the whole thread; omit runId.",
+            );
+          const stopFailure = (error: unknown) =>
+            failure(
+              "orchestration_error",
+              `Unable to stop thread ${input.threadId}: ${errorMessage(error)}`,
+            );
+          const { runs } = yield* threadManagement
+            .getThreadRecords(input.threadId, ["runs"])
+            .pipe(Effect.mapError(threadManagementFailure));
+          const live = runs.findLast(
+            (run) =>
+              run.status !== "queued" && !ThreadManagementService.isTerminalRunStatus(run.status),
+          );
+          const commandId = stableCommandId({ scope, requestKey: key, operation: "thread-stop" });
+          yield* threadManagement
+            .dispatch({
+              type: "thread.stop",
+              commandId,
+              threadId: input.threadId,
+              ...(input.reason === undefined ? {} : { reason: input.reason }),
+            })
+            .pipe(Effect.mapError(stopFailure));
+          yield* threadManagement
+            .stopDelegatedTasks({ threadId: input.threadId, commandId, reason: input.reason })
+            .pipe(Effect.mapError(stopFailure));
+          return {
+            threadId: input.threadId,
+            runId: live?.id ?? null,
+            status: live === undefined ? "no_active_run" : "interrupt_requested",
+            stopCascade: true,
+          } satisfies OrchestratorMcpThreadInterruptResult;
+        }
         const result = yield* threadManagement
           .interruptThread({
             projectId: target.thread.projectId,

@@ -962,6 +962,8 @@ export const OrchestratorMcpThreadInterruptInput = Schema.Struct({
   runId: Schema.optional(RunId),
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  /** Stop like GOAT's Stop: also hold the thread's queue and stop the tasks it delegated. */
+  stopCascade: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpThreadInterruptInput = typeof OrchestratorMcpThreadInterruptInput.Type;
 
@@ -974,6 +976,8 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
     Schema.Literal("no_active_run"),
     Schema.Literals(["completed", "failed", "cancelled", "interrupted", "rolled_back"]),
   ]),
+  /** Present only when the queue was held and delegated tasks were stopped; older servers omit it. */
+  stopCascade: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;
 
