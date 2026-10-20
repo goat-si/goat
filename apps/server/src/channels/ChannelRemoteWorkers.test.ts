@@ -129,6 +129,8 @@ class RemoteMachine {
   probeAttempted = Deferred.makeUnsafe<void>();
   probeCount = 0;
   refuseInterruptWith: string | undefined;
+  /** An older GOAT rejects `stopCascade` before the interrupt runs. */
+  refuseStopCascade = false;
   interruptAttempted = Deferred.makeUnsafe<void>();
   scriptDown = false;
   scriptCalled = Deferred.makeUnsafe<void>();
@@ -527,6 +529,14 @@ class RemoteMachine {
                 const refused = machine.refuseInterruptWith;
                 yield* Deferred.succeed(attempted, undefined);
                 if (refused !== undefined) return yield* machine.refused(refused);
+                // An older GOAT has no stopCascade argument and refuses it before anything runs.
+                if (call.arguments.stopCascade === true && machine.refuseStopCascade) {
+                  return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                    reason: "remote_refused",
+                    message: "goat_thread_interrupt does not take stopCascade, so nothing ran.",
+                    remoteCode: "invalid_request",
+                  });
+                }
                 return {};
               }
               case "goat_thread_send": {
@@ -3355,4 +3365,89 @@ it.effect("freezes a remote brief before the SSH launch accepts the worker", () 
     const brief = yield* ledger.latestTaskBrief(task.taskId);
     assert.strictEqual(brief?.version, 1);
   }).pipe(Effect.provide(harness.layer));
+});
+
+describe("stopping a worker on another machine", () => {
+  const stopRunningRemote = (machine: RemoteMachine) =>
+    Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* gateway.ingest(goatInput("do@mac-studio: keep going", "remote-stop"), rpcContext);
+      yield* runtime.drain;
+      const running = yield* writes.waitFor(
+        (task) => task.status === "running" && task.worker?.threadId !== undefined,
+      );
+      yield* Deferred.await(machine.waitIdle);
+      const cancelled = yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(running.taskId))!,
+        { type: "task.cancelled", payload: { reason: "Stopped by the person." } },
+        { owner: runtime.ownerToken, forward: true },
+      );
+      assert.isDefined(cancelled);
+      const pending = (yield* ledger.listPendingForwards(10)).find(
+        (event) => event.event.type === "task.cancelled",
+      );
+      assert.isDefined(pending);
+      yield* (yield* ChannelRemoteWorkers).stop(pending!, runtime.ownerToken);
+      yield* writes.waitForForward(pending!.sequence);
+      return { running, pending: pending!, ledger };
+    });
+
+  it.effect(
+    "stops the remote thread with stopCascade and finishes when the answer omits it",
+    () => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        const { running, pending, ledger } = yield* stopRunningRemote(machine);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+        assert.strictEqual((yield* onlyTask).status, "cancelled");
+        assert.lengthOf(machine.interrupts, 1);
+        assert.deepStrictEqual(machine.interrupts[0], {
+          threadId: running.worker?.threadId,
+          reason: "Stopped from GOAT Bot.",
+          clientRequestId: "channel-stop:" + pending.event.eventId,
+          stopCascade: true,
+        });
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "interrupts an older remote that refuses stopCascade and still finishes the stop",
+    () => {
+      const { machine, harness } = remoteHarness();
+      machine.refuseStopCascade = true;
+      const logs: Array<string> = [];
+      const logger = Logger.make(({ message }) => {
+        logs.push(JSON.stringify(message));
+      });
+      return Effect.gen(function* () {
+        const { running, pending, ledger } = yield* stopRunningRemote(machine);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+        assert.strictEqual((yield* onlyTask).status, "cancelled");
+        assert.lengthOf(machine.interrupts, 2);
+        assert.strictEqual(machine.interrupts[0]?.stopCascade, true);
+        assert.strictEqual(machine.interrupts[0]?.threadId, running.worker?.threadId);
+        assert.strictEqual(
+          machine.interrupts[0]?.clientRequestId,
+          "channel-stop:" + pending.event.eventId,
+        );
+        assert.isUndefined(machine.interrupts[1]?.stopCascade);
+        assert.strictEqual(machine.interrupts[1]?.threadId, running.worker?.threadId);
+        assert.strictEqual(
+          machine.interrupts[1]?.clientRequestId,
+          machine.interrupts[0]?.clientRequestId,
+        );
+        assert.include(logs.join("\n"), "remote GOAT cannot stop subagents");
+      }).pipe(
+        Effect.provide(
+          Layer.merge(harness.layer, Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      );
+    },
+  );
 });

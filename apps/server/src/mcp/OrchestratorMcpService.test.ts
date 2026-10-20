@@ -3339,3 +3339,294 @@ it.effect.each([
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(dependencies))));
     }),
 );
+
+describe("OrchestratorMcpService thread interrupt", () => {
+  const parentThreadId = ThreadId.make("thread:mcp-stop-parent");
+  const childThreadId = ThreadId.make("thread:mcp-stop-child");
+  const liveRunId = RunId.make("run:mcp-stop-live");
+  const queuedRunId = RunId.make("run:mcp-stop-queued");
+  const doneRunId = RunId.make("run:mcp-stop-done");
+  const taskId = NodeId.make("node:mcp-stop-task");
+  const scope: McpInvocationScope = {
+    environmentId: EnvironmentId.make("environment:mcp-stop"),
+    requestNamespace: "provider-session:mcp-stop",
+    thread: {
+      threadId: parentThreadId,
+      providerSessionId: "provider-session:mcp-stop",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    },
+    client: undefined,
+    capabilities: new Set(["orchestration"]),
+    issuedAt: 1,
+  };
+
+  const commandIdFor = (operation: string, clientRequestId: string) =>
+    CommandId.make(
+      [
+        "command",
+        "mcp",
+        encodeURIComponent(scope.requestNamespace),
+        operation,
+        encodeURIComponent(clientRequestId),
+      ].join(":"),
+    );
+
+  const projectionsFor = (live: boolean) => {
+    const parent = {
+      thread: {
+        id: parentThreadId,
+        projectId: ProjectId.make("project:mcp-stop"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+      runs: live
+        ? [
+            { id: liveRunId, status: "running", ordinal: 1 },
+            { id: queuedRunId, status: "queued", ordinal: 2, queueHeld: false },
+          ]
+        : [{ id: doneRunId, status: "completed", ordinal: 1 }],
+      subagents: [
+        {
+          id: taskId,
+          threadId: parentThreadId,
+          origin: "app_owned",
+          childThreadId,
+        },
+      ],
+      providerThreads: [],
+      messages: [],
+      contextTransfers: [],
+      turnItems: [],
+      runtimeRequests: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const child = {
+      thread: {
+        id: childThreadId,
+        projectId: ProjectId.make("project:mcp-stop"),
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+      runs: [{ id: RunId.make("run:mcp-stop-child"), status: "running", ordinal: 1 }],
+      subagents: [],
+      providerThreads: [],
+      messages: [],
+      contextTransfers: [],
+      turnItems: [],
+      runtimeRequests: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    return { parent, child };
+  };
+
+  const runInterrupt = <E>(
+    live: boolean,
+    effect: (input: {
+      readonly service: OrchestratorMcpService.OrchestratorMcpService["Service"];
+      readonly commands: Array<OrchestrationV2ServerCommand>;
+      readonly interrupts: Array<{ readonly commandId: CommandId; readonly threadId: ThreadId }>;
+      readonly stopDelegated: Array<{ readonly threadId: ThreadId; readonly commandId: CommandId }>;
+    }) => Effect.Effect<void, E>,
+  ) =>
+    Effect.gen(function* () {
+      const projections = projectionsFor(live);
+      const commands: Array<OrchestrationV2ServerCommand> = [];
+      const interrupts: Array<{ readonly commandId: CommandId; readonly threadId: ThreadId }> = [];
+      const stopDelegated: Array<{ readonly threadId: ThreadId; readonly commandId: CommandId }> =
+        [];
+      const getThreadRecords = (threadId: ThreadId) =>
+        Effect.succeed(threadId === childThreadId ? projections.child : projections.parent);
+      const dispatch = (command: OrchestrationV2ServerCommand) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return {} as never;
+        });
+      const walk = ThreadManagementService.makeStopDelegatedTasks({
+        dispatch,
+        getThreadRecords:
+          getThreadRecords as Orchestrator.OrchestratorV2["Service"]["getThreadRecords"],
+      });
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords,
+          getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
+          dispatch,
+          stopDelegatedTasks: (input) =>
+            Effect.sync(() => {
+              stopDelegated.push({ threadId: input.threadId, commandId: input.commandId });
+            }).pipe(Effect.andThen(walk(input))),
+          interruptThread: (input) =>
+            Effect.sync(() => {
+              interrupts.push({ commandId: input.commandId, threadId: input.threadId });
+              return {
+                type: "interrupt_requested",
+                run: { id: liveRunId, status: "running" },
+                dispatch: {},
+              } as never;
+            }),
+        }),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        }),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        yield* effect({ service, commands, interrupts, stopDelegated });
+      }).pipe(
+        Effect.provide(
+          layerOrchestratorService.pipe(
+            Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+            Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
+            Layer.provide(layerDependencies),
+          ),
+        ),
+      );
+    });
+
+  const stops = (commands: ReadonlyArray<OrchestrationV2ServerCommand>, threadId: ThreadId) =>
+    commands.filter(
+      (command): command is Extract<OrchestrationV2ServerCommand, { type: "thread.stop" }> =>
+        command.type === "thread.stop" && command.threadId === threadId,
+    );
+
+  it.effect(
+    "stopCascade stops a running thread, holds its queue, and stops its async subagent",
+    () =>
+      runInterrupt(true, ({ service, commands, stopDelegated }) =>
+        Effect.gen(function* () {
+          const result = yield* service.interruptThread(scope, {
+            threadId: parentThreadId,
+            stopCascade: true,
+            clientRequestId: "stop-live",
+            reason: "hold the queue",
+          });
+          assert.deepEqual(result, {
+            threadId: parentThreadId,
+            runId: liveRunId,
+            status: "interrupt_requested",
+            stopCascade: true,
+          });
+          const parentStop = stops(commands, parentThreadId);
+          const childStop = stops(commands, childThreadId);
+          // thread.stop holds the queue; the queued run gets no start command.
+          assert.deepEqual(
+            commands.map((command) => command.type),
+            ["thread.stop", "thread.stop"],
+          );
+          assert.isFalse(
+            commands.some((command) => "runId" in command && command.runId === queuedRunId),
+          );
+          assert.equal(parentStop[0]?.commandId, commandIdFor("thread-stop", "stop-live"));
+          assert.equal(parentStop[0]?.reason, "hold the queue");
+          assert.isUndefined(parentStop[0]?.stopCascadeFrom);
+          assert.equal(stopDelegated[0]?.threadId, parentThreadId);
+          assert.equal(stopDelegated[0]?.commandId, parentStop[0]?.commandId);
+          assert.equal(
+            childStop[0]?.commandId,
+            CommandId.make(`${parentStop[0]?.commandId}:stop:${childThreadId}`),
+          );
+          assert.equal(childStop[0]?.stopCascadeFrom, parentThreadId);
+          assert.equal(childStop[0]?.reason, "hold the queue");
+        }),
+      ),
+  );
+
+  it.effect("stopCascade stops an idle thread's running async subagent", () =>
+    runInterrupt(false, ({ service, commands, stopDelegated }) =>
+      Effect.gen(function* () {
+        const result = yield* service.interruptThread(scope, {
+          threadId: parentThreadId,
+          stopCascade: true,
+          clientRequestId: "stop-idle",
+          reason: "subagent still running",
+        });
+        assert.deepEqual(result, {
+          threadId: parentThreadId,
+          runId: null,
+          status: "no_active_run",
+          stopCascade: true,
+        });
+        const parentStop = stops(commands, parentThreadId);
+        const childStop = stops(commands, childThreadId);
+        assert.equal(stopDelegated.length, 1);
+        assert.equal(parentStop[0]?.commandId, commandIdFor("thread-stop", "stop-idle"));
+        assert.equal(childStop[0]?.stopCascadeFrom, parentThreadId);
+        assert.equal(childStop[0]?.reason, "subagent still running");
+      }),
+    ),
+  );
+
+  it.effect("stopCascade with runId is an invalid request", () =>
+    runInterrupt(true, ({ service, commands, stopDelegated, interrupts }) =>
+      Effect.gen(function* () {
+        const error = yield* service
+          .interruptThread(scope, {
+            threadId: parentThreadId,
+            stopCascade: true,
+            runId: liveRunId,
+            clientRequestId: "stop-with-run",
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.code, "invalid_request");
+        assert.equal(error.message, "stopCascade stops the whole thread; omit runId.");
+        assert.equal(commands.length, 0);
+        assert.equal(stopDelegated.length, 0);
+        assert.equal(interrupts.length, 0);
+      }),
+    ),
+  );
+
+  it.effect("an interrupt without stopCascade does not stop delegated tasks", () =>
+    runInterrupt(true, ({ service, commands, stopDelegated, interrupts }) =>
+      Effect.gen(function* () {
+        const result = yield* service.interruptThread(scope, {
+          threadId: parentThreadId,
+          clientRequestId: "interrupt-only",
+          reason: "turn only",
+        });
+        assert.deepEqual(result, {
+          threadId: parentThreadId,
+          runId: liveRunId,
+          status: "interrupt_requested",
+        });
+        assert.isFalse(Object.hasOwn(result, "stopCascade"));
+        assert.equal(commands.length, 0);
+        assert.equal(stopDelegated.length, 0);
+        assert.deepEqual(interrupts, [
+          {
+            commandId: commandIdFor("thread-interrupt", "interrupt-only"),
+            threadId: parentThreadId,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("retries of the same clientRequestId reuse the stop command ids", () =>
+    runInterrupt(true, ({ service, commands }) =>
+      Effect.gen(function* () {
+        const input = {
+          threadId: parentThreadId,
+          stopCascade: true as const,
+          clientRequestId: "stop-retry",
+          reason: "again",
+        };
+        const first = yield* service.interruptThread(scope, input);
+        const second = yield* service.interruptThread(scope, input);
+        assert.deepEqual(second, first);
+        const parentStops = stops(commands, parentThreadId);
+        const childStops = stops(commands, childThreadId);
+        assert.equal(parentStops.length, 2);
+        assert.equal(childStops.length, 2);
+        assert.equal(parentStops[0]?.commandId, commandIdFor("thread-stop", "stop-retry"));
+        assert.equal(parentStops[1]?.commandId, parentStops[0]?.commandId);
+        assert.equal(childStops[1]?.commandId, childStops[0]?.commandId);
+        assert.equal(childStops[0]?.stopCascadeFrom, parentThreadId);
+      }),
+    ),
+  );
+});
