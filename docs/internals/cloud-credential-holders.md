@@ -53,8 +53,9 @@ Three rules keep registration from being a confused deputy:
 - Devin's CLI binds sessions to the sign-in that created them, so registered Devin sessions are
   link-only by design.
 
-Forgetting a registered run deletes its thread, which detaches observation. The vendor run keeps
-running; GOAT never cancels it on forget.
+GOAT never cancels a run it did not launch. Stopping a registered run's turn ends observation and
+leaves the task `tracking: "link-only"` (the Cursor adapter's `interruptTurn`); forgetting it
+deletes its thread. Either way the vendor run keeps running, and only its owner cancels it.
 
 ## Adding a provider
 

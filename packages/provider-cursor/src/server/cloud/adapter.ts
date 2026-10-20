@@ -775,6 +775,43 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               ) {
                 return yield* protocol("The requested Cursor Cloud turn is not attached.");
               }
+              // A registered run belongs to whoever launched it: Stop only stops following it.
+              if (ctx.thread.cloudTask?.attach === "registered") {
+                ctx.stopRequested = true;
+                if (ctx.fiber) yield* Fiber.interrupt(ctx.fiber);
+                if (ctx.finalized) return;
+                const timestamp = yield* DateTime.now;
+                const { error: _observationError, ...task } = ctx.thread.cloudTask;
+                const turn = {
+                  ...ctx.turn,
+                  status: "interrupted",
+                  completedAt: timestamp,
+                } satisfies OrchestrationV2ProviderTurn;
+                yield* commit(
+                  ctx,
+                  {
+                    ...task,
+                    tracking: "link-only",
+                    progress:
+                      "GOAT stopped following this run. It keeps running in Cursor; open it there to cancel it.",
+                  },
+                  turn,
+                );
+                yield* emit({
+                  type: "turn.terminal",
+                  driver: DRIVER,
+                  providerThreadId: ctx.thread.id,
+                  providerTurnId: turn.id,
+                  runOrdinal: PositiveInt.make(ctx.input.runOrdinal),
+                  status: "interrupted",
+                  failure: null,
+                  threadDisposition: "reusable",
+                });
+                ctx.finalized = true;
+                if (active === ctx) active = undefined;
+                yield* Deferred.succeed(ctx.done, undefined);
+                return;
+              }
               const apiKey = yield* key;
               yield* call("cancel", () =>
                 sdk.cancelRun(ctx.run.id, { runtime: "cloud", agentId: ctx.run.agentId, apiKey }),
