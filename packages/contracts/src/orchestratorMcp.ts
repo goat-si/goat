@@ -976,7 +976,7 @@ export const OrchestratorMcpThreadInterruptResult = Schema.Struct({
     Schema.Literal("no_active_run"),
     Schema.Literals(["completed", "failed", "cancelled", "interrupted", "rolled_back"]),
   ]),
-  /** Present only when the queue was held and delegated tasks were stopped; older servers omit it. */
+  /** Present when the queue was held and delegated tasks were stopped. */
   stopCascade: Schema.optional(Schema.Literal(true)),
 });
 export type OrchestratorMcpThreadInterruptResult = typeof OrchestratorMcpThreadInterruptResult.Type;

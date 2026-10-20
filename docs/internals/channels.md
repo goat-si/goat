@@ -149,7 +149,8 @@ machines report through their host, so their runs are not recorded here.
   never claimed for a launch is stopped by the ledger write alone. A worker on another machine is
   stopped there through `goat_thread_interrupt` with `stopCascade`, the same `thread.stop` plus
   delegated-task walk, found through its report binding when its launch was still in flight. An
-  older remote ignores `stopCascade`, interrupts only the turn, and omits it from the result.
+  older remote refuses the undeclared `stopCascade` argument before anything runs, so the stop
+  retries once without it and only interrupts the turn there.
 
 An owner has one bot, in the Scratch project, and one bot conversation keyed by the owner rather
 than the thread. Where Scratch is off because the data directory is inside a Git work tree, the bot

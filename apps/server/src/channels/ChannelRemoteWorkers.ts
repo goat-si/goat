@@ -1200,6 +1200,11 @@ const make = Effect.gen(function* () {
 
   const remoteCode = (error: unknown) =>
     error instanceof SshRemoteDispatch.SshRemoteDispatchError ? error.remoteCode : undefined;
+  /** An older remote refuses an argument it does not declare, before anything runs. */
+  const refusesStopCascade = (error: unknown) =>
+    error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+    error.remoteCode === "invalid_request" &&
+    error.message.includes("does not take stopCascade");
   const isUnreachable = (error: unknown) =>
     error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
     (error.reason === "host_unavailable" || error.reason === "ssh_failed");
@@ -2202,22 +2207,32 @@ const make = Effect.gen(function* () {
             }
           }
           // Stops the thread there as local Stop does: its queue is held and the tasks it
-          // delegated stop too. An older remote ignores stopCascade and only interrupts.
-          const stopped = yield* callHost(
-            {
-              host: state.host,
-              tool: "goat_thread_interrupt",
-              arguments: {
-                threadId,
-                reason: "Stopped from GOAT Bot.",
-                clientRequestId: "channel-stop:" + pending.event.eventId,
-                stopCascade: true,
+          // delegated stop too. An older remote refuses the stopCascade argument before anything
+          // runs; it then gets the plain interrupt, and its subagents run on until they end.
+          const interrupt = (stopCascade: boolean) =>
+            callHost(
+              {
+                host: state.host,
+                tool: "goat_thread_interrupt",
+                arguments: {
+                  threadId,
+                  reason: "Stopped from GOAT Bot.",
+                  clientRequestId: "channel-stop:" + pending.event.eventId,
+                  ...(stopCascade ? { stopCascade: true } : {}),
+                },
+                writes: true,
+                timeoutMs: SEND_TIMEOUT_MS,
               },
-              writes: true,
-              timeoutMs: SEND_TIMEOUT_MS,
-            },
-            authorize,
-          ).pipe(Effect.result);
+              authorize,
+            ).pipe(Effect.result);
+          let stopped = yield* interrupt(true);
+          if (stopped._tag === "Failure" && refusesStopCascade(stopped.failure)) {
+            yield* Effect.logWarning(
+              "remote GOAT cannot stop subagents; interrupting the worker's turn only",
+              { taskId: stored.task.taskId, host: state.host },
+            );
+            stopped = yield* interrupt(false);
+          }
           if (stopped._tag === "Failure" && remoteCode(stopped.failure) !== "thread_not_found") {
             if (stopped.failure instanceof Superseded) return;
             // Unreachable or refused for now: left pending, so the next pass stops it.
@@ -2227,14 +2242,6 @@ const make = Effect.gen(function* () {
             });
             return;
           }
-          if (
-            stopped._tag === "Success" &&
-            (stopped.success as { readonly stopCascade?: unknown } | null)?.stopCascade !== true
-          )
-            yield* Effect.logWarning(
-              "remote GOAT only interrupted the worker; its subagents keep running until it is updated",
-              { taskId: stored.task.taskId, host: state.host },
-            );
           yield* done;
         }),
       ),
