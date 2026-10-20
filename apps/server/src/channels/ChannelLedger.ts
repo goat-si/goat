@@ -288,8 +288,14 @@ export class ChannelLedger extends Context.Service<
     readonly listPendingForwards: (
       limit: number,
     ) => Effect.Effect<ReadonlyArray<ChannelPendingEvent>, ChannelLedgerError>;
-    /** Records one worker run as it stands now; the newest write for a run wins. */
-    readonly upsertWorkerRun: (run: ChannelWorkerRun) => Effect.Effect<void, ChannelLedgerError>;
+    /**
+     * Records one worker run as it stands now; the newest write for a run wins. Deliveries commit
+     * in that same write, so a stall notice cannot land without the status it describes.
+     */
+    readonly upsertWorkerRun: (
+      run: ChannelWorkerRun,
+      deliveries?: ReadonlyArray<ChannelOutboxInsert>,
+    ) => Effect.Effect<void, ChannelLedgerError>;
     /** The recorded runs of these tasks, oldest first per task. */
     readonly listWorkerRuns: (
       taskIds: ReadonlyArray<ChannelTaskId>,
@@ -326,6 +332,16 @@ export class ChannelLedger extends Context.Service<
       readonly requestId: string;
       readonly now: string;
     }) => Effect.Effect<string, ChannelLedgerError>;
+    /**
+     * The code already issued for a request, and when. Does not issue a new one: a card that
+     * was never sent has no code, so a numbered reply cannot land on it.
+     */
+    readonly approvalCodeForRequest: (
+      requestId: string,
+    ) => Effect.Effect<
+      { readonly code: string; readonly issuedAt: string } | undefined,
+      ChannelLedgerError
+    >;
     /** The request a code was issued for in this conversation, if any. */
     readonly approvalRequestForCode: (input: {
       readonly conversationId: ChannelConversationId;
@@ -337,7 +353,7 @@ export class ChannelLedger extends Context.Service<
       readonly from: number;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
-    /** Recorded runs still running or waiting, across tasks, for reconciliation. */
+    /** Recorded runs still running, waiting, or stalled, across tasks, for reconciliation. */
     readonly listOpenWorkerRuns: () => Effect.Effect<
       ReadonlyArray<ChannelWorkerRun>,
       ChannelLedgerError
@@ -1369,13 +1385,20 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listPendingForwards")),
       ),
 
-    upsertWorkerRun: (run) =>
-      sql`
-        INSERT INTO channel_runtime_state (key, value_json, updated_at)
-        VALUES (${workerRunKey(run.taskId, run.runId)}, ${encodeWorkerRun(run)}, ${run.updatedAt})
-        ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
-          updated_at = excluded.updated_at
-      `.pipe(Effect.asVoid, Effect.mapError(toLedgerError("upsertWorkerRun"))),
+    upsertWorkerRun: (run, deliveries = []) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              INSERT INTO channel_runtime_state (key, value_json, updated_at)
+              VALUES (${workerRunKey(run.taskId, run.runId)}, ${encodeWorkerRun(run)}, ${run.updatedAt})
+              ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json,
+                updated_at = excluded.updated_at
+            `;
+            if (deliveries.length > 0) yield* insertDeliveries(deliveries, run.updatedAt);
+          }),
+        )
+        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("upsertWorkerRun"))),
 
     listWorkerRuns: (taskIds) =>
       taskIds.length === 0
@@ -1489,6 +1512,19 @@ const make = Effect.gen(function* () {
         )
         .pipe(Effect.mapError(toLedgerError("issueApprovalCode"))),
 
+    approvalCodeForRequest: (requestId) =>
+      sql<{ readonly value_json: string; readonly updated_at: string }>`
+        SELECT value_json, updated_at FROM channel_runtime_state
+        WHERE key = ${"approval-code-of:" + requestId}
+      `.pipe(
+        Effect.map((rows) => {
+          const row = rows[0];
+          if (row === undefined) return undefined;
+          return { code: decodeApprovalOf(row.value_json).code, issuedAt: row.updated_at };
+        }),
+        Effect.mapError(toLedgerError("approvalCodeForRequest")),
+      ),
+
     approvalRequestForCode: (input) =>
       sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state
@@ -1525,7 +1561,7 @@ const make = Effect.gen(function* () {
       sql<{ readonly value_json: string }>`
         SELECT value_json FROM channel_runtime_state
         WHERE key >= 'worker-run:' AND key < 'worker-run;'
-          AND json_extract(value_json, '$.status') IN ('running', 'waiting')
+          AND json_extract(value_json, '$.status') IN ('running', 'waiting', 'stalled')
       `.pipe(
         Effect.map((rows) => rows.map((row) => decodeWorkerRun(row.value_json))),
         Effect.mapError(toLedgerError("listOpenWorkerRuns")),

@@ -16,6 +16,10 @@
  * Workers may also report progress, questions, and proposed completion with channel_task_report;
  * the caller's thread and generation must match the task's assignment.
  *
+ * A running run whose thread has not changed for STALLED_AFTER_MS is recorded stalled. The
+ * requester hears about each quiet period once, in the same write as the status. Waiting on a
+ * person is not a stall, and the work item itself stays in progress.
+ *
  * @module ChannelWorkerReports
  */
 import {
@@ -39,7 +43,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { readStoredThreadResultReport } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
-import { questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
+import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
@@ -72,9 +76,52 @@ const workerRunStatus = (
   }
 };
 
+/**
+ * How long a running run can sit without thread activity before it is stalled. Same bound as
+ * fleet thread health (`STALL_AFTER_MS`).
+ */
+export const STALLED_AFTER_MS = 20 * 60_000;
+
 /** How far back, and how many per pass, finished tasks have their runs read into history. */
 const RUN_HISTORY_DAYS = 7;
 const RUN_HISTORY_PER_PASS = 20;
+
+const openWorkerRun = (status: ChannelWorkerRunStatus) =>
+  status === "running" || status === "waiting" || status === "stalled";
+
+const stallNotice = (title: string) =>
+  '"' +
+  title +
+  '" has made no progress for ' +
+  STALLED_AFTER_MS / 60_000 +
+  ' minutes. It may be stuck: say "stop" to stop it, or keep waiting.';
+
+/** One notice per quiet period. A later period has a new activity time, so it notifies again. */
+const stallDelivery = (
+  task: ChannelTask,
+  runId: string,
+  activityAt: string,
+): ChannelLedger.ChannelOutboxInsert => {
+  const causeKey = "stall:" + task.taskId + ":" + runId + ":" + activityAt;
+  const deliveryId = deliveryIdFor(causeKey);
+  const mentionActorId =
+    task.originAddress.kind === "slack" ? task.requester.externalActorId : undefined;
+  return {
+    deliveryId,
+    causeKey,
+    taskId: task.taskId,
+    message: {
+      deliveryId,
+      destination: task.originAddress,
+      kind: "receipt",
+      text: stallNotice(task.title),
+      taskId: task.taskId,
+      taskVersion: task.version,
+      ...(mentionActorId === undefined ? {} : { mentionActorId }),
+    },
+  };
+};
+
 /** How long a finished task without a thread waits for a launch that may still land. */
 const NO_THREAD_GRACE_MS = 120_000;
 
@@ -172,6 +219,7 @@ const make = Effect.gen(function* () {
     runs: ReadonlyArray<OrchestrationV2Run>,
     floor: number,
     needsYou: boolean,
+    activityAt: DateTime.Utc,
   ) =>
     Effect.gen(function* () {
       const worker = task.worker;
@@ -179,25 +227,35 @@ const make = Effect.gen(function* () {
       const known = new Map(
         (yield* ledger.listWorkerRuns([task.taskId])).map((run) => [run.runId, run]),
       );
-      const now = DateTime.formatIso(yield* DateTime.now);
+      const nowDt = yield* DateTime.now;
+      const now = DateTime.formatIso(nowDt);
+      const activityIso = DateTime.formatIso(activityAt);
+      const quiet =
+        DateTime.toEpochMillis(nowDt) - DateTime.toEpochMillis(activityAt) > STALLED_AFTER_MS;
       const latestOrdinal = runs.at(-1)?.ordinal;
+      // Agents over MCP never answer, so they are not told a run stalled.
+      const tellRequester = task.requester.originKind !== "mcp";
       for (const run of runs) {
         if (run.ordinal < floor) continue;
         // Only the newest run can be waiting on a person; earlier ones have ended.
-        const status = workerRunStatus(run.status, needsYou && run.ordinal === latestOrdinal);
+        const derived = workerRunStatus(run.status, needsYou && run.ordinal === latestOrdinal);
+        const status = derived === "running" && quiet ? "stalled" : derived;
         const before = known.get(run.id);
         if (before?.status === status) continue;
-        const ended = status === "running" || status === "waiting" ? undefined : now;
-        yield* ledger.upsertWorkerRun({
-          runId: run.id,
-          taskId: task.taskId,
-          generation: worker.generation,
-          threadId: worker.threadId,
-          status,
-          startedAt: before?.startedAt ?? DateTime.formatIso(run.requestedAt),
-          updatedAt: now,
-          ...(ended === undefined ? {} : { endedAt: before?.endedAt ?? ended }),
-        });
+        const notify = status === "stalled" && tellRequester;
+        yield* ledger.upsertWorkerRun(
+          {
+            runId: run.id,
+            taskId: task.taskId,
+            generation: worker.generation,
+            threadId: worker.threadId,
+            status,
+            startedAt: before?.startedAt ?? DateTime.formatIso(run.requestedAt),
+            updatedAt: now,
+            ...(openWorkerRun(status) ? {} : { endedAt: before?.endedAt ?? now }),
+          },
+          notify ? [stallDelivery(task, run.id, activityIso)] : [],
+        );
       }
       return true;
     }).pipe(
@@ -314,6 +372,7 @@ const make = Effect.gen(function* () {
         runs,
         launched?.ordinal ?? bound?.ordinal ?? 0,
         observed.needsYou.length > 0,
+        records.value.thread.updatedAt,
       );
 
       if (!TERMINAL_RUN_STATUSES.has(current.status)) return latest !== stored;
@@ -454,13 +513,15 @@ const make = Effect.gen(function* () {
           runs,
           launched?.ordinal ?? 0,
           false,
+          records.success.thread.updatedAt,
         );
         if (recorded && runs.every((run) => TERMINAL_RUN_STATUSES.has(run.status))) {
           yield* settle;
         }
       }
-      // Runs recorded as running or waiting whose task has ended (stopped, or settled by the
-      // worker's own report) still end on their own; record how.
+      // Open runs whose task has ended (stopped, or settled by the worker's own report) still end
+      // on their own; record how. A stalled run stays stalled until that orchestration run ends,
+      // so the next pass does not tell the requester again.
       const activeIds = new Set(active.map((stored) => stored.task.taskId as string));
       const open = (yield* ledger.listOpenWorkerRuns()).filter(
         (run) => !activeIds.has(run.taskId) && run.host === undefined,
@@ -473,13 +534,15 @@ const make = Effect.gen(function* () {
         const now = DateTime.formatIso(yield* DateTime.now);
         for (const recorded of open.filter((run) => run.threadId === threadId)) {
           const run = records.value.runs.find((candidate) => candidate.id === recorded.runId);
-          const status = run === undefined ? "stopped" : workerRunStatus(run.status, false);
+          const derived = run === undefined ? "stopped" : workerRunStatus(run.status, false);
+          const status =
+            recorded.status === "stalled" && derived === "running" ? "stalled" : derived;
           if (status === recorded.status) continue;
           yield* ledger.upsertWorkerRun({
             ...recorded,
             status,
             updatedAt: now,
-            ...(status === "running" || status === "waiting" ? {} : { endedAt: now }),
+            ...(openWorkerRun(status) ? {} : { endedAt: now }),
           });
         }
       }

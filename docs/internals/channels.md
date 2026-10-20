@@ -118,10 +118,10 @@ A task is a work item: what a person asked for. Its worker runs are separate rec
 run of the task's worker thread, kept as `worker-run:<task>:<run>` rows in
 `channel_runtime_state` (a `ChannelWorkerRun`) rather than a new table, so no migration
 competes with other work for an id. Worker reconciliation writes a run's row when its state
-changes: running, waiting (on a person), finished, failed or stopped. A run finishing never
-finishes its item. The item's state comes from the task and from its newest outcome delivery to
-where the work came from (`channelWorkQueue.ts`): finished work stays open as "result not sent
-yet" or "result not delivered" until that delivery is recorded delivered. Workers on other
+changes: running, waiting (on a person), stalled (no progress for 20 minutes), finished, failed
+or stopped. A run finishing never finishes its item. The item's state comes from the task and
+from its newest outcome delivery to where the work came from (`channelWorkQueue.ts`): finished
+work stays open as "result not sent yet" or "result not delivered" until that delivery is recorded delivered. Workers on other
 machines report through their host, so their runs are not recorded here.
 
 - **What's pending.** A `pending` read lists the open items the requester may see, newest

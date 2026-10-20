@@ -134,6 +134,11 @@ export class WorkerWorld {
   readonly steered = new Map<string, RunId>();
   /** Sends to fail, by message id, with the error the orchestrator would give. */
   readonly sendFailures = new Map<string, unknown>();
+  /**
+   * When the worker thread last changed. Unset reads as now, so a run stalls only when a test
+   * freezes this behind the clock.
+   */
+  readonly activityAt = new Map<string, DateTime.Utc>();
 
   addRun(threadId: ThreadId, userMessageId: MessageId) {
     const existing = this.runs.get(threadId) ?? [];
@@ -343,48 +348,52 @@ export function makeHarness(
           const messageRunIds = (
             filter as { readonly messageRunIds?: ReadonlyArray<string> } | undefined
           )?.messageRunIds;
-          return Effect.succeed({
-            thread: {
-              id: threadId,
-              projectId,
-              archivedAt: null,
-              deletedAt: null,
-              pullRequests: world.pullRequests.get(threadId) ?? [],
-            },
-            runs,
-            runtimeRequests: world.runtimeRequests.get(threadId) ?? [],
-            turnItems: (world.runtimeRequests.get(threadId) ?? []).flatMap((request) => {
-              const prompt = world.approvalPrompts.get(request.id);
-              return prompt === undefined
-                ? []
-                : [{ type: "approval_request", requestId: request.id, prompt }];
-            }),
-            providerThreads: [
-              ...(world.background.has(threadId)
-                ? [{ pendingBackgroundTasks: [{ taskId: "background" }] }]
-                : []),
-              ...(world.cloudTasks.has(threadId)
-                ? [{ cloudTask: { status: world.cloudTasks.get(threadId) } }]
-                : []),
-            ],
-            subagents: world.subagents.get(threadId) ?? [],
-            messages: runs
-              .filter((run) => messageRunIds === undefined || messageRunIds.includes(run.id))
-              .flatMap((run) => {
-                const text = world.finalText.get(run.id);
-                return text === undefined
+          return Effect.gen(function* () {
+            const updatedAt = world.activityAt.get(threadId) ?? (yield* DateTime.now);
+            return {
+              thread: {
+                id: threadId,
+                projectId,
+                archivedAt: null,
+                deletedAt: null,
+                pullRequests: world.pullRequests.get(threadId) ?? [],
+                updatedAt,
+              },
+              runs,
+              runtimeRequests: world.runtimeRequests.get(threadId) ?? [],
+              turnItems: (world.runtimeRequests.get(threadId) ?? []).flatMap((request) => {
+                const prompt = world.approvalPrompts.get(request.id);
+                return prompt === undefined
                   ? []
-                  : [
-                      {
-                        role: "assistant",
-                        text,
-                        streaming: false,
-                        runId: run.id,
-                        createdAt: DateTime.makeUnsafe("2026-10-12T00:05:00.000Z"),
-                      },
-                    ];
+                  : [{ type: "approval_request", requestId: request.id, prompt }];
               }),
-          } as never);
+              providerThreads: [
+                ...(world.background.has(threadId)
+                  ? [{ pendingBackgroundTasks: [{ taskId: "background" }] }]
+                  : []),
+                ...(world.cloudTasks.has(threadId)
+                  ? [{ cloudTask: { status: world.cloudTasks.get(threadId) } }]
+                  : []),
+              ],
+              subagents: world.subagents.get(threadId) ?? [],
+              messages: runs
+                .filter((run) => messageRunIds === undefined || messageRunIds.includes(run.id))
+                .flatMap((run) => {
+                  const text = world.finalText.get(run.id);
+                  return text === undefined
+                    ? []
+                    : [
+                        {
+                          role: "assistant",
+                          text,
+                          streaming: false,
+                          runId: run.id,
+                          createdAt: DateTime.makeUnsafe("2026-10-12T00:05:00.000Z"),
+                        },
+                      ];
+                }),
+            } as never;
+          });
         }) as typeof real.getThreadRecords,
         getThreadShell: (threadId) => {
           if (!isWorker(threadId)) return real.getThreadShell(threadId);

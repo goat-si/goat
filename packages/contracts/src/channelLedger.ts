@@ -188,6 +188,7 @@ export type ChannelTaskMove = typeof ChannelTaskMove.Type;
 export const ChannelWorkerRunStatus = Schema.Literals([
   "running",
   "waiting",
+  "stalled",
   "finished",
   "failed",
   "stopped",
