@@ -19,6 +19,7 @@ const harness = vi.hoisted(() => ({
   respond: vi.fn(),
   refresh: vi.fn(),
   refreshProviders: vi.fn(),
+  navigate: vi.fn(),
   scopeAllowed: true,
   manage: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
   publish: (_registry: AtomRegistry.AtomRegistry, _value: SshHandoffProgressResult) => {},
@@ -66,7 +67,10 @@ vi.mock("./CopyTextButton", () => ({
     <button>{accessibilityLabel}</button>
   ),
 }));
-vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+vi.mock("@react-navigation/native", () => ({
+  useIsFocused: () => true,
+  useNavigation: () => ({ navigate: harness.navigate }),
+}));
 vi.mock("react-native", () => ({
   AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -149,6 +153,7 @@ beforeEach(() => {
   harness.respond.mockReset().mockResolvedValue({ _tag: "Success", value: handoff });
   harness.scopeAllowed = true;
   harness.refresh.mockReset();
+  harness.navigate.mockReset();
   harness.refreshProviders.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
 });
 afterEach(async () => {
@@ -469,6 +474,66 @@ it.each([
     expect(container.textContent).not.toContain("This approval expired.");
   },
 );
+
+describe("provider setup request", () => {
+  const request: Handoff = {
+    ...handoff,
+    kind: "approval",
+    title: "Set up Claude",
+    reason: "Sign in so the agent can continue.",
+    state: "pending",
+    target: { environmentId: EnvironmentId.make("vps"), path: "provider.setup" },
+  };
+  it("opens provider accounts on the requested driver and instance", async () => {
+    harness.open.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        human: {
+          location: "Sign in to Claude on vps",
+          providerSetup: {
+            driver: "claudeAgent",
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+          },
+        },
+      },
+    });
+    await render(request);
+    expect(container.textContent).not.toContain("Open setup");
+    await click("Review request");
+    expect(container.textContent).toContain("Sign in to Claude on vps");
+    await click("Open setup");
+    expect(harness.navigate).toHaveBeenCalledWith("SettingsSheet", {
+      screen: "SettingsContent",
+      params: {
+        screen: "SettingsProviderAccounts",
+        params: {
+          environmentId: EnvironmentId.make("vps"),
+          driver: "claudeAgent",
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+        },
+      },
+    });
+    expect(harness.respond).not.toHaveBeenCalled();
+  });
+  it("does not offer setup for other provider requests", async () => {
+    await render({
+      ...request,
+      target: { ...request.target, path: "provider.home_request" },
+    });
+    await click("Review request");
+    expect(container.textContent).not.toContain("Open setup");
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+  it("needs permission to manage providers on the target", async () => {
+    await act(async () => harness.manage(registry, false));
+    await render(request);
+    const review = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Review request",
+    );
+    expect(review?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("Open setup");
+  });
+});
 
 describe("OpenCodex Home approval", () => {
   const request = {

@@ -1,7 +1,7 @@
 import { codexRouteErrorMessage } from "@goat/client-runtime/state/provider-instance-display";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import * as DateTime from "effect/DateTime";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { CopyTextButton } from "./CopyTextButton";
 import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
@@ -17,6 +17,7 @@ import {
   AuthOrchestrationReadScope,
   isHandoffPending,
   isProviderHandoffPath,
+  PROVIDER_SETUP_HANDOFF_PATH,
   type EnvironmentId,
   type Handoff,
   type HandoffHuman,
@@ -68,6 +69,8 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   const isSsh = handoff.target.path.startsWith("ssh.");
   const isProvider = isProviderHandoffPath(handoff.target.path);
   const isProviderHome = handoff.target.path === "provider.home_request";
+  const isProviderSetup = handoff.target.path === PROVIDER_SETUP_HANDOFF_PATH;
+  const navigation = useNavigation();
   const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
   const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth;
   const resolvedLabel =
@@ -183,6 +186,21 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
       setBusy(false);
     }
   };
+  const openProviderSetup = () => {
+    if (human === null) return;
+    const setup = human.providerSetup;
+    navigation.navigate("SettingsSheet", {
+      screen: "SettingsContent",
+      params: {
+        screen: "SettingsProviderAccounts",
+        params: {
+          environmentId: handoff.target.environmentId,
+          ...(setup?.driver ? { driver: setup.driver } : {}),
+          ...(setup?.instanceId ? { instanceId: setup.instanceId } : {}),
+        },
+      },
+    });
+  };
   return (
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
       <Text className="font-goat-bold text-base text-foreground">{handoff.title}</Text>
@@ -217,6 +235,14 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             />
           ) : (
             <>
+              {isProviderSetup ? (
+                <Button
+                  tone="primary"
+                  label="Open setup"
+                  disabled={busy || !allowed || !canTarget}
+                  onPress={openProviderSetup}
+                />
+              ) : null}
               <Text className="font-sans text-sm text-foreground">{human.location}</Text>
               {human.fingerprint ? (
                 <>
