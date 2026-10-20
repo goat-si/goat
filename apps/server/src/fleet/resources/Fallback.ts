@@ -299,9 +299,9 @@ export const make = Effect.gen(function* () {
       /** Re-checks the thread, then the notice and the continuation, both fixed per run. */
       const announce = (target: ModelSelection, hop: number) =>
         Effect.gen(function* () {
-          // The user may have settled, snoozed, stopped, or redirected the thread meanwhile. A
-          // small window remains between this read and the dispatch; the orchestrator has no
-          // conditional continuation to close it (#538).
+          // The user may have settled, snoozed, stopped, or redirected the thread meanwhile.
+          // This read skips the notice; automatedContinuationOfRunId makes the orchestrator
+          // refuse a continuation that loses the race after it.
           const latest = yield* threads.getThreadShell(threadId);
           if (
             latest === null ||
@@ -343,6 +343,7 @@ export const make = Effect.gen(function* () {
             commandId: CommandId.make(continuation),
             messageId: MessageId.make(continuation),
             threadId,
+            automatedContinuationOfRunId: runId,
             text: "Continue where you left off.",
             attachments: [],
             dispatchMode: { type: "start_immediately" },

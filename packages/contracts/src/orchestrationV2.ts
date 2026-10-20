@@ -3080,6 +3080,11 @@ export const OrchestrationV2Command = Schema.Union([
     restartContinuationOfRunId: Schema.optional(RunId),
     usageLimitContinuationOfRunId: Schema.optional(RunId),
     manualContinuationOfRunId: Schema.optional(RunId),
+    /**
+     * A server-initiated resume of this failed run. Accepted as a no-op instead of starting a
+     * turn once the user has settled, snoozed, archived, or otherwise moved the thread on.
+     */
+    automatedContinuationOfRunId: Schema.optional(RunId),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(

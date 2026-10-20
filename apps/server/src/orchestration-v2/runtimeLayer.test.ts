@@ -32,6 +32,7 @@ import {
   RunId,
   ThreadId,
 } from "@goat/contracts";
+import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -7121,6 +7122,138 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         assert.equal(resumed.runs[2]?.status, "starting");
         assert.isFalse(resumed.runs[2]?.queueHeld);
       }
+    }),
+  );
+});
+
+it.layer(layerTest)("automated continuation", (it) => {
+  const seedFailedThread = (name: string) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make(`auto-continue:${name}`);
+      const projectId = ProjectId.make(`auto-continue:project:${name}`);
+      const now = yield* DateTime.now;
+      yield* seedProject({
+        projectId,
+        title: "Automated continuation project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(now),
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`auto-continue:create:${name}`),
+        threadId,
+        projectId,
+        title: "Failed thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`auto-continue:start:${name}`),
+        threadId,
+        messageId: MessageId.make(`auto-continue:start:${name}`),
+        text: "Work on this.",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const started = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      yield* events.write({
+        commandId: CommandId.make(`auto-continue:failure:${name}`),
+        events: [
+          {
+            id: EventId.make(`auto-continue:run:${name}`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...started, status: "failed", completedAt: now },
+          },
+        ],
+      });
+      const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+      assert.equal(run.status, "failed");
+      return { orchestrator, threadId, run };
+    });
+
+  const continuation = (threadId: ThreadId, runId: RunId, name: string) => ({
+    type: "message.dispatch" as const,
+    commandId: CommandId.make(`auto-continue:dispatch:${name}`),
+    messageId: MessageId.make(`auto-continue:dispatch:${name}`),
+    threadId,
+    automatedContinuationOfRunId: runId,
+    text: "Continue where you left off.",
+    attachments: [],
+    dispatchMode: { type: "start_immediately" as const },
+    createdBy: "user" as const,
+    creationSource: "server" as const,
+  });
+
+  it.effect("starts a new run when the continuation targets the failed run", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, run } = yield* seedFailedThread("accepted");
+      const receipt = yield* orchestrator.dispatch(continuation(threadId, run.id, "accepted"));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.isAbove(receipt.sequence, 0);
+      assert.lengthOf(after.runs, 2);
+      assert.equal(latestExecutedRun(after.runs)?.id, after.runs[1]?.id);
+      assert.equal(after.runs[1]?.status, "starting");
+    }),
+  );
+
+  it.effect("stays settled and starts no run after the user settles", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, run } = yield* seedFailedThread("settled");
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("auto-continue:settle:settled"),
+        threadId,
+      });
+      const settled = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(settled.thread.settledOverride, "settled");
+      assert.equal(settled.runs[0]?.status, "failed");
+      yield* orchestrator.dispatch(continuation(threadId, run.id, "settled"));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.lengthOf(after.runs, 1);
+      assert.equal(after.runs[0]?.id, run.id);
+      assert.equal(after.thread.settledOverride, "settled");
+    }),
+  );
+
+  it.effect("starts nothing when a newer run is latest", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, run } = yield* seedFailedThread("superseded");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("auto-continue:newer:superseded"),
+        threadId,
+        messageId: MessageId.make("auto-continue:newer:superseded"),
+        text: "A newer turn.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const newer = before.runs[1]!;
+      assert.lengthOf(before.runs, 2);
+      assert.equal(latestExecutedRun(before.runs)?.id, newer.id);
+      assert.notEqual(newer.id, run.id);
+      yield* orchestrator.dispatch(continuation(threadId, run.id, "superseded"));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(
+        after.runs.map((candidate) => candidate.id),
+        [run.id, newer.id],
+      );
+      assert.equal(after.runs[1]?.status, newer.status);
     }),
   );
 });

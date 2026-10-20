@@ -5058,6 +5058,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return;
         }
       }
+      if (command.automatedContinuationOfRunId !== undefined) {
+        const now = yield* DateTime.now;
+        const latest = latestExecutedRun(projection.runs);
+        if (
+          latest?.id !== command.automatedContinuationOfRunId ||
+          latest.status !== "failed" ||
+          projection.runs.some((run) => run.status === "queued") ||
+          projection.thread.archivedAt !== null ||
+          projection.thread.deletedAt !== null ||
+          projection.thread.settledOverride === "settled" ||
+          projection.runtimeRequests.some((request) => request.status === "pending") ||
+          (projection.thread.snoozedUntil != null &&
+            DateTime.toEpochMillis(projection.thread.snoozedUntil) > DateTime.toEpochMillis(now))
+        ) {
+          // Accepted without change, so a replayed delivery does not retry.
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "thread.metadata-updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: projection.thread,
+          });
+          return;
+        }
+      }
 
       if (command.restartContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
