@@ -3,7 +3,6 @@ import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import { fleetHostReportsAtom } from "~/state/fleetHostMetrics";
-import { hostStatusAtom } from "~/state/hostStatus";
 
 import {
   recordHostSamples,
@@ -44,8 +43,8 @@ export const fleetConsoleTelemetryAtom = Atom.make((get): FleetConsoleTelemetry 
   const { reports, sources } = get(fleetHostReportsAtom);
   const failed: EnvironmentId[] = [];
   let loading = false;
-  for (const environmentId of sources) {
-    const result = get(hostStatusAtom(environmentId));
+  for (const { environmentId, atom } of sources) {
+    const result = get(atom);
     if (AsyncResult.isFailure(result)) failed.push(environmentId);
     else if (AsyncResult.isInitial(result)) loading = true;
   }

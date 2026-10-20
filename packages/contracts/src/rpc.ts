@@ -384,7 +384,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { GoatHostStatusResult } from "./hostStatus.ts";
+import { GoatHostStatusResult, ServerGetHostStatusInput } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import {
   UsageLimitSourceError,
@@ -1045,9 +1045,9 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
   error: EnvironmentAuthorizationError,
 });
 
-/** The `goat_host_status` payload: this machine, plus connected SSH hosts for sessions that may operate threads. */
+/** The `goat_host_status` payload: this machine, plus connected SSH hosts for sessions that may operate threads unless `local`. */
 const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
-  payload: Schema.Struct({}),
+  payload: ServerGetHostStatusInput,
   success: GoatHostStatusResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });

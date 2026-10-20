@@ -24,22 +24,33 @@ const asLastKnown = (hosts: ReadonlyArray<HostStatusEntry>): ReadonlyArray<HostS
       : { ...entry, reachability: "unreachable", lastKnown: true },
   );
 
+/** One host-status read Fleet holds open, for refreshing and for its failure state. */
+export interface FleetHostStatusSource {
+  readonly environmentId: EnvironmentId;
+  readonly atom: ReturnType<typeof hostStatusAtom>;
+}
+
 /**
  * Each connected environment's host-status answer, by environment. The primary
  * answers for itself and every SSH host it holds open; see fleetHostStatusNeeded
- * for when another environment is read, since each read samples CPU and fans out
- * to that machine's own SSH hosts. Sources lists every environment
- * read, answered or not, for refreshing. Mounting this starts the reads.
+ * for when another environment is read, since each read samples CPU. Another
+ * environment fans out to its own SSH hosts only when a Fleet machine is one it
+ * dispatched to; otherwise it reads itself alone. Sources lists every read,
+ * answered or not, for refreshing. Mounting this starts the reads.
  */
 export const fleetHostReportsAtom = Atom.make((get) => {
   const environments = get(fleetEnvironmentsAtom);
   const primary = get(primaryEnvironmentIdAtom);
   const reports = new Map<EnvironmentId, ReadonlyArray<HostStatusEntry>>();
-  const sources: EnvironmentId[] = [];
+  const sources: FleetHostStatusSource[] = [];
   /** Null while the first answer is on its way. */
-  const read = (environmentId: EnvironmentId): ReadonlyArray<HostStatusEntry> | null => {
-    sources.push(environmentId);
-    const result = get(hostStatusAtom(environmentId));
+  const read = (
+    environmentId: EnvironmentId,
+    options?: { readonly local: boolean },
+  ): ReadonlyArray<HostStatusEntry> | null => {
+    const atom = hostStatusAtom(environmentId, options);
+    sources.push({ environmentId, atom });
+    const result = get(atom);
     const hosts = Option.getOrNull(AsyncResult.value(result))?.hosts ?? null;
     if (hosts === null) return AsyncResult.isFailure(result) ? [] : null;
     const answer = AsyncResult.isFailure(result) ? asLastKnown(hosts) : hosts;
@@ -64,7 +75,8 @@ export const fleetHostReportsAtom = Atom.make((get) => {
       primaryHosts,
       dispatchers,
     });
-    if (needed) read(environment.environmentId);
+    if (needed)
+      read(environment.environmentId, { local: !dispatchers.has(environment.environmentId) });
   }
   return { reports, sources } as const;
 }).pipe(Atom.withLabel("fleet-host-reports"));
@@ -111,8 +123,8 @@ export function useFleetHostMetrics(): ReadonlyMap<string, FleetMachineHeat> {
   const heat = useAtomValue(fleetHeatAtom);
   useLiveRefresh(
     () => {
-      for (const environmentId of registry.get(fleetHostReportsAtom).sources) {
-        refreshHostStatus(registry, hostStatusAtom(environmentId));
+      for (const source of registry.get(fleetHostReportsAtom).sources) {
+        refreshHostStatus(registry, source.atom);
       }
     },
     { key: "fleet-host-status", intervalMs: HOST_STATUS_REFRESH_MS },

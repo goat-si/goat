@@ -67,12 +67,24 @@ export const HostStatusQuota = Schema.Struct({
 });
 export type HostStatusQuota = typeof HostStatusQuota.Type;
 
+/** A provider instance configured on that machine, whether or not it reports usage limits. */
+export const HostStatusProvider = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.Boolean,
+});
+export type HostStatusProvider = typeof HostStatusProvider.Type;
+
 export const HostStatusMetrics = Schema.Struct({
   ...HostCapacitySnapshot.fields,
   /** `process.platform` of that machine (`linux`, `darwin`, `win32`). Older hosts omit it. */
   platform: Schema.optional(TrimmedNonEmptyString),
   threads: HostThreadCounts,
+  /** Only the instances that report usage limits; `providers` lists every configured one. */
   quotas: Schema.Array(HostStatusQuota),
+  /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
+  providers: Schema.optional(Schema.Array(HostStatusProvider)),
 });
 export type HostStatusMetrics = typeof HostStatusMetrics.Type;
 
@@ -135,3 +147,12 @@ export const GoatHostStatusInput = Schema.Struct({
   }),
 });
 export type GoatHostStatusInput = typeof GoatHostStatusInput.Type;
+
+/** `server.getHostStatus` input. An older server ignores `local` and answers with its usual fan-out. */
+export const ServerGetHostStatusInput = Schema.Struct({
+  local: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "When true, report only the machine that answers, without contacting its SSH hosts.",
+  }),
+});
+export type ServerGetHostStatusInput = typeof ServerGetHostStatusInput.Type;

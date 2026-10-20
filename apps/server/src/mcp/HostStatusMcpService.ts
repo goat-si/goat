@@ -28,6 +28,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import {
   countHostThreads,
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
+  hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
   markHostCompatibility,
@@ -70,12 +71,14 @@ export interface HostStatusMcpServiceShape {
    * The same read for a signed-in GOAT client, such as the web Hosts panel.
    * Connected SSH hosts are reached only with `reachHosts`, which the caller
    * grants to sessions that may operate threads: like the MCP tool's fan-out,
-   * it uses this machine's SSH keys. Without it, only this machine is read.
+   * it uses this machine's SSH keys. Without it, or with `local`, only this
+   * machine is read.
    */
   readonly readForClient: (client: {
     readonly environmentId: EnvironmentId;
     readonly sessionId: string;
     readonly reachHosts: boolean;
+    readonly local?: boolean;
   }) => Effect.Effect<GoatHostStatusResult, OrchestratorMcpFailure>;
 }
 
@@ -123,7 +126,10 @@ const make = Effect.gen(function* () {
       );
       providers = yield* registry.getProviders;
     }
-    return hostStatusQuotas(providers, refreshed);
+    return {
+      quotas: hostStatusQuotas(providers, refreshed),
+      providers: hostStatusProviders(providers),
+    };
   });
 
   const readLocal = Effect.fn("HostStatus.readLocal")(function* () {
@@ -145,7 +151,7 @@ const make = Effect.gen(function* () {
         ...snapshot,
         platform,
         threads: countHostThreads(shells),
-        quotas: yield* readQuotas(),
+        ...(yield* readQuotas()),
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
@@ -232,7 +238,7 @@ const make = Effect.gen(function* () {
       // Only reads: remote hosts are asked for their own local status with writes off.
       client: { sessionId: client.sessionId, label: "GOAT client", access: "read-only" },
     };
-    return yield* read(scope, client.reachHosts ? {} : { local: true });
+    return yield* read(scope, client.reachHosts && client.local !== true ? {} : { local: true });
   });
 
   return HostStatusMcpService.of({ read, readForClient });
