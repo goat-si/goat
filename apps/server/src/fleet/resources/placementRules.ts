@@ -109,9 +109,12 @@ export function hostRefusal(
   return undefined;
 }
 
+/** An instance with no usage limits reported has no windows, so it is never exhausted. */
 const quotaCandidate = <A>(
   value: A,
-  quota: HostStatusQuota,
+  quota: Pick<HostStatusQuota, "instanceId" | "displayName"> & {
+    readonly limits?: HostStatusQuota["limits"];
+  },
   host: string | null,
   activeTasks: number,
   preferred: boolean,
@@ -121,7 +124,7 @@ const quotaCandidate = <A>(
   providerLabel: quota.displayName ?? quota.instanceId,
   preferred,
   windows:
-    quota.limits.windows.length === 0
+    quota.limits === undefined || quota.limits.windows.length === 0
       ? null
       : quota.limits.windows.map((window) => ({
           label: window.label,
@@ -163,18 +166,27 @@ export function place(
     let first: PlacementRefusal | undefined;
     input.selections.forEach((modelSelection, index) => {
       const quota = metrics.quotas.find((item) => item.instanceId === modelSelection.instanceId);
-      if (quota === undefined) {
-        first ??= refusal("no_instance", modelSelection.instanceId + " is not reported there");
+      // Hosts that predate `providers` list only the instances that report quota.
+      const instance =
+        metrics.providers === undefined
+          ? quota
+          : metrics.providers.find((item) => item.instanceId === modelSelection.instanceId);
+      if (instance === undefined) {
+        first ??= refusal("no_instance", modelSelection.instanceId + " is not configured there");
+        return;
+      }
+      if ("enabled" in instance && !instance.enabled) {
+        first ??= refusal("no_instance", modelSelection.instanceId + " is disabled there");
         return;
       }
       const candidate = quotaCandidate(
         { host: entry.host, modelSelection },
-        quota,
+        quota ?? instance,
         entry.host,
         hostThreads(entry) ?? 0,
         index === 0,
       );
-      if (isExhausted(candidate, now)) {
+      if (quota !== undefined && isExhausted(candidate, now)) {
         const resetsAt = nextReset(quota, now);
         first ??= refusal(
           "quota_exhausted",

@@ -1,5 +1,6 @@
 import type {
   HostStatusEntry,
+  HostStatusProvider,
   HostStatusQuota,
   HostThreadCounts,
   RuntimeProtocolRanges,
@@ -145,6 +146,17 @@ export function quotaRefreshDue(
   const checkedAt = Date.parse(limits.checkedAt);
   if (!Number.isFinite(checkedAt)) return true;
   return nowMs - checkedAt >= intervalMs;
+}
+
+export function hostStatusProviders(
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver" | "displayName" | "enabled">>,
+): Array<HostStatusProvider> {
+  return providers.map((provider) => ({
+    instanceId: provider.instanceId,
+    driver: provider.driver,
+    ...(provider.displayName === undefined ? {} : { displayName: provider.displayName }),
+    enabled: provider.enabled,
+  }));
 }
 
 export function hostStatusQuotas(

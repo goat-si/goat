@@ -36,6 +36,11 @@ const host = (
       readonly instanceId: ProviderInstanceId;
       readonly windows: ReadonlyArray<Window>;
     }>;
+    /** Omit for an older host, which lists only the instances that report quota. */
+    readonly providers?: ReadonlyArray<{
+      readonly instanceId: ProviderInstanceId;
+      readonly enabled: boolean;
+    }>;
     readonly reachability?: HostStatusEntry["reachability"];
     readonly lastKnown?: true;
   } = {},
@@ -59,6 +64,15 @@ const host = (
       fromCache: true,
       limits: { checkedAt: EARLIER, windows: [...quota.windows] },
     })),
+    ...(options.providers === undefined
+      ? {}
+      : {
+          providers: options.providers.map((provider) => ({
+            instanceId: provider.instanceId,
+            driver: ProviderDriverKind.make("codex"),
+            enabled: provider.enabled,
+          })),
+        }),
   },
 });
 
@@ -228,11 +242,53 @@ describe("place", () => {
     });
   });
 
-  it("refuses a host that does not report the requested instance", () => {
+  it("refuses an older host that does not report the requested instance", () => {
     const result = place(goal({ selections: [claudeOpus] }), [host(null)], none, NOW);
     assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
       code: "no_instance",
-      message: "claudeAgent is not reported there",
+      message: "claudeAgent is not configured there",
+    });
+  });
+
+  it("places an instance listed in providers that reports no quota", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [host(null, { providers: [{ instanceId: claude, enabled: true }] })],
+      none,
+      NOW,
+    );
+    assert.strictEqual(result._tag, "Placed");
+    assert.deepStrictEqual(result._tag === "Placed" && result.modelSelection, claudeOpus);
+  });
+
+  it("refuses an instance the host does not configure", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [host(null, { providers: [{ instanceId: codex, enabled: true }] })],
+      none,
+      NOW,
+    );
+    assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
+      code: "no_instance",
+      message: "claudeAgent is not configured there",
+    });
+  });
+
+  it("refuses an instance the host configures as disabled", () => {
+    const result = place(
+      goal({ selections: [claudeOpus] }),
+      [
+        host(null, {
+          quotas: [{ instanceId: claude, windows: [window(10)] }],
+          providers: [{ instanceId: claude, enabled: false }],
+        }),
+      ],
+      none,
+      NOW,
+    );
+    assert.deepStrictEqual(result._tag === "Refused" && result.reasons[0]?.reason, {
+      code: "no_instance",
+      message: "claudeAgent is disabled there",
     });
   });
 

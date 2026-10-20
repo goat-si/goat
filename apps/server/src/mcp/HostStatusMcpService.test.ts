@@ -64,11 +64,13 @@ const provider = (
   instanceId: string,
   usageLimits: ServerProviderUsageLimits | undefined,
   displayName?: string,
+  enabled = true,
 ): ServerProvider =>
   ({
     instanceId: ProviderInstanceId.make(instanceId),
     driver: ProviderDriverKind.make(instanceId),
     ...(displayName === undefined ? {} : { displayName }),
+    enabled,
     usageLimits,
   }) as ServerProvider;
 
@@ -228,6 +230,12 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
         { instanceId: "api", displayName: "API", fromCache: true },
       ],
     });
+    // Quotas omit claude, which reports no usage limits. Providers lists every instance.
+    expect(decoded.hosts[0]?.metrics?.providers).toEqual([
+      { instanceId: "codex", driver: "codex", displayName: "Codex", enabled: true },
+      { instanceId: "claude", driver: "claude", enabled: true },
+      { instanceId: "api", driver: "api", displayName: "API", enabled: true },
+    ]);
     expect(decoded.hosts[1]).toMatchObject({ host: "box", metrics: { sampledAt: 9 } });
     expect(decoded.hosts[2]).toEqual({
       host: "zeta",
@@ -322,6 +330,28 @@ it.effect("reads only this machine for a client session that may not reach hosts
       reachability: "ok",
       metrics: { platform: "win32", threads: { running: 1, waiting: 1, queued: 1 } },
     });
+  }),
+);
+
+it.effect("reads only this machine when a client that may reach hosts asks for local", () =>
+  Effect.gen(function* () {
+    const { value, calls, connectedReads } = yield* run(
+      { hosts: ["box"], hostCall: () => Effect.die("local read reached SSH") },
+      (service) =>
+        service.readForClient({
+          environmentId: EnvironmentId.make("host-status-test"),
+          sessionId: "web-session",
+          reachHosts: true,
+          local: true,
+        }),
+    );
+    expect(connectedReads()).toBe(0);
+    expect(calls).toEqual([]);
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+    ]);
   }),
 );
 
