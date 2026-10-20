@@ -652,6 +652,11 @@ export const layer: Layer.Layer<
       /** A reported terminal preserves the adapter's acknowledged task state. */
       readonly providerReportedTerminal?: true;
       readonly refreshAfterTurn: Effect.Effect<void>;
+      /**
+       * A start can fail after the provider already reported this turn. The
+       * row would otherwise stay `running` (#552).
+       */
+      readonly liveProviderTurn?: OrchestrationV2ProviderTurn;
       readonly writeIfRunCurrent?: {
         readonly activeAttemptId: RunAttemptId;
         readonly expectedStatus: OrchestrationV2Run["status"];
@@ -838,6 +843,25 @@ export const layer: Layer.Layer<
                       providerThread: input.providerThread,
                       completedAt,
                     }),
+                  },
+                ]
+              : []),
+            ...(input.liveProviderTurn !== undefined &&
+            !isTerminalProviderTurnStatus(input.liveProviderTurn.status)
+              ? [
+                  {
+                    id: yield* allocateEventId(),
+                    type: "provider-turn.updated" as const,
+                    threadId: input.run.threadId,
+                    runId: input.run.id,
+                    nodeId: input.liveProviderTurn.nodeId,
+                    providerInstanceId: input.run.providerInstanceId,
+                    occurredAt: completedAt,
+                    payload: {
+                      ...input.liveProviderTurn,
+                      status: input.terminal.status,
+                      completedAt,
+                    },
                   },
                 ]
               : []),
@@ -1106,7 +1130,7 @@ export const layer: Layer.Layer<
           );
           const rootTerminalSeen = yield* Ref.make(false);
           // The root turn the provider reported as live for this attempt.
-          const liveRootProviderTurn = yield* Ref.make<ProviderTurnId | null>(null);
+          const liveRootProviderTurn = yield* Ref.make<OrchestrationV2ProviderTurn | null>(null);
           const rootRunFinalized = yield* Ref.make(false);
           const providerThreadOwnerLost = yield* Ref.make(false);
           const activeChildProviderTurns = yield* Ref.make<ReadonlySet<ProviderTurnId>>(new Set());
@@ -1122,12 +1146,14 @@ export const layer: Layer.Layer<
               }
               const providerThread = yield* Ref.get(latestProviderThread);
               const openSubagents = yield* Ref.get(openRunOwnedSubagents);
+              const liveProviderTurn = yield* Ref.get(liveRootProviderTurn);
               yield* writeFinalRunEvents({
                 run: input.run,
                 rootNode: input.rootNode,
                 checkpointScope: input.checkpointScope,
                 providerThread,
                 attempt: input.attempt,
+                ...(liveProviderTurn === null ? {} : { liveProviderTurn }),
                 ...(input.shouldFinalizeRun === undefined
                   ? {}
                   : {
@@ -1474,7 +1500,7 @@ export const layer: Layer.Layer<
                     liveRootProviderTurn,
                     isTerminalProviderTurnStatus(event.providerTurn.status)
                       ? null
-                      : event.providerTurn.id,
+                      : event.providerTurn,
                   );
                 }
                 yield* trackChildLifecycle(event, deliveredEvent !== null);
@@ -1814,19 +1840,26 @@ export const layer: Layer.Layer<
                 // is already cut, so this stop cannot settle the run as
                 // interrupted ahead of the failure below.
                 Effect.andThen(Ref.get(liveRootProviderTurn)),
-                Effect.flatMap((providerTurnId) =>
-                  providerTurnId === null
+                Effect.flatMap((liveProviderTurn) =>
+                  liveProviderTurn === null
                     ? Effect.void
                     : Ref.get(latestProviderThread).pipe(
                         Effect.flatMap((providerThread) =>
-                          input.session.interruptTurn({ providerThread, providerTurnId }),
+                          input.session.interruptTurn({
+                            providerThread,
+                            providerTurnId: liveProviderTurn.id,
+                          }),
                         ),
                         Effect.catchCauseIf(
                           (interruptCause) => !Cause.hasInterruptsOnly(interruptCause),
                           (interruptCause) =>
                             Effect.logWarning(
                               "orchestration V2 could not stop a provider turn whose start failed",
-                              { runId: input.run.id, providerTurnId, cause: interruptCause },
+                              {
+                                runId: input.run.id,
+                                providerTurnId: liveProviderTurn.id,
+                                cause: interruptCause,
+                              },
                             ),
                         ),
                       ),
@@ -1837,27 +1870,34 @@ export const layer: Layer.Layer<
                     Effect.flatMap((latestItemOrdinal) =>
                       Ref.get(openRunOwnedSubagents).pipe(
                         Effect.flatMap((openSubagents) =>
-                          writeFinalRunEvents({
-                            run: input.run,
-                            rootNode: input.rootNode,
-                            checkpointScope: input.checkpointScope,
-                            providerThread,
-                            attempt: input.attempt,
-                            writeIfRunCurrent: {
-                              activeAttemptId: input.attempt.id,
-                              expectedStatus: "running",
-                            },
-                            openRunOwnedSubagents: openSubagents,
-                            terminal: makeFailedTerminalEvent(
-                              makeProviderFailure({
-                                cause: Cause.squash(cause),
-                                class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                          Ref.get(liveRootProviderTurn).pipe(
+                            Effect.flatMap((liveProviderTurn) =>
+                              writeFinalRunEvents({
+                                run: input.run,
+                                rootNode: input.rootNode,
+                                checkpointScope: input.checkpointScope,
+                                providerThread,
+                                attempt: input.attempt,
+                                ...(liveProviderTurn === null ? {} : { liveProviderTurn }),
+                                writeIfRunCurrent: {
+                                  activeAttemptId: input.attempt.id,
+                                  expectedStatus: "running",
+                                },
+                                openRunOwnedSubagents: openSubagents,
+                                terminal: makeFailedTerminalEvent(
+                                  makeProviderFailure({
+                                    cause: Cause.squash(cause),
+                                    class: Exit.isFailure(shouldStart)
+                                      ? "unknown"
+                                      : "provider_error",
+                                  }),
+                                  latestItemOrdinal + 1,
+                                ),
+                                failureItemPersisted: false,
+                                refreshAfterTurn,
                               }),
-                              latestItemOrdinal + 1,
                             ),
-                            failureItemPersisted: false,
-                            refreshAfterTurn,
-                          }),
+                          ),
                         ),
                       ),
                     ),

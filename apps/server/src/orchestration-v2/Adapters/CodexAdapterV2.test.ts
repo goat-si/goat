@@ -4284,7 +4284,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("continues an interrupted native thread with empty input and reasoning summaries", () =>
+  it.effect("continues an interrupted native thread with the continuation text", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const scenario = "codex-restart-promptless";
@@ -4325,7 +4325,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 method: "turn/start",
                 params: {
                   threadId: nativeThreadId,
-                  input: [],
+                  input: [{ type: "text", text: "Continue where you left off." }],
                   cwd: "/workspace",
                   model: "gpt-5.4",
                   approvalPolicy: "never",

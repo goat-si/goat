@@ -3894,7 +3894,7 @@ it.effect("stops a provider turn reported live before its start failed, then fai
     // swallowed the next run on the thread, which then stayed running forever.
     const announced = yield* Deferred.make<void>();
     const interrupted = yield* Ref.make<ReadonlyArray<ProviderTurnId>>([]);
-    const { observed, written } = yield* captureRootRunTermination({
+    const { observed, written, finalEvents } = yield* captureRootRunTermination({
       key: "start-failure:announced-turn",
       shouldFinalizeRun: () => Effect.succeed(true),
       events: (ids) =>
@@ -3943,6 +3943,13 @@ it.effect("stops a provider turn reported live before its start failed, then fai
     assert.deepEqual(observed, ["run:failed", "pull-requests-refreshed"]);
     const error = written.find((item) => item.type === "error");
     assert.include(error?.failure.message ?? "", "provider could not start this turn");
+    const providerTurn = finalEvents.find((event) => event.type === "provider-turn.updated");
+    assert.equal(
+      providerTurn?.payload.id,
+      backgroundScenarioIds("start-failure:announced-turn").rootProviderTurnId,
+    );
+    assert.equal(providerTurn?.payload.status, "failed");
+    assert.notEqual(providerTurn?.payload.completedAt, null);
   }),
 );
 
