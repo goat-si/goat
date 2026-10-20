@@ -18,6 +18,7 @@ export function selectWorktreeInstall(tools: { readonly vp: boolean; readonly pn
 }
 
 function toolOnPath(name: string): boolean {
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before `vp i`, so only Node built-ins exist and HostProcess cannot be imported.
   const locator = process.platform === "win32" ? "where" : "command -v";
   const result = NodeChildProcess.spawnSync(`${locator} ${name}`, {
     shell: true,

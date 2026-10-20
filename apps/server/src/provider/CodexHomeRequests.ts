@@ -80,7 +80,7 @@ const make = Effect.gen(function* () {
         };
       const allowed = yield* authorizeApprovalRequest(scope).pipe(
         Effect.as(true),
-        Effect.catchTag("EnvironmentAuthorizationError", () => Effect.succeed(false)),
+        Effect.catchTags({ EnvironmentAuthorizationError: () => Effect.succeed(false) }),
       );
       if (!allowed)
         return {
