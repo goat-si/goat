@@ -18,6 +18,14 @@ export const isCloudMachineAlias = Schema.is(CloudMachineAlias);
 /** Aliases with this prefix are reserved for machines a GOAT server manages. */
 export const CLOUD_MACHINE_ALIAS_PREFIX = "boat-";
 
+/**
+ * Whether an SSH alias falls in the reserved Boat namespace, valid or not. OpenSSH matches host
+ * names without regard to case, so neither does this. Prefer the CloudMachine record where one
+ * is at hand; this is the fallback for code that only has the alias.
+ */
+export const hasCloudMachineAliasPrefix = (alias: string): boolean =>
+  alias.toLowerCase().startsWith(CLOUD_MACHINE_ALIAS_PREFIX);
+
 export const BoatSandboxId = TrimmedNonEmptyString.check(Schema.isPattern(SANDBOX_ID_PATTERN));
 export type BoatSandboxId = typeof BoatSandboxId.Type;
 

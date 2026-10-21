@@ -73,7 +73,7 @@ const storageError = (cause: unknown) =>
   new Store.MemoryStorageError({ stage: "quota-codec", cause });
 
 /** Exact-day endpoints; missing metrics or days remain unavailable rather than becoming zero growth. */
-export function storageDeltas(
+function storageDeltas(
   current: M.MemoryStorageSample | null,
   samples: ReadonlyArray<M.MemoryStorageSample>,
   clockDiscontinuity = false,

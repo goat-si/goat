@@ -7,6 +7,7 @@ import {
   SlackChannelConnectionId,
   type SlackChannelSettingsError,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -196,11 +197,14 @@ describe("SlackChannelSettings.live", () => {
           const files = yield* fileState(baseDir);
           assert(files.settings !== undefined && !files.settings.includes("SENTINEL"));
           assert(files.settings.includes(owner.principalId));
-          assert.equal(yield* files.mode(files.settingsPath), 0o600);
           const appSecret = files.secretPath(
             SlackChannelSettingsLive.appTokenSecretName(created.connectionId),
           );
-          assert.equal(yield* files.mode(appSecret), 0o600);
+          // Windows keeps no POSIX permission bits; its profile ACLs guard these files.
+          if ((yield* HostProcess.Platform) !== "win32") {
+            assert.equal(yield* files.mode(files.settingsPath), 0o600);
+            assert.equal(yield* files.mode(appSecret), 0o600);
+          }
           const fs = yield* FileSystem.FileSystem;
           assert.equal(yield* fs.readFileString(appSecret), APP_TOKEN);
 

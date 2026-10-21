@@ -3,7 +3,11 @@ import {
   isDesktopLocalConnectionTarget,
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
-import type { HubNodeImportProfile, HubNodesImportInput } from "@goat/contracts";
+import {
+  hasCloudMachineAliasPrefix,
+  type HubNodeImportProfile,
+  type HubNodesImportInput,
+} from "@goat/contracts";
 import * as Option from "effect/Option";
 
 export function* eligibleHubNodeProfiles(
@@ -21,7 +25,10 @@ export function* eligibleHubNodeProfiles(
       continue;
     for (const route of routes) {
       const profile = Option.getOrNull(route.profile);
-      if (profile?._tag !== "SshConnectionProfile" || profile.target.alias.startsWith("boat-"))
+      if (
+        profile?._tag !== "SshConnectionProfile" ||
+        hasCloudMachineAliasPrefix(profile.target.alias)
+      )
         continue;
       yield {
         environmentId: entry.target.environmentId,
