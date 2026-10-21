@@ -654,6 +654,8 @@ export default defineConfig({
                 "bg-[Highlight]",
                 "fill-[#26251E]",
                 "fill-[#EDECEC]",
+                "fill-[#263FA9]",
+                "fill-[#FEFEFE]",
                 "fill-[#0F0F0F]",
                 "fill-[#F5F5F5]",
                 "fill-[#d97757]",

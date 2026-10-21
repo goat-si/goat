@@ -35,6 +35,8 @@ import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -1293,7 +1295,7 @@ const layerWorktreeToolkitRegistration = catalogRegistrations.worktree.pipe(
 
 const layerPreviewControlsRegistration = catalogRegistrations.previewControls;
 
-export const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
+const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
   Layer.provide(ThreadCommandExecutor.layer),
 );
 
@@ -1304,6 +1306,7 @@ export const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  Layer.provide(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),
@@ -1311,12 +1314,12 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
 );
 
 /** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
-export const layerHostStatusToolkit = catalogRegistrations.hostStatus;
+const layerHostStatusToolkit = catalogRegistrations.hostStatus;
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
 export const layerFleetToolkit = catalogRegistrations.fleet;
 /** Reads Placement and FallbackChains from the server's context, like host status. */
-export const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
+const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
 
 /**
  * goat_provider_diagnose. Composed beside `layer` by the server, which provides

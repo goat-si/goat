@@ -1,3 +1,4 @@
+import { BOAT_MACHINE_STATUS_LABEL, boatMachineStatus } from "@goat/client-runtime/cloud-machines";
 import type { CloudMachine, CloudMachineType } from "@goat/contracts";
 
 /** What a user may do with a machine in its current state. Every server call rechecks. */
@@ -44,25 +45,7 @@ export function cloudMachineActions(machine: CloudMachine): CloudMachineActions 
 }
 
 export function cloudMachineStatus(machine: CloudMachine): string {
-  if (machine.deletePending) return "Deleting";
-  if (machine.presence === "not_found") return "Boat no longer shows this machine";
-  if (machine.presence === "unknown" || machine.state === null) return "State unknown";
-  switch (machine.state) {
-    case "ready":
-    case "idle":
-    case "running":
-      return "Running";
-    case "archived":
-      return "Stopped";
-    case "archiving":
-      return "Stopping";
-    case "error":
-      return "Failed";
-    case "cancelled":
-      return "Cancelled";
-    default:
-      return "Starting";
-  }
+  return BOAT_MACHINE_STATUS_LABEL[boatMachineStatus(machine)];
 }
 
 export function formatAutoStop(seconds: number): string {

@@ -99,7 +99,7 @@ export const refuseProxiedCall = (
 const encodeAuthorizationError = Schema.encodeSync(EnvironmentAuthorizationError);
 
 /** An Effect RPC failure Exit for one request, keeping the client's id and its type. */
-export const refusalExit = (id: string | number, error: EnvironmentAuthorizationError) => ({
+const refusalExit = (id: string | number, error: EnvironmentAuthorizationError) => ({
   _tag: "Exit",
   requestId: id,
   exit: { _tag: "Failure", cause: [{ _tag: "Fail", error: encodeAuthorizationError(error) }] },

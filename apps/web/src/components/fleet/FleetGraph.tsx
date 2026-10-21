@@ -18,9 +18,10 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { observeResize } from "../../lib/observeResize";
 import { cn } from "../../lib/utils";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { BoatIcon } from "../Icons";
 import { GoatWordmark } from "../GoatWordmark";
 import { renderProviderGlyph } from "../chat/ProviderInstanceIcon";
-import { describeMachine } from "./describeMachine";
+import { fleetMachineSubtitle } from "./describeMachine";
 import {
   fleetConnectionVisual,
   UNKNOWN_FLEET_CONNECTION,
@@ -768,12 +769,11 @@ function MachineNode(props: {
     event.preventDefault();
     onSelect(machine.id);
   };
-  const device = describeMachine(machine.os, machine.machineKind);
   // The user knows their own hardware; naming the machine is what matters here.
   const sub = current
     ? THIS_MACHINE
-    : [device, machine.subtitle].filter((part) => part !== null).join(" · ") ||
-      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh");
+    : (fleetMachineSubtitle(machine) ??
+      (machine.kind === "environment" ? null : machine.kind === "cloud" ? "cloud" : "ssh"));
   const status =
     connection.state === "unknown"
       ? []
@@ -782,9 +782,12 @@ function MachineNode(props: {
             ? connection.label
             : connection.label + ": " + connection.reason,
         ];
-  const description = [current ? THIS_MACHINE : null, ...status, workSummary(machine)].filter(
-    (part) => part !== null,
-  );
+  const description = [
+    current ? THIS_MACHINE : null,
+    machine.boat === null ? null : "Boat machine",
+    ...status,
+    workSummary(machine),
+  ].filter((part) => part !== null);
   // Only heat is worth announcing; a normal reading stays in the tooltip.
   const spoken =
     heated === null ? description : [...description, heat.summary.replaceAll(" · ", ", ")];
@@ -832,17 +835,25 @@ function MachineNode(props: {
       {heated === null ? null : (
         <circle r={MACHINE_RADIUS - 0.8} className={cn("pointer-events-none", HEAT_TINT[heated])} />
       )}
-      <EnvironmentMachineIcon
-        kind={
-          machine.machineKind ??
-          (machine.kind === "cloud" || machine.cloudState !== null ? "cloud" : "server")
-        }
-        x={-8}
-        y={-8}
-        width={16}
-        height={16}
-        className={quiet ? "text-muted-foreground/70" : "text-foreground"}
-      />
+      {machine.boat !== null ? (
+        <BoatIcon
+          data-fleet-boat-logo=""
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "opacity-55" : undefined}
+        />
+      ) : (
+        <EnvironmentMachineIcon
+          kind={machine.machineKind ?? (machine.kind === "cloud" ? "cloud" : "server")}
+          x={-8}
+          y={-8}
+          width={16}
+          height={16}
+          className={quiet ? "text-muted-foreground/70" : "text-foreground"}
+        />
+      )}
       <g transform={"translate(" + STATUS_OFFSET + " " + STATUS_OFFSET + ")"}>
         <FleetConnectionGlyph state={connection.state} halo />
       </g>

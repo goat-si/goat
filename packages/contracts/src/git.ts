@@ -363,6 +363,7 @@ export const GitCommandFailureReason = Schema.Literals([
   "path_already_exists",
   "ref_not_found",
   "remote_unreachable",
+  "stalled",
   "tag_would_be_clobbered",
 ]);
 export type GitCommandFailureReason = typeof GitCommandFailureReason.Type;

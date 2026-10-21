@@ -27,7 +27,7 @@ import * as Schema from "effect/Schema";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 
 /** Failures that repeat for every request until something about the provider changes. */
-export const DETERMINISTIC_FAILURES: ReadonlySet<TextGenerationFailureKind> = new Set([
+const DETERMINISTIC_FAILURES: ReadonlySet<TextGenerationFailureKind> = new Set([
   "schema_rejected",
   "auth",
   "unavailable",
@@ -36,8 +36,8 @@ export const DETERMINISTIC_FAILURES: ReadonlySet<TextGenerationFailureKind> = ne
 export type MemoryGenerationHoldReason = M.MemoryGenerationHold["reason"];
 
 /** Waits before each probe after consecutive failures; then one probe per cycle. */
-export const MEMORY_HOLD_PROBE_DELAYS_MS = [60_000, 600_000, 3_600_000] as const;
-export const MEMORY_HOLD_CYCLE_MS = 86_400_000;
+const MEMORY_HOLD_PROBE_DELAYS_MS = [60_000, 600_000, 3_600_000] as const;
+const MEMORY_HOLD_CYCLE_MS = 86_400_000;
 /** Throttling and outages usually clear on their own, so they never wait more than an hour. */
 const TRANSIENT_HOLD_CYCLE_MS = 3_600_000;
 const cycleFor = (reason: MemoryGenerationHoldReason) =>
@@ -53,7 +53,7 @@ export interface HoldState {
 }
 
 /** The hold after one more deterministic failure. */
-export function nextHold(
+function nextHold(
   previous: HoldState | undefined,
   reason: MemoryGenerationHoldReason,
   now: number,

@@ -89,7 +89,7 @@ export const modelSelection = {
   model: "gpt-6.1-sol",
 } as const;
 
-export const refusingAdapter = {
+const refusingAdapter = {
   instanceId: modelSelection.instanceId,
   driver: ProviderDriverKind.make("codex"),
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -98,7 +98,7 @@ export const refusingAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 /** Scripted worker threads: their runs, final assistant text, and background work. */
-export class WorkerWorld {
+class WorkerWorld {
   readonly runs = new Map<string, Array<OrchestrationV2Run>>();
   readonly finalText = new Map<string, string>();
   readonly background = new Set<string>();
@@ -225,7 +225,7 @@ export type ChannelServicesLayer = Layer.Layer<
 >;
 
 /** A machine whose SSH config lists no hosts: every task stays on this machine. */
-export const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
   listHosts: () => Effect.succeed([]),
 });
 

@@ -1,11 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as DatabaseMaintenance from "./DatabaseMaintenance.ts";
 import * as Sqlite from "./Sqlite.ts";
@@ -123,3 +130,132 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
     );
   },
 );
+
+const createLegacyDatabase = (legacy: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`PRAGMA journal_mode = WAL`;
+    yield* sql`CREATE TABLE v1_data (value TEXT)`;
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: legacy })));
+
+/**
+ * Deletes files the way Windows does: a database that any SQLite connection
+ * holds, this process's own included, cannot be deleted. `busyRemovals`
+ * stands in for another process holding the file, and `busy` completes at the
+ * first such refusal.
+ */
+interface WindowsFileState {
+  busyRemovals: number;
+  busyAttempts: number;
+  busy: Deferred.Deferred<void>;
+}
+
+const windowsFileSystem = (state: WindowsFileState) =>
+  Layer.effect(
+    FileSystem.FileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const busy = (target: string) =>
+        PlatformError.systemError({
+          _tag: "Busy",
+          module: "FileSystem",
+          method: "remove",
+          pathOrDescriptor: target,
+        });
+      const isOpen = (target: string) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`PRAGMA busy_timeout = 0`;
+          yield* sql`BEGIN EXCLUSIVE`;
+          yield* sql`ROLLBACK`;
+        }).pipe(
+          Effect.provide(NodeSqliteClient.layer({ filename: target })),
+          Effect.exit,
+          Effect.map(Exit.isFailure),
+        );
+      return FileSystem.FileSystem.of({
+        ...fs,
+        remove: (target, options) =>
+          Effect.gen(function* () {
+            if (path.basename(target) === "state.sqlite") {
+              if (state.busyRemovals > 0) {
+                state.busyRemovals--;
+                state.busyAttempts++;
+                yield* Deferred.succeed(state.busy, undefined);
+                return yield* busy(target);
+              }
+              if (yield* isOpen(target)) return yield* busy(target);
+            }
+            return yield* fs.remove(target, options);
+          }),
+      });
+    }),
+  );
+
+const windowsMaintenance = (state: WindowsFileState) =>
+  DatabaseMaintenance.layerWith({
+    busyRetry: Schedule.spaced("1 second").pipe(Schedule.upTo({ times: 3 })),
+  }).pipe(
+    Layer.provide(windowsFileSystem(state)),
+    Layer.provide(Layer.succeed(HostProcess.Platform, "win32")),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+describe("DatabaseMaintenance where an open file cannot be deleted", () => {
+  it.effect("releases its own lock before deleting the database from before 0.1.0", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const maintenance = yield* DatabaseMaintenance.DatabaseMaintenance;
+      const userdata = yield* fs.makeTempDirectoryScoped({ prefix: "goat-legacy-win-" });
+      const legacy = path.join(userdata, "state.sqlite");
+      yield* createLegacyDatabase(legacy);
+
+      yield* maintenance.removeLegacyDatabase(path.join(userdata, "statev2.sqlite"));
+      assert.isFalse(yield* fs.exists(legacy));
+      assert.isFalse(yield* fs.exists(`${legacy}-wal`));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        windowsMaintenance({ busyRemovals: 0, busyAttempts: 0, busy: Deferred.makeUnsafe() }),
+      ),
+    ),
+  );
+
+  it.effect("retries a busy delete, then reports the database in use and keeps it", () => {
+    const state: WindowsFileState = {
+      busyRemovals: Number.POSITIVE_INFINITY,
+      busyAttempts: 0,
+      busy: Deferred.makeUnsafe(),
+    };
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const maintenance = yield* DatabaseMaintenance.DatabaseMaintenance;
+      const userdata = yield* fs.makeTempDirectoryScoped({ prefix: "goat-legacy-busy-" });
+      const dbPath = path.join(userdata, "statev2.sqlite");
+      const legacy = path.join(userdata, "state.sqlite");
+      yield* createLegacyDatabase(legacy);
+
+      const held = yield* maintenance
+        .removeLegacyDatabase(dbPath)
+        .pipe(Effect.flip, Effect.forkChild);
+      // Retries sleep only after the first attempt's real file I/O.
+      yield* Deferred.await(state.busy);
+      yield* TestClock.adjust("1 minute");
+      assert.equal((yield* Fiber.join(held))._tag, "DatabaseInUseError");
+      assert.equal(state.busyAttempts, 4);
+      assert.isTrue(yield* fs.exists(legacy));
+
+      // Held only for moments, as by an antivirus scan.
+      state.busyRemovals = 2;
+      state.busy = Deferred.makeUnsafe();
+      const released = yield* maintenance.removeLegacyDatabase(dbPath).pipe(Effect.forkChild);
+      yield* Deferred.await(state.busy);
+      yield* TestClock.adjust("1 minute");
+      yield* Fiber.join(released);
+      assert.isFalse(yield* fs.exists(legacy));
+    }).pipe(Effect.scoped, Effect.provide(windowsMaintenance(state)));
+  });
+});

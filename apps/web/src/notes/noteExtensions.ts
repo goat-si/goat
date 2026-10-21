@@ -35,7 +35,7 @@ const NoteSource = Extension.create({
   },
 });
 
-export const NoteRawMarkdown = Node.create({
+const NoteRawMarkdown = Node.create({
   name: "noteRawMarkdown",
   group: "block",
   content: "text*",

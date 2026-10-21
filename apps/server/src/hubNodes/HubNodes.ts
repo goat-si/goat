@@ -17,6 +17,7 @@ import {
   ExecutionEnvironmentDescriptor,
   HubNodesError,
   SshHostAlias,
+  hasCloudMachineAliasPrefix,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as DateTime from "effect/DateTime";
@@ -275,7 +276,7 @@ export const make = Effect.gen(function* () {
           new HubNodesError({ reason: "invalid_request", detail: "Pass a valid SSH host alias." }),
       ),
     );
-    if (alias.startsWith("boat-"))
+    if (hasCloudMachineAliasPrefix(alias))
       return yield* new HubNodesError({
         reason: "refused",
         detail: "Cloud machine aliases are managed in Settings → Connections → Cloud machines.",
@@ -512,7 +513,7 @@ export const make = Effect.gen(function* () {
         for (const profile of input.catalog.profiles) {
           const alias = profile.ssh.alias;
           const routeId = `ssh:${alias}`;
-          if (alias.startsWith("boat-") || existing.has(routeId)) continue;
+          if (hasCloudMachineAliasPrefix(alias) || existing.has(routeId)) continue;
           yield* repository.upsertRegistration({
             routeId,
             environmentId: profile.environmentId,

@@ -238,7 +238,7 @@ export function withHeldContext(
       );
 }
 
-export function pullRequestWatchMessage(input: {
+function pullRequestWatchMessage(input: {
   readonly number: number;
   readonly url: string;
   readonly baseBranch: string;

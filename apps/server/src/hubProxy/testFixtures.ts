@@ -59,7 +59,7 @@ export const sshNode: HubProxyNode = {
     },
   ],
 };
-export const group = RpcGroup.make(
+const group = RpcGroup.make(
   Rpc.make("orchestration.subscribeThread", {
     success: Schema.String,
     stream: true,

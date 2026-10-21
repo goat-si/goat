@@ -440,6 +440,34 @@ valid_uint() {
 }
 valid_positive() { valid_uint "$1" && [ "$1" != 0 ]; }
 valid_port() { valid_uint "$1" && [ "$1" -le 65535 ]; }
+# A server this user runs from GOAT's own runtime directory for the default home is GOAT's
+# managed runtime, whichever client or person started it. Lost launch records (a manual
+# restart, a moved state directory) must not turn it into a foreign server nobody may replace.
+# Records that name a live process belong to someone: another server, an older client's
+# per-client directory, or an ownership change in progress. Attaching to a foreign server
+# removes its PID file, so a lost-records server has none.
+managed_orphan() {
+  orphan_pid="$1"; orphan_port="$2"; orphan_version="$3"; orphan_state="$4"
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 1 ;; esac
+  valid_positive "$orphan_pid" && valid_positive "$orphan_port" && valid_port "$orphan_port" &&
+    valid_version "$orphan_version" || return 1
+  [ ! -e "$orphan_state/draining" ] && [ ! -L "$orphan_state/draining" ] || return 1
+  case "$-" in *f*) orphan_noglob=1 ;; *) orphan_noglob=0 ;; esac
+  set +f
+  for orphan_record in "$HOME/.goat/ssh-launch/"*/pid; do
+    orphan_recorded="$(cat "$orphan_record" 2>/dev/null || true)"
+    if valid_positive "$orphan_recorded" && kill -0 "$orphan_recorded" 2>/dev/null; then
+      [ "$orphan_noglob" = 0 ] || set -f
+      return 1
+    fi
+  done
+  [ "$orphan_noglob" = 0 ] || set -f
+  orphan_dir="$HOME/.goat/runtime/goat/versions/$orphan_version"
+  [ -d "$orphan_dir" ] && [ ! -L "$orphan_dir" ] && [ -x "$orphan_dir/goat" ] && [ ! -L "$orphan_dir/goat" ] || return 1
+  orphan_uid="$(ps -o uid= -p "$orphan_pid" 2>/dev/null | awk 'NF==1 { print $1 }')"
+  [ -n "$orphan_uid" ] && [ "$orphan_uid" = "$(id -u)" ] || return 1
+  [ "$(ps -o command= -p "$orphan_pid" 2>/dev/null)" = "$orphan_dir/goat serve --host 127.0.0.1 --port $orphan_port --base-dir $HOME/.goat" ]
+}
 valid_protocol_field() { [ "$1" = unknown ] || valid_positive "$1"; }
 valid_own_tokens() {
   [ "$#" = 5 ] && valid_version "$1" && valid_protocol_field "$2" &&
@@ -1409,6 +1437,19 @@ check_candidate_protocol() {
     printf 'No protocol signals; only an independently proven exact release is allowed.\\n' >&2; exit 1
   fi
 }
+# Only an owning launch holding the host replacement lock writes ownership records. Identity,
+# port and PID come first and the managed marker last, so a reader never sees ownership without identity.
+adopt_managed_orphan() {
+  [ "\${OWNING_LAUNCH:-0}" = 1 ] && [ "\${LOCK_HELD:-0}" = 1 ] && [ "\${LEGACY_PENDING:-0}" != 1 ] &&
+    [ "$(readlink "$LOCK" 2>/dev/null || true)" = "$OWNER" ] || return 1
+  managed_orphan "$LIVE_PID" "$LIVE_PORT" "$LIVE_VERSION" "$STATE_DIR" || return 1
+  adopt_next="$STATE_DIR/identity.adopt.$$"
+  printf '%s\n' "$HOME/.goat/runtime/goat/versions/$LIVE_VERSION/goat serve --host 127.0.0.1 --port $LIVE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$adopt_next" &&
+    mv -f "$adopt_next" "$STATE_DIR/identity" &&
+    printf '%s\n' "$LIVE_PORT" >"$PORT_FILE" && printf '%s\n' "$LIVE_PID" >"$PID_FILE" &&
+    printf 'managed\n' >"$MANAGED_FILE" || { rm -f "$adopt_next"; return 1; }
+  verify_owned_identity "$LIVE_PID" "$LIVE_PORT"
+}
 check_live_protocol() {
   LIVE_STATUS=none; LIVE_PID=0; LIVE_PORT=0; LIVE_VERSION=unknown
   LIVE_COMPATIBLE=0; LIVE_OWNED=0; NEEDS_OWNED_UPGRADE=0; REPLACEMENT_REASON=incompatible; comparison=
@@ -1422,6 +1463,7 @@ check_live_protocol() {
        [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$LIVE_PID" ] &&
        [ "$(cat "$PORT_FILE" 2>/dev/null || true)" = "$LIVE_PORT" ]; then LIVE_OWNED=1; fi
     if [ "$LIVE_STATUS" = live ]; then read_live_compat "$2" "$3" "$4"; fi
+    if [ "$LIVE_STATUS" = live ] && [ "$LIVE_OWNED" = 0 ] && adopt_managed_orphan; then LIVE_OWNED=1; fi
   else
     if [ -e "$DEFAULT_RUNTIME_FILE" ] || [ -e "$PORT_FILE" ] || [ -e "$PID_FILE" ]; then LIVE_STATUS=unknown; fi
   fi
@@ -2040,10 +2082,30 @@ export const REMOTE_RUNTIME_CLEANUP_SCRIPT = String.raw`cleanup_runtime_versions
     [ -d "$parent" ] && [ ! -L "$parent" ] || return 1
   done
   versions="$HOME/.goat/runtime/goat/versions"
-  [ -d /proc/self ] && command -v flock >/dev/null 2>&1 || return 1
+  # Linux names every process's executable and directory under /proc. macOS has no /proc,
+  # so lsof answers the same question there.
+  cleanup_lsof=
+  if [ ! -d /proc/self ]; then
+    for candidate in "$(command -v lsof 2>/dev/null || true)" /usr/sbin/lsof /sbin/lsof; do
+      if [ -n "$candidate" ] && [ -x "$candidate" ]; then cleanup_lsof="$candidate"; break; fi
+    done
+    [ -n "$cleanup_lsof" ] || return 1
+  fi
   [ ! -L "$versions/.maintenance.lock" ] || return 1
-  exec 9>"$versions/.maintenance.lock" || return 1
-  flock -n -x 9 || return 1
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$versions/.maintenance.lock" || return 1
+    flock -n -x 9 || return 1
+  else
+    # Without flock (macOS) an atomic directory is the mutex, released when this subshell
+    # exits. One a killed cleanup left behind over an hour ago is stale.
+    maintenance="$versions/.maintenance.lock.d"
+    [ ! -L "$maintenance" ] || return 1
+    if ! mkdir "$maintenance" 2>/dev/null; then
+      [ -n "$(find "$maintenance" -maxdepth 0 -mmin +60 2>/dev/null)" ] &&
+        rmdir "$maintenance" 2>/dev/null && mkdir "$maintenance" 2>/dev/null || return 1
+    fi
+    trap 'rmdir "$maintenance" 2>/dev/null || true' EXIT
+  fi
   set +f
   # Older clients do not take the maintenance mutex; their install locks still veto cleanup.
   for install in "$versions"/.*.install.lock*; do
@@ -2065,6 +2127,13 @@ export const REMOTE_RUNTIME_CLEANUP_SCRIPT = String.raw`cleanup_runtime_versions
     commands="$(ps -o command= -U "$uid")" && pids="$(ps -o pid= -U "$uid")" || return 1
     [ -n "$commands" ] && [ -n "$pids" ] || return 1
     paths="$commands"
+    if [ -n "$cleanup_lsof" ]; then
+      # Like an unreadable /proc entry, any lsof failure vetoes deletion.
+      open_paths="$("$cleanup_lsof" -n -P -w -a -u "$uid" -d cwd,txt -Fn 2>/dev/null)" || return 1
+      paths="$paths
+$(printf '%s\n' "$open_paths" | sed -n 's/^n//p')"
+      return 0
+    fi
     # ps alone misses chdir and exec with a custom argv[0]. An unreadable live process vetoes
     # deletion; one that exited since ps listed it has nothing left to protect.
     for pid in $pids; do
@@ -2095,26 +2164,39 @@ $cwd"
     fi
     "$live_binary" __ssh-helper compare-version "$@" "$first" "$second" 2>/dev/null
   }
-  older=
-  for dir in "$versions"/*; do
-    [ -d "$dir" ] && [ ! -L "$dir" ] || continue
-    [ -x "$dir/goat" ] && [ ! -L "$dir/goat" ] || continue
-    version="${"${dir##*/}"}"
-    valid_version "$version" || continue
-    [ ! -L "$dir/.install-complete" ] &&
-      [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$version" ] || continue
-    [ "$version" != "$SELECTED_VERSION" ] || continue
-    [ "$(cleanup_order "$SELECTED_VERSION" "$version")" = newer ] || continue
-    older="$older $version"
+  # A complete install that is provably older than the live build.
+  cleanup_older() {
+    dir="$versions/$1"
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ -x "$dir/goat" ] && [ ! -L "$dir/goat" ] || return 1
+    valid_version "$1" && [ "$1" != "$SELECTED_VERSION" ] || return 1
+    [ ! -L "$dir/.install-complete" ] && [ "$(cat "$dir/.install-complete" 2>/dev/null)" = "$1" ] || return 1
+    [ "$(cleanup_order "$SELECTED_VERSION" "$1")" = newer ]
+  }
+  cleanup_ifs="$IFS"; IFS='
+'
+  # Install markers, most recent first. Version names never contain a newline.
+  installed="$(ls -t "$versions"/*/.install-complete 2>/dev/null || true)"
+  # One rollback build is kept: the older build installed last, which this host ran before
+  # the live one.
+  previous=
+  for marker in $installed; do
+    # Only the list splits on newlines; commands inside split words as usual.
+    IFS="$cleanup_ifs"
+    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
+    if cleanup_older "$version"; then previous="$version"; break; fi
   done
-  for version in $older; do
-    [ "$version" != "$retained" ] && [ "$version" != "$REQUESTED_VERSION" ] || continue
-    # Preserve every maximal older build when the rollback candidates cannot be totally ordered.
-    removable=0
-    for other in $older; do
-      if [ "$(cleanup_order "$other" "$version")" = newer ]; then removable=1; break; fi
-    done
-    [ "$removable" = 1 ] || continue
+  # Each check starts goat, so a long backlog is pruned over several connections within the
+  # caller's deadline, oldest installs first.
+  started="$(date +%s)"
+  IFS='
+'
+  for marker in $(printf '%s\n' "$installed" | awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }'); do
+    IFS="$cleanup_ifs"
+    [ $(( $(date +%s) - started )) -lt 6 ] || break
+    version="${"${marker%/.install-complete}"}"; version="${"${version##*/}"}"
+    [ "$version" != "$previous" ] && [ "$version" != "$retained" ] &&
+      [ "$version" != "$REQUESTED_VERSION" ] || continue
+    cleanup_older "$version" || continue
     dir="$versions/$version"
     cleanup_process_paths || return 1
     case "$paths" in *"$dir/"*|*"$dir
@@ -2126,6 +2208,14 @@ $cwd"
     mv "$dir" "$trash/runtime" || return 1
     rm -rf "$trash" || return 1
     printf 'ssh.runtime.cleanup.removed version=%s\n' "$version" >&2
+  done
+  IFS="$cleanup_ifs"
+  # Staging exists only while an install holds its lock, and none is held now.
+  for leftover in "$versions"/.staging-* "$versions"/.trash-*; do
+    [ -d "$leftover" ] && [ ! -L "$leftover" ] || continue
+    [ -n "$(find "$leftover" -maxdepth 0 -mmin +60 2>/dev/null)" ] || continue
+    rm -rf "$leftover" || return 1
+    printf 'ssh.runtime.cleanup.removed leftover=%s\n' "${"${leftover##*/}"}" >&2
   done
 }
 (cleanup_runtime_versions) || { printf 'ssh.runtime.cleanup.skipped inspection, lock, or cleanup failed\n' >&2 || true; }
@@ -2313,7 +2403,16 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   PREVIOUS_IDENTITY="$(cat "$STATE_DIR/identity")" || ownership_unverified
   PREVIOUS_RUNNER="$STATE_DIR/run-t3.previous"
   if [ -f "$RETAINED_SNAPSHOT_FILE" ]; then cp -p "$RETAINED_SNAPSHOT_FILE" "$PREVIOUS_RUNNER"
-  else cp -p "$RUNNER_FILE" "$PREVIOUS_RUNNER"; fi
+  elif [ -e "$RUNNER_FILE" ] || [ -L "$RUNNER_FILE" ] || [ "$GOAT_ARCHIVE_MODE" != 1 ]; then cp -p "$RUNNER_FILE" "$PREVIOUS_RUNNER"
+  else
+    # An adopted server lost its runner with its records. Rollback restarts its installed
+    # release through this app's runner with only the archive version changed.
+    awk -v v="$UPGRADE_VERSION" '/^GOAT_ARCHIVE_VERSION=/ { print "GOAT_ARCHIVE_VERSION=\\047" v "\\047"; next }
+      /^T3_ARCHIVE_VERSION=/ { print "T3_ARCHIVE_VERSION=\\047" v "\\047"; next } { print }' "$RUNNER_CANDIDATE_FILE.pin" >"$PREVIOUS_RUNNER" &&
+      chmod 700 "$PREVIOUS_RUNNER" || ownership_unverified
+    [ "$(read_runner_hint "$PREVIOUS_RUNNER" GOAT_ARCHIVE_VERSION ${LEGACY_SSH_ARCHIVE_VERSION_KEY})" = "$UPGRADE_VERSION" ] &&
+      [ "$(read_runner_hint "$PREVIOUS_RUNNER" T3_ARCHIVE_VERSION T3_ARCHIVE_VERSION)" = "$UPGRADE_VERSION" ] || ownership_unverified
+  fi
   # The server, not this script, stops itself: it refuses new turns, lets running work
   # finish within the grace window, and exits. Unconfirmed, an expired window cancels.
   drain_force=
@@ -3285,6 +3384,10 @@ probe_live() {
      [ "$(cat "$state/managed" 2>/dev/null || true)" = managed ] &&
      [ "$(cat "$state/pid" 2>/dev/null || true)" = "$5" ] &&
      [ "$(cat "$state/port" 2>/dev/null || true)" = "$6" ]; then live_owned=true; fi
+  if [ "$1" = live ] && [ "$live_owned" = false ] && [ -n "$state_key" ] &&
+     managed_orphan "$5" "$6" "$2" "$state"; then
+    live_fields="$live_fields,\\"liveAdoptable\\":true"
+  fi
   if [ "$1" = live ] && valid_version "$2"; then
     live_version="$2"
     live_fields="$live_fields$(printf ',"livePort":%s' "$6")"
@@ -3350,7 +3453,7 @@ printf '{"platform":"%s","arch":"%s","ready":%s,"liveOwned":%s,"identityAbsent":
 `;
 }
 
-const decodeRemoteRuntimeProbe = Schema.decodeEffect(
+const decodeRemoteRuntimeProbeFields = Schema.decodeEffect(
   fromLenientJson(
     Schema.Struct({
       platform: Schema.Literals(["darwin", "linux", "win32"]),
@@ -3395,9 +3498,23 @@ const decodeRemoteRuntimeProbe = Schema.decodeEffect(
       liveLacksMemoryScopes: Schema.optionalKey(Schema.Boolean),
       /** The live server drains for a replacement. Without it the client only attaches. */
       liveDrain: Schema.optionalKey(Schema.Boolean),
+      /** The live server is GOAT's managed runtime whose launch records were lost; see `managed_orphan`. */
+      liveAdoptable: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 );
+
+// An owning launch adopts such a server under the replacement lock before it acts, so every
+// decision treats it as owned. Its identity is written by that adoption, not inherited.
+type RemoteRuntimeProbe = Effect.Success<ReturnType<typeof decodeRemoteRuntimeProbeFields>>;
+const decodeRemoteRuntimeProbe = (input: string) =>
+  decodeRemoteRuntimeProbeFields(input).pipe(
+    Effect.map((probe): RemoteRuntimeProbe =>
+      probe.liveAdoptable === true && probe.liveOwned !== true
+        ? { ...probe, liveOwned: true, identityAbsent: false }
+        : probe,
+    ),
+  );
 
 /**
  * SSH failures (an unreachable host, a timeout, rejected authentication) keep their own error
@@ -3479,10 +3596,7 @@ const installOnHost = Effect.fn("ssh/tunnel.installOnHost")(function* (
  * install. It sorts above every `0.1.0-nightly.*` yet lacks their migrations, so starting it
  * against their database fails every launch.
  */
-export const compareHostRuntimeBuilds = (
-  left: RuntimeBuild,
-  right: RuntimeBuild,
-): number | undefined => {
+const compareHostRuntimeBuilds = (left: RuntimeBuild, right: RuntimeBuild): number | undefined => {
   const leftParsed = parseSemver(left.version);
   const rightParsed = parseSemver(right.version);
   const leftPlain = leftParsed?.prerelease.length === 0;
@@ -4940,7 +5054,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
   },
 );
 
-export const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
+const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
   target: DesktopSshEnvironmentTarget,
   sessionOptions: RemoteClientSessionOptions,
   input?: SshAuth.SshAuthOptions,
@@ -5167,6 +5281,29 @@ const existingTunnelCheck = (entry: SshTunnelEntry, minimumMs: number) => ({
   timeoutMs: Math.max(minimumMs, entry.readiness.probeTimeoutMs * 2),
   probeTimeoutMs: entry.readiness.probeTimeoutMs,
 });
+
+const decodeForwardDescriptor = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ serverVersion: Schema.optionalKey(Schema.String) })),
+);
+
+/**
+ * The version the server behind an open forward reports now. A server replaced on the same
+ * port (another client's update, a self-update, a manual restart) still answers the forward,
+ * so readiness alone would keep reporting the version this client attached to.
+ */
+const readForwardServerVersion = (entry: SshTunnelEntry) =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.get(
+      new URL("/.well-known/goat/environment", entry.httpBaseUrl).toString(),
+    );
+    if (response.status !== 200) return undefined;
+    return (yield* decodeForwardDescriptor(yield* response.text)).serverVersion;
+  }).pipe(
+    Effect.timeoutOption(`${entry.readiness.probeTimeoutMs} millis`),
+    Effect.map((version) => (version._tag === "Some" ? version.value : undefined)),
+    Effect.orElseSucceed(() => undefined),
+  );
 
 const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: {
   readonly selectedRuntime: PreparedRemoteRuntime;
@@ -6473,6 +6610,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
       }
     };
+    // The caller skipped "connecting" while a forward existed; that forward was found stale.
+    if (input.previousLocalPort !== undefined && !tunnels.has(input.key))
+      phase({ target: input.resolvedTarget, phase: "connecting" });
     const launchScope = yield* Scope.Scope;
     let launchTransferred = false;
     const operation = (authOptions: SshAuth.SshAuthOptions) =>
@@ -6646,6 +6786,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }
     }
     if (setupTerminalFailure(input.key)) pendingReplacements.delete(input.key);
+    // The host already runs the requested build (another client, a self-update or a person
+    // replaced it), so an intent kept from the older server must not report or retry an update.
+    if (
+      remoteLaunch.status === "ready" &&
+      remoteLaunch.pending === undefined &&
+      !needsArchiveRetry &&
+      remoteLaunch.selectedRuntime.version === remoteLaunch.selectedRuntime.requestedVersion
+    )
+      pendingReplacements.delete(input.key);
     if (remoteLaunch.status === "pending") {
       const previous = input.previous ?? tunnels.get(input.key);
       if (previous !== undefined) {
@@ -6852,6 +7001,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     // A forward whose ssh process already exited (after sleep, or a keepalive timeout) cannot
     // answer, so skip the readiness window. An unreadable state falls back to the HTTP check.
     const forwardRunning = yield* entry.process.isRunning.pipe(Effect.orElseSucceed(() => true));
+    let runtimeChanged = false;
     if (!forwardRunning) {
       yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
         ...logFields,
@@ -6862,13 +7012,30 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         waitForHttpReady(existingTunnelCheck(entry, EXISTING_TUNNEL_CHECK_TIMEOUT_MS)),
       );
       if (Exit.isSuccess(readinessExit)) {
-        yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
-        return true;
+        const selectedVersion = entry.selectedRuntime.version;
+        const liveVersion =
+          selectedVersion === null || selectedVersion === ""
+            ? undefined
+            : yield* readForwardServerVersion(entry);
+        if (liveVersion === undefined || liveVersion === selectedVersion) {
+          yield* Effect.logDebug("ssh.environment.tunnel.reused", logFields);
+          return true;
+        }
+        // Reconnecting re-reads the live server, so the reported version and every runtime
+        // decision follow the server that now answers, never this attachment's old selection.
+        runtimeChanged = true;
+        yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
+          ...logFields,
+          reason: "runtime-changed",
+          selectedVersion,
+          liveVersion,
+        });
+      } else {
+        yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
+          ...logFields,
+          cause: readinessExit.cause,
+        });
       }
-      yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
-        ...logFields,
-        cause: readinessExit.cause,
-      });
     }
     yield* Effect.gen(function* () {
       if (tunnels.get(key) === entry) {
@@ -6877,6 +7044,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         // whose host-side fingerprint is still checked by the folded command.
         if (
           retainSelection &&
+          !runtimeChanged &&
           !closed &&
           !forgotten.has(key) &&
           entry.attachmentInvalidated !== true &&
@@ -6886,7 +7054,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           selection.generation === (generations.get(key) ?? 0)
         )
           reconnectSelections.set(key, selection);
-        if (entry.attachmentInvalidated === true || entry.uncertainDrain === true)
+        if (entry.attachmentInvalidated === true || entry.uncertainDrain === true || runtimeChanged)
           invalidateReconnectSelection(key);
         tunnels.delete(key);
       }
@@ -7497,7 +7665,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               tunnels.has(key);
             const onPhase: SshRuntimeProgressCallback = ({ phase, upload }) =>
               report.onPhase(phase, upload);
-            if (!reusingPending)
+            // A caller reusing a forward that still answers must not flip a ready host to
+            // "preparing"; agents call this before every remote tool. A forward that turns out
+            // stale publishes its reconnect from createTunnel.
+            if (!reusingPending && !tunnels.has(key))
               publishPhase(
                 key,
                 resolvedTarget,
