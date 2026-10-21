@@ -566,3 +566,32 @@ it.effect("bind sets a thread's profile once and never replaces it", () =>
     expect((yield* profiles.resolve(threadScope("bot-turn"))).profile.id).toBe("owner");
   }).pipe(Effect.provide(fixture())),
 );
+
+it.effect("native subagent limits follow the thread's live profile and fail closed", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    expect(yield* profiles.nativeSubagentLimit(ThreadId.make("unbound"))).toBe(6);
+    // A child bound under owner by a manager caller keeps the manager's lane ceiling.
+    yield* profiles.claim(outside, {
+      id: "child",
+      childThreadId: ThreadId.make("child"),
+      runtimeMode: "full-access",
+      profileId: "owner",
+    });
+    expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBe(6);
+    const policy = (yield* settings.getSettings).goatclaw;
+    yield* settings.updateSettings({
+      goatclaw: {
+        ...policy,
+        profiles: { ...policy.profiles, owner: { ...policy.profiles.owner!, maxLanes: 2 } },
+      },
+    });
+    expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBe(2);
+    const { owner: _removed, ...remaining } = (yield* settings.getSettings).goatclaw.profiles;
+    yield* settings.updateSettings({ goatclaw: { profiles: remaining } });
+    expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBe(0);
+    yield* settings.updateSettings({ goatclaw: { enabled: false } });
+    expect(yield* profiles.nativeSubagentLimit(ThreadId.make("child"))).toBeUndefined();
+  }).pipe(Effect.provide(fixture("manager"))),
+);

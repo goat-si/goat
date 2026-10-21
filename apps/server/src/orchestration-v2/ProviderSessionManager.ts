@@ -58,6 +58,8 @@ import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
+import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -390,6 +392,22 @@ export const layerWithOptions = (
       const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
       /** Absent only in test assemblies; without it every turn counts as unleased. */
       const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+      /** Absent only in test assemblies, which then run without goatclaw limits. */
+      const permissionProfiles = yield* Effect.serviceOption(PermissionProfiles.PermissionProfiles);
+      // An enabled policy fails closed: a thread whose limit cannot be read gets no native subagents.
+      const withNativeSubagentLimit = (threadId: ThreadId, config: McpProviderSessionConfig) =>
+        Effect.gen(function* () {
+          const { nativeSubagentLimit: _previous, ...rest } = config;
+          if (Option.isNone(permissionProfiles)) return rest;
+          const limit = yield* permissionProfiles.value.nativeSubagentLimit(threadId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not read the goatclaw subagent limit; allowing none.", {
+                cause,
+              }).pipe(Effect.as(0)),
+            ),
+          );
+          return limit === undefined ? rest : { ...rest, nativeSubagentLimit: limit };
+        });
       const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
         ComputerUseOrigin.computerUseOrigin(
           ComputerUseOrigin.projectionOriginReads({
@@ -756,7 +774,14 @@ export const layerWithOptions = (
                     resolved.memoryPolicy.policyEpoch === committed.epoch
                   ) {
                     yield* mcpSessions.set(
-                      ComputerUse.withComputerUse(existing, computerUse, COMPUTER_USE_LEASE_ROUTE),
+                      yield* withNativeSubagentLimit(
+                        threadId,
+                        ComputerUse.withComputerUse(
+                          existing,
+                          computerUse,
+                          COMPUTER_USE_LEASE_ROUTE,
+                        ),
+                      ),
                     );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -793,10 +818,13 @@ export const layerWithOptions = (
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
                 yield* mcpSessions.set(
-                  ComputerUse.withComputerUse(
-                    credential.config,
-                    computerUse,
-                    COMPUTER_USE_LEASE_ROUTE,
+                  yield* withNativeSubagentLimit(
+                    threadId,
+                    ComputerUse.withComputerUse(
+                      credential.config,
+                      computerUse,
+                      COMPUTER_USE_LEASE_ROUTE,
+                    ),
                   ),
                 );
                 yield* Ref.update(

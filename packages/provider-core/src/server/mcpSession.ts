@@ -45,6 +45,11 @@ export interface McpProviderSessionConfig {
    * user-defined server off do so.
    */
   readonly cuaDriverBlocked?: boolean;
+  /**
+   * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
+   * while goatclaw is off, which leaves the provider's own limits in place.
+   */
+  readonly nativeSubagentLimit?: number;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */

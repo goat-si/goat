@@ -33,6 +33,7 @@ import { assert, it } from "@effect/vitest";
 import { AgentScope } from "@goat/shared/AgentScope";
 import {
   RunId,
+  OrchestratorMcpFailure,
   type OrchestrationV2Run,
   CommandId,
   MessageId,
@@ -76,6 +77,7 @@ import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
 
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -1667,6 +1669,62 @@ it.effect(
             mcpConfigs,
           }),
         ),
+      );
+    }),
+);
+
+it.effect.each([
+  ["a limit", Effect.succeed(2), 2],
+  [
+    "an unreadable limit",
+    Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "down" })),
+    0,
+  ],
+] as const)(
+  "ProviderSessionManagerV2 hands the adapter %s from the goatclaw profile",
+  ([, lookup, expected]) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const mcpConfigs = yield* Ref.make<
+        ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+      >([]);
+      const asked = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
+      const unused = () => Effect.die("unused");
+      const profiles = PermissionProfiles.PermissionProfiles.of({
+        resolve: unused,
+        check: unused,
+        require: unused,
+        assertTarget: unused,
+        recheck: unused,
+        requireCloudApproval: unused,
+        claim: unused,
+        complete: unused,
+        release: unused,
+        bind: unused,
+        nativeSubagentLimit: (threadId) =>
+          Ref.update(asked, (threads) => [...threads, threadId]).pipe(Effect.andThen(lookup)),
+      });
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-subagents");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.equal((yield* Ref.get(mcpConfigs))[0]?.nativeSubagentLimit, expected);
+        assert.deepEqual(yield* Ref.get(asked), [threadId]);
+        yield* manager.close(providerSessionId);
+      });
+      yield* effect.pipe(
+        Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })),
+        Effect.provideService(PermissionProfiles.PermissionProfiles, profiles),
       );
     }),
 );

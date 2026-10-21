@@ -1,4 +1,5 @@
 import {
+  type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
   type PermissionCapability,
@@ -138,6 +139,13 @@ export class PermissionProfiles extends Context.Service<
       profileId: string,
       ownerKey: string,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /**
+     * The thread's `maxLanes` for provider-native subagents, or undefined while goatclaw is off.
+     * A bound profile that no longer exists allows none.
+     */
+    readonly nativeSubagentLimit: (
+      threadId: ThreadId,
+    ) => Effect.Effect<number | undefined, OrchestratorMcpFailure>;
   }
 >()("goat/goatclaw/PermissionProfiles") {}
 
@@ -189,6 +197,29 @@ export const layer = Layer.effect(
     const sqlEffect = Option.isSome(database)
       ? Effect.succeed(database.value)
       : Effect.fail(storageFailure());
+    /** The thread's bound profile narrowed by its launch ceiling, else the default profile. */
+    const threadProfile = Effect.fn("PermissionProfiles.threadProfile")(function* (
+      policy: GoatclawSettings,
+      threadId: ThreadId | undefined,
+    ) {
+      const sql = yield* sqlEffect;
+      const binding =
+        threadId === undefined
+          ? undefined
+          : (yield* sql<{ profile_id: string; ceiling_json: string }>`
+      SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${threadId}
+    `.pipe(Effect.mapError(storageFailure)))[0];
+      const profileId = binding?.profile_id ?? policy.defaultProfile;
+      const named = policy.profiles[profileId];
+      if (named === undefined)
+        return yield* refusal(`Permission profile ${profileId} no longer exists.`);
+      return binding === undefined
+        ? named
+        : intersectProfiles(
+            named,
+            yield* decodeProfile(binding.ceiling_json).pipe(Effect.mapError(storageFailure)),
+          );
+    });
     const resolve = Effect.fn("PermissionProfiles.resolve")(function* (
       scope: McpInvocationScope,
       runtimeMode?: RuntimeMode,
@@ -213,23 +244,7 @@ export const layer = Layer.effect(
         };
       }
       const sql = yield* sqlEffect;
-      const binding =
-        threadId === undefined
-          ? undefined
-          : (yield* sql<{ profile_id: string; ceiling_json: string }>`
-      SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${threadId}
-    `.pipe(Effect.mapError(storageFailure)))[0];
-      const profileId = binding?.profile_id ?? policy.defaultProfile;
-      const named = policy.profiles[profileId];
-      if (named === undefined)
-        return yield* refusal(`Permission profile ${profileId} no longer exists.`);
-      let profile =
-        binding === undefined
-          ? named
-          : intersectProfiles(
-              named,
-              yield* decodeProfile(binding.ceiling_json).pipe(Effect.mapError(storageFailure)),
-            );
+      let profile = yield* threadProfile(policy, threadId);
       if (forwarded !== undefined) profile = intersectProfiles(profile, forwarded);
       let callerMode =
         runtimeMode === undefined
@@ -488,6 +503,19 @@ export const layer = Layer.effect(
       VALUES (${threadId}, ${profileId}, ${encodeProfile(named)}, ${ownerKey})
       ON CONFLICT(thread_id) DO NOTHING`.pipe(Effect.mapError(storageFailure));
     });
+    const nativeSubagentLimit = Effect.fn("PermissionProfiles.nativeSubagentLimit")(function* (
+      threadId: ThreadId,
+    ) {
+      const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+      if (!policy.enabled) return undefined;
+      return yield* threadProfile(policy, threadId).pipe(
+        Effect.map((profile) => profile.maxLanes),
+        Effect.catchIf(
+          (error) => error.code === "capability_denied",
+          () => Effect.succeed(0),
+        ),
+      );
+    });
     return PermissionProfiles.of({
       resolve,
       check,
@@ -499,6 +527,7 @@ export const layer = Layer.effect(
       complete,
       release,
       bind,
+      nativeSubagentLimit,
     });
   }),
 );
