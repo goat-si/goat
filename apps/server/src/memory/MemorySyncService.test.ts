@@ -2183,6 +2183,7 @@ it.effect.each([
               [95, "MemorySummaryWorkThreadIndex"],
               [96, "ThreadHistoryArchives"],
               [97, "PermissionProfiles"],
+              [98, "DecisionInbox"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(

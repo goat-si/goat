@@ -43,6 +43,7 @@ it.effect("082 participates in the migration ledger and preserves its flag on re
       [95, "MemorySummaryWorkThreadIndex"],
       [96, "ThreadHistoryArchives"],
       [97, "PermissionProfiles"],
+      [98, "DecisionInbox"],
     ]);
     yield* sql`INSERT INTO memory_hub_administration_state VALUES(1,1)`;
     assert.deepStrictEqual(yield* runMigrations(), []);
