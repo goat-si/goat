@@ -18,7 +18,12 @@ import type { CloudMachine, EnvironmentId, RemoteLaunch } from "@goat/contracts"
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
-import { presentFleetConnection, type FleetConnection } from "../components/fleet/fleetConnection";
+import {
+  presentFleetConnection,
+  presentFleetMachineConnection,
+  UNKNOWN_FLEET_CONNECTION,
+  type FleetConnection,
+} from "../components/fleet/fleetConnection";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations, environmentSummaries } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
@@ -184,7 +189,7 @@ function snapshotKey(
       machine.id,
       machine.label,
       machine.subtitle,
-      machine.cloudState,
+      machine.boat,
       machine.os,
       machine.machineKind,
       machine.running,
@@ -236,10 +241,11 @@ export const fleetPageAtom = Atom.make((get): FleetPageState => {
   const connections = new Map<string, FleetConnection>();
   let currentMachineId: string | null = null;
   for (const machine of snapshot.machines) {
-    if (machine.environmentId === null) continue;
     if (machine.environmentId === primaryEnvironmentId) currentMachineId = machine.id;
-    const connection = get(fleetConnectionAtom(machine.environmentId));
-    if (connection !== null) connections.set(machine.id, connection);
+    const live =
+      machine.environmentId === null ? null : get(fleetConnectionAtom(machine.environmentId));
+    const connection = presentFleetMachineConnection(machine.boat, live);
+    if (connection !== UNKNOWN_FLEET_CONNECTION) connections.set(machine.id, connection);
   }
   const key = snapshotKey(snapshot, connections, currentMachineId);
   const previous = Option.getOrNull(get.self<FleetPageState>());

@@ -9,6 +9,7 @@ import {
   SshHostAddInput,
   SshHostAlias,
   buildSshKeyAuthInstructions,
+  hasCloudMachineAliasPrefix,
   type SshPreflightInput,
   type SshPreflightReport,
   type AuthSessionId,
@@ -225,8 +226,7 @@ export const make = (
       home,
       directory: "goat-hosts",
       isAlias: (alias) =>
-        /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(alias) &&
-        !alias.toLowerCase().startsWith("boat-"),
+        /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(alias) && !hasCloudMachineAliasPrefix(alias),
     });
     const directory = path.join(home, ".ssh", "goat-hosts");
     const challenges = new Map<string, { challenge: Challenge; sessionId: AuthSessionId }>();
@@ -355,7 +355,7 @@ export const make = (
       Effect.gen(function* () {
         const host = yield* decodeAlias(aliasFor(input));
         if (
-          host.toLowerCase().startsWith("boat-") ||
+          hasCloudMachineAliasPrefix(host) ||
           [input.address, input.user, input.identityFile].some(
             (v) => v !== undefined && (!v.trim() || v.startsWith("-") || /[\r\n\0]/u.test(v)),
           )

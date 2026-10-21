@@ -1,6 +1,5 @@
 import type {
   CloudMachine,
-  CloudMachineState,
   EnvironmentId,
   EnvironmentMachineKind,
   ExecutionEnvironmentPlatformOs,
@@ -12,6 +11,7 @@ import type {
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 
+import { identifyBoatMachine, type BoatMachineIdentity } from "../cloudMachines.ts";
 import { scopeThreadRef } from "../environment/scoped.ts";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { presentRemoteLaunches } from "./remoteLaunches.ts";
@@ -209,7 +209,8 @@ export interface FleetMachine {
   readonly environmentId: EnvironmentId | null;
   /** An SSH or cloud host a dispatcher reported, by the alias that dispatcher reaches it through. */
   readonly sshHost: { readonly via: EnvironmentId; readonly alias: string } | null;
-  readonly cloudState: CloudMachineState | null;
+  /** Set when the host is a Boat machine, from a server's record or else its reserved alias. */
+  readonly boat: BoatMachineIdentity | null;
   readonly running: number;
   readonly attention: number;
   readonly reported: number;
@@ -287,6 +288,7 @@ export function buildFleet(input: {
   const threads: FleetThread[] = [];
   const labelOf = new Map(input.environments.map((env) => [env.environmentId, env.label]));
   const environmentBySshAlias = new Map<string, EnvironmentId>();
+  const aliasesOf = new Map(input.environments.map((env) => [env.environmentId, env.sshAliases]));
   for (const environment of input.environments) {
     machines.set(machineId(environment.environmentId), {
       id: machineId(environment.environmentId),
@@ -297,7 +299,7 @@ export function buildFleet(input: {
       machineKind: environment.machineKind ?? null,
       environmentId: environment.environmentId,
       sshHost: null,
-      cloudState: null,
+      boat: null,
       running: 0,
       attention: 0,
       reported: 0,
@@ -387,7 +389,7 @@ export function buildFleet(input: {
         machineKind: null,
         environmentId: null,
         sshHost: { via: dispatcher, alias },
-        cloudState: null,
+        boat: null,
         running: 0,
         attention: 0,
         reported: 0,
@@ -398,9 +400,19 @@ export function buildFleet(input: {
     };
 
     for (const cloud of source.cloudMachines) {
-      if (cloud.deletePending || cloud.presence === "not_found") continue;
+      if (cloud.deletePending || cloud.presence === "not_found") {
+        // No node for a machine on its way out, but a connected one still says why it is going.
+        const environmentId = resolveAlias(cloud.alias);
+        if (environmentId !== undefined) {
+          machines.get(machineId(environmentId))!.boat = identifyBoatMachine({
+            record: cloud,
+            aliases: [],
+          });
+        }
+        continue;
+      }
       const machine = hostMachine(cloud.alias, "cloud", cloud.label);
-      machine.cloudState = cloud.state;
+      machine.boat = identifyBoatMachine({ record: cloud, aliases: [] });
       if (machine.kind === "environment" && machine.label !== cloud.label) {
         machine.subtitle = cloud.label;
       }
@@ -434,6 +446,18 @@ export function buildFleet(input: {
         });
       });
     });
+  }
+
+  for (const machine of machines.values()) {
+    if (machine.boat !== null) continue;
+    const aliases =
+      machine.environmentId !== null
+        ? (aliasesOf.get(machine.environmentId) ?? [])
+        : machine.sshHost !== null
+          ? [machine.sshHost.alias]
+          : [];
+    machine.boat = identifyBoatMachine({ record: null, aliases });
+    if (machine.boat !== null && machine.kind === "ssh") machine.kind = "cloud";
   }
 
   threads.sort(compareFleetThreads);

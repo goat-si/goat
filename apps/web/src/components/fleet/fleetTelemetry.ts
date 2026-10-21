@@ -295,6 +295,7 @@ function connectionAlert(connection: FleetConnection): Pick<FleetAlert, "tone" |
       return { tone: "warning", detail };
     case "unreachable":
     case "offline":
+    case "stopped":
       return { tone: "muted", detail: connection.label };
     default:
       return null;
