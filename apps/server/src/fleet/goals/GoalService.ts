@@ -76,7 +76,7 @@ const encodeSpec = Schema.encodeSync(FleetGoalSpec);
 const sameSpec = (left: FleetGoal["spec"], right: FleetGoal["spec"]) =>
   JSON.stringify(encodeSpec(left)) === JSON.stringify(encodeSpec(right));
 
-export const ownerKeyOf = (threadId: string) => "thread:" + threadId;
+const ownerKeyOf = (threadId: string) => "thread:" + threadId;
 
 const threadCallerIn = Effect.gen(function* () {
   const caller = yield* loadCaller();
@@ -98,7 +98,7 @@ const hasFullAccess = (caller: Caller) =>
 const assertMayManage = (caller: Caller, goal: FleetGoal) =>
   isOwner(caller, goal) ? Effect.void : assertFullAccess(caller, managesGoals);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const store = yield* GoalStore;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagementService.ThreadManagementService;

@@ -10,11 +10,18 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type CloudMachine,
+  type CloudMachineAlias,
   type EnvironmentMachineKind,
   type HostStatusEntry,
 } from "@goat/contracts";
 
-import type { FleetConnection } from "./fleetConnection";
+import {
+  presentFleetConnection,
+  presentFleetMachineConnection,
+  UNKNOWN_FLEET_CONNECTION,
+  type FleetConnection,
+} from "./fleetConnection";
 
 const GIB = 1024 ** 3;
 const SAMPLED_AT = Date.parse("2026-10-20T00:00:00.000Z");
@@ -68,7 +75,25 @@ const MACHINE_KINDS: Readonly<Record<string, EnvironmentMachineKind>> = {
   "macbookpro-2": "laptop",
   "mac-studio": "mac-studio",
   "lidge-ai": "linux",
+  "boat-agent": "cloud",
 };
+
+const BOAT_AGENT_ALIAS = "boat-bx_23456789" as CloudMachineAlias;
+
+function boatMachine(alias: CloudMachineAlias, label: string, state: CloudMachine["state"]) {
+  return {
+    alias,
+    sandboxId: alias.slice("boat-".length),
+    label,
+    provider: "boat",
+    type: "default",
+    ttlSeconds: 3600,
+    presence: "present",
+    state,
+    deletePending: false,
+    lastError: null,
+  } as CloudMachine;
+}
 
 /** One machine per tier and state, with numbers like a real afternoon on this fleet. */
 function demoMachines(): ReadonlyArray<{
@@ -104,6 +129,11 @@ function demoMachines(): ReadonlyArray<{
       running: 0,
       entry: sample({ cpu: 0.95, cores: 4, load: 6, memoryUsed: 0.5, reachable: false }),
     },
+    {
+      id: "boat-agent",
+      running: 1,
+      entry: sample({ cpu: 0.22, cores: 4, load: 0.8, memoryUsed: 0.35 }),
+    },
   ];
 }
 
@@ -137,8 +167,9 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
 }
 
 /**
- * A fixed six-machine fleet with one machine in each heat tier, one with stale
- * metrics, and one with none, so a burning node can be shown deterministically.
+ * A fixed fleet with one machine in each heat tier, one with stale metrics, one with none, and
+ * two Boat machines (one running and connected, one stopped and only reported), so a burning node
+ * and Boat's states can be shown deterministically.
  * Dev builds draw it at `/fleet?fleetDemo=heat`; the graph's browser test uses it too.
  */
 export function fleetHeatDemo(): {
@@ -151,7 +182,7 @@ export function fleetHeatDemo(): {
   const environments: FleetEnvironment[] = MACHINES.map(({ id }) => ({
     environmentId: EnvironmentId.make(id),
     label: id,
-    sshAliases: [id],
+    sshAliases: [id === "boat-agent" ? BOAT_AGENT_ALIAS : id],
     os: id.startsWith("mac") ? "darwin" : "linux",
     machineKind: MACHINE_KINDS[id] ?? "server",
   }));
@@ -164,12 +195,28 @@ export function fleetHeatDemo(): {
     environments,
     primaryEnvironmentId: environments[3]!.environmentId,
     shells,
-    remote: [],
+    remote: [
+      {
+        dispatcherEnvironmentId: environments[3]!.environmentId,
+        launches: [],
+        cloudMachines: [
+          boatMachine(BOAT_AGENT_ALIAS, "boat-agent", "running"),
+          boatMachine("boat-bx_3456789a" as CloudMachineAlias, "nightly-ci", "archived"),
+        ],
+      },
+    ],
     provider: () => ({ label: "Codex", driver: ProviderDriverKind.make("codex") }),
   });
   const entries = new Map(MACHINES.map(({ id, entry }) => [id, entry]));
   const heat = new Map(
     snapshot.machines.map((machine) => [machine.id, fleetMachineHeat(entries.get(machine.label))]),
   );
-  return { snapshot, heat, currentMachineId: snapshot.machines[3]!.id, connections: new Map() };
+  const connected = presentFleetConnection({ phase: "connected", error: null, unreachable: false });
+  const connections = new Map<string, FleetConnection>();
+  for (const machine of snapshot.machines) {
+    const live = machine.label === "boat-agent" ? connected : null;
+    const connection = presentFleetMachineConnection(machine.boat, live);
+    if (connection !== UNKNOWN_FLEET_CONNECTION) connections.set(machine.id, connection);
+  }
+  return { snapshot, heat, currentMachineId: snapshot.machines[3]!.id, connections };
 }

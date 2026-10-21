@@ -54,6 +54,11 @@ export interface ExecuteGitInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number | null;
+  /**
+   * Fail only after Git prints nothing for this long, instead of after `timeoutMs`.
+   * For commands whose healthy duration is unbounded but which report progress.
+   */
+  readonly stallTimeoutMs?: number;
   readonly forceKillAfterMs?: number;
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
@@ -143,6 +148,18 @@ export interface CreateWorktreeProgress {
     completed: number;
     total: number;
   }) => Effect.Effect<void, never>;
+  /** A Git hook, usually post-checkout, started after the files were written. */
+  readonly onHookStarted?: (hookName: string) => Effect.Effect<void, never>;
+  /**
+   * The hook stopped printing long enough to count as stuck. Git runs post-checkout only
+   * after the worktree is complete, so the worktree is kept and `createWorktree` succeeds.
+   */
+  readonly onHookStalled?: (input: {
+    readonly hookName: string;
+    readonly detail: string;
+  }) => Effect.Effect<void, never>;
+  /** Directories the project file keeps out of this worktree through sparse checkout. */
+  readonly onSparseCheckout?: (excluded: ReadonlyArray<string>) => Effect.Effect<void, never>;
   readonly onSubmodulesStarted?: () => Effect.Effect<void, never>;
   readonly onSubmodulesDisabled?: (input: {
     source: "settings" | "t3.json";
@@ -177,6 +194,12 @@ export interface CreateWorktreeOptions {
    * commits or a dirty or foreign checkout still fails, naming the existing_worktree launch.
    */
   readonly reuseExistingBranch?: boolean;
+  /**
+   * The caller runs the project's worktree setup script itself, so a repository hook that
+   * honors `GOAT_WORKTREE_SETUP=0` (this repository's post-checkout does) skips installing
+   * dependencies inside `git worktree add` a second time.
+   */
+  readonly skipSetupHook?: boolean;
 }
 
 export interface GitCommitProgress {

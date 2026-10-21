@@ -32,7 +32,7 @@ import {
   type PlacementResult,
 } from "./placementRules.ts";
 
-export const MAX_DECISIONS = 50;
+const MAX_DECISIONS = 50;
 
 export interface PlacementRequest {
   /** "goal:<id>" or "thread:<id>". */
@@ -66,7 +66,7 @@ export const PlacementHostConditions = Context.Reference<{
   defaultValue: () => ({ cordoned: Effect.succeed(new Set<string | null>()) }),
 });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
   const environment = yield* ServerEnvironment.ServerEnvironment;

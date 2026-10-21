@@ -13,7 +13,7 @@ import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
 type PowerTransition = DesktopSystemWakeEvent["reason"];
 
 /** Repeated macOS powerMonitor resume events within this window belong to the same wake. */
-export const RESUME_DEDUP_WINDOW_MS = 3_000;
+const RESUME_DEDUP_WINDOW_MS = 3_000;
 
 /**
  * Tells the renderer when the machine wakes or the screen unlocks, so its

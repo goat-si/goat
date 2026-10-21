@@ -178,6 +178,11 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+A repository with large folders that agents only read, such as vendored reference code, can keep
+them out of new worktrees with `"worktreeSparseExclude": [".repos/"]` in `t3.json`. GOAT checks
+the worktree out with Git sparse checkout, so those folders are never written, which matters most
+on Windows. Run `git sparse-checkout disable` in a worktree to bring them back there.
+
 ## Check an agent's work when its run completes
 
 An agent's reported tests are only what it says it ran. To have GOAT run a check itself, turn on
@@ -201,6 +206,22 @@ are, and cleanup covers both the default folder and the custom one.
 If the custom folder can't be used when a thread starts, for example because its drive is
 unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
 **Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+
+### Slow worktrees on Windows
+
+On Windows, Microsoft Defender scans every file a new worktree writes, which can stretch a
+checkout to minutes. When Defender scans the worktree folder, **Settings → Connections** shows a
+warning for that machine with the command to exclude it, which you run in an administrator
+PowerShell on that machine. GOAT never changes Defender itself. A Dev Drive is the alternative
+Microsoft recommends: create one in Windows Settings and set **Worktree location** to a folder on
+it. GOAT also turns on Git's file system cache and long paths for the repository when they are
+unset.
+
+A checkout that is slow but still printing progress keeps going. GOAT stops Git only after two
+minutes without output, and says how long it ran and what it printed last. If the repository's
+post-checkout hook is what went quiet, the files are already in place, so GOAT keeps the worktree
+and notes it in the checkout step. On Windows the hook itself can keep running in the background,
+because Git Bash detaches it from Git.
 
 ## Storage cleanup
 

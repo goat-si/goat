@@ -96,7 +96,7 @@ const APP_BASE_NAME = "GOAT";
  * Storage" item, Linux Secret Service entry), which DesktopSafeStorageKeyMigration copies over
  * from the legacy name before first use.
  */
-export const DESKTOP_RUNTIME_APP_BASE_NAME = "GOAT";
+const DESKTOP_RUNTIME_APP_BASE_NAME = "GOAT";
 
 export const desktopRuntimeAppName = (stageLabel: DesktopAppStageLabel) =>
   `${DESKTOP_RUNTIME_APP_BASE_NAME} ${stageLabel}`;

@@ -18,7 +18,7 @@ export function machineColumns(rows: ReadonlyArray<ProviderHostRow>) {
   return rows.toSorted((a, b) => Number(b.host === null) - Number(a.host === null));
 }
 
-export function hostUnavailableReason(row: ProviderHostRow) {
+function hostUnavailableReason(row: ProviderHostRow) {
   const labels = {
     ok: null,
     update_runtime: "Update runtime",

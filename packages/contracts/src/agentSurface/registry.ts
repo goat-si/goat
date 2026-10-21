@@ -2128,7 +2128,7 @@ export const agentSurfaceRegistry = {
     toolkit: "ssh",
     summary: "Update an SSH runtime",
     description:
-      "Move this host's GOAT runtime to this SSH owner's version. Defaults to when_idle. For MCP, now needs a person's approval; outside a thread, return error/unsupported with instructions to ask from a GOAT thread. After the person approves, GOAT continues on its own. when_idle returns at its first real phase or waiting result. Never replaces a newer or unowned runtime. Call goat_ssh_host_status to follow it. No desktop app is needed on the host.",
+      "Move this host's GOAT runtime to this SSH owner's version. Defaults to when_idle, which a running GOAT thread may start itself: it drains the runtime only when no work runs there, and otherwise waits and retries. For MCP, now needs a person's approval; outside a thread, return error/unsupported with instructions to ask from a GOAT thread. After the person approves, GOAT continues on its own. when_idle returns at its first real phase or waiting result. Never replaces a newer or foreign runtime; a GOAT runtime whose launch records were lost counts as GOAT's own. Call goat_ssh_host_status to follow it. No desktop app is needed on the host.",
     effect: "write",
     hostRoutable: false,
     requires: "either",

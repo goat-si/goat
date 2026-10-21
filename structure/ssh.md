@@ -115,6 +115,24 @@ Remembered launch files whose PID has exited are stale and do not block attachin
 (`readLiveSshRuntimeProtocol` in `apps/server/src/cli/sshHelper.ts`). They never grant kill
 authority either, because the launch script requires its PID file to name the live PID.
 
+Ownership follows the server, not the client that started it. A live server this host user runs
+as `~/.goat/runtime/goat/versions/<v>/goat serve --host 127.0.0.1 --port <p> --base-dir ~/.goat`
+is GOAT's managed runtime even when its launch records are gone, for example after a manual
+restart or a moved `ssh-launch` directory. The probe reports it as `liveAdoptable`, and an
+owning launch holding the replacement lock writes identity, port, PID and `managed` for it
+(`managed_orphan` and `adopt_managed_orphan` in `packages/ssh/src/tunnel.ts`). From then on it
+updates through its own drain like any owned runtime; a rollback without a retained runner
+restarts it through this client's runner pinned to its version. Records that name another live
+process, a drain in progress, Windows hosts, and any other command line (a developer's own
+server, another base directory, another user) stay foreign: attach-only, never replaced.
+
+A reused forward is checked against the live descriptor's `serverVersion`. A server replaced on
+the same port by another client, a self-update or a person no longer matches the attachment, so
+the client reconnects and reads the live server again instead of reporting, or acting on, the
+version it first attached to. A host that already runs the requested build drops any refresh
+intent kept from its older server. Callers that only reuse a forward that still answers, as
+agents do before every remote tool, never publish `preparing`.
+
 Desktop and agent dispatch both leave the server running when they disconnect
 (`leaveRemoteServerRunning`). Removing a saved connection also leaves the remote runtime running.
 The explicit stop script signals a server only after its
@@ -215,12 +233,16 @@ desktop and the server's SSH dispatch (`resolveSshCliRunner` in
 After a launch that installed a runtime, cleanup runs under the host replacement lock, never
 on a drain/replacement or rollback connection, and excludes concurrent installs. It uses the
 live binary's `__ssh-helper compare-version` to remove only proven older, unused directories,
-keeping the live, retained and requested versions and the newest older rollback build (all
-unordered rollback candidates are preserved). It checks process commands, executable paths and
-cwd, renames victims into sibling `.trash-*` directories before deleting, and never follows
-symlinks. Errors only log `ssh.runtime.cleanup.*`. Windows is skipped because its process and
-shell utilities differ; hosts without readable `/proc` executable/cwd links or `flock`, including
-macOS, conservatively keep everything.
+keeping the live, retained and requested versions and one rollback build: the proven-older
+build installed most recently, which is the one the host ran before. Versions whose order
+against the live build is unknown, or that are newer, stay. It checks process commands,
+executable paths and cwd (`/proc` on Linux, `lsof` on macOS), renames victims into sibling
+`.trash-*` directories before deleting, and never follows symlinks. Each ordering check starts
+`goat`, so a long backlog shrinks over several connections, oldest installs first, within the
+cleanup deadline. Staging and trash directories over an hour old are removed too, since no
+install holds a lock then. The mutex is `flock`, or an atomic directory where `flock` is
+missing. Errors only log `ssh.runtime.cleanup.*`; a failed inspection keeps everything.
+Windows is skipped because its process and shell utilities differ.
 
 Runtime supply targets the owning process's exact release and platform, not the
 latest published build. The acquisition order in
@@ -239,7 +261,7 @@ archive integrity does not prove protocol support or authorize a userdata downgr
 
 Manual updates target the owning manager's version too. An idle update waits for running work;
 a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
-runtime whose version cannot be ordered, or an externally started server blocks replacement
+runtime whose version cannot be ordered, or a foreign server (see [Shared runtime](#shared-runtime)) blocks replacement
 without changing whether a compatible server can be used.
 
 "Older" and "newer" come from `compareRuntimeBuilds` in `packages/shared/src/semver.ts`, used by

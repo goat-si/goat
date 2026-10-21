@@ -81,7 +81,7 @@ export function normalizeOpenCodexBaseUrl(value: string): string {
     throw unavailable(INVALID_ADDRESS);
   return url.toString().replace(/\/+$/, "");
 }
-export const codexRouteEnvironment = (
+const codexRouteEnvironment = (
   settings: Pick<CodexSettings, "setupMode" | "modelRoute" | "opencodexBaseUrl">,
   environment: NodeJS.ProcessEnv,
 ) => {
