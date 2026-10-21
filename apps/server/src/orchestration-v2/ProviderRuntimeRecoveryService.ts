@@ -793,7 +793,7 @@ export const make = Effect.gen(function* () {
   ) {
     const continueAfterRestart = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
     const threadIds = yield* projections
-      .getRecoveryThreadIds("runtime")
+      .getRecoveryThreadIds("runtime-cleanup")
       .pipe(
         Effect.mapError(
           (cause) => new ProviderRuntimeRecoveryError({ operation: "read-projections", cause }),

@@ -170,6 +170,12 @@ It observes OpenCodex on the Codex execution host. OpenCodex owns link keys
 and tunnel lifecycle; GOAT's route selection stays on the Codex instance.
 The shared status contract is `packages/contracts/src/codexRoute.ts`.
 
+Proposed (not implemented): a hub environment that is the OpenCodex Home for the fleet. Devices
+join through OpenCodex Remote Link or Hub mode, driven over GOAT's SSH sessions, and GOAT checks
+each device's parity and reads the Home's quota pool.
+
+> Decision record: [ADR-0021](decisions/ADR-0021-goatclaw-hub.md)
+
 ## Source control
 
 Pull requests and repository operations go through `apps/server/src/sourceControl/`.

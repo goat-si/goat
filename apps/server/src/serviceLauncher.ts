@@ -54,9 +54,11 @@ export const PROBATION_MS = 10 * 60_000;
 export const SMOKE_TIMEOUT_MS = 30_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
-// Matches SERVER_EXIT_CODE_STATE_DIR_OWNED in contracts. The standalone
-// launcher stays independent of the Effect-backed contracts package.
+// Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
+// in contracts/desktopBootstrap. The standalone launcher must stay independent
+// of its Effect runtime; subprocess tests use the authoritative contract values.
 const STATE_DIR_OWNED_EXIT_CODE = 78;
+const DATABASE_AHEAD_EXIT_CODE = 79;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -1051,7 +1053,13 @@ export class Launcher {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
-      await this.#idleWhileStateDirOwned();
+      await this.#idleWhileRefused("state-dir-owned");
+      return;
+    }
+    // A trial still owns a restorable snapshot. An active build must not roll
+    // back to an even older runtime when the home already requires a newer one.
+    if (child.role === "active" && code === DATABASE_AHEAD_EXIT_CODE) {
+      await this.#idleWhileRefused("database-ahead");
       return;
     }
     if (this.#stopRequested || (await pathExists(stopMarkerPath(this.#baseDir)))) {
@@ -1098,16 +1106,16 @@ export class Launcher {
   /**
    * Exiting would make systemd or launchd start another refused server, so stay
    * idle until stopped or restarted. A pending update fails without restoring
-   * its backup: the other owner may have written to the database since.
+   * its backup: another build may have written to the database since.
    */
-  async #idleWhileStateDirOwned(): Promise<void> {
+  async #idleWhileRefused(reason: "state-dir-owned" | "database-ahead"): Promise<void> {
     this.#clearTimer();
     const pending = this.#state.update;
     if (pending?.status === "pending") {
       const next: ServiceState = {
         ...this.#state,
         activeVersion: pending.fromVersion,
-        update: terminalUpdate({ pending, status: "failed", reason: "state-dir-owned" }),
+        update: terminalUpdate({ pending, status: "failed", reason }),
       };
       await writeServiceState(this.#statePath, next);
       this.#state = next;
@@ -1117,7 +1125,9 @@ export class Launcher {
     // Signal listeners alone do not keep Node alive.
     this.#timer = setInterval(() => {}, 2_147_483_647);
     process.stderr.write(
-      "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
+      reason === "database-ahead"
+        ? "[service-launcher] This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.\n"
+        : "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
     );
   }
 

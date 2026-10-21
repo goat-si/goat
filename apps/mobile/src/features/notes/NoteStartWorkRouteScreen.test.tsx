@@ -204,6 +204,26 @@ describe("start work completion navigation", () => {
     expect(mocks.dismissed).toHaveBeenCalledOnce();
     expect(mocks.blocked).not.toHaveBeenCalled();
   });
+
+  it("releases the navigation guard after a rejected launch and retries the captured request", async () => {
+    const result = Promise.withResolvers<ReturnType<typeof AsyncResult.success<object>>>();
+    mocks.start.mockReturnValueOnce(result.promise).mockResolvedValueOnce(AsyncResult.success({}));
+    await render();
+    act(() => button("Start work").click());
+    expect(mocks.guarded).toBe(true);
+    expect(button("Starting…").disabled).toBe(true);
+
+    await act(async () => result.reject(new Error("Connection lost")));
+    expect(container.textContent).toContain("Connection lost");
+    expect(mocks.guarded).toBe(false);
+    expect(mocks.dismissed).not.toHaveBeenCalled();
+    expect(button("Retry this attempt").disabled).toBe(false);
+
+    await act(async () => button("Retry this attempt").click());
+    expect(mocks.start.mock.calls[1]).toEqual(mocks.start.mock.calls[0]);
+    expect(mocks.dismissed).toHaveBeenCalledOnce();
+    expect(mocks.blocked).not.toHaveBeenCalled();
+  });
 });
 
 describe("start work node selection", () => {
