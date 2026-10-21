@@ -199,6 +199,24 @@ Bitbucket, Forgejo, and GitCafe. The packages are `packages/source-control-githu
 that list is unsupported. `packages/source-control-testing` holds test doubles and is not a host.
 The contracts for linking a thread to a pull request stay in `packages/contracts`.
 
+## Computer use
+
+`apps/server/src/cua/CuaDriver.ts` owns the Cua Driver host lifecycle behind the server setting
+`enableCua`, which is off by default. One acquisition is shared by every caller, a crashed or failed
+host is retired and replaced on the next acquisition, and disabling stops the host. Standalone
+servers start `GOAT_CUA_DRIVER_PATH` when set, otherwise the pinned release that
+`apps/server/src/cua/CuaDriverInstallation.ts` downloads, checks against the size and SHA-256 in
+`packages/shared/src/cuaDriverRelease.ts`, and publishes under `<base>/tools/cua-driver/<version>`.
+Desktop servers send `cuaDriverRequest` on the desktop telemetry control pipe and wait for a
+`cuaDriverReport` (`packages/contracts/src/cua.ts`). The Electron shell ignores the request and
+hosts no driver, so a desktop acquisition fails after the 30-second startup bound.
+
+Every host passes the driver's telemetry and update-check opt-outs through its environment
+allowlist, and every MCP descriptor the service returns carries all of them. Nothing attaches the
+driver to provider sessions yet.
+
+> Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
+
 ## Services
 
 A WebSocket handler, HTTP route, or MCP tool decodes input, calls one service method, and maps

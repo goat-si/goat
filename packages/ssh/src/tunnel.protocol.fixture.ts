@@ -16,6 +16,7 @@ import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import {
   exitWithTestOwner,
   exitWithTestParent,
+  killGroupWithTestOwner,
   TEST_OWNER_FILE,
 } from "./testParentLifetime.fixture.ts";
 import * as SshTunnel from "./tunnel.ts";
@@ -630,7 +631,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   };
   const fixtureScope = yield* Scope.Scope;
   const remoteSpawn = (command: ChildProcess.Command) =>
-    realSpawner.spawn(command).pipe(Effect.provideService(Scope.Scope, fixtureScope));
+    realSpawner
+      .spawn(killGroupWithTestOwner(command))
+      .pipe(Effect.provideService(Scope.Scope, fixtureScope));
   const transport = ChildProcessSpawner.make((command) => {
     if (command._tag !== "StandardCommand") return remoteSpawn(command);
     if (command.command === "gh") {

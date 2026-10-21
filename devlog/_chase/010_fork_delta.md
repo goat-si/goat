@@ -56,6 +56,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components/chat`, `apps/web/src/index.css`
 - 정책: 레이아웃은 GOAT, 컴포저 동작은 upstream.
 
+### `cua-driver` Cua Driver 컴퓨터 사용 포트
+
+- 커밋: #665
+- 경로: `apps/server/src/cua`, `packages/shared/src/cuaDriverRelease.ts`, `packages/contracts/src/{cua,resourceTelemetry,settings,index}.ts`, `apps/server/src/resourceTelemetry/DesktopTelemetryReceiver.ts`, `apps/desktop/src/telemetry/DesktopTelemetryPublisher.ts`, `apps/server/src/server.ts`, `apps/server/package.json`, `packages/shared/package.json`, `pnpm-workspace.yaml`, `third-party-licenses.config.json`, `structure/decisions/ADR-0020-cua-driver-computer-use.md`
+- 정책: upstream이 머지하지 않은 PR #21694-#21697(고정 head `b8569ac92` `dc307c8a7` `6b627499b` `25852df14`)을 포트한 것이다. 이미 검토된 upstream 스택이 아니라 0.37.0 고정과 합친 새 통합이다. upstream이 자기 버전을 머지하면 대체하지 말고 고정 head와 파일별로 대조해 upstream 로직을 받고 GOAT 델타만 다시 얹는다: 0.37.0 고정(아카이브 바이트·SHA-256, catalog SDK 버전), `cuaDriverHostOptions`의 텔레메트리·업데이트 확인 끄기와 MCP 설명자의 `withCuaDriverPrivacyEnvironment`, 독립 서버 호스트 id `si.goat.server`, `GOAT_CUA_DRIVER_PATH`, `server.ts` layer 병합(`pipe` 20단계 한도). 이후 레인의 provider 부착, 첫 실행 안내, 안전 lease, 원격 호스트 판정도 같은 영역에 더한다.
+
 ### `delegated-tasks` 사이드바 위임 작업, 승격, launch 계보
 
 - 커밋: #33

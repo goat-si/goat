@@ -3,10 +3,12 @@ name: goat-ci
 # goat fork CI; every upstream workflow is disabled. Trusted runs (a manual run, or a pull request
 # from a branch of this repository) run on the EPYC self-hosted runners, which hosted concurrency on
 # the free plan cannot match. A pull request from a fork runs on GitHub-hosted ubuntu-24.04, so fork
-# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. Every job
-# carries the same runs-on expression, and the pre-push guard pins it. EPYC runners persist between
-# jobs, so no step may change the machine: a step that needs sudo or a throwaway VM runs on hosted
-# runners only.
+# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. The ci
+# matrix takes the epyc runners. goat-scope, goat-screenshot-gate and goat-ci-result take the two
+# runners labelled epyc-light instead, which carry no epyc label, so a busy matrix never makes a
+# short gate job wait for a runner. The pre-push guard pins both expressions. EPYC runners persist
+# between jobs, so no step may change the machine: a step that needs sudo or a throwaway VM runs on
+# hosted runners only.
 #
 # A pull request runs only what its changes reach: the goat-scope job reads the diff, the workspace
 # graph and the import graph (.github/scripts/goat-ci-scope.cjs) and hands ci its matrix. The server
@@ -56,7 +58,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && 'goat-scope' || 'goat-ci (label ignored)' }}
     # Outside pull requests are closed (close-outside-prs.yml), so a fork's run would only spend minutes.
     if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:'))
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.scope.outputs.matrix }}
@@ -324,7 +326,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && 'goat-screenshot-gate' || 'goat-ci (label ignored)' }}
     # It reads the pull request, so a manual run has nothing to inspect.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:'))
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -368,7 +370,7 @@ jobs:
     needs: [scope, ci, screenshot-gate]
     # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Require every selected task

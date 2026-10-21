@@ -148,6 +148,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -348,6 +349,11 @@ const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMoni
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -1178,7 +1184,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // pipe takes at most 20 steps, so the Cua Driver joins this merge.
+  Layer.provideMerge(Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver)),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
