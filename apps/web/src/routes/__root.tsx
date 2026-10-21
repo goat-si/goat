@@ -27,7 +27,7 @@ import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
-import { ComputerUseFirstRunPrompt } from "../components/desktop/ComputerUseFirstRunPrompt";
+import { FirstRunPrompts } from "../components/desktop/FirstRunPrompts";
 import { ConnectionCatalogUnreadableToast } from "../components/desktop/ConnectionCatalogUnreadableNotice";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { HubNodesImportCoordinator } from "../components/desktop/HubNodesImportCoordinator";
@@ -262,7 +262,7 @@ function RootRouteView() {
           ) : null}
           {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
           {isElectron ? <DesktopUpdateLaunchNotice /> : null}
-          {isElectron && primaryEnvironmentAuthenticated ? <ComputerUseFirstRunPrompt /> : null}
+          {isElectron && primaryEnvironmentAuthenticated ? <FirstRunPrompts /> : null}
           {appShell}
           {/* Above the router: a theme draft is judged by walking the app, so the
               editor has to survive navigation away from settings. */}

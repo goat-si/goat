@@ -12,6 +12,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
+  type GoatclawSettings,
   type HostStatusEntry,
   HubCloudHolder,
   type HubSettings as HubSettingsValue,
@@ -28,6 +29,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { profileLabel } from "../desktop/firstRunPrompts.logic";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -99,19 +101,33 @@ export function HubSettings() {
 function useHubSettings(environmentId: EnvironmentId) {
   const registry = useContext(RegistryContext);
   const settings = useEnvironmentSettings(environmentId, (value) => value.hub);
+  const goatclaw = useEnvironmentSettings(environmentId, (value) => value.goatclaw);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const save = async (hub: Partial<HubSettingsValue>) => {
+  const savePatch = async (
+    patch:
+      | { readonly hub: Partial<HubSettingsValue> }
+      | { readonly goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">> },
+  ) => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return;
     setSaving(true);
     setError(null);
-    const result = await update({ environmentId, input: { patch: { hub } } });
+    const result = await update({ environmentId, input: { patch } });
     setSaving(false);
     if (result._tag === "Failure") setError("Could not save the setting. Try again.");
   };
-  return { settings, canConfigure, saving, error, save };
+  return {
+    settings,
+    goatclaw,
+    canConfigure,
+    saving,
+    error,
+    save: (hub: Partial<HubSettingsValue>) => savePatch({ hub }),
+    saveGoatclaw: (goatclaw: Partial<Pick<GoatclawSettings, "enabled" | "defaultProfile">>) =>
+      savePatch({ goatclaw }),
+  };
 }
 
 function HubControls({
@@ -191,6 +207,46 @@ function HubControls({
                 {HubCloudHolder.literals.map((value) => (
                   <SelectItem key={value} value={value}>
                     {CLOUD_HOLDER_LABEL[value]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("hub-permission-profiles")}
+          serverScoped
+          settingKeys={["goatclaw"]}
+          description="Agents can launch, merge or change settings only as far as their profile allows. Agents without one get the default profile."
+          control={
+            <Switch
+              aria-label="Permission profiles"
+              checked={hub.goatclaw.enabled}
+              disabled={hub.saving || !hub.canConfigure}
+              onCheckedChange={(enabled) => void hub.saveGoatclaw({ enabled })}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("hub-default-profile")}
+          serverScoped
+          settingKeys={["goatclaw"]}
+          description="The profile for agents launched without one."
+          control={
+            <Select
+              value={hub.goatclaw.defaultProfile}
+              disabled={hub.saving || !hub.canConfigure || !hub.goatclaw.enabled}
+              onValueChange={(value) => {
+                if (typeof value === "string") void hub.saveGoatclaw({ defaultProfile: value });
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="Default profile">
+                <SelectValue>{(value: string) => profileLabel(value)}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {Object.keys(hub.goatclaw.profiles).map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {profileLabel(id)}
                   </SelectItem>
                 ))}
               </SelectPopup>

@@ -11,7 +11,8 @@ Linux.
 ## Turn it on
 
 The first time you open the desktop app, GOAT asks whether agents may use this
-computer. Choose **Later** to leave it off; GOAT does not ask again.
+computer, or on a later launch when it has another first-run question to ask
+first. Choose **Later** to leave it off; GOAT does not ask again.
 
 You can turn it on or off at any time in **Settings → Integrations → Computer
 use**. Pick the environment whose computer agents should use, then turn on

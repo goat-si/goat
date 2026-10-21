@@ -7,6 +7,13 @@ shows whether each linked device really uses the hub, and holds cloud runs there
 
 The hub is off until you turn it on. Make only one environment the hub.
 
+When the desktop app first finds OpenCodex on its machine, it asks once whether
+Codex there should use your OpenCodex Home or keep its own sign-in, and, on a
+Home or a machine not yet linked to one, whether to turn on the hub and
+permission profiles. It asks one question per launch, and closing a question
+leaves everything as it was. Change these answers later in **Settings →
+Providers → Codex** and **Settings → Hub**.
+
 ## Turn it on
 
 Open **Settings → Hub** on the machine whose OpenCodex is the Home, and turn on
@@ -18,6 +25,13 @@ Cloud runs start on the hub or wherever a sign-in exists.
 Devices join from OpenCodex (`ocx link add` on the Home) and show under
 **Devices** after the next read. Accounts and keys stay in OpenCodex; open its
 dashboard from **Accounts and keys**.
+
+## Permission profiles
+
+**Permission profiles** is off by default. With it on, an agent can launch
+threads, merge pull requests or change settings only as far as its profile
+allows, and an agent without its own profile gets **Default profile**. Turn it on
+in **Settings → Hub**.
 
 ## Read a device
 

@@ -159,6 +159,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
   },
   {
+    id: "hub-permission-profiles",
+    title: "Permission profiles",
+    to: "/settings/hub",
+    searchTerms: ["goatclaw permission profiles supervisor agents capabilities limits"],
+  },
+  {
+    id: "hub-default-profile",
+    title: "Default profile",
+    to: "/settings/hub",
+    searchTerms: ["goatclaw default permission profile worker manager owner observer"],
+  },
+  {
     id: "hub-devices",
     title: "Hub devices",
     to: "/settings/hub",

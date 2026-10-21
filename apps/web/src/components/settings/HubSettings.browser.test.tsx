@@ -158,18 +158,29 @@ function setup() {
       entry: { target: { _tag: "PrimaryConnectionTarget" } },
     },
   });
-  state.update
-    .mockReset()
-    .mockImplementation(
-      async (
-        _registry: unknown,
-        { input }: { input: { patch: { hub: Partial<ServerSettings["hub"]> } } },
-      ) => {
-        const next = registry.get(settings);
-        registry.set(settings, { ...next, hub: { ...next.hub, ...input.patch.hub } });
-        return { _tag: "Success", value: undefined };
+  state.update.mockReset().mockImplementation(
+    async (
+      _registry: unknown,
+      {
+        input,
+      }: {
+        input: {
+          patch: {
+            hub?: Partial<ServerSettings["hub"]>;
+            goatclaw?: Partial<ServerSettings["goatclaw"]>;
+          };
+        };
       },
-    );
+    ) => {
+      const next = registry.get(settings);
+      registry.set(settings, {
+        ...next,
+        hub: { ...next.hub, ...input.patch.hub },
+        goatclaw: { ...next.goatclaw, ...input.patch.goatclaw },
+      });
+      return { _tag: "Success", value: undefined };
+    },
+  );
   state.verify.mockReset().mockImplementation(async () => {
     const parity: HubParityResult = {
       verdict: "ok",
@@ -246,5 +257,30 @@ it("turns the hub and a device's own sign-in on and back off", async () => {
     { hub: { enabled: false } },
     { hub: { devices: { "macmini-ts": { localFallback: true } } } },
     { hub: { devices: { "macmini-ts": { localFallback: false } } } },
+  ]);
+});
+
+it("turns permission profiles on with a default profile, and back off", async () => {
+  using fixture = setup();
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  const profiles = screen.getByRole("switch", { name: "Permission profiles" });
+  const defaultProfile = screen.getByRole("combobox", { name: "Default profile" });
+  await expect.element(profiles).not.toBeChecked();
+  await expect.element(defaultProfile).toBeDisabled();
+  await userEvent.click(profiles);
+  await expect.element(profiles).toBeChecked();
+  await userEvent.click(defaultProfile);
+  await userEvent.click(screen.getByRole("option", { name: "Manager", exact: true }));
+  await expect.element(defaultProfile).toHaveTextContent("Manager");
+  await userEvent.click(profiles);
+  await expect.element(profiles).not.toBeChecked();
+  expect(state.update.mock.calls.map((call) => call[1].input.patch)).toEqual([
+    { goatclaw: { enabled: true } },
+    { goatclaw: { defaultProfile: "manager" } },
+    { goatclaw: { enabled: false } },
   ]);
 });

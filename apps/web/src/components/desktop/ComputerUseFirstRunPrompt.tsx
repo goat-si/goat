@@ -1,39 +1,26 @@
-import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId } from "@goat/contracts";
 import { useEffect } from "react";
 
-import {
-  persistClientSettingsPatch,
-  useClientSettings,
-  useClientSettingsHydrated,
-} from "../../hooks/useSettings";
-import { isLocalEnvironmentDisabled } from "../../localEnvironment";
-import { primaryServerConfigAtom } from "../../state/server";
 import { ComputerUseSetup, useComputerUseHost } from "../settings/ComputerUseSettings";
 import { computerUseUnavailable } from "../settings/CuaSetupDialog.logic";
+import { recordFirstRunPrompt } from "./recordFirstRunPrompt";
 
 /**
  * Asks once per desktop profile whether agents may use this computer. Later leaves computer
  * use off; Settings → Integrations → Computer use turns it on at any time.
  */
-export function ComputerUseFirstRunPrompt() {
-  const hydrated = useClientSettingsHydrated();
-  const prompt = useClientSettings((settings) => settings.computerUsePrompt);
-  const serverConfig = useAtomValue(primaryServerConfigAtom);
-  if (!hydrated || prompt !== "pending" || serverConfig === null || isLocalEnvironmentDisabled())
-    return null;
-  return <LocalComputerUsePrompt environmentId={serverConfig.environment.environmentId} />;
-}
-
-function LocalComputerUsePrompt({
+export function ComputerUseFirstRunPrompt({
   environmentId,
+  onClosed,
 }: {
-  environmentId: Parameters<typeof useComputerUseHost>[0];
+  environmentId: EnvironmentId;
+  onClosed: () => void;
 }) {
   const host = useComputerUseHost(environmentId, true);
   const alreadyOn = host.enabled;
   // Someone turned it on elsewhere first; that answers the question.
   useEffect(() => {
-    if (alreadyOn) void persistClientSettingsPatch({ computerUsePrompt: "enabled" });
+    if (alreadyOn) void recordFirstRunPrompt("computerUse", "answered");
   }, [alreadyOn]);
   // A computer without a usable screen has nothing to ask about.
   if (
@@ -47,11 +34,10 @@ function LocalComputerUsePrompt({
     <ComputerUseSetup
       host={host}
       hostLabel={host.status.platform === "darwin" ? "this Mac" : "this computer"}
-      onClose={(outcome) =>
-        void persistClientSettingsPatch({
-          computerUsePrompt: outcome === "enabled" ? "enabled" : "later",
-        })
-      }
+      onClose={(outcome) => {
+        void recordFirstRunPrompt("computerUse", outcome === "enabled" ? "answered" : "later");
+        onClosed();
+      }}
     />
   );
 }

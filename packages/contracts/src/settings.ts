@@ -325,6 +325,26 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
+/** "later" was closed without an answer; neither it nor "answered" is asked again. */
+export const FirstRunPromptState = Schema.Literals(["pending", "answered", "later"]);
+export type FirstRunPromptState = typeof FirstRunPromptState.Type;
+
+const firstRunPrompt = FirstRunPromptState.pipe(
+  Schema.withDecodingDefault(Effect.succeed("pending" as const)),
+);
+
+/**
+ * Questions the desktop asks once per profile. Only the record is shared: each answer lives in
+ * the setting its prompt changes, and each prompt stays independent of the others.
+ */
+export const FirstRunPrompts = Schema.Struct({
+  computerUse: firstRunPrompt,
+  opencodex: firstRunPrompt,
+  goatclaw: firstRunPrompt,
+});
+export type FirstRunPrompts = typeof FirstRunPrompts.Type;
+export type FirstRunPromptId = keyof FirstRunPrompts;
+
 export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
@@ -496,10 +516,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  // The desktop asks once per profile whether agents may use this computer.
-  computerUsePrompt: Schema.Literals(["pending", "enabled", "later"]).pipe(
-    Schema.withDecodingDefault(Effect.succeed("pending")),
-  ),
+  firstRunPrompts: FirstRunPrompts.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /** Before firstRunPrompts; hydration folds it into firstRunPrompts.computerUse. */
+  computerUsePrompt: Schema.optionalKey(Schema.Literals(["pending", "enabled", "later"])),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
@@ -2120,7 +2139,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
-  computerUsePrompt: Schema.optionalKey(Schema.Literals(["pending", "enabled", "later"])),
+  firstRunPrompts: Schema.optionalKey(FirstRunPrompts),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });
