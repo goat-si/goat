@@ -166,6 +166,36 @@ const decodeMetrics = Schema.decodeUnknownEffect(metricsCodec);
 const encodeMetrics = Schema.encodeEffect(metricsCodec);
 
 describe("QuotaPool", () => {
+  it.effect("preserves providers when optional properties explicitly contain undefined", () =>
+    Effect.gen(function* () {
+      const withUndefined = {
+        ...pool,
+        providers: pool.providers.map((provider) => ({
+          ...provider,
+          pooled: { ...provider.pooled, headroom: undefined, nextResetAt: undefined },
+          accounts: provider.accounts.map((account) => ({
+            ...account,
+            label: undefined,
+            plan: undefined,
+            failure: undefined,
+            windows: account.windows.map((window) => ({
+              ...window,
+              scopeModel: undefined,
+              resetsAt: undefined,
+            })),
+          })),
+        })),
+      } satisfies QuotaPool;
+      const wire = yield* encodePool(withUndefined);
+      // Effect's JSON codec represents an explicitly present undefined as null, then restores undefined.
+      const expected = JSON.parse(
+        JSON.stringify(withUndefined, (_key, value) => (value === undefined ? null : value)),
+      );
+      expect(JSON.parse(JSON.stringify(wire))).toEqual(expected);
+      expect(yield* decodePool(wire)).toEqual(withUndefined);
+    }),
+  );
+
   it.effect("round-trips Codex, model-scoped Anthropic and Kiro credit evidence as JSON", () =>
     Effect.gen(function* () {
       const decoded = yield* decodePool(pool);

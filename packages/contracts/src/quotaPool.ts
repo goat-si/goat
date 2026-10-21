@@ -1,12 +1,25 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ForwardCompatibleArray, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
-// These JSON-only shapes need nested arrays to decode before encoding recovery validates their contents.
+// Encoding recovery validates raw nested arrays too early; recover only while decoding unknown entries.
 const quotaArray = <Element extends Schema.Top>(element: Element) =>
-  ForwardCompatibleArray(
-    Schema.Unknown.pipe(Schema.decodeTo(element)),
-  ) as ForwardCompatibleArray<Element>;
+  Schema.Array(
+    Schema.UndefinedOr(element).pipe(Schema.catchDecoding(() => Effect.succeedSome(undefined))),
+  ).pipe(
+    Schema.decodeTo(
+      Schema.Array(Schema.toType(element)),
+      SchemaTransformation.transform<
+        ReadonlyArray<Element["Type"]>,
+        ReadonlyArray<Element["Type"] | undefined>
+      >({
+        decode: (values) => values.filter((value) => value !== undefined),
+        encode: (values) => values,
+      }),
+    ),
+  );
 
 export const QuotaWindowKind = Schema.Literals([
   "burst_5h",
