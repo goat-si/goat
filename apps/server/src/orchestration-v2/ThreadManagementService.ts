@@ -61,6 +61,7 @@ import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
 
@@ -1122,6 +1123,7 @@ const make = Effect.gen(function* () {
 
   /** Dispatches one message and reads back the run it started, joined, or queued behind. */
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   /** See `gateUnattendedSteering`: such a message waits as the next turn instead. */
   const unattendedSteeringMode = (
     input: ThreadManagementSendInput,
@@ -1133,6 +1135,9 @@ const make = Effect.gen(function* () {
         (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
       )
         return mode;
+      // With computer use off no turn holds a driver, so steering stays as it always was,
+      // including for senders on other machines this host cannot classify.
+      if (Option.isNone(cuaDriver) || !(yield* cuaDriver.value.enabled)) return mode;
       const gated = yield* ComputerUseOrigin.gateUnattendedSteering(
         ComputerUseOrigin.projectionOriginReads({
           getThreadRecords: (id, fields, filter) =>

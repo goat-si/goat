@@ -152,10 +152,12 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
     an instruction that joins a running turn. A message from an unattended origin (a scheduled
     task, or a sender thread that classifies unattended) aimed at a person's running turn is
     therefore queued behind that turn instead of steering it
-    (`gateUnattendedSteering`, applied where `ThreadManagementService` sends). It then starts its
-    own turn, which this message classifies as unattended. Steering into an unattended turn is
-    unchanged, since that turn has no direct driver. A person promoting the queued message to
-    steer is their decision.
+    (`gateUnattendedSteering`, applied where `ThreadManagementService` sends) while computer use
+    is on. It then starts its own turn, which this message classifies as unattended. Steering
+    into an unattended turn is unchanged, since that turn has no direct driver, and so is all
+    steering while computer use is off, when no turn holds a driver. A sender this host cannot
+    classify, such as a thread on another machine, counts as unattended. A person promoting the
+    queued message to steer is their decision.
 - **Admission lease.** An unattended thread asks with `goat_computer_use_request`, which creates
   an approval handoff on `computer_use.grant` whose text names the thread and turn, this host,
   the stated purpose and the expiry. Approving it needs `settings:write` in an authenticated

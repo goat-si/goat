@@ -34,6 +34,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
@@ -1172,11 +1173,13 @@ it.effect.each(["running", "completed"] as const)(
 );
 
 it.effect.each([
-  { sender: "channel-worker:abc", expected: "queue_after_active" },
-  { sender: "peer", expected: "steer_active" },
+  { sender: "channel-worker:abc", computerUse: true, expected: "queue_after_active" },
+  { sender: "peer", computerUse: true, expected: "steer_active" },
+  // No turn holds a driver while computer use is off, so nothing changes.
+  { sender: "channel-worker:abc", computerUse: false, expected: "steer_active" },
 ] as const)(
-  "queues a steer from an unattended sender behind a person's turn ($sender)",
-  ({ sender, expected }) =>
+  "queues a steer from an unattended sender behind a person's turn ($sender, computer use $computerUse)",
+  ({ sender, computerUse, expected }) =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("mine");
       const runId = RunId.make("typed");
@@ -1211,6 +1214,9 @@ it.effect.each([
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(layerReceiptsTest),
             Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+            Layer.provide(
+              Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(computerUse) }),
+            ),
             Layer.provide(
               Layer.mock(Orchestrator.OrchestratorV2)({
                 getThreadRecords: (id) => Effect.succeed(id === "peer" ? peer : projection),
