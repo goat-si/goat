@@ -128,7 +128,6 @@ jobs:
             echo "HOME=$HOME"
             # The runners share one host, so its load explains a slow job.
             echo "nproc=$(nproc) loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
-            readlink -f /bin/sleep
             test "$HOME" = "/opt/actions-runner/$RUNNER_NAME/_home"
             test -w "$HOME"
             echo "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64" >> "$GITHUB_ENV"
@@ -215,10 +214,12 @@ jobs:
 
       # The ssh tests start real shells, servers and sshd, and several wait a fixed
       # 2 seconds for a process to stop. Two workers leave a 4-vCPU hosted runner room for them.
+      # The suite mostly waits, and with two workers the shared EPYC host ran it about twice as
+      # slowly as a hosted runner, near the job timeout; its 192 cores take eight.
       - name: Test ssh
         if: matrix.task == 'test-ssh'
         env:
-          VITEST_MAX_WORKERS: "2"
+          VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && '8' || '2' }}
         run: vp run --filter @goat/ssh test
 
       - name: Test provider core
