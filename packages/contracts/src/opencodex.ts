@@ -80,3 +80,31 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
   fallback: ForwardCompatibleOptional(OpenCodexDeviceFallback),
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;
+
+/** `alias` null is the machine that coordinates the window: the Home, or a standalone install. */
+const UpdateAlias = Schema.NullOr(Schema.String);
+
+export const OpenCodexUpdateMemberRecord = Schema.Struct({
+  alias: UpdateAlias,
+  phase: Schema.Literals(["installed", "probation", "accepted", "rolled-back", "rollback-failed"]),
+  fromVersion: Schema.String,
+  targetVersion: Schema.String,
+  at: Schema.Number,
+  reason: Schema.optional(Schema.String),
+});
+export type OpenCodexUpdateMemberRecord = typeof OpenCodexUpdateMemberRecord.Type;
+
+/** The coordinator's last managed-update decision; adopted installs only ever get advice. */
+export const OpenCodexUpdateStatus = Schema.Struct({
+  checkedAt: Schema.Number,
+  decision: Schema.Literals(["none", "wait", "update"]),
+  /** Machine-readable code such as `up-to-date`, `busy` or `child-cannot-follow`. */
+  reason: Schema.String,
+  targetVersion: Schema.optional(Schema.String),
+  waitingOn: Schema.Array(UpdateAlias),
+  advisories: Schema.Array(
+    Schema.Struct({ alias: UpdateAlias, version: Schema.String, targetVersion: Schema.String }),
+  ),
+  members: Schema.Array(OpenCodexUpdateMemberRecord),
+});
+export type OpenCodexUpdateStatus = typeof OpenCodexUpdateStatus.Type;

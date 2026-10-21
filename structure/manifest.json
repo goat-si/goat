@@ -166,6 +166,8 @@
         "apps/server/src/hub/localRoutes.ts",
         "apps/server/src/hub/HubMembership.ts",
         "apps/server/src/hub/HubOcx.ts",
+        "apps/server/src/hub/OpenCodexManagedUpdate.ts",
+        "apps/server/src/hub/opencodexUpdatePlan.ts",
         "packages/contracts/src/hubParity.ts",
         "packages/contracts/src/hubDevice.ts",
         "apps/server/src/provider/builtInDrivers.ts",

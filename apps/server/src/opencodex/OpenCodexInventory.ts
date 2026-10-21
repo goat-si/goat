@@ -75,6 +75,7 @@ const Health = Schema.Struct({
   port: Schema.optional(Port),
   uptime: ForwardCompatibleOptional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
   instanceId: ForwardCompatibleOptional(Schema.String),
+  pid: ForwardCompatibleOptional(Schema.Int),
 });
 const Ready = Schema.Struct({
   ...Health.fields,
@@ -435,6 +436,7 @@ const make = Effect.gen(function* () {
         ...(health?.uptime !== undefined && healthResponse
           ? { startedAt: healthResponse.observedAt - health.uptime * 1000 }
           : {}),
+        ...(health?.pid !== undefined ? { processId: health.pid } : {}),
         ...(childLinkId ? { childLinkId } : {}),
         ...(record ? { settingsLinkId: record.linkId } : {}),
         ...(settings ? { settingsDigest: yield* digest(settings) } : {}),

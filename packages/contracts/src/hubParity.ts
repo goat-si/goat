@@ -25,6 +25,8 @@ export const HubParityEvidence = Schema.Struct({
   healthRole: Schema.optional(Schema.String),
   instanceId: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.Number),
+  /** The runtime's process id from `/healthz`; a change proves it restarted. */
+  processId: Schema.optional(Schema.Int),
   childLinkId: Schema.optional(Schema.String),
   settingsLinkId: Schema.optional(Schema.String),
   settingsDigest: Schema.optional(Schema.String),

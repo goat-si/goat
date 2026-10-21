@@ -17,7 +17,7 @@ import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
-import { OpenCodexInventorySnapshot } from "./opencodex.ts";
+import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
 
 /**
@@ -63,6 +63,11 @@ export const HostThreadCounts = Schema.Struct({
   queued: NonNegativeInt.annotate({
     description: "Threads with a queued turn that has not started.",
   }),
+  subagentsRunning: Schema.optional(
+    NonNegativeInt.annotate({
+      description: "Subagent threads running a turn. Older hosts omit it.",
+    }),
+  ),
 });
 export type HostThreadCounts = typeof HostThreadCounts.Type;
 
@@ -229,6 +234,8 @@ export const HostStatusEntry = Schema.Struct({
   /** Self-healing conditions this machine derived for the host. Older servers omit it. */
   conditions: Schema.optional(Schema.Array(HostCondition)),
   parity: ForwardCompatibleOptional(HubParityResult),
+  /** Managed OpenCodex updates this machine coordinates. Only the answering machine sets it. */
+  opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
 });

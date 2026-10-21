@@ -373,7 +373,7 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(calls.every((call) => call.writes === false)).toBe(true);
     expect(calls.every((call) => call.timeoutMs === HOST_STATUS_REMOTE_TIMEOUT_MS)).toBe(true);
     expect(calls.every((call) => call.arguments.local === true)).toBe(true);
-    expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
+    expect(queries).toEqual([{ projectId: undefined, includeSubagents: true }]);
     expect(refreshes).toEqual(["codex"]);
   }),
 );
