@@ -1,5 +1,7 @@
 import {
-  HOST_STORAGE_BUDGETS,
+  HOST_HISTORY_BUDGET_BYTES,
+  MEMORY_STORE_BUDGET_BYTES,
+  MEMORY_STORE_TARGET_BYTES,
   type HostStorageHealth,
   type HostStrayProcesses,
   type ServerEventLoopStall,
@@ -17,7 +19,10 @@ export type HostHealthTone = "success" | "warning" | "destructive" | "muted";
 export const SLOW_CONNECT_MS = 30_000;
 /** A connected host whose status read has waited this long is not answering. */
 export const SLOW_ANSWER_MS = 10_000;
-/** Storage at this share of its budget shows in the host's tooltip before it alerts. */
+/**
+ * History at this share of its budget is approaching it: the host's tooltip says so before it
+ * alerts. Memory approaches at MEMORY_STORE_TARGET_BYTES, where its own warning starts.
+ */
 export const STORAGE_APPROACHING_RATIO = 0.75;
 /** History this many times its budget slows the host down. */
 export const STORAGE_CRITICAL_RATIO = 3;
@@ -106,8 +111,8 @@ const meter = (bytes: number | null, budgetBytes: number): HostStorageMeter => (
   ratio: bytes === null ? null : bytes / budgetBytes,
 });
 
-const levelOf = (ratio: number | null): HostStorageLevel =>
-  ratio === null || ratio < STORAGE_APPROACHING_RATIO
+const levelOf = (ratio: number | null, approachingRatio: number): HostStorageLevel =>
+  ratio === null || ratio < approachingRatio
     ? "ok"
     : ratio < 1
       ? "approaching"
@@ -133,10 +138,10 @@ export function presentHostStorage(
   storage: HostStorageHealth,
   nowMs: number,
 ): HostStoragePresentation {
-  const memory = meter(storage.memoryBytes, HOST_STORAGE_BUDGETS.memoryBytes);
-  const history = meter(storage.historyBytes, HOST_STORAGE_BUDGETS.historyBytes);
-  const memoryLevel = levelOf(memory.ratio);
-  const historyLevel = levelOf(history.ratio);
+  const memory = meter(storage.memoryBytes, MEMORY_STORE_BUDGET_BYTES);
+  const history = meter(storage.historyBytes, HOST_HISTORY_BUDGET_BYTES);
+  const memoryLevel = levelOf(memory.ratio, MEMORY_STORE_TARGET_BYTES / MEMORY_STORE_BUDGET_BYTES);
+  const historyLevel = levelOf(history.ratio, STORAGE_APPROACHING_RATIO);
   const level = LEVEL_ORDER[historyLevel] >= LEVEL_ORDER[memoryLevel] ? historyLevel : memoryLevel;
   const worse = LEVEL_ORDER[historyLevel] >= LEVEL_ORDER[memoryLevel] ? "history" : "memory";
   const compactingMs =

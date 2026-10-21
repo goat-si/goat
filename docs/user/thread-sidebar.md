@@ -182,6 +182,16 @@ graph's heat, refreshed every 15 seconds while the page is open. A machine shows
 when no connected machine reports on it. Collapse the panel to a one-line summary; it stays
 collapsed until you open it again.
 
+Alerts say how long a problem has lasted and offer one next step. A connection that takes more
+than 30 seconds offers **Retry**. A connected machine that stops answering for 10 seconds says
+so, with the likely cause: CPU load, or a state database whose thread history is over its 2 GB
+budget. History over budget offers **Compact**, which runs that machine's history cleanup now; on
+databases created before online space reclamation, the file shrinks after `goat doctor` runs
+there. A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
+behind by test runs, whose launcher exited and whose home is deleted or temporary, appear as one
+item with **Clean up**; it stops only those processes, never a server with a real home. When
+there are more than three alerts, **+N more** opens the rest with their actions.
+
 Below the list, **Connections** shows your saved machines with the same controls as
 **Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
 another with **Add device**.

@@ -60,6 +60,11 @@ describe("presentHostStorage", () => {
     expect(view.summary).toBe("History 900 MB of 2 GB · memory 12 MB of 100 MB");
     const approaching = presentHostStorage(storage({ historyBytes: 1.6 * GB }), NOW);
     expect(approaching).toMatchObject({ level: "approaching", tone: "muted", alert: null });
+    // Memory approaches at the memory store's own target, half its budget.
+    expect(presentHostStorage(storage({ memoryBytes: 60 * MB }), NOW)).toMatchObject({
+      level: "approaching",
+      alert: null,
+    });
   });
 
   it("alerts when history passes its budget, and says it slows the host at 3x", () => {

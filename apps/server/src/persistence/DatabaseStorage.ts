@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -22,6 +23,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { resolveHostCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
+import * as Metrics from "../observability/Metrics.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -30,11 +32,8 @@ import * as Settings from "../serverSettings.ts";
 /** Pages returned per reclaim pass; one minute of churn, not a backlog. */
 const RECLAIM_PAGES_PER_PASS = 1024;
 const COMPACTION_INTERVAL = Duration.hours(6);
-/**
- * Measuring the memory tables walks their pages, so it reuses a recent figure; the rest of the
- * accounting is PRAGMA reads and stays fresh every minute.
- */
-const MEMORY_MEASURE_INTERVAL_MS = 10 * 60_000;
+/** The memory store's own sample, so its pages are measured once, by the memory worker. */
+const memoryStoreTotal = Metric.withAttributes(Metrics.memoryStoreBytes, { area: "total" });
 
 export class DatabaseStorage extends Context.Service<
   DatabaseStorage,
@@ -66,10 +65,6 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const statusRef = yield* SubscriptionRef.make<DatabaseStorageStatus | null>(null);
   const healthRef = yield* Ref.make<HostStorageHealth | null>(null);
-  const memoryMeasure = yield* Ref.make<{ readonly at: number; readonly bytes: number | null }>({
-    at: Number.NEGATIVE_INFINITY,
-    bytes: null,
-  });
   const compaction = yield* Ref.make<{
     readonly since: string | null;
     readonly last: HostStorageCompactionResult | null;
@@ -90,23 +85,6 @@ const make = Effect.gen(function* () {
     path.resolve(config.baseDir, "userdata", path.basename(config.dbPath));
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
-  // Only memory_* objects (tables, their indexes, FTS shadow tables), one name at a time: dbstat
-  // narrows to a name only on equality, and an unfiltered scan walks the whole database.
-  const measureMemoryBytes = Effect.gen(function* () {
-    const names = yield* sql<{ readonly name: string }>`
-      SELECT name FROM sqlite_schema WHERE tbl_name LIKE 'memory!_%' ESCAPE '!'
-    `;
-    let bytes = 0;
-    for (const { name } of names) {
-      const rows = yield* sql<{ readonly bytes: number | null }>`
-        SELECT sum(pgsize) AS bytes FROM dbstat WHERE name = ${name} AND aggregate = TRUE
-      `;
-      bytes += rows[0]?.bytes ?? 0;
-      yield* Effect.yieldNow;
-    }
-    return bytes;
-  }).pipe(Effect.orElseSucceed(() => null));
-
   const readHealth = Effect.gen(function* () {
     const pages = yield* sql<{ readonly page_count: number }>`PRAGMA page_count`;
     const free = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
@@ -114,17 +92,14 @@ const make = Effect.gen(function* () {
     const pageSize = size[0]?.page_size ?? 0;
     const databaseBytes = (pages[0]?.page_count ?? 0) * pageSize;
     const reclaimableBytes = (free[0]?.freelist_count ?? 0) * pageSize;
-    const now = yield* Clock.currentTimeMillis;
-    let memory = yield* Ref.get(memoryMeasure);
-    if (now - memory.at >= MEMORY_MEASURE_INTERVAL_MS) {
-      memory = { at: now, bytes: yield* measureMemoryBytes };
-      yield* Ref.set(memoryMeasure, memory);
-    }
+    // Every memory btree holds at least one page, so zero means no sample has been taken yet.
+    const sampled = (yield* Metric.value(memoryStoreTotal)).value;
+    const memoryBytes = sampled > 0 ? sampled : null;
     const { since, last } = yield* Ref.get(compaction);
     const health: HostStorageHealth = {
       databaseBytes,
-      memoryBytes: memory.bytes,
-      historyBytes: Math.max(0, databaseBytes - reclaimableBytes - (memory.bytes ?? 0)),
+      memoryBytes,
+      historyBytes: Math.max(0, databaseBytes - reclaimableBytes - (memoryBytes ?? 0)),
       reclaimableBytes,
       measuredAt: yield* nowIso,
       ...(since === null ? {} : { compactingSince: since }),

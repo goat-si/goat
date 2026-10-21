@@ -63,14 +63,11 @@ export const HostThreadCounts = Schema.Struct({
 export type HostThreadCounts = typeof HostThreadCounts.Type;
 
 /**
- * Per-host storage budgets. Memory is the memory store's tables; history is everything else in
- * the state database, almost all orchestration events and projections. They grow for different
- * reasons and are fixed differently, so each has its own budget.
+ * Orchestration history's share of one server's state database: everything that is neither the
+ * memory store (budgeted by MEMORY_STORE_BUDGET_BYTES) nor free pages. Provisional until history
+ * gets its own budget and retirement; replace this with that constant when it lands.
  */
-export const HOST_STORAGE_BUDGETS = {
-  memoryBytes: 100 * 1024 ** 2,
-  historyBytes: 2 * 1024 ** 3,
-} as const;
+export const HOST_HISTORY_BUDGET_BYTES = 2 * 1024 ** 3;
 
 /** The last on-demand or scheduled history compaction this server finished. */
 export const HostStorageCompactionResult = Schema.Struct({
@@ -89,7 +86,7 @@ export type HostStorageCompactionResult = typeof HostStorageCompactionResult.Typ
 /** The state database of the machine that answered, from its once-a-minute storage pass. */
 export const HostStorageHealth = Schema.Struct({
   databaseBytes: NonNegativeInt,
-  /** Null when the memory tables could not be measured on this SQLite build. */
+  /** The memory store's last sample (goat_memory_store_bytes); null before the first one. */
   memoryBytes: Schema.NullOr(NonNegativeInt),
   /** Database bytes that are neither memory nor free pages. */
   historyBytes: NonNegativeInt,
