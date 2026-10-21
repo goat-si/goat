@@ -139,6 +139,13 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - One request is one PR. Split it only when the maintainer asks. Outside contributions follow the stricter [one problem per PR](CONTRIBUTING.md#one-problem) rule.
 - When babysitting: poll checks and comments newer than the last push, verify each bot finding against the source, fix real ones, dismiss false positives with a written reason. Stay quiet when nothing is new. Stop when the bots are green on the latest commit.
 
+## Merging
+
+- Do not rebase or update-branch because `dev` moved. Rebase only on `CONFLICTING`, or when CI needs a fix that exists only on `dev`.
+- Squash-merge with `gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` once `goat-ci-result` is `SUCCESS` on that exact head. `CLEAN` and `UNSTABLE` (behind `dev`) are both fine.
+- A failure that reproduces identically on `dev` does not block: note it in the PR and merge. Re-run flaky or cancelled jobs instead of rebasing.
+- Stacks, batch merging, and the `dev` full-run cadence: [Merging pull requests](docs/operations/merging.md).
+
 ## Documentation
 
 Most code changes do not need an internal documentation change. Agents can read the code.
