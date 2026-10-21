@@ -24,6 +24,7 @@ import {
   type ScheduledTaskId,
   ThreadId,
   describeWorktreesDirectoryUnavailable,
+  GitCommandError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -265,6 +266,24 @@ function failureDetail(error: unknown): string {
     return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
   }
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+const isGitCommandError = Schema.is(GitCommandError);
+
+/**
+ * Most preparation failures are a request this machine cannot satisfy, such as a missing
+ * base ref. A stalled Git command is a slow or stuck host instead, which a later attempt
+ * can get past, so it is retryable and must not read as a bad request.
+ */
+export function preparationFailureClass(error: unknown): {
+  readonly class: "validation_error" | "unknown";
+  readonly code: string | null;
+  readonly retryable: boolean;
+} {
+  const cause = isThreadLaunchError(error) ? error.cause : error;
+  return isGitCommandError(cause) && cause.reason === "stalled"
+    ? { class: "unknown", code: "git_stalled", retryable: true }
+    : { class: "validation_error", code: null, retryable: false };
 }
 
 const make = Effect.gen(function* () {
@@ -567,6 +586,8 @@ const make = Effect.gen(function* () {
           worktree: "reused" | "added";
           fastForwarded: boolean;
         } | null;
+        let hookStallNotice = null as string | null;
+        let sparseNotice = null as string | null;
         const worktree = yield* git
           .createWorktree(
             {
@@ -579,6 +600,8 @@ const make = Effect.gen(function* () {
             {
               // A retry finds the branch and worktree an earlier failed attempt left behind.
               reuseExistingBranch: true,
+              // The setup stage below runs this script and shows its output.
+              skipSetupHook: project.scripts.some((script) => script.runOnWorktreeCreate),
               progress: {
                 onWorktreeClaimed: (path) =>
                   Effect.sync(() => {
@@ -594,6 +617,19 @@ const make = Effect.gen(function* () {
                   }),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+                onHookStarted: (hookName) =>
+                  setupTracker.stage(threadId, "checkout", {
+                    percent: 100,
+                    detail: `Files checked out; running the repository's ${hookName} hook`,
+                  }),
+                onHookStalled: ({ hookName, detail }) =>
+                  Effect.sync(() => {
+                    hookStallNotice = `Kept the finished checkout; stopped waiting for the ${hookName} hook. ${detail}`;
+                  }),
+                onSparseCheckout: (excluded) =>
+                  Effect.sync(() => {
+                    sparseNotice = `Left out ${excluded.join(", ")} (worktreeSparseExclude); run git sparse-checkout disable in the worktree to add them`;
+                  }),
               },
             },
           )
@@ -610,9 +646,15 @@ const make = Effect.gen(function* () {
           yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
         }
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
-        yield* worktreesDirectoryNotice === null
-          ? setupTracker.stageStatus(threadId, "checkout", "done", existingBranchNotice)
-          : setupTracker.stageStatus(threadId, "checkout", "warning", worktreesDirectoryNotice);
+        const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
+        yield* checkoutWarning === null
+          ? setupTracker.stageStatus(
+              threadId,
+              "checkout",
+              "done",
+              existingBranchNotice ?? sparseNotice,
+            )
+          : setupTracker.stageStatus(threadId, "checkout", "warning", checkoutWarning);
       }
 
       // A reused worktree is already recorded, and rewriting it could undo
@@ -911,8 +953,7 @@ const make = Effect.gen(function* () {
             failure: makeProviderFailure({
               cause,
               message: failureDetail(cause),
-              class: "validation_error",
-              retryable: false,
+              ...preparationFailureClass(cause),
             }),
           })
           .pipe(

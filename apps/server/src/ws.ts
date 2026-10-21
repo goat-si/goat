@@ -107,6 +107,7 @@ import {
   type PullRequestRef,
   type ScheduledTaskListResult,
   type ServerConfigStreamEvent,
+  type ServerWorktreeCheckoutHealth,
   type ServerLifecycleStreamEvent,
   type TerminalMetadataStreamEvent,
 } from "@goat/contracts";
@@ -292,6 +293,7 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
@@ -340,6 +342,8 @@ export const withLateEditorConfig = <E, R>(
   config: ClientServerConfig,
   liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
   launcher: EditorDiscovery,
+  /** Defender probe results that land after the snapshot; Windows servers only. */
+  checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -359,12 +363,25 @@ export const withLateEditorConfig = <E, R>(
     ),
     Stream.map((editorConfig) => ({ type: "editorsResolved" as const, editorConfig })),
   );
+  const lateCheckoutHealth = checkoutHealthChanges.pipe(
+    Stream.map((health) => ({ type: "checkoutHealthResolved" as const, health })),
+  );
 
-  return Stream.merge(liveUpdates, lateEditorConfig).pipe(
+  return Stream.merge(liveUpdates, Stream.merge(lateEditorConfig, lateCheckoutHealth)).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "checkoutHealthResolved": {
+            // Every client applies a snapshot, so this reaches ones built before the field.
+            const same =
+              current.worktreeCheckoutHealth?.defender === event.health.defender &&
+              current.worktreeCheckoutHealth?.worktreesDirectory ===
+                event.health.worktreesDirectory;
+            if (same) return [current, []];
+            const next = { ...current, worktreeCheckoutHealth: event.health };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "editorsResolved": {
             const {
               availableEditors: _editors,
@@ -1418,6 +1435,7 @@ export const layerWsRpc = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+      const worktreeCheckoutHealth = yield* WorktreeCheckoutHealth.WorktreeCheckoutHealth;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -1899,6 +1917,7 @@ export const layerWsRpc = (
         const auth = yield* serverAuth.getDescriptor();
         const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
         const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
+        const checkoutHealth = yield* worktreeCheckoutHealth.current;
         const editorConfig = yield* resolveEditorConfig(
           yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
           resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
@@ -1941,6 +1960,7 @@ export const layerWsRpc = (
           }),
           newProjectsRoot: managedFolders.namedProjectsRoot,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
+          ...(checkoutHealth === null ? {} : { worktreeCheckoutHealth: checkoutHealth }),
         };
       });
 
@@ -3325,6 +3345,7 @@ export const layerWsRpc = (
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
+              const checkoutHealthChanges = yield* worktreeCheckoutHealth.subscribeChanges;
               const config = yield* loadServerConfig({ usageLimitsCommand });
               const keybindingsUpdates = keybindingsChanges.pipe(
                 Stream.map((event) => ({
@@ -3414,7 +3435,7 @@ export const layerWsRpc = (
 
               return Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
-                withLateEditorConfig(config, liveUpdates, externalLauncher),
+                withLateEditorConfig(config, liveUpdates, externalLauncher, checkoutHealthChanges),
               );
             }),
           ),
