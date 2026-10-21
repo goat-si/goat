@@ -32,10 +32,10 @@ GOAT's default proxy path; OpenCodex Remote Workspace experimental for remote ex
 were uncommitted local notes and no longer exist. The D14 in `devlog/_plan/261013_remove-t3-internals` is an
 unrelated dead-code rule.
 
-**Hub-agnostic.** Which device should be the hub is the user's decision (DH1), because it moves where every
-login and account lives. Every package works with any hub. Until the user decides, the hub is the current
-Remote Link Home, jun's MacBook Pro. It is a laptop and was overloaded on 2026-10-21, so it keeps
-`allowGoals: false` and gets no heavy lanes. Moving the hub is a separate, consent-gated flow (§1.8).
+**Hub-agnostic, hub decided.** The user chose (DH1): the hub stays on **jun's MacBook Pro**, the current Remote
+Link Home, because it is nearly always on. Every package still works with any hub, and switching remains a
+consent-gated capability (§1.8, H7) with no migration planned. The MacBook Pro is a laptop that also runs the
+user's own work, so it keeps `allowGoals: false`, the #676 pressure guard applies to it, and it gets no heavy lanes.
 
 Real gaps remain and are what this design adds: one provider-neutral quota model (§3), Child parity
 detection and repair (§1.4), Windows devices (§1.5), install/adopt (§5), version alignment (§6), Fleet
@@ -218,19 +218,26 @@ Password-only SSH gets the same answer: a device GOAT reaches only by password j
 
 ### 1.6 Hub down
 
-OpenCodex already refuses silent fallback: a Child returns a retryable `503` and sends neither key nor
-request when its tunnel is not ready, and a joined link waits up to 15 s for the tunnel. GOAT keeps that and
-adds a policy:
+OpenCodex owns the fallback behavior and GOAT follows its terms. A Child returns a retryable `503` and sends
+neither key nor request when its tunnel is not ready, and a joined link waits up to 15 s for the tunnel.
+OpenCodex is adding **fallback off** (OCX-11): a Child never silently serves its local providers when the Home is
+unreachable, and model, account and provider fallback chains can be turned off per scope. GOAT reads that
+state; it never changes OpenCodex fallback settings.
 
-- If the device has its own sign-in for the provider **and** the person turned on
-  `hub.devices[alias].localFallback`, new work moves through the existing **fallback chain** (ADR-0018) to a
-  local provider instance (`modelRoute: "default"`) with a thread notice. Running turns stay.
-- Otherwise goal work on that device pauses (health condition `HubUnreachable`), people's own threads see
-  OpenCodex's 503 as today, and one decision-inbox item goes to the supervisor with options: wait, fail over
-  to a named host with a local sign-in, or switch hub.
-- Hub health reuses #676: the hub's own `pressure` must stay `ok`. Placement treats the hub as
-  `allowGoals: false` by default, so heavy lanes go elsewhere and the hub only routes, orchestrates and holds
-  cloud launches.
+GOAT's own policy sits on top and uses separate words, so the two never blur:
+
+- **GOAT fallback** is the existing fallback chain (ADR-0018): it moves new GOAT work to another provider
+  instance. `hub.devices[alias].localFallback` allows a hop to a local provider instance on that device
+  (`modelRoute: "default"`) only when the device has its own sign-in for that provider, the person turned it
+  on, and OpenCodex's fallback state for that scope does not forbid local providers. The hop gets a thread
+  notice; running turns stay.
+- Otherwise goal work on that device **pauses** (health condition `HubUnreachable`), people's own threads see
+  OpenCodex's 503 as today, and one decision-inbox item goes to the supervisor with options: wait, or move the
+  work to a named host with its own sign-in. Switching the hub is not offered as an automatic option.
+- The Fleet hub row and Settings → Hub (H4) show OpenCodex's fallback state per device and scope (on, off,
+  unknown when the Home predates OCX-11), next to GOAT's `localFallback` switch.
+- Hub health reuses #676. Placement treats the hub as `allowGoals: false`, so heavy lanes go elsewhere and the
+  hub only routes, orchestrates and holds cloud launches.
 
 ### 1.7 What cannot be centralized
 
@@ -386,7 +393,8 @@ Web and desktop get the full surface; mobile gets read-only views plus the decis
   - Per device: "use this device's own sign-in when the hub is down".
   - A link to the Home's OpenCodex dashboard for accounts and keys. GOAT never shows a key.
 - **Fleet → hub row**: the Home and each device with transport, parity verdict, tunnel state from
-  `ocx link status`, version verdict and pressure (#676). Cloud runs sit under the hub.
+  `ocx link status`, version verdict, OpenCodex fallback state (OCX-11, when available) and pressure (#676).
+  Cloud runs sit under the hub.
 - **Fleet → Pool**: per provider, every account's windows (5h, weekly, monthly, credits, model-scoped), pooled
   headroom, next reset, and a source badge (measured, header, estimated).
 - **Decision inbox** (§8.2).
@@ -653,15 +661,21 @@ publish through the nightly channel.
   Remote Link refuses Windows. Find out how it was created, what its tunnel serves, and make `ocx link add` refuse a
   Windows Child before issuing a key and starting a tunnel. Clean up such records with a clear message.
 
+- **OCX-11 fallback off (OpenCodex's own package).** GOAT consumes it: expose per-scope fallback state read-only
+  (management API and the Child relay) so H4/H5 can show it and respect it.
+- **OCX-10 service status JSON.** `ocx service status --json` with `{installed, running, backend}`, and the
+  install-detection verdict in `ocx status --json` (found by H1).
+- **OCX-7** is dropped: Q0 (#687) showed the weekly-only reading is the locally signed-in account, not a parser bug.
+
 ## 11. Decisions
 
-| ID  | Question                     | Outcome (2026-10-21)                                                                                                                                                                         |
-| --- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DH1 | Which device is the hub      | **Escalated to the user.** Design and implementation are hub-agnostic; until the user decides, the hub is the current Home (jun's MacBook Pro) with `allowGoals: false`. Switching uses §1.8 |
-| DH2 | mini's transport             | **Approved:** Hub-mode client, after inspecting and cleaning up the existing mini link (§1.5)                                                                                                |
-| DH3 | Default when the hub is down | **Approved:** pause plus decision item; local fallback opt-in per device                                                                                                                     |
-| DH4 | D14                          | Its documents no longer exist; ADR-0021 supersedes it                                                                                                                                        |
-| DH5 | MacBook Pro ssh config       | Recorded in §1.2                                                                                                                                                                             |
+| ID  | Question                     | Outcome (2026-10-21)                                                                                                                                                                                   |
+| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| DH1 | Which device is the hub      | **User decided:** the hub stays on jun's MacBook Pro (nearly always on), with `allowGoals: false` and the pressure guard. Packages stay hub-agnostic; H7 keeps switching as a capability, no migration |
+| DH2 | mini's transport             | **Approved:** Hub-mode client, after inspecting and cleaning up the existing mini link (§1.5)                                                                                                          |
+| DH3 | Default when the hub is down | **Approved:** pause plus decision item; local fallback opt-in per device                                                                                                                               |
+| DH4 | D14                          | Its documents no longer exist; ADR-0021 supersedes it                                                                                                                                                  |
+| DH5 | MacBook Pro ssh config       | Recorded in §1.2                                                                                                                                                                                       |
 
 ## 12. Rollout
 
