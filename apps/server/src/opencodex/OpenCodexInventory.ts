@@ -362,7 +362,6 @@ const make = Effect.gen(function* () {
         ? undefined
         : status?.fallback?.devices.find(({ id }) => id === ownDeviceId);
     const installed = binaries.length > 0 || health !== undefined || ready !== undefined;
-    const childLinkId = config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId;
     const recordText =
       linkRole === "child"
         ? yield* readFile(path.join(ocxHome, "link", "home-codex-settings.json"))
