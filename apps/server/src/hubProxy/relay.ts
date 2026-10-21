@@ -26,7 +26,7 @@ export class RelayOverflowError extends Error {
   override readonly name = "RelayOverflowError";
 }
 
-export class RelaySendError extends Error {
+class RelaySendError extends Error {
   override readonly name = "RelaySendError";
 }
 
@@ -105,7 +105,7 @@ export const webSocketOfTransport = (transport: unknown): RelayWebSocket | undef
   return isRelayWebSocket(ws) ? ws : undefined;
 };
 
-export const isRelayWebSocket = (value: unknown): value is RelayWebSocket =>
+const isRelayWebSocket = (value: unknown): value is RelayWebSocket =>
   typeof value === "object" &&
   value !== null &&
   typeof (value as { bufferedAmount?: unknown }).bufferedAmount === "number" &&

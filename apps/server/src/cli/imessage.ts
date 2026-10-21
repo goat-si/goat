@@ -44,10 +44,7 @@ export async function readImessageFile(
   }
 }
 
-export async function writeImessageFile(
-  stateDir: string,
-  file: ImessageSettingsFile,
-): Promise<void> {
+async function writeImessageFile(stateDir: string, file: ImessageSettingsFile): Promise<void> {
   if (validateImessageSettings(file) === undefined) throw new Error("Invalid iMessage settings");
   await NodeFSP.mkdir(stateDir, { recursive: true, mode: 0o700 });
   const path = NodePath.join(stateDir, IMESSAGE_SETTINGS_FILE);

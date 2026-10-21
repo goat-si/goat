@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { hostCanStoreFileName } from "@goat/shared/testing/fileNames";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -1030,8 +1031,8 @@ it.effect("workspace snapshot keeps force-added ignored files with current disk 
     const added = [
       "added.txt",
       ".env",
-      "odd [name]\nfile.txt",
-      ":(exclude)literal.txt",
+      "odd [name] file.txt",
+      ...["odd [name]\nfile.txt", ":(exclude)literal.txt"].filter(hostCanStoreFileName),
       "-dash.txt",
     ];
     yield* fs.writeFileString(path.join(cwd, ".gitignore"), "*\n");

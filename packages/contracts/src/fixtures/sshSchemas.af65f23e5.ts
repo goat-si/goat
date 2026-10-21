@@ -34,7 +34,7 @@ const SshHostStatusShape = Schema.Struct({
 });
 
 /** Check a snapshot before publishing it through IPC or an SSH host tool. */
-export function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
+function validateSshHostStatus(status: typeof SshHostStatusShape.Type) {
   if ((status.state === "preparing") !== (status.phase !== undefined)) return false;
   if (status.state === "failed" && status.failure === undefined) return false;
   if (

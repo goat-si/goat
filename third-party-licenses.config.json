@@ -37,6 +37,13 @@
     },
     {
       "bundles": ["desktop", "web"],
+      "license": "LicenseRef-Boat-Trademark",
+      "name": "Boat logomark",
+      "sourceUrl": "https://boat.dev/brand/logomark-ocean.svg",
+      "noticeFile": "apps/web/src/components/BOAT-LOGO-NOTICE"
+    },
+    {
+      "bundles": ["desktop", "web"],
       "license": "MIT",
       "name": "Ionic keyboard assist",
       "sourceUrl": "https://github.com/ionic-team/ionic-framework/blob/main/core/src/utils/keyboard/keyboard.ts",

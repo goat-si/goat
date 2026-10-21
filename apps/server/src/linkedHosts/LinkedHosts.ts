@@ -38,9 +38,9 @@ import { base64UrlEncode } from "../auth/utils.ts";
  */
 
 /** One secret holds every link, so a link and its token are written together. */
-export const LINKED_HOSTS_SECRET = "linked-hosts";
+const LINKED_HOSTS_SECRET = "linked-hosts";
 /** Never dialled: the code comes back in the decision response, not through a browser. */
-export const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
+const LINK_REDIRECT_URI = "http://127.0.0.1/goat-host-link";
 const LINK_TIMEOUT = "20 seconds";
 const LINK_CLIENT_NAME_MAX = 100;
 /** Lowercase-led, ssh-alias-safe, and short enough to read in a tool result. */
@@ -180,7 +180,7 @@ export class LinkedHosts extends Context.Service<
   }
 >()("goat/linkedHosts/LinkedHosts") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;

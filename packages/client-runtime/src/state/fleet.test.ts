@@ -317,7 +317,7 @@ describe("buildFleet", () => {
     expect(fleet.machines[1]).toMatchObject({
       kind: "environment",
       subtitle: "Cloud box",
-      cloudState: "running",
+      boat: { status: "running", source: "record" },
       running: 1,
     });
   });
@@ -330,7 +330,10 @@ describe("buildFleet", () => {
       remote: [{ dispatcherEnvironmentId: local, launches: [], cloudMachines: [cloud()] }],
     });
     expect(fleet.machines).toHaveLength(2);
-    expect(fleet.machines[1]).toMatchObject({ environmentId: remote, cloudState: "running" });
+    expect(fleet.machines[1]).toMatchObject({
+      environmentId: remote,
+      boat: { status: "running", source: "record" },
+    });
     expect(fleet.totals).toMatchObject({ running: 0, attention: 0, reported: 0 });
   });
 
@@ -356,6 +359,73 @@ describe("buildFleet", () => {
       "cloud",
     ]);
     expect(fleet.machines[2]).toMatchObject({ label: "Cloud box", subtitle: "via Mac" });
+  });
+
+  it("names a reported cloud machine's Boat state, so a stopped one is not mistaken for away", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac")],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [],
+          cloudMachines: [
+            cloud({ state: "archived" }),
+            cloud({ alias: "boat-bx_zzzzzzzz" as CloudMachine["alias"], state: "provisioning" }),
+          ],
+        },
+      ],
+    });
+    expect(fleet.machines.slice(1).map((machine) => [machine.kind, machine.boat])).toEqual([
+      ["cloud", { status: "stopped", source: "record" }],
+      ["cloud", { status: "starting", source: "record" }],
+    ]);
+    expect(fleet.machines[0]!.boat).toBeNull();
+  });
+
+  it("falls back to the reserved alias only when no record describes the host", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", ["BOAT-bx_23456789"])],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [launch({ host: CLOUD_ALIAS }), launch({ host: "devbox" })],
+          // The dispatcher's cloud machine list has not loaded.
+          cloudMachines: [],
+        },
+      ],
+    });
+    const byLabel = new Map(fleet.machines.map((machine) => [machine.label, machine]));
+    expect(byLabel.get(CLOUD_ALIAS)).toMatchObject({
+      kind: "cloud",
+      boat: { status: "unknown", source: "alias" },
+      reported: 1,
+    });
+    expect(byLabel.get("Box")).toMatchObject({
+      kind: "environment",
+      boat: { status: "unknown", source: "alias" },
+    });
+    expect(byLabel.get("devbox")).toMatchObject({ kind: "ssh", boat: null });
+  });
+
+  it("keeps a connected machine's Boat identity while Boat deletes it", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac"), env(remote, "Box", [CLOUD_ALIAS])],
+      primaryEnvironmentId: local,
+      shells: [],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          launches: [],
+          cloudMachines: [cloud({ deletePending: true })],
+        },
+      ],
+    });
+    expect(fleet.machines).toHaveLength(2);
+    expect(fleet.machines[1]!.boat).toEqual({ status: "deleting", source: "record" });
   });
 
   it("groups agents per machine", () => {

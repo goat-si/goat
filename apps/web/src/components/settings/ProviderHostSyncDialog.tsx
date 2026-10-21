@@ -220,7 +220,7 @@ export function ProviderHostSyncDialog(props: ProviderHostSyncDialogProps) {
   );
 }
 
-export function ProviderHostSyncContent({
+function ProviderHostSyncContent({
   environmentId,
   driver,
   displayName,

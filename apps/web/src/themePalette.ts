@@ -26,8 +26,6 @@ import {
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, GOAT_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
-export const GOAT_CHAT_THEME_ID = "goat-chat" as const;
-export const OCEAN_THEME_ID = "ocean" as const;
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "goat:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "goat:theme-follow-system";
@@ -75,10 +73,6 @@ let themePreviewAppearance: ThemeAppearance | null = null;
 
 export function getThemePreviewAppearance(): ThemeAppearance | null {
   return themePreviewAppearance;
-}
-
-export function getThemePreviewSidebarArtwork(): boolean | null {
-  return themePreviewAppearance === null ? null : false;
 }
 
 export function subscribeToThemePreview(listener: () => void): () => void {
