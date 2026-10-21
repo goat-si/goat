@@ -825,9 +825,17 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     });
   const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   if (codexSettings.modelRoute === "opencodex") {
-    routeStatus = Option.isSome(routes)
+    const observedRoute = Option.isSome(routes)
       ? yield* routes.value.inspect(routeInput.success)
-      : { modelRoute: "opencodex", state: "failed", reason: "Could not read OpenCodex status" };
+      : {
+          modelRoute: "opencodex" as const,
+          state: "failed" as const,
+          reason: "Could not read OpenCodex status",
+        };
+    // Endpoint inspection precedes Codex's config/read. Only that successful probe can
+    // publish an effective URL; otherwise fleet parity could accept an unverified route.
+    const { effectiveBaseUrl: _unverified, ...unverifiedRoute } = observedRoute;
+    routeStatus = unverifiedRoute;
     if (routeStatus.state !== "connected" && routeStatus.state !== "home")
       return buildStatus({
         presentation: CODEX_PRESENTATION,
@@ -907,6 +915,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
+  if (routeStatus?.modelRoute === "opencodex" && snapshot.effectiveBaseUrl)
+    routeStatus = { ...routeStatus, effectiveBaseUrl: snapshot.effectiveBaseUrl };
   if (codexSettings.modelRoute === "default")
     routeStatus = {
       modelRoute: "default",

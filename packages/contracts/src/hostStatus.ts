@@ -7,6 +7,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { OpenCodexInventorySnapshot } from "./opencodex.ts";
+import { HubParityResult } from "./hubParity.ts";
 
 /**
  * Wire shape for `goat_host_status`. A later GUI reads this schema; add fields
@@ -128,6 +129,7 @@ export const HostStatusEntry = Schema.Struct({
   message: Schema.optional(Schema.String),
   /** Self-healing conditions this machine derived for the host. Older servers omit it. */
   conditions: Schema.optional(Schema.Array(HostCondition)),
+  parity: ForwardCompatibleOptional(HubParityResult),
 });
 export type HostStatusEntry = typeof HostStatusEntry.Type;
 
@@ -143,6 +145,10 @@ const HostAlias = TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate(
 });
 
 export const GoatHostStatusInput = Schema.Struct({
+  parityEvidence: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "With local:true, collect fresh read-only hub parity evidence, including one GET /v1/models.",
+  }),
   host: Schema.optional(HostAlias),
   local: Schema.optional(Schema.Boolean).annotate({
     description:

@@ -23,6 +23,7 @@ import * as TestClock from "effect/testing/TestClock";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -143,8 +144,9 @@ const run = <A, E>(
   let connectedReads = 0;
   const providers = { current: options.providers ?? [] };
   const layer = HostStatusMcpService.layer.pipe(
+    Layer.provide(Layer.mock(HubParity.HubParity)({ latest: () => Effect.succeed(undefined) })),
     Layer.provide(
-      Layer.succeed(OpenCodexInventory.OpenCodexInventory, {
+      Layer.mock(OpenCodexInventory.OpenCodexInventory)({
         read: Effect.succeed({
           installed: false,
           binaries: [],

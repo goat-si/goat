@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -99,6 +100,7 @@ const make = Effect.gen(function* () {
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
+  const parity = yield* HubParity.HubParity;
   const clock = yield* Clock.Clock;
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
@@ -140,7 +142,7 @@ const make = Effect.gen(function* () {
     };
   });
 
-  const readLocal = Effect.fn("HostStatus.readLocal")(function* () {
+  const readLocal = Effect.fn("HostStatus.readLocal")(function* (parityEvidence = false) {
     const snapshot = yield* resources.read;
     const platform = yield* HostProcess.Platform;
     const shells = yield* threads
@@ -160,20 +162,21 @@ const make = Effect.gen(function* () {
         platform,
         threads: countHostThreads(shells),
         ...(yield* readQuotas()),
-        opencodex: yield* opencodex.read,
+        opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
     return entry;
   });
 
-  const localEntry = readLocal().pipe(
-    Effect.catch((error) =>
-      Ref.get(known).pipe(
-        Effect.map((current) => unreachableHostStatus(null, error.message, current.get(null))),
+  const localEntry = (parityEvidence = false) =>
+    readLocal(parityEvidence).pipe(
+      Effect.catch((error) =>
+        Ref.get(known).pipe(
+          Effect.map((current) => unreachableHostStatus(null, error.message, current.get(null))),
+        ),
       ),
-    ),
-  );
+    );
 
   const readRemoteOnce = Effect.fn("HostStatus.readRemoteOnce")(function* (
     scope: McpInvocationScope,
@@ -193,6 +196,11 @@ const make = Effect.gen(function* () {
       )
       .pipe(
         Effect.map((result) => tagRemoteHostStatus(result, host)),
+        Effect.flatMap((entry) =>
+          parity
+            .latest(host)
+            .pipe(Effect.map((result) => (result ? { ...entry, parity: result } : entry))),
+        ),
         Effect.tap((entry) => (entry.reachability === "ok" ? remember(host, entry) : Effect.void)),
         Effect.catch((error) => {
           if (callerFailure(error) || (failInvalid && error.code === "invalid_request")) {
@@ -240,7 +248,9 @@ const make = Effect.gen(function* () {
       if (input.local === true && input.host !== undefined) {
         return yield* failure("invalid_request", "Pass either host or local:true, not both.");
       }
-      if (input.local === true) return { hosts: [yield* localEntry] };
+      if (input.parityEvidence && input.local !== true)
+        return yield* failure("invalid_request", "Parity evidence requires local:true.");
+      if (input.local === true) return { hosts: [yield* localEntry(input.parityEvidence)] };
       if (input.host !== undefined)
         return {
           hosts: [
@@ -250,7 +260,7 @@ const make = Effect.gen(function* () {
       const aliases = [...(yield* dispatch.connectedHosts)].toSorted();
       const [local, remote] = yield* Effect.all(
         [
-          localEntry,
+          localEntry(),
           Effect.forEach(aliases, (host) => readRemote(scope, host, false), { concurrency: 4 }),
         ],
         { concurrency: "unbounded" },

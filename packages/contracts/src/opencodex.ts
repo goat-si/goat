@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { ForwardCompatibleOptional } from "./baseSchemas.ts";
+import { HubParityEvidence } from "./hubParity.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
 const Protocol = Schema.Int.check(Schema.isGreaterThan(0));
@@ -47,6 +49,8 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
           "idle",
           "unknown",
         ]),
+        lastApplyAt: ForwardCompatibleOptional(Schema.Number),
+        apiKeyId: Schema.optional(Schema.String),
       }),
     ),
     childSettingsApplied: Schema.NullOr(Schema.Boolean),
@@ -58,5 +62,6 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
       protocolVersion: Schema.optional(Protocol),
     }),
   ),
+  parityEvidence: ForwardCompatibleOptional(HubParityEvidence),
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;

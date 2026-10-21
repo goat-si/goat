@@ -206,6 +206,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_host_link_remove",
     "goat_host_status",
     "goat_host_uncordon",
+    "goat_hub_device_verify",
     "goat_origin_report",
     "goat_origin_reports_wait",
     "goat_pending_request_list",
@@ -289,7 +290,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(158);
+  expect(names.size).toBe(159);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);

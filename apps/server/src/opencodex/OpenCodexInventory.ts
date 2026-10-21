@@ -1,4 +1,11 @@
-import { OpenCodexInventorySnapshot, OpenCodexProtocolEvidence } from "@goat/contracts";
+import {
+  ForwardCompatibleOptional,
+  OpenCodexInventorySnapshot,
+  OpenCodexProtocolEvidence,
+} from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -20,27 +27,95 @@ const COMMAND_TIMEOUT = "3 seconds";
 const CACHE_TTL = "30 seconds";
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
 const Role = Schema.Literals(["standalone", "hub", "client"]);
+const Settings = Schema.Struct({
+  fastMode: Schema.NullOr(Schema.Boolean),
+  multiAgentMode: Schema.NullOr(Schema.Literals(["v1", "default", "v2"])),
+  webSearchSidecarEnabled: Schema.Boolean,
+  subagentDefaults: Schema.NullOr(
+    Schema.Struct({ model: Schema.String, reasoningEffort: Schema.NullOr(Schema.String) }),
+  ),
+});
+const SettingsRecord = Schema.Struct({
+  linkId: Schema.String,
+  fetchedAt: Schema.DateTimeUtcFromString,
+  document: Schema.Struct({
+    version: Schema.Literal(1),
+    home: Schema.Struct({
+      name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
+      version: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+    }),
+    settings: Settings,
+  }),
+});
+const decodeSettingsRecord = Schema.decodeUnknownOption(Schema.fromJsonString(SettingsRecord), {
+  onExcessProperty: "error",
+});
 const Config = Schema.Struct({
   port: Schema.optional(Port),
   runtimeRole: Schema.optional(Role),
-  client: Schema.optional(Schema.Struct({ transport: Schema.optional(Schema.String) })),
+  client: Schema.optional(
+    Schema.Struct({
+      transport: Schema.optional(Schema.String),
+      link: Schema.optional(Schema.Struct({ linkId: Schema.String })),
+    }),
+  ),
+  fastMode: Schema.optional(Schema.Boolean),
+  multiAgentMode: Schema.optional(Schema.Literals(["v1", "default", "v2"])),
+  webSearchSidecar: Schema.optional(Schema.Struct({ enabled: Schema.optional(Schema.Boolean) })),
+  syncCodexSubagentDefaults: Schema.optional(Schema.Boolean),
+  injectionModel: Schema.optional(Schema.String),
+  injectionEffort: Schema.optional(Schema.String),
 });
 const Health = Schema.Struct({
   service: Schema.Literal("opencodex"),
   version: Schema.optional(Schema.String),
   role: Schema.optional(Role),
   port: Schema.optional(Port),
+  uptime: ForwardCompatibleOptional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
+  instanceId: ForwardCompatibleOptional(Schema.String),
 });
 const Ready = Schema.Struct({
   ...Health.fields,
   ...OpenCodexProtocolEvidence.fields,
   status: Schema.Literals(["ready", "pending", "failed"]),
 });
-const Status = Schema.Struct({ runtimeRole: Schema.optional(Role) });
+const Status = Schema.Struct({
+  runtimeRole: Schema.optional(Role),
+  appliedCodexSettingsDigest: ForwardCompatibleOptional(Schema.String),
+  remoteHub: Schema.optional(
+    Schema.Struct({ link: Schema.optional(Schema.Struct({ linkId: Schema.String })) }),
+  ),
+});
 const Link = Schema.Struct({
   role: Schema.Literals(["home", "child", "standalone"]),
   links: OpenCodexInventorySnapshot.fields.link.fields.links,
 });
+const Models = Schema.Struct({
+  data: Schema.Array(
+    Schema.StructWithRest(Schema.Struct({ id: Schema.String }), [
+      Schema.Record(Schema.String, Schema.Json),
+    ]),
+  ),
+});
+const Providers = Schema.Struct({
+  configured: Schema.Array(
+    Schema.Struct({
+      disabled: Schema.optional(Schema.Boolean),
+      active: Schema.optional(Schema.Boolean),
+    }),
+  ),
+});
+const compareText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const canonical = (value: Schema.Json): Schema.Json =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(
+          Object.entries(value)
+            .sort(([a], [b]) => compareText(a, b))
+            .map(([key, item]) => [key, canonical(item)]),
+        )
+      : value;
 const Connect = OpenCodexInventorySnapshot.fields.hubClient;
 const Service = Schema.Struct({
   installed: Schema.optional(Schema.Boolean),
@@ -60,7 +135,10 @@ export const ManagedInstall = Context.Reference<boolean>("goat/opencodex/Managed
 
 export class OpenCodexInventory extends Context.Service<
   OpenCodexInventory,
-  { readonly read: Effect.Effect<OpenCodexInventorySnapshot> }
+  {
+    readonly read: Effect.Effect<OpenCodexInventorySnapshot>;
+    readonly readParity: Effect.Effect<OpenCodexInventorySnapshot>;
+  }
 >()("goat/opencodex/OpenCodexInventory") {}
 
 const make = Effect.gen(function* () {
@@ -73,6 +151,12 @@ const make = Effect.gen(function* () {
   const managed = yield* ManagedInstall;
   const runner = yield* ProcessRunner.ProcessRunner;
   const http = HttpClient.withScope(yield* HttpClient.HttpClient);
+  const crypto = yield* Crypto.Crypto;
+  const digest = (value: unknown) =>
+    crypto.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))).pipe(
+      Effect.map(Hex.encode),
+      Effect.orElseSucceed(() => undefined),
+    );
   const ocxHome = path.resolve(cwd, environment.OPENCODEX_HOME || path.join(home, ".opencodex"));
   const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
     Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text));
@@ -108,7 +192,7 @@ const make = Effect.gen(function* () {
   );
 
   const probe = Effect.fn("OpenCodexInventory.probe")(
-    function* (port: number, endpoint: "healthz" | "readyz") {
+    function* (port: number, endpoint: "healthz" | "readyz" | "v1/models") {
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const response = yield* http
@@ -120,7 +204,11 @@ const make = Effect.gen(function* () {
               }),
             );
           // Never follow a local service's redirect to another machine or disclose auth state.
-          if (response.status !== 200 && !(endpoint === "readyz" && response.status === 503)) {
+          if (
+            response.status !== 200 &&
+            !(endpoint === "readyz" && response.status === 503) &&
+            endpoint !== "v1/models"
+          ) {
             return yield* new InventoryReadError({ stage: "http" });
           }
           let size = 0;
@@ -137,14 +225,19 @@ const make = Effect.gen(function* () {
               (body, chunk) => body + chunk,
             ),
           );
-          return { text, status: response.status };
+          return {
+            text,
+            status: response.status,
+            servedBy: response.headers["x-opencodex-served-by"],
+            observedAt: yield* Clock.currentTimeMillis,
+          };
         }),
       ).pipe(Effect.timeout(PROBE_TIMEOUT));
     },
     Effect.orElseSucceed(() => undefined),
   );
 
-  const collect = Effect.fn("OpenCodexInventory.collect")(function* () {
+  const collect = Effect.fn("OpenCodexInventory.collect")(function* (parity = false) {
     const configText = yield* readFile(path.join(ocxHome, "config.json"));
     const config = configText === undefined ? undefined : decodeJson(Config, configText);
     const port = config?.port ?? 10100;
@@ -247,6 +340,87 @@ const make = Effect.gen(function* () {
       .exists(path.join(ocxHome, "link", "home-codex-settings.json"))
       .pipe(Effect.orElseSucceed(() => null));
     const installed = binaries.length > 0 || health !== undefined || ready !== undefined;
+    let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
+    if (parity) {
+      const observedAt = yield* Clock.currentTimeMillis;
+      const modelsResponse = yield* probe(port, "v1/models");
+      const providerText = binary
+        ? yield* command(binary, ["provider", "list", "--json"])
+        : undefined;
+      const providers =
+        providerText === undefined ? undefined : decodeJson(Providers, providerText);
+      // Legacy provider list reports configuration, not activity. On a Child those
+      // rows can be inactive; only an empty list or explicit activity proves P8.
+      const localProviderCount = providers?.configured.every(
+        (provider) => provider.active !== undefined || provider.disabled === true,
+      )
+        ? providers.configured.filter(
+            (provider) => provider.active === true && provider.disabled !== true,
+          ).length
+        : undefined;
+      const models =
+        modelsResponse?.status === 200 ? decodeJson(Models, modelsResponse.text) : undefined;
+      const recordText =
+        linkRole === "child"
+          ? yield* readFile(path.join(ocxHome, "link", "home-codex-settings.json"))
+          : undefined;
+      const record =
+        recordText === undefined
+          ? undefined
+          : Option.getOrUndefined(decodeSettingsRecord(recordText));
+      // Project only Home policy, matching OpenCodex's version-1 settings document. Home labels
+      // and release numbers describe the publisher and must not manufacture settings drift.
+      const settings =
+        (record
+          ? { version: record.document.version, settings: record.document.settings }
+          : undefined) ??
+        (linkRole === "home" && config
+          ? {
+              version: 1,
+              settings: {
+                fastMode: config.fastMode ?? null,
+                multiAgentMode: config.multiAgentMode ?? null,
+                webSearchSidecarEnabled: config.webSearchSidecar?.enabled !== false,
+                subagentDefaults:
+                  config.syncCodexSubagentDefaults === true && config.injectionModel?.trim()
+                    ? {
+                        model: config.injectionModel.trim(),
+                        reasoningEffort: config.injectionEffort?.trim() || null,
+                      }
+                    : null,
+              },
+            }
+          : undefined);
+      parityEvidence = {
+        observedAt,
+        ...(health ? { healthRole: health.role ?? "standalone" } : {}),
+        ...(health?.instanceId ? { instanceId: health.instanceId } : {}),
+        ...(health?.uptime !== undefined && healthResponse
+          ? { startedAt: healthResponse.observedAt - health.uptime * 1000 }
+          : {}),
+        ...((config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId)
+          ? { childLinkId: config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId }
+          : {}),
+        ...(record ? { settingsLinkId: record.linkId } : {}),
+        ...(settings ? { settingsDigest: yield* digest(settings) } : {}),
+        ...(status?.appliedCodexSettingsDigest
+          ? { appliedSettingsDigest: status.appliedCodexSettingsDigest }
+          : {}),
+        ...(modelsResponse ? { modelsStatus: modelsResponse.status } : {}),
+        // Model order is not routing drift; duplicate ids still change the digest.
+        ...(models
+          ? {
+              catalogDigest: yield* digest(
+                models.data
+                  .map(canonical)
+                  .sort((a, b) => compareText(JSON.stringify(a), JSON.stringify(b))),
+              ),
+            }
+          : {}),
+        ...(modelsResponse?.servedBy ? { servedBy: modelsResponse.servedBy } : {}),
+        ...(localProviderCount !== undefined ? { localProviderCount } : {}),
+      };
+    }
     return {
       installed,
       binaries,
@@ -271,12 +445,13 @@ const make = Effect.gen(function* () {
         childSettingsApplied,
       },
       ...(connect && linkRole !== "child" && connect.apiKeyId ? { hubClient: connect } : {}),
+      ...(parityEvidence ? { parityEvidence } : {}),
     } satisfies OpenCodexInventorySnapshot;
   });
 
   // Host status is polled by several clients; share in-flight work and avoid spawning ocx on every poll.
   const read = yield* Effect.cachedWithTTL(collect(), CACHE_TTL);
-  return OpenCodexInventory.of({ read });
+  return OpenCodexInventory.of({ read, readParity: collect(true) });
 });
 
 export const layer = Layer.effect(OpenCodexInventory, make);

@@ -529,6 +529,21 @@ export const agentSurfaceRegistry = {
     humanSteps: [],
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
+  "hub.device_verify": entry({
+    resource: "hub",
+    verb: "device_verify",
+    name: "goat_hub_device_verify",
+    toolkit: "hostStatus",
+    summary: "Verify that one device is served by this OpenCodex Home.",
+    description:
+      "Read-only P1–P8 parity verification of a device SSH alias against this machine's OpenCodex Home. Reads the Home locally and device evidence through the existing host-status path, including one non-billed GET /v1/models on the device. Returns ok, degraded, broken, or unproven with check ids and reasons. Does not repair, sync, restart, or join devices. Reaching a device requires permission to use this machine's SSH keys.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: true },
+  }),
   "host.status": entry({
     resource: "host",
     verb: "status",
