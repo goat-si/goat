@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -34,6 +35,9 @@ type ShellOptions = {
   readonly launchedBy?: FleetShell["source"]["launchedBy"];
   readonly subagentOf?: string;
   readonly subagentRequest?: FleetShell["pendingSubagentRequest"];
+  readonly natives?: ReadonlyArray<
+    readonly [id: string, child: string | null, status?: "running" | "waiting"]
+  >;
   readonly createdAt?: string;
   readonly updatedAt?: string;
 };
@@ -73,6 +77,12 @@ function shell(environmentId: EnvironmentId, id: string, options: ShellOptions =
             rootThreadId: ThreadId.make(options.subagentOf),
           },
     pendingSubagentRequest: options.subagentRequest ?? null,
+    nativeSubagents: (options.natives ?? []).map(([nativeId, child, status]) => ({
+      id: NodeId.make(nativeId),
+      childThreadId: child === null ? null : ThreadId.make(child),
+      title: "task " + nativeId,
+      status: status ?? "running",
+    })),
     createdAt: options.createdAt ?? "2026-10-17T00:00:00.000Z",
     updatedAt: options.updatedAt ?? "2026-10-17T00:00:00.000Z",
     source: options.launchedBy === undefined ? {} : { launchedBy: options.launchedBy },
@@ -275,6 +285,47 @@ describe("buildFleet", () => {
     expect(fleet.threads.map((thread) => [thread.title, thread.state])).toEqual([
       ["parent", "attention"],
     ]);
+  });
+
+  it("groups native subagents, nested and under delegated children, on their top-level row", () => {
+    const fleet = buildFleet({
+      environments: [env(local, "Mac")],
+      primaryEnvironmentId: local,
+      shells: [
+        shell(local, "parent", {
+          natives: [
+            ["n1", "native-a"],
+            ["n2", null, "waiting"],
+          ],
+        }),
+        // Native child threads have no runs; a nested record lives on the spawning child.
+        shell(local, "native-a", {
+          subagentOf: "parent",
+          status: null,
+          title: "/root/reader",
+          natives: [["n3", "native-b"]],
+        }),
+        shell(local, "delegated", { subagentOf: "parent", natives: [["n4", null]] }),
+        shell(local, "other"),
+      ],
+      remote: [],
+    });
+    expect(fleet.threads.map((thread) => thread.title)).toEqual(["other", "parent"]);
+    expect(fleet.totals).toMatchObject({ running: 2, attention: 0 });
+    const [other, parent] = fleet.threads;
+    expect(
+      parent!.subagents.map((subagent) => [
+        subagent.title,
+        subagent.status,
+        subagent.ref?.threadId ?? null,
+      ]),
+    ).toEqual([
+      ["/root/reader", "running", "native-a"],
+      ["task n2", "waiting", null],
+      ["task n3", "running", "native-b"],
+      ["task n4", "running", null],
+    ]);
+    expect(other!.subagents).toEqual([]);
   });
 
   it("counts a launch whose thread is loaded here once, as that live thread", () => {

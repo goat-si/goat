@@ -3,6 +3,10 @@ import type { FleetUncountedHost } from "./fleetCount";
 
 const LISTED = 8;
 
+/** A small count beside a label, for what a line holds without listing it as rows. */
+export const FLEET_COUNT_CHIP_CLASS =
+  "-my-0.5 inline-flex h-4 items-center rounded-sm border px-1 align-middle font-mono text-2xs leading-none tracking-normal text-muted-foreground tabular-nums normal-case outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
+
 /**
  * "+N" beside a machine count: hosts shown on the page that the count leaves out. A chip keeps
  * the explanation on the count's own line; the list lives in its tooltip and accessible name.
@@ -23,7 +27,7 @@ export function FleetUncountedHosts(props: { readonly hosts: ReadonlyArray<Fleet
             aria-label={
               summary + ": " + hosts.map((host) => host.label + ", " + host.reason).join("; ")
             }
-            className="-my-0.5 inline-flex h-4 items-center rounded-sm border px-1 align-middle font-mono text-2xs leading-none tracking-normal text-muted-foreground tabular-nums normal-case outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className={FLEET_COUNT_CHIP_CLASS}
           />
         }
       >

@@ -566,3 +566,35 @@ it.effect("bind sets a thread's profile once and never replaces it", () =>
     expect((yield* profiles.resolve(threadScope("bot-turn"))).profile.id).toBe("owner");
   }).pipe(Effect.provide(fixture())),
 );
+
+it.effect("counts live native subagents, nested ones included, against maxLanes", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed("caller", "auto");
+    const native = (id: string, thread: string, status: string, child: string | null = null) =>
+      sql`INSERT INTO orchestration_v2_projection_subagents
+        (subagent_id, thread_id, run_id, parent_node_id, provider, child_thread_id, origin, status, updated_at, payload_json)
+        VALUES (${id}, ${thread}, ${id === "rolled" ? "run-rolled" : null}, 'node', 'codex', ${child}, 'provider_native', ${status}, '2026-10-22', '{}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES ('run-rolled', 'caller', 1, 'codex', 'rolled_back', '2026-10-22', '{}')`;
+    yield* native("first", "caller", "running", "native-child");
+    yield* native("nested", "native-child", "waiting");
+    yield* native("done", "caller", "completed");
+    yield* native("rolled", "caller", "running");
+    yield* sql`INSERT INTO orchestration_v2_projection_subagents
+      (subagent_id, thread_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+      VALUES ('delegated', 'caller', 'node', 'codex', 'app_owned', 'running', '2026-10-22', '{}')`;
+    // Two live natives leave one of the worker's three lanes.
+    yield* profiles.claim(threadScope("caller"), { id: "lane-1", runtimeMode: "auto" });
+    expect(
+      (yield* profiles
+        .claim(threadScope("caller"), { id: "lane-2", runtimeMode: "auto" })
+        .pipe(Effect.flip)).message,
+    ).toContain("at most 3 running lanes");
+    yield* sql`UPDATE orchestration_v2_projection_subagents SET status = 'completed' WHERE subagent_id = 'nested'`;
+    expect(
+      (yield* profiles.claim(threadScope("caller"), { id: "lane-2", runtimeMode: "auto" })).enabled,
+    ).toBe(true);
+  }).pipe(Effect.provide(fixture())),
+);
