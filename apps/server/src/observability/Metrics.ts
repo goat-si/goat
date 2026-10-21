@@ -63,6 +63,12 @@ export const serverEventLoopDelayMax = Metric.gauge("goat_server_event_loop_dela
   attributes: { unit: "ms" },
 });
 
+export const memoryStoreBytes = Metric.gauge("goat_memory_store_bytes", {
+  description:
+    "Allocated bytes of the memory_* tables and indexes at the last storage sample, by area.",
+  attributes: { unit: "By" },
+});
+
 export const gitCommandsTotal = Metric.counter("goat_git_commands_total", {
   description: "Total git commands executed by the server runtime.",
 });

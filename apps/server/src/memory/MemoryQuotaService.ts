@@ -197,6 +197,18 @@ const make = Effect.gen(function* () {
               dimension: "fts_admission_brake",
               limit: M.MEMORY_FTS_ALLOCATED_BRAKE_BYTES,
             });
+          // The per-dimension limits guard individual concerns; this guards their sum on disk.
+          // It reuses the live payload dimension so older clients and hub peers can decode it.
+          const storeBytes =
+            payloadBytes > oldPayloadBytes
+              ? yield* store.measuredMemoryBytes(input.environmentId)
+              : null;
+          if (storeBytes !== null && storeBytes >= M.MEMORY_STORE_BUDGET_BYTES)
+            return yield* new Store.MemoryCapacityError({
+              dimension: "live_payload_bytes",
+              current: storeBytes,
+              limit: M.MEMORY_STORE_BUDGET_BYTES,
+            });
         }
         charge("lifetime_ids", usage.lifetimeIds, Number(identityNew), M.MEMORY_MAX_LIFETIME_IDS);
         charge(
