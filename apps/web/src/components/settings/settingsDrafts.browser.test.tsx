@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { DEFAULT_CLIENT_SETTINGS, DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";

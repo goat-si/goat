@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+import { fakeTimers } from "../../../test/render";
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
@@ -66,7 +66,6 @@ afterEach(async () => {
   if (mounted) await act(async () => root.unmount());
   registry.dispose();
   container.remove();
-  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -191,7 +190,7 @@ describe("saved SSH runtime row", () => {
     "refreshes %s while mounted and clears the timer on unmount",
     async (state, interval) => {
       await render({ ...base, state, ...(state === "preparing" ? { phase: "checking" } : {}) });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      using _timers = fakeTimers();
       // A fresh snapshot schedules this row's next refresh using fake timers.
       await settle();
       const before = owner.status.mock.calls.length;
@@ -366,7 +365,7 @@ it("polls a pending Add while the Desktop connection has not published its first
       </RegistryContext>,
     ),
   );
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  using _timers = fakeTimers();
   await settle();
   reply = { kind: "ok", status: { ...base, state: "preparing", phase: "uploading" } };
   await act(async () => {

@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { EnvironmentId, type SshHostResult, type SshHostStatus } from "@goat/contracts";
 import { SshConnectionProfile, SshConnectionTarget } from "@goat/client-runtime/connection";
 import * as Option from "effect/Option";
