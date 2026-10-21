@@ -22,8 +22,10 @@ import { FleetGraph } from "./FleetGraph";
 import { fleetMachineSubtitle } from "./describeMachine";
 import { fleetConnectionLegend, UNKNOWN_FLEET_CONNECTION } from "./fleetConnection";
 import { FleetConnectionIcon } from "./FleetConnectionGlyph";
+import { fleetUncountedMachines } from "./fleetCount";
 import { fleetHeatDemo } from "./fleetHeatDemo";
 import { FleetThreadList, STATE_DOT, STATE_LABEL } from "./FleetThreadList";
+import { FleetUncountedHosts } from "./FleetUncountedHosts";
 
 const plural = (count: number, one: string, many = one + "s") =>
   count + " " + (count === 1 ? one : many);
@@ -90,6 +92,7 @@ export function FleetPage() {
     tier !== "normal" && [...heat.values()].some((entry) => entry.tier === tier) ? [tier] : [],
   );
   const { totals } = snapshot;
+  const uncounted = fleetUncountedMachines(snapshot.machines, connections);
 
   return (
     <SidebarInset>
@@ -102,13 +105,14 @@ export function FleetPage() {
             <FleetConsoleSlot snapshot={snapshot} connections={connections} heat={heat} />
             <p className="text-sm text-muted-foreground" role="status">
               {totals.running + totals.attention === 0
-                ? "Nothing running on " + plural(totals.machines, "machine") + "."
+                ? "Nothing running on " + plural(totals.machines, "machine")
                 : plural(totals.running, "thread") +
                   " running, " +
                   totals.attention +
                   " need you, on " +
-                  plural(totals.machines, "machine") +
-                  "."}
+                  plural(totals.machines, "machine")}
+              {uncounted.length > 0 ? " " : null}
+              <FleetUncountedHosts hosts={uncounted} />.
               {totals.reported > 0
                 ? " " +
                   plural(totals.reported, "launch", "launches") +

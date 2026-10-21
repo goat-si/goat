@@ -24,8 +24,10 @@ import { BoatIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { FleetConnection } from "./fleetConnection";
+import { fleetHostCount } from "./fleetCount";
 import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
+import { FleetUncountedHosts } from "./FleetUncountedHosts";
 import {
   fleetAlerts,
   fleetThroughput,
@@ -378,7 +380,7 @@ function FleetConsoleExpanded(props: {
   const hottest = hottestHost(rows, heat);
   const quotas = quotaRows(rows).slice(0, 3);
   const { totals } = snapshot;
-  const reporting = rows.filter((row) => row.tone === "ok").length;
+  const hostCount = fleetHostCount({ rows, machines: snapshot.machines, connections });
   const boatByMachine = new Map(
     snapshot.machines.flatMap((machine) =>
       machine.boat === null ? [] : [[machine.id, machine.boat] as const],
@@ -437,10 +439,13 @@ function FleetConsoleExpanded(props: {
           aria-label="Hosts"
           className="flex min-h-0 flex-col border-b p-3 md:border-r md:border-b-0"
         >
-          <div className="mb-1 grid grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] gap-3">
-            <Label>
-              Hosts {reporting}/{rows.length}
-            </Label>
+          <div className="mb-1 grid grid-cols-[minmax(0,6.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+            <span className="flex min-w-0 items-center gap-1">
+              <Label>
+                Hosts {hostCount.reporting}/{totals.machines}
+              </Label>
+              <FleetUncountedHosts hosts={hostCount.uncounted} />
+            </span>
             <Label>CPU</Label>
             <Label>Mem</Label>
             <Label>Load 1m</Label>

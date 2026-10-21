@@ -82,6 +82,7 @@ function machine(id: string, overrides: Partial<FleetMachine> = {}): FleetMachin
     environmentId: null,
     sshHost: null,
     boat: null,
+    answering: true,
     running: 0,
     attention: 0,
     reported: 0,
