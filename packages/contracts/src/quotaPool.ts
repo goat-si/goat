@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ForwardCompatibleOptional, IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 // Encoding recovery validates raw nested arrays too early; recover only while decoding unknown entries.
 const quotaArray = <Element extends Schema.Top>(element: Element) =>
@@ -70,6 +70,7 @@ export const QuotaPool = Schema.Struct({
     version: TrimmedNonEmptyString,
     role: Schema.Literals(["standalone", "hub", "client"]),
     homeId: TrimmedNonEmptyString,
+    displayName: ForwardCompatibleOptional(TrimmedNonEmptyString),
   }),
   generatedAt: IsoDateTime,
   providers: quotaArray(

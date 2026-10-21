@@ -100,10 +100,108 @@ function row(
 const reference = { homeId: "home", provider: "openai" };
 
 describe("Fleet OpenCodex quota", () => {
+  it.each([
+    {
+      scenario: "link Home label",
+      inventory: { link: { homeLabel: "Link hub" }, runtime: { homeName: "Runtime hub" } },
+      producerName: "Producer hub",
+      expected: "Link hub",
+    },
+    {
+      scenario: "status Home name",
+      inventory: { runtime: { homeName: "Runtime hub" } },
+      producerName: "Producer hub",
+      expected: "Runtime hub",
+    },
+    {
+      scenario: "producer display name",
+      inventory: {},
+      producerName: "Producer hub",
+      expected: "Producer hub",
+    },
+    {
+      scenario: "blank inventory name",
+      inventory: { link: { homeLabel: "  " }, runtime: { homeName: "  Runtime hub  " } },
+      producerName: "Producer hub",
+      expected: "Runtime hub",
+    },
+    {
+      scenario: "no display metadata",
+      inventory: undefined,
+      producerName: undefined,
+      expected: null,
+    },
+    {
+      scenario: "raw IDs in display fields",
+      inventory: { link: { homeLabel: "opaque-home-id" }, runtime: { homeName: "opaque-home-id" } },
+      producerName: "opaque-home-id",
+      expected: null,
+    },
+    {
+      scenario: "invalid or blank names",
+      inventory: { link: { homeLabel: 42 }, runtime: null },
+      producerName: " ",
+      expected: null,
+    },
+  ])(
+    "uses $scenario without showing an opaque Home ID",
+    ({ inventory, producerName, expected }) => {
+      const snapshot = pool("opaque-home-id", {
+        producer: {
+          version: "3.0.0",
+          role: "hub",
+          homeId: "opaque-home-id",
+          ...(producerName === undefined ? {} : { displayName: producerName }),
+        },
+      });
+      const child = row("child-a", [], snapshot);
+      const opencodex =
+        inventory === undefined
+          ? undefined
+          : {
+              installed: true,
+              binaries: [],
+              ownership: "adopted" as const,
+              service: { available: true },
+              link: {
+                role: "child" as const,
+                available: true,
+                links: [],
+                childSettingsApplied: null,
+                ...inventory.link,
+              },
+              runtime: {
+                role: "client" as const,
+                port: 10100,
+                healthy: true,
+                ready: true,
+                ...inventory.runtime,
+              },
+            };
+      const namedChild = {
+        ...child,
+        entry: { ...child.entry!, metrics: { ...child.entry!.metrics!, opencodex } },
+      };
+      for (const rows of [
+        [namedChild, row("child-b", [], snapshot)],
+        [row("child-b", [], snapshot), namedChild],
+      ]) {
+        const result = fleetQuota(rows);
+        expect(result.quotas[0]!.host).toBe(expected);
+        expect(result.quotas[0]!.detail?.split("\n")[0]).toBe(
+          "OpenCodex pool" + (expected === null ? "" : ` · ${expected}`),
+        );
+        expect(result.quotas[0]!.detail).not.toContain("opaque-home-id");
+        expect([...result.viaHub.values()]).toEqual([expected, expected]);
+      }
+    },
+  );
+
   it("renders one Home pool across devices and deduplicates accountRef within it", () => {
     const base = pool();
     const provider = base.providers[0]!;
     const snapshot = pool("home", {
+      producer: { ...base.producer, displayName: "Hub workstation" },
       providers: [{ ...provider, accounts: [...provider.accounts, ...provider.accounts] }],
     });
     const result = fleetQuota([
@@ -158,7 +256,7 @@ describe("Fleet OpenCodex quota", () => {
       ),
     ]);
     expect(result.quotas.map((q) => q.label)).toEqual(["OpenCodex pool", "own-claude"]);
-    expect(result.viaHub.get("child")).toBe("home");
+    expect(result.viaHub.get("child")).toBeNull();
   });
 
   it("uses the latest Home snapshot and does not resurrect windows from older devices", () => {
@@ -186,7 +284,8 @@ describe("Fleet OpenCodex quota", () => {
 
   it("does not merge different Homes that use the same provider or accountRef", () => {
     const result = fleetQuota([row("a", [], pool("home-a")), row("b", [], pool("home-b"))]);
-    expect(result.quotas.map((q) => q.host)).toEqual(["home-a", "home-b"]);
+    expect(new Set(result.quotas.map((q) => q.key)).size).toBe(2);
+    expect(result.quotas.map((q) => q.host)).toEqual([null, null]);
   });
 
   it("groups multiple providers and account windows inside the same Home row with +N detail", () => {

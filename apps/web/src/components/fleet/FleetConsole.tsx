@@ -246,7 +246,7 @@ function HostRow({
   readonly now: number;
   /** The host is connected but not answering, or froze recently: its alert's tone. */
   readonly answeringLate: FleetAlertTone | null;
-  readonly viaHub: string | undefined;
+  readonly viaHub: string | null | undefined;
 }) {
   const metrics = row.entry?.metrics;
   const stale = row.tone === "stale";
@@ -297,13 +297,13 @@ function HostRow({
             <span className="block truncate">{row.label}</span>
             {viaHub === undefined ? null : (
               <span className="block truncate font-mono text-3xs text-muted-foreground">
-                via Hub {viaHub}
+                via Hub{viaHub === null ? "" : ` ${viaHub}`}
               </span>
             )}
           </TooltipTrigger>
           <TooltipPopup side="top">
             {hostDetail(row, lastSeen, observedAt)}
-            {viaHub === undefined ? null : ` · via Hub ${viaHub}`}
+            {viaHub === undefined ? null : ` · via Hub${viaHub === null ? "" : ` ${viaHub}`}`}
           </TooltipPopup>
         </Tooltip>
       </span>

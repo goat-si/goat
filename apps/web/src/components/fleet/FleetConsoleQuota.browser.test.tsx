@@ -62,7 +62,12 @@ function setup(): FleetSnapshot {
   const observedAt = "2026-10-21T08:00:00.000Z";
   const pool: QuotaPool = {
     schema: "ocx.quota-pool/1",
-    producer: { version: "3.0.0", role: "hub", homeId: "home-host" },
+    producer: {
+      version: "3.0.0",
+      role: "hub",
+      homeId: "home-host",
+      displayName: "Hub workstation",
+    },
     generatedAt: observedAt,
     providers: [
       {
@@ -118,6 +123,7 @@ function setup(): FleetSnapshot {
     machineKind: null,
     sshHost: null,
     cloudState: null,
+    boat: null,
     running: 0,
     attention: 0,
     reported: 0,

@@ -18,6 +18,8 @@ import {
 import { QuotaPool, QuotaWindow, type QuotaWindowKind } from "./quotaPool.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 
+const decodePoolMetadata = Schema.decodeUnknownEffect(QuotaPool);
+
 const at = "2026-10-21T03:00:00.000Z";
 const resetAt = "2026-10-21T08:00:00.000Z";
 const burst = {
@@ -193,6 +195,22 @@ describe("QuotaPool", () => {
       );
       expect(JSON.parse(JSON.stringify(wire))).toEqual(expected);
       expect(yield* decodePool(wire)).toEqual(withUndefined);
+    }),
+  );
+
+  it.effect("retains optional producer display names and ignores invalid display metadata", () =>
+    Effect.gen(function* () {
+      const named = { ...pool, producer: { ...pool.producer, displayName: "Home workstation" } };
+      const decoded = yield* decodePoolMetadata(named);
+      expect(decoded.producer.displayName).toBe("Home workstation");
+      for (const displayName of ["", 42]) {
+        const legacy = yield* decodePoolMetadata({
+          ...pool,
+          producer: { ...pool.producer, displayName },
+        });
+        expect(legacy.producer.displayName).toBeUndefined();
+        expect(legacy.producer.homeId).toBe("home-fixture");
+      }
     }),
   );
 
