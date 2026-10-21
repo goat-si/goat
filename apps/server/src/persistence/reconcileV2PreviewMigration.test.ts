@@ -108,6 +108,7 @@ describe("V2 preview upgrade", () => {
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
         [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -226,6 +227,7 @@ describe("V2 preview upgrade", () => {
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
         [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
