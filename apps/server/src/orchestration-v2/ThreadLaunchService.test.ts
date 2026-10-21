@@ -2818,3 +2818,34 @@ it.effect.each([" /COMPACT "])(
       }).pipe(Effect.provide(harness.layer));
     }),
 );
+
+it("reports a stalled worktree checkout as retryable, not as a bad request", () => {
+  const launchError = (cause: unknown) =>
+    new ThreadLaunch.ThreadLaunchError({
+      operation: "provision-worktree",
+      commandId: CommandId.make("cmd-stall"),
+      projectId: ProjectId.make("project-stall"),
+      cause,
+    });
+  const gitError = (reason?: "stalled" | "ref_not_found") =>
+    new GitCommandError({
+      operation: "GitVcsDriver.createWorktree",
+      command: "git worktree add",
+      cwd: "C:\\Users\\super\\Developer\\goat",
+      ...(reason === undefined ? {} : { reason }),
+      detail: "Git made no progress for 2m 0s and was stopped after 5m 0s.",
+    });
+
+  assert.deepStrictEqual(ThreadLaunch.preparationFailureClass(launchError(gitError("stalled"))), {
+    class: "unknown",
+    code: "git_stalled",
+    retryable: true,
+  });
+  for (const cause of [gitError("ref_not_found"), gitError(), new Error("boom")]) {
+    assert.deepStrictEqual(ThreadLaunch.preparationFailureClass(launchError(cause)), {
+      class: "validation_error",
+      code: null,
+      retryable: false,
+    });
+  }
+});

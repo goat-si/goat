@@ -7,6 +7,10 @@
       "types": "./src/hubNodes.ts",
       "default": "./src/hubNodes.ts"
     },
+    "./cloud-machines": {
+      "types": "./src/cloudMachines.ts",
+      "default": "./src/cloudMachines.ts"
+    },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
       "default": "./src/memoryBrowsing.ts"

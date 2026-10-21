@@ -65,9 +65,6 @@ export const LEGACY_BOOT_SERVICE_NAMES: BootServiceNames = {
 
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
-export const BOOT_SERVICE_UNIT_FILE = BOOT_SERVICE_NAMES.unitFile;
-export const BOOT_SERVICE_LAUNCHD_LABEL = BOOT_SERVICE_NAMES.launchdLabel;
-export const BOOT_SERVICE_PLIST_FILE = plistFileOf(BOOT_SERVICE_NAMES);
 const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
 const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 /**

@@ -51,12 +51,21 @@ import {
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import { resolveAvailableWorktreesDirectory } from "../worktreesDirectory.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
+import {
+  defaultCheckoutWorkers,
+  missingWindowsCheckoutSettings,
+  WINDOWS_CHECKOUT_SETTINGS,
+  worktreeSparseCheckoutPatterns,
+} from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const gitProcesses = Semaphore.makeUnsafe(8);
-const WORKTREE_ADD_TIMEOUT_MS = 300_000;
+// Silence, not total time, marks a stuck checkout: a Windows checkout under real-time
+// scanning or a hook installing dependencies can print steadily for many minutes.
+const WORKTREE_ADD_STALL_TIMEOUT_MS = Duration.toMillis(Duration.minutes(2));
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
@@ -178,12 +187,14 @@ interface GitRefsSnapshot {
 interface ExecuteGitOptions {
   stdin?: string | undefined;
   timeoutMs?: number | null | undefined;
+  stallTimeoutMs?: number | undefined;
   forceKillAfterMs?: number | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorDetail?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
   maxOutputBytes?: number | undefined;
   appendTruncationMarker?: boolean | undefined;
+  keepLineCallbacksAfterTruncation?: boolean | undefined;
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
 }
 
@@ -1038,7 +1049,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
 
-      const runGitCommand = Effect.fn("runGitCommand")(function* () {
+      const runGitCommand = Effect.fn("runGitCommand")(function* (watch: GitStallWatch | null) {
+        const watchLine = (
+          onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
+        ): ((line: string) => Effect.Effect<void, never>) | undefined =>
+          watch === null
+            ? onLine
+            : (line) =>
+                onLine ? Effect.andThen(watch.touch(line), onLine(line)) : watch.touch(line);
         const trace2Monitor = yield* createTrace2Monitor(commandInput, input.progress).pipe(
           Effect.provideService(Path.Path, path),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1091,7 +1109,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               child.stdout,
               maxOutputBytes,
               appendTruncationMarker,
-              input.progress?.onStdoutLine,
+              watchLine(input.progress?.onStdoutLine),
               input.keepLineCallbacksAfterTruncation,
             ),
             collectOutput(
@@ -1099,7 +1117,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               child.stderr,
               maxOutputBytes,
               appendTruncationMarker,
-              input.progress?.onStderrLine,
+              watchLine(input.progress?.onStderrLine),
               input.keepLineCallbacksAfterTruncation,
             ),
             child.exitCode.pipe(
@@ -1150,7 +1168,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
 
-      const execution = runGitCommand().pipe(Effect.scoped);
+      if (input.stallTimeoutMs !== undefined) {
+        return yield* withGitStallTimeout(
+          input.stallTimeoutMs,
+          (stall) =>
+            new GitCommandError({
+              ...gitCommandContext(commandInput),
+              reason: "stalled",
+              detail: describeGitStall(stall),
+            }),
+          (watch) => runGitCommand(watch).pipe(Effect.scoped),
+        );
+      }
+
+      const execution = runGitCommand(null).pipe(Effect.scoped);
       if (timeoutMs === null) {
         return yield* execution;
       }
@@ -1181,7 +1212,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       }),
       (execution) =>
-        input.timeoutMs === null || (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) > DEFAULT_TIMEOUT_MS
+        input.stallTimeoutMs !== undefined ||
+        input.timeoutMs === null ||
+        (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) > DEFAULT_TIMEOUT_MS
           ? execution
           : gitProcesses.withPermits(1)(execution),
       Effect.withSpan(input.operation, {
@@ -1208,12 +1241,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ...(options.env !== undefined ? { env: options.env } : {}),
       allowNonZeroExit: true,
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.stallTimeoutMs !== undefined ? { stallTimeoutMs: options.stallTimeoutMs } : {}),
       ...(options.forceKillAfterMs !== undefined
         ? { forceKillAfterMs: options.forceKillAfterMs }
         : {}),
       ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
       ...(options.appendTruncationMarker !== undefined
         ? { appendTruncationMarker: options.appendTruncationMarker }
+        : {}),
+      ...(options.keepLineCallbacksAfterTruncation !== undefined
+        ? { keepLineCallbacksAfterTruncation: options.keepLineCallbacksAfterTruncation }
         : {}),
       ...(options.progress ? { progress: options.progress } : {}),
     }).pipe(
@@ -3898,6 +3935,90 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return { tip, baseSha, uniqueCommits, worktreePath, dirty };
     });
 
+  /** The project file as committed at `ref`, which is what the new worktree will contain. */
+  const readProjectFileAtRef = Effect.fn("GitVcsDriver.readProjectFileAtRef")(function* (
+    cwd: string,
+    ref: string,
+  ) {
+    for (const name of [GOAT_PROJECT_FILE_NAME, LEGACY_PROJECT_FILE_NAME]) {
+      const result = yield* executeGit(
+        "GitVcsDriver.readProjectFileAtRef",
+        cwd,
+        ["show", `${ref}:${name}`],
+        { allowNonZeroExit: true, timeoutMs: 10_000 },
+      );
+      if (result.exitCode === 0) return parseGoatProjectFile(result.stdout);
+    }
+    return null;
+  });
+
+  // A sparse worktree replays post-checkout through `git hook run` (Git 2.36+); without it,
+  // a new worktree's hook would see the wrong arguments, so older Git checks out fully.
+  let hookRunSupported: boolean | null = null;
+  const supportsHookRun = Effect.fn("GitVcsDriver.supportsHookRun")(function* (cwd: string) {
+    if (hookRunSupported !== null) return hookRunSupported;
+    const result = yield* executeGit(
+      "GitVcsDriver.supportsHookRun",
+      cwd,
+      // -h prints usage and exits 129 when the command exists; an older Git exits 1 with
+      // "not a git command". Newer Git rejects unknown hook names, so none can be probed.
+      ["hook", "run", "-h"],
+      { allowNonZeroExit: true, timeoutMs: 10_000 },
+    );
+    hookRunSupported = result.exitCode === 129;
+    return hookRunSupported;
+  });
+
+  const readWorktreeSparseCheckout = Effect.fn("GitVcsDriver.readWorktreeSparseCheckout")(
+    function* (cwd: string, ref: string) {
+      const file = yield* readProjectFileAtRef(cwd, ref).pipe(
+        Effect.catchTags({
+          GitCommandError: (cause) =>
+            Effect.logWarning("Could not read the project file; checking out every file", {
+              cause,
+            }).pipe(Effect.as(null)),
+        }),
+      );
+      const excluded = file?.worktreeSparseExclude ?? [];
+      const patterns = worktreeSparseCheckoutPatterns(excluded);
+      if (patterns === null) return null;
+      if (!(yield* supportsHookRun(cwd))) {
+        yield* Effect.logWarning("Git lacks git hook run; checking out every file");
+        return null;
+      }
+      return { patterns, excluded };
+    },
+  );
+
+  const applyWindowsCheckoutSettings = Effect.fn("GitVcsDriver.applyWindowsCheckoutSettings")(
+    function* (cwd: string) {
+      const current = new Map<string, string | null>();
+      for (const { key } of WINDOWS_CHECKOUT_SETTINGS) {
+        current.set(key, yield* readConfigValue(cwd, key));
+      }
+      const missing = missingWindowsCheckoutSettings((key) => current.get(key) ?? null);
+      for (const setting of missing) {
+        yield* runGit("GitVcsDriver.applyWindowsCheckoutSettings", cwd, [
+          "config",
+          "--local",
+          setting.key,
+          setting.value,
+        ]);
+      }
+      if (missing.length > 0) {
+        yield* Effect.logInfo("Turned on Windows checkout settings for this repository", {
+          cwd,
+          keys: missing.map((setting) => setting.key),
+        });
+      }
+    },
+    // Tuning is best effort; a repository whose config cannot be written still checks out.
+    Effect.catchTags({
+      GitCommandError: (cause) =>
+        Effect.logWarning("Could not apply Windows checkout settings", { cause }),
+    }),
+  );
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -4068,30 +4189,121 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     });
 
-    const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    if (existing !== "reused") {
-      yield* executeGitWithStableDiagnostics(
-        "GitVcsDriver.createWorktree",
-        input.cwd,
-        ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
+    if (hostPlatform === "win32" && existing !== "reused") {
+      yield* applyWindowsCheckoutSettings(input.cwd);
+    }
+    const checkoutWorkers =
+      (yield* readConfigValue(input.cwd, "checkout.workers")) ??
+      defaultCheckoutWorkers(hostPlatform);
+    // Writes files for the new worktree. Every output line, a hook's included, counts as
+    // progress. Git runs post-checkout only after the worktree is complete and unlocked, so
+    // a post-checkout hook that goes silent costs the hook, not the checkout. Earlier hooks,
+    // such as reference-transaction while the branch is created, run before any file lands.
+    const runCheckoutCommand = (operation: string, cwd: string, commandArgs: string[]) => {
+      let postCheckoutStarted = false;
+      return executeGitWithStableDiagnostics(
+        operation,
+        cwd,
+        ["-c", `checkout.workers=${checkoutWorkers}`, ...commandArgs],
         {
           fallbackErrorDetail: "git worktree add failed",
-          timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-          ...(onCheckoutProgress
-            ? {
-                // Git only prints checkout progress when stderr is a tty or the
-                // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
-                env: { GIT_PROGRESS_DELAY: "0" },
-                progress: {
-                  onStderrLine: (line) => {
-                    const parsed = parseGitCheckoutProgressLine(line);
-                    return parsed ? onCheckoutProgress(parsed) : Effect.void;
-                  },
-                },
-              }
-            : {}),
+          stallTimeoutMs: WORKTREE_ADD_STALL_TIMEOUT_MS,
+          // A hook installing dependencies can print far more than the buffered copy keeps.
+          appendTruncationMarker: true,
+          keepLineCallbacksAfterTruncation: true,
+          env: {
+            // Git only prints checkout progress when stderr is a tty or the delay
+            // elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
+            GIT_PROGRESS_DELAY: "0",
+            ...(options?.skipSetupHook ? { GOAT_WORKTREE_SETUP: "0" } : {}),
+          },
+          progress: {
+            onStderrLine: (line) => {
+              const parsed = onCheckoutProgress ? parseGitCheckoutProgressLine(line) : null;
+              return parsed && onCheckoutProgress ? onCheckoutProgress(parsed) : Effect.void;
+            },
+            onHookStarted: (hookName) =>
+              Effect.suspend(() => {
+                if (hookName !== "post-checkout") return Effect.void;
+                postCheckoutStarted = true;
+                return progress?.onHookStarted?.(hookName) ?? Effect.void;
+              }),
+          },
         },
       ).pipe(
+        Effect.asVoid,
+        Effect.catchTags({
+          GitCommandError: (error) => {
+            const hookName = "post-checkout";
+            if (error.reason !== "stalled" || !postCheckoutStarted) return Effect.fail(error);
+            // On Windows the hook keeps running after git is stopped: Git Bash re-creates
+            // processes on exec, which detaches them from git's process tree, so neither
+            // killing git nor taskkill /T reaches it. Thread launches skip this repository's
+            // dependency-installing hook (skipSetupHook), so it does not race their setup step.
+            return Effect.logWarning("Git hook stalled after checkout; keeping the worktree", {
+              worktreePath: targetPath,
+              hookName,
+              detail: error.detail,
+            }).pipe(
+              Effect.andThen(
+                progress?.onHookStalled?.({ hookName, detail: error.detail }) ?? Effect.void,
+              ),
+            );
+          },
+        }),
+      );
+    };
+    if (existing !== "reused") {
+      const sparse = yield* readWorktreeSparseCheckout(
+        input.cwd,
+        existing === "added" ? newBranch! : input.refName,
+      );
+      yield* Effect.gen(function* () {
+        if (sparse === null) {
+          yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
+          return;
+        }
+        // --no-checkout writes no files and runs no hook, so the patterns apply before
+        // the first file lands; checkout -f then fills the worktree around them.
+        const [worktreeVerb, addVerb, ...rest] = args;
+        yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [
+          worktreeVerb!,
+          addVerb!,
+          "--no-checkout",
+          ...rest,
+        ]);
+        yield* runGit(
+          "GitVcsDriver.createWorktree.sparseCheckout",
+          targetPath,
+          ["sparse-checkout", "set", "--no-cone", "--stdin"],
+          { stdin: sparse.patterns },
+        );
+        // checkout prints progress to a pipe only when asked, and would run post-checkout as a
+        // same-commit switch. Hooks are off for it, then post-checkout runs with the
+        // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.
+        yield* runCheckoutCommand("GitVcsDriver.createWorktree.checkout", targetPath, [
+          "-c",
+          `core.hooksPath=${path.join(targetPath, ".git-goat-no-hooks")}`,
+          "checkout",
+          "-f",
+          "--progress",
+        ]);
+        if (progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
+        const head = (yield* runGitStdout("GitVcsDriver.createWorktree.head", targetPath, [
+          "rev-parse",
+          "HEAD",
+        ])).trim();
+        yield* runCheckoutCommand("GitVcsDriver.createWorktree.postCheckout", targetPath, [
+          "hook",
+          "run",
+          "--ignore-missing",
+          "post-checkout",
+          "--",
+          "0".repeat(head.length),
+          head,
+          "1",
+        ]);
+      }).pipe(
         Effect.onError((cause) =>
           rollbackAdd(cause).pipe(
             Effect.catchCause((rollbackCause) =>

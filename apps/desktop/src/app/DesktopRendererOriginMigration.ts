@@ -35,8 +35,8 @@ export class DesktopRendererOriginMigration extends Context.Service<
   }
 >()("@goat/desktop/app/DesktopRendererOriginMigration") {}
 
-export const MARKER_FILE_NAME = "renderer-origin-migrated";
-export const ATTEMPT_FILE_NAME = "renderer-origin-migration-attempt";
+const MARKER_FILE_NAME = "renderer-origin-migrated";
+const ATTEMPT_FILE_NAME = "renderer-origin-migration-attempt";
 const STEP_TIMEOUT = Duration.seconds(30);
 
 export class RendererOriginMigrationError extends Schema.TaggedError<RendererOriginMigrationError>()(

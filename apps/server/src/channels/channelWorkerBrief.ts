@@ -17,8 +17,8 @@ import * as Path from "effect/Path";
 import type { ChannelBotFiles } from "./channelBotNotes.ts";
 
 /** At most this many skills, each cut to this many characters, ride a remote worker's message. */
-export const REMOTE_SKILLS_LIMIT = 3;
-export const REMOTE_SKILL_CHARS = 4_000;
+const REMOTE_SKILLS_LIMIT = 3;
+const REMOTE_SKILL_CHARS = 4_000;
 /**
  * The remote goat_thread_launch takes at most 120,000 characters, and the SSH dispatch appends
  * its reporting note; the notes and skills give way first so the work itself still starts.

@@ -67,7 +67,7 @@ export class GoalController extends Context.Service<
   }
 >()("goat/fleet/goals/GoalController") {}
 
-export const renderPrompt = (goal: FleetGoal, worker: WorkerRecord, branch: string) => {
+const renderPrompt = (goal: FleetGoal, worker: WorkerRecord, branch: string) => {
   const target = goal.spec.workers.perTarget ? goal.spec.targets[worker.slot] : undefined;
   const targetText =
     target === undefined
@@ -99,7 +99,7 @@ export const renderPrompt = (goal: FleetGoal, worker: WorkerRecord, branch: stri
   );
 };
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const store = yield* GoalStore;
   const runtime = yield* GoalWorkerRuntime;
   const placement = yield* Placement;

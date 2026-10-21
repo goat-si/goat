@@ -6,6 +6,7 @@ import { HostCondition } from "./fleetHealth.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
+import { OpenCodexInventorySnapshot } from "./opencodex.ts";
 
 /**
  * Wire shape for `goat_host_status`. A later GUI reads this schema; add fields
@@ -85,6 +86,8 @@ export const HostStatusMetrics = Schema.Struct({
   quotas: Schema.Array(HostStatusQuota),
   /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
   providers: Schema.optional(Schema.Array(HostStatusProvider)),
+  /** Read-only inventory of this host's OpenCodex. Older hosts omit it. */
+  opencodex: ForwardCompatibleOptional(OpenCodexInventorySnapshot),
 });
 export type HostStatusMetrics = typeof HostStatusMetrics.Type;
 

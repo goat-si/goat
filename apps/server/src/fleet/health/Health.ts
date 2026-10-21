@@ -90,7 +90,7 @@ export const probeRemoteStatus = (host: string, threadId: ThreadId, ceiling: Run
     return { answered: true, status };
   });
 
-export const readRemoteStatus = (host: string, threadId: ThreadId, ceiling: RuntimeMode) =>
+const readRemoteStatus = (host: string, threadId: ThreadId, ceiling: RuntimeMode) =>
   probeRemoteStatus(host, threadId, ceiling).pipe(Effect.map((probe) => probe.status));
 
 /** A thread on this machine, from its shell row. */
@@ -120,7 +120,7 @@ export const readLocalStatus = (threadId: ThreadId) =>
     return snapshot;
   });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const monitor = yield* HostHealthMonitor;
   const context = yield* Effect.context<
     | SshRemoteDispatch.SshRemoteDispatch

@@ -31,7 +31,7 @@ import { readCaller, unavailable } from "./threadAccess.ts";
 
 const DEFAULT_LIMIT = 50;
 /** Most matching threads one environment considers per search, newest first. */
-export const MATCH_SCAN_LIMIT = 1_000;
+const MATCH_SCAN_LIMIT = 1_000;
 const HOST_LIMIT = 16;
 /** The cursor key for this environment in a fan-out cursor. */
 const HERE = "";
@@ -107,7 +107,7 @@ interface EnvironmentSearch extends Filters {
  * every environment's offset by what it contributed. Each page must be that
  * environment's newest matches from its offset, in `newestFirst` order.
  */
-export function mergeSearchPages(
+function mergeSearchPages(
   cursor: FanOutCursor,
   pages: ReadonlyArray<{ readonly key: string; readonly page: Page }>,
   limit: number,

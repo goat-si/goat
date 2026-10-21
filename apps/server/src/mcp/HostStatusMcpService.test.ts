@@ -8,6 +8,7 @@ import {
   ThreadId,
   type ServerProvider,
   type ServerProviderUsageLimits,
+  type OpenCodexInventorySnapshot,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
@@ -21,6 +22,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -76,7 +78,7 @@ const provider = (
     usageLimits,
   }) as ServerProvider;
 
-const remoteOk = (sampledAt: number) => ({
+const remoteOk = (sampledAt: number, opencodex?: OpenCodexInventorySnapshot) => ({
   hosts: [
     {
       host: null,
@@ -86,10 +88,38 @@ const remoteOk = (sampledAt: number) => ({
         sampledAt,
         threads: { running: 1, waiting: 0, queued: 0 },
         quotas: [],
+        ...(opencodex ? { opencodex } : {}),
       },
     },
   ],
 });
+
+it.effect("fan-out preserves a host's inventory and accepts older hosts that omit it", () =>
+  Effect.gen(function* () {
+    const inventory: OpenCodexInventorySnapshot = {
+      installed: true,
+      binaries: [{ path: "/fixture/ocx", version: "2.86.0" }],
+      ownership: "adopted",
+      service: { available: false },
+      runtime: { port: 10100, version: "2.86.0", role: "client", healthy: true, ready: true },
+      link: { role: "child", available: true, links: [], childSettingsApplied: true },
+    };
+    const { value } = yield* run(
+      {
+        hosts: ["child", "legacy"],
+        hostCall: (call) =>
+          Effect.succeed(remoteOk(9, call.host === "child" ? inventory : undefined)),
+      },
+      (service) => service.read(scope, {}),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    const hosts = decode(value.success).hosts;
+    expect(hosts.find((host) => host.host === "child")?.metrics?.opencodex).toEqual(inventory);
+    expect(hosts.find((host) => host.host === "legacy")?.metrics?.opencodex).toBeUndefined();
+    expect(hosts.find((host) => host.host === null)?.metrics?.opencodex?.ownership).toBe("none");
+  }),
+);
 
 const sshError = (reason: SshRemoteDispatch.SshRemoteDispatchError["reason"], message: string) =>
   new SshRemoteDispatch.SshRemoteDispatchError({ reason, message });
@@ -113,6 +143,18 @@ const run = <A, E>(
   let connectedReads = 0;
   const providers = { current: options.providers ?? [] };
   const layer = HostStatusMcpService.layer.pipe(
+    Layer.provide(
+      Layer.succeed(OpenCodexInventory.OpenCodexInventory, {
+        read: Effect.succeed({
+          installed: false,
+          binaries: [],
+          ownership: "none" as const,
+          service: { available: false },
+          runtime: { port: 10100, healthy: false, ready: false },
+          link: { role: "none" as const, available: false, links: [], childSettingsApplied: false },
+        }),
+      }),
+    ),
     Layer.provide(HostThreadsMcpService.layer),
     Layer.provide(
       Layer.mock(ThreadResultService.ThreadResultService)({
