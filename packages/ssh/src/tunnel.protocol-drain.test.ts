@@ -206,6 +206,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               force: true,
               grace: 60,
             });
+            // A person's confirmation is never an automatic request the runtime may drop.
+            assert.deepInclude(log, { type: "drain-body", version: OLDER, automatic: false });
             assert.isFalse(log.some((entry) => entry.type === "activity"));
             assert.isFalse(isAlive(f.pid));
           } else {
@@ -325,6 +327,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           force: false,
           grace: 60,
         });
+        // The first-connection refresh is automatic, so the runtime may arbitrate it.
+        assert.deepInclude(log, { type: "drain-body", version: OLDER, automatic: true });
         assert.deepInclude(log, {
           type: "supervise",
           version: ARCHIVE.archiveVersion,

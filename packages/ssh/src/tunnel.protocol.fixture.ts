@@ -134,7 +134,8 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
 } else if (args[0] === "__ssh-helper" && args[1] === "drain") {
   const value = await (await import(${JSON.stringify(helperUrl)})).requestSshRuntimeDrain({
     port: Number(flag("--port")), instanceId: flag("--instance-id"), targetVersion: flag("--target-version"),
-    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file") });
+    graceSeconds: Number(flag("--grace-seconds")), force: args.includes("--force"), tokenFile: flag("--token-file"),
+    automatic: process.env.GOAT_RUNTIME_DRAIN_AUTOMATIC === "1" });
   event("drain-request", { value, force: args.includes("--force"), grace: Number(flag("--grace-seconds")) }); console.log(value);
 } else if (args[0] === "__ssh-helper" && args[1] === "supervise") {
   // Supervised children prove readiness through their descriptor, not the readiness FIFO.
@@ -227,6 +228,7 @@ if (req.method === "POST" && req.url === "/.well-known/goat/runtime/drain" && dr
     const token = fs.readFileSync(tokenFile, "utf8").trim();
     if (req.headers["x-goat-runtime-control"] !== token) { res.statusCode = 403; res.end("{}"); return; }
     if (request.expectedInstanceId !== instanceId) { res.end(JSON.stringify({status: "instance-changed", instanceId, forced: false})); return; }
+    event("drain-body", { automatic: request.automatic === true });
     const file = path.join(test, "drain");
     const mode = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "drained";
     if (mode === "response-lost") {

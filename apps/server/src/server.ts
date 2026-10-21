@@ -144,6 +144,7 @@ import * as CloudHttp from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
@@ -1169,6 +1170,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
+      // One instance, shared with the auto-update scheduler, so arbitration sees its target.
+      Layer.provide(SshRuntimeAutoUpdate.layerArbiter),
+      Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
       Layer.provideMerge(RuntimeAdmission.layer),
