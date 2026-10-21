@@ -392,34 +392,14 @@ export const layerWithOptions = (
       const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
       const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
         ComputerUseOrigin.computerUseOrigin(
-          {
+          ComputerUseOrigin.projectionOriginReads({
+            getThreadRecords: (id, fields, filter) =>
+              projectionStore.getThreadRecords(id, fields, filter),
             channelOrigin: (id) =>
               Option.isSome(computerUseLeases)
-                ? ComputerUseOrigin.originRead(computerUseLeases.value.channelOrigin(id))
+                ? computerUseLeases.value.channelOrigin(id)
                 : Effect.succeed(undefined),
-            thread: (id) =>
-              ComputerUseOrigin.originRead(
-                projectionStore.getThread(id).pipe(
-                  Effect.map((thread) => ({
-                    createdAt: thread.createdAt,
-                    lineage: thread.lineage,
-                    launchedBy: thread.launchedBy,
-                  })),
-                ),
-              ),
-            runs: (id) =>
-              ComputerUseOrigin.originRead(
-                projectionStore
-                  .getThreadRecords(id, ["runs"])
-                  .pipe(Effect.map((records) => records.runs)),
-              ),
-            message: (id, messageId) =>
-              ComputerUseOrigin.originRead(
-                projectionStore
-                  .getThreadRecords(id, ["messages"], { messageIds: [messageId] })
-                  .pipe(Effect.map((records) => records.messages[0])),
-              ),
-          },
+          }),
           { threadId, runId },
         );
       const memoryPolicy = yield* Effect.serviceOption(

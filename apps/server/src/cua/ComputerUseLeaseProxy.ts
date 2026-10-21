@@ -6,8 +6,8 @@
  * - every tools/call waits for the server to confirm the lease, then checks the deadline;
  * - the deadline is a timer here, and the server pushes revocation over a streamed response;
  * - on expiry, revocation or a lost connection it refuses new calls, sends MCP cancellation for
- *   every outstanding request, revokes the driver sessions the agent named, and kills its
- *   `cua-driver mcp` child.
+ *   every outstanding request, kills its `cua-driver mcp` child, answers the provider, and only
+ *   then revokes the driver sessions the agent named, in the background.
  *
  * Killing the child is what stops nested work. Against the pinned 0.37.0 driver, MCP
  * cancellation and `cua-driver revoke --session` both leave a running run_script going, while
@@ -97,6 +97,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   options: LeaseProxyOptions<EU, ED>,
 ) {
   const driver = yield* options.startDriver;
+  const scope = yield* Effect.scope;
   const confirmed = yield* Deferred.make<void>();
   const ended = yield* Deferred.make<LeaseEnd>();
   let deadline = DateTime.toEpochMillis(options.expiresAt);
@@ -118,10 +119,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           params: { requestId: request.id, reason: LEASE_END_MESSAGES[reason] },
         }),
       );
-    if (sessions.size > 0) yield* options.revokeSessions([...sessions]);
+    // The transport kill is what stops nested work, so nothing runs before it that could wait.
     yield* driver.kill;
     for (const request of pending)
       yield* options.output(refusal(request.id, request.method, LEASE_END_MESSAGES[reason]));
+    // Best effort and deny-only; a slow or stuck revoke cannot hold anything up.
+    if (sessions.size > 0)
+      yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
   // The server is the authority: the first word for this handoff confirms it, anything else ends.
@@ -155,7 +159,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Effect.gen(function* () {
     for (;;) {
       const now = yield* Clock.currentTimeMillis;
-      if (now >= deadline) return yield* end("expired");
+      if (now >= deadline) {
+        yield* end("expired");
+        // Fires even when another end got there first: the driver is gone by the deadline.
+        return yield* driver.kill;
+      }
       yield* Effect.sleep(deadline - now);
     }
   }).pipe(Effect.forkScoped);

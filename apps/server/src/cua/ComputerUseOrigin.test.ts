@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import {
   ComputerUseOriginError,
   computerUseOrigin,
+  gateUnattendedSteering,
   type OriginMessage,
   type OriginReads,
   type OriginRun,
@@ -207,6 +208,88 @@ describe("computerUseOrigin", () => {
       assert.deepEqual(
         yield* classify({ threads: { x: {} }, runs: { x: [run("r1", "m1", 0)] } }, "x", "r1"),
         unknown,
+      );
+    }),
+  );
+});
+
+describe("channel workers before the ledger binds them", () => {
+  it.effect("are unattended from the id they were created with", () =>
+    Effect.gen(function* () {
+      // No worker binding exists yet: channelOrigin knows nothing about the thread.
+      const world: World = {
+        threads: { "channel-worker:3f2a": {} },
+        runs: { "channel-worker:3f2a": [run("first", "brief", 0)] },
+        messages: { brief: typed(0) },
+      };
+      assert.deepEqual(yield* classify(world, "channel-worker:3f2a", "first"), {
+        _tag: "unattended",
+        reason: "channel_task",
+      });
+    }),
+  );
+});
+
+describe("gateUnattendedSteering", () => {
+  const world: World = {
+    bot: ["bot"],
+    threads: { bot: {}, mine: {}, peer: {}, "channel-worker:9c": {} },
+    runs: {
+      mine: [run("typed", "m1", 1)],
+      peer: [run("p1", "pm", 0)],
+      "channel-worker:9c": [run("w1", "wm", 0)],
+    },
+    messages: { m1: typed(1), pm: typed(0), wm: typed(0) },
+  };
+  const steer = (thread: string, runId: string) =>
+    ({ type: "steer_active", targetRunId: RunId.make(runId) }) as const;
+  const gate = (
+    thread: string,
+    runId: string,
+    from: { readonly scheduledTaskId?: string; readonly senderThreadId?: string },
+  ) =>
+    gateUnattendedSteering(
+      reads(world),
+      {
+        threadId: ThreadId.make(thread),
+        ...(from.scheduledTaskId === undefined ? {} : { scheduledTaskId: from.scheduledTaskId }),
+        ...(from.senderThreadId === undefined
+          ? {}
+          : { senderThreadId: ThreadId.make(from.senderThreadId) }),
+      },
+      steer(thread, runId),
+    );
+
+  it.effect("queues unattended messages behind a person's running turn", () =>
+    Effect.gen(function* () {
+      const queued = {
+        mode: { type: "queue_after_active", behindRunId: RunId.make("typed") },
+        queued: true,
+      } as const;
+      assert.deepEqual(yield* gate("mine", "typed", { senderThreadId: "bot" }), queued);
+      assert.deepEqual(
+        yield* gate("mine", "typed", { senderThreadId: "channel-worker:9c" }),
+        queued,
+      );
+      assert.deepEqual(yield* gate("mine", "typed", { scheduledTaskId: "task-1" }), queued);
+    }),
+  );
+
+  it.effect("keeps steering between people's threads and into unattended turns", () =>
+    Effect.gen(function* () {
+      const kept = (thread: string, runId: string) => ({
+        mode: steer(thread, runId),
+        queued: false as const,
+      });
+      assert.deepEqual(
+        yield* gate("mine", "typed", { senderThreadId: "peer" }),
+        kept("mine", "typed"),
+      );
+      assert.deepEqual(yield* gate("mine", "typed", {}), kept("mine", "typed"));
+      // The worker's turn has no direct driver, so steering it stays as it was.
+      assert.deepEqual(
+        yield* gate("channel-worker:9c", "w1", { senderThreadId: "bot" }),
+        kept("channel-worker:9c", "w1"),
       );
     }),
   );

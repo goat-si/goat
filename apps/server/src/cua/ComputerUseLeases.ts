@@ -60,7 +60,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly holder: (
       except?: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
-    /** Whether the thread is the GOAT Bot thread or a channel task's worker. */
+    /** Whether the thread is the GOAT Bot thread. Channel workers are known by their id. */
     readonly channelOrigin: (
       threadId: ThreadId,
     ) => Effect.Effect<ChannelOrigin | undefined, ComputerUseLeaseError>;
@@ -158,7 +158,6 @@ export const make = Effect.gen(function* () {
       const read = <A>(effect: Effect.Effect<A, ChannelBotDirectory.ChannelBotDirectoryError>) =>
         effect.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
       if (yield* read(directory.isBotThread(threadId))) return "goat_bot" as const;
-      if (yield* read(directory.isWorkerThread(threadId))) return "channel_task" as const;
       return undefined;
     }),
     state,

@@ -51,6 +51,10 @@ turning computer use off also stops it. When the time runs out or you end it,
 GOAT stops the agent's computer use right away, even in the middle of an action
 sequence: the step already under way finishes, and nothing after it runs.
 
+If such work sends a message to a thread you are running, it does not join your
+turn; it waits and runs as that thread's next turn, without computer use unless
+that thread is approved.
+
 ## macOS permissions
 
 On a Mac, GOAT needs **Accessibility** and **Screen Recording**. When you turn

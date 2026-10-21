@@ -143,6 +143,19 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   at the launch time) are unattended. Launches from another machine are unattended. A person
   promoting or forking a thread takes it over. Any read failure or runaway lineage counts as
   unattended.
+  - Provenance is read from what is fixed before a turn can run. A channel worker is known from
+    its thread id (`channel-worker:<digest>`, `isChannelWorkerThreadId`), which the dispatcher
+    chooses before launch, not from the ledger's `task.worker.bound`, which commits after the
+    launch and could lose a race with the first turn's preparation. Scheduled and webhook runs
+    carry `scheduledTaskId` on the message that starts them, committed with the run.
+  - Steering keeps a turn's starting message, so a classification at attachment would never see
+    an instruction that joins a running turn. A message from an unattended origin (a scheduled
+    task, or a sender thread that classifies unattended) aimed at a person's running turn is
+    therefore queued behind that turn instead of steering it
+    (`gateUnattendedSteering`, applied where `ThreadManagementService` sends). It then starts its
+    own turn, which this message classifies as unattended. Steering into an unattended turn is
+    unchanged, since that turn has no direct driver. A person promoting the queued message to
+    steer is their decision.
 - **Admission lease.** An unattended thread asks with `goat_computer_use_request`, which creates
   an approval handoff on `computer_use.grant` whose text names the thread and turn, this host,
   the stated purpose and the expiry. Approving it needs `settings:write` in an authenticated
@@ -158,8 +171,10 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   lease's state and pushes its end. Every `tools/call` waits for the server's confirmation and
   checks the deadline; the proxy holds its own timer on the expiry. On expiry, revocation, a lost
   stream or computer use turned off, it refuses new calls, sends MCP cancellation for every
-  outstanding request, revokes the driver sessions the agent named, and kills its
-  `cua-driver mcp` child.
+  outstanding request, kills its `cua-driver mcp` child, answers the provider, and only then
+  revokes the driver sessions the agent named, in the background: a slow or stuck revoke never
+  delays the kill. The deadline timer kills the child at the expiry whichever path ended the
+  lease first.
 - **Stopping boundary (0.37.0, measured on macOS).** A `run_script` launching six apps 1.5 s
   apart was stopped three ways. MCP `notifications/cancelled` and `cua-driver revoke --session`
   ("Revoked 1 authorization scope") both let all six launch: 0.37.0 defers session cleanup while

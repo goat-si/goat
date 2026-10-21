@@ -60,6 +60,8 @@ import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimi
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import { currentMemoryAccess } from "../memory/MemoryAccess.ts";
 
 /**
@@ -1119,15 +1121,47 @@ const make = Effect.gen(function* () {
     });
 
   /** Dispatches one message and reads back the run it started, joined, or queued behind. */
+  const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  /** See `gateUnattendedSteering`: such a message waits as the next turn instead. */
+  const unattendedSteeringMode = (
+    input: ThreadManagementSendInput,
+    mode: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>["dispatchMode"],
+  ) =>
+    Effect.gen(function* () {
+      if (
+        (mode.type !== "steer_active" && mode.type !== "restart_active") ||
+        (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
+      )
+        return mode;
+      const gated = yield* ComputerUseOrigin.gateUnattendedSteering(
+        ComputerUseOrigin.projectionOriginReads({
+          getThreadRecords: (id, fields, filter) =>
+            orchestrator.getThreadRecords(id, fields, filter),
+          channelOrigin: (id) =>
+            Option.isSome(computerUseLeases)
+              ? computerUseLeases.value.channelOrigin(id)
+              : Effect.succeed(undefined),
+        }),
+        input,
+        mode,
+      );
+      if (gated.queued)
+        yield* Effect.logInfo(
+          "An unattended message waits as the next turn instead of steering a person's turn.",
+          { threadId: input.threadId, messageId: input.messageId },
+        );
+      return gated.mode;
+    });
   const dispatchAndRead = (
     input: ThreadManagementSendInput,
     commandId: CommandId,
-    dispatchMode: Extract<
+    requestedMode: Extract<
       OrchestrationV2Command,
       { readonly type: "message.dispatch" }
     >["dispatchMode"],
   ) =>
     Effect.gen(function* () {
+      const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
       const dispatched = yield* dispatch({
         type: "message.dispatch",
         memoryGrantCeiling: input.memoryGrantCeiling ?? "none",

@@ -75,8 +75,9 @@ the running turn and give the bot thread runs it was built never to have.
   nothing in the sandbox backs it. A requester linked below full access keeps their ceiling, so
   the bot never gives a person more than they could run themselves. Work that changes things is
   a coding task.
-- **Computer use.** Full access does not reach the screen. Bot turns, channel task workers and
-  every thread they launch or message count as unattended (`apps/server/src/cua/ComputerUseOrigin.ts`),
+- **Computer use.** Full access does not reach the screen. Bot turns, channel task workers (known
+  by their `channel-worker:` thread id, so before the ledger binds them) and every thread they
+  launch or message count as unattended (`apps/server/src/cua/ComputerUseOrigin.ts`),
   so they get no `cua-driver` until a person approves a `computer_use.grant` handoff in a GOAT
   client session holding `settings:write`. Channel text never answers it: handoffs resolve only
   through authenticated client RPC. See ADR-0020.

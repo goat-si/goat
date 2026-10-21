@@ -21,13 +21,20 @@ const active = (expiresAt = "1970-01-01T00:30:00.000Z"): ComputerUseLeaseUpdate 
 });
 
 /** A proxy over in-memory stdio, lease stream and driver, on the TestClock (epoch 0). */
-const harness = Effect.fn(function* (options: { readonly expiresAt?: string } = {}) {
+const harness = Effect.fn(function* (
+  options: {
+    readonly expiresAt?: string;
+    /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
+    readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+  } = {},
+) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
   const output = yield* Queue.unbounded<string>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
   const driverIn = yield* Queue.unbounded<string>();
   const driverOut = yield* Queue.unbounded<string, Cause.Done>();
   const killed = yield* Deferred.make<void>();
+  const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
   const proxy = yield* runLeaseProxy({
     handoffId: HANDOFF,
@@ -40,7 +47,11 @@ const harness = Effect.fn(function* (options: { readonly expiresAt?: string } = 
       lines: Stream.fromQueue(driverOut),
       kill: Deferred.succeed(killed, undefined).pipe(Effect.andThen(Queue.end(driverOut))),
     }),
-    revokeSessions: (sessions) => Effect.sync(() => void revoked.push(sessions)),
+    revokeSessions: (sessions) =>
+      Effect.sync(() => void revoked.push(sessions)).pipe(
+        Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
+        Effect.andThen(options.revoke?.(sessions) ?? Effect.void),
+      ),
   }).pipe(Effect.scoped, Effect.forkChild);
   const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
   return {
@@ -54,6 +65,7 @@ const harness = Effect.fn(function* (options: { readonly expiresAt?: string } = 
     driverQueued: Queue.size(driverIn),
     killed: Deferred.await(killed),
     isKilled: Deferred.isDone(killed),
+    revokeCalled: Deferred.await(revokeCalled),
     revoked,
     proxy,
   };
@@ -96,8 +108,9 @@ describe("ComputerUseLeaseProxy", () => {
           method: "notifications/cancelled",
           params: { requestId: 7, reason: LEASE_END_MESSAGES.revoked },
         });
-        assert.deepEqual(h.revoked, [["work"]]);
         assert.deepEqual(yield* h.nextToProvider, refusedCall(7, "revoked"));
+        yield* h.revokeCalled;
+        assert.deepEqual(h.revoked, [["work"]]);
         // A late answer from the dead driver never reaches the provider.
         yield* h.send(call(8, "click", { pid: 1, x: 1, y: 1 }));
         assert.deepEqual(yield* h.nextToProvider, refusedCall(8, "revoked"));
@@ -122,6 +135,32 @@ describe("ComputerUseLeaseProxy", () => {
       yield* h.send(call(4, "click"));
       assert.deepEqual(yield* h.nextToProvider, refusedCall(4, "expired"));
     }),
+  );
+
+  it.effect.each(["revoked", "expired"] as const)(
+    "kills the driver and answers the provider while a session revoke is stuck (%s)",
+    (reason) =>
+      Effect.gen(function* () {
+        const stuck = yield* Deferred.make<void>();
+        const h = yield* harness({
+          expiresAt: "1970-01-01T00:10:00.000Z",
+          revoke: () => Deferred.await(stuck),
+        });
+        yield* h.push(active("1970-01-01T00:10:00.000Z"));
+        yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
+        assert.equal((yield* h.nextToDriver).id, 7);
+        if (reason === "revoked") yield* h.push({ state: "ended", reason: "revoked" });
+        else yield* TestClock.adjust("10 minutes");
+        yield* h.killed;
+        assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(7, reason));
+        // The revoke started after the kill and has still not returned.
+        yield* h.revokeCalled;
+        assert.isFalse(yield* Deferred.isDone(stuck));
+        // Nor does it hold up refusing the next call.
+        yield* h.send(call(8, "click"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(8, reason));
+      }),
   );
 
   it.effect("keeps the earlier of its own deadline and the server's", () =>

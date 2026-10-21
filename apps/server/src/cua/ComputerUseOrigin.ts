@@ -13,6 +13,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { isChannelWorkerThreadId } from "../channels/channelIds.ts";
+
 export class ComputerUseOriginError extends Schema.TaggedError<ComputerUseOriginError>()(
   "ComputerUseOriginError",
   { cause: Schema.Defect() },
@@ -111,6 +113,8 @@ const classify: (
   "ComputerUse.classifyOrigin",
 )(function* (reads, threadId, pick, depth) {
   if (depth > MAX_DEPTH) return unattended("unknown");
+  // Known from the id the thread was created with, so it holds before the ledger binds it.
+  if (isChannelWorkerThreadId(threadId)) return unattended("channel_task");
   const channel = yield* reads.channelOrigin(threadId);
   if (channel !== undefined) return unattended(channel);
   const thread = yield* reads.thread(threadId);
@@ -175,3 +179,79 @@ export const computerUseOrigin = (
     Effect.catchCause(() => Effect.succeed(unattended("unknown"))),
     Effect.withSpan("ComputerUse.origin"),
   );
+
+/** The projection reads both callers have, as classification reads. */
+export const projectionOriginReads = <E1, E2>(deps: {
+  readonly getThreadRecords: (
+    threadId: ThreadId,
+    fields: ReadonlyArray<"runs" | "messages">,
+    filter?: { readonly messageIds?: ReadonlyArray<MessageId> },
+  ) => Effect.Effect<
+    {
+      readonly thread: OriginThread;
+      readonly runs?: ReadonlyArray<OriginRun>;
+      readonly messages?: ReadonlyArray<OriginMessage & { readonly id: MessageId }>;
+    },
+    E1
+  >;
+  readonly channelOrigin: (
+    threadId: ThreadId,
+  ) => Effect.Effect<"goat_bot" | "channel_task" | undefined, E2>;
+}): OriginReads => ({
+  channelOrigin: (id) => originRead(deps.channelOrigin(id)),
+  thread: (id) =>
+    originRead(deps.getThreadRecords(id, []).pipe(Effect.map((records) => records.thread))),
+  runs: (id) =>
+    originRead(
+      deps.getThreadRecords(id, ["runs"]).pipe(Effect.map((records) => records.runs ?? [])),
+    ),
+  message: (id, messageId) =>
+    originRead(
+      deps
+        .getThreadRecords(id, ["messages"], { messageIds: [messageId] })
+        .pipe(
+          Effect.map((records) => records.messages?.find((message) => message.id === messageId)),
+        ),
+    ),
+});
+
+type SteeringMode =
+  | { readonly type: "steer_active"; readonly targetRunId: RunId }
+  | { readonly type: "restart_active"; readonly targetRunId: RunId };
+
+/**
+ * A message from an unattended origin (a scheduled task, or a thread that classifies as
+ * unattended) must not join a turn a person is running: that turn may hold the direct driver,
+ * and steering keeps the turn's starting message, so the attachment decision would never see
+ * the new instruction. It waits as that thread's next turn instead, which this message starts
+ * and which gets computer use only through a lease. Steering into an unattended turn stays,
+ * since that turn has no direct driver.
+ */
+export const gateUnattendedSteering = Effect.fn("ComputerUse.gateUnattendedSteering")(function* (
+  reads: OriginReads,
+  input: {
+    readonly threadId: ThreadId;
+    readonly scheduledTaskId?: string | undefined;
+    readonly senderThreadId?: ThreadId | undefined;
+  },
+  mode: SteeringMode,
+) {
+  if (input.scheduledTaskId === undefined && input.senderThreadId === undefined)
+    return { mode, queued: false } as const;
+  const provenance =
+    input.senderThreadId === undefined
+      ? unattended("scheduled_task")
+      : input.scheduledTaskId !== undefined
+        ? unattended("scheduled_task")
+        : yield* computerUseOrigin(reads, { threadId: input.senderThreadId });
+  if (provenance._tag === "interactive") return { mode, queued: false } as const;
+  const target = yield* computerUseOrigin(reads, {
+    threadId: input.threadId,
+    runId: mode.targetRunId,
+  });
+  if (target._tag === "unattended") return { mode, queued: false } as const;
+  return {
+    mode: { type: "queue_after_active", behindRunId: mode.targetRunId },
+    queued: true,
+  } as const;
+});
