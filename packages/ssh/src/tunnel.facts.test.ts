@@ -140,13 +140,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH host facts
         assert.equal((yield* f.fs.readFileString(file)).split("\n")[0], key);
         const retained = yield* f.snapshot;
         yield* f.setCompat(["real"]);
-        yield* launch(f);
+        // Probe shares compat_fact with launch without repeating readiness and ownership checks.
+        yield* probe(f);
         assert.deepEqual(yield* f.snapshot, retained);
         const recovered = yield* f.fs.readFileString(file);
         assert.equal(recovered.split("\n")[0], key);
         assert.match(recovered.split("\n")[1]!, /^compatible 1 [A-Za-z0-9-]+$/u);
         const positive = yield* recordableAsks(f);
-        yield* launch(f);
+        yield* probe(f);
         assert.equal((yield* recordableAsks(f)).compat, positive.compat);
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     LAUNCHES_TIMEOUT_MS,
