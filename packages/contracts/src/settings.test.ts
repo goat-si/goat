@@ -2,6 +2,7 @@ import {
   MemoryHubSettings,
   MemoryHubSettingsUpdateInput,
   ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
 } from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
@@ -52,6 +53,8 @@ describe("storage cleanup settings", () => {
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
       historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
+      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
+      historyArchiveDeleteAfterDays: null,
     });
   });
 

@@ -11,6 +11,7 @@ import * as Settings from "../serverSettings.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import * as DatabaseStorage from "./DatabaseStorage.ts";
 import * as Sqlite from "./Sqlite.ts";
 
@@ -27,6 +28,7 @@ const storageLayer = <E>(
 ) =>
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
     Layer.provide(Settings.layerTest()),
     Layer.provideMerge(Sqlite.layerMemory),

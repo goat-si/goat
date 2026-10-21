@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 
 export const MCP_APP_MODEL_CONTEXT_MAX_BYTES = 16 * 1024;
 
@@ -41,6 +42,7 @@ export const layer = Layer.effect(
   McpAppModelContext,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const archiveGate = yield* ThreadArchiveGate;
     const fail = (cause: unknown) => new McpAppModelContextError({ cause });
 
     const set = Effect.fn("McpAppModelContext.set")(function* (input: {
@@ -66,6 +68,7 @@ export const layer = Layer.effect(
     });
 
     const forThread = Effect.fn("McpAppModelContext.forThread")(function* (threadId: ThreadId) {
+      yield* archiveGate.restore(threadId);
       // The item can live in a thread this one was forked from, so it is
       // matched by id alone; that thread rolling the run back later leaves the
       // fork's copy in place.

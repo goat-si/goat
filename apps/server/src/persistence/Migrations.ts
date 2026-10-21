@@ -103,6 +103,7 @@ import Migration0092 from "./Migrations/092_RemoteDispatchObservation.ts";
 import Migration0093 from "./Migrations/093_MemoryRevisionCheckpointSize.ts";
 import Migration0094 from "./Migrations/094_HubNodes.ts";
 import Migration0095 from "./Migrations/095_MemorySummaryWorkThreadIndex.ts";
+import Migration0096 from "./Migrations/096_ThreadHistoryArchives.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -203,6 +204,7 @@ export const migrationEntries = [
   [93, "MemoryRevisionCheckpointSize", Migration0093],
   [94, "HubNodes", Migration0094],
   [95, "MemorySummaryWorkThreadIndex", Migration0095],
+  [96, "ThreadHistoryArchives", Migration0096],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

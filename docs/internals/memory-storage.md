@@ -34,3 +34,11 @@ Traps measured on real data:
 - Payload bytes overstate the pages a trim frees, so the walk re-measures allocation (three pragmas) after each thread.
 - Memory's size comes from its hourly sample, because a `dbstat` walk of the memory tables costs about 18 ms.
 - Pages select keys with `octet_length`, which SQLite answers from the record header without reading overflow pages. Each payload is then read, trimmed, and written alone with a yield, because a single tool output can be a megabyte.
+
+### Cold archive
+
+Before trimming, the same pass moves threads idle past `storageCleanup.historyArchiveAfterDays` (default 30) to `userdata/thread-archive/<sha256(thread)>.jsonl.zst`, indexed by `orchestration_v2_thread_history_archives`. Only turn items and their `turn-item.updated` events move. Turn item positions stay so ordinals never collide, and nodes, messages and runs stay because other projections reference them. Threads with a pending, running or waiting item are skipped. Files are hashed rather than named by thread id because thread ids carry `:` and `%`.
+
+The order is what makes a crash harmless: write zstd frames (about 1 MiB raw each) to a temporary file, fsync, rename, fsync the directory, re-read and verify the checksum and line count, then insert the index row, then delete rows in groups of 4 rows or 256 KiB. `rows_deleted` marks the end. A pass that stopped midway is finished from the archive itself on the next pass. Deletes match each item's archived `updated_at`, so an item changed after archiving keeps its newer row.
+
+Restoring sets the row to `restoring`, inserts with `INSERT OR IGNORE` in transactions of 32 rows or 256 KiB, then drops the row and the file. Rerunning a cut-short restore is safe, and rows written after archiving win. Reads reach the archive through `ThreadArchiveGate`: the server provides one slot, the archive service fills it at startup, and the projection store wraps its thread-scoped reads (snapshot, history pages, turn items, turn start context, next ordinal) with it. Handoffs and MCP app context read turn items directly and call it themselves. Without the server's slot the gate is inert, which keeps tests and the doctor CLI unaware of archives. Search does not see archived tool output.
