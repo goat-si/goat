@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-
+import { fakeTimers } from "../../../test/render";
 import {
   EnvironmentId,
   ProjectReadFileError,
@@ -42,7 +41,10 @@ vi.mock("~/hooks/useActiveProjectTarget", () => ({
 }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../chat/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
+vi.mock("@effect/atom-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@effect/atom-react")>()),
+  useAtomValue: (atom: unknown) => atom,
+}));
 vi.mock("~/state/server", () => ({
   primaryServerKeybindingsAtom: [],
   serverEnvironment: {
@@ -110,11 +112,12 @@ vi.mock("./projectFilesQueryState", () => ({
 import { ProjectFilePicker } from "./ProjectFilePicker";
 
 let root: Root;
+let timers: Disposable;
 let container: HTMLDivElement;
 const setOpen = vi.fn();
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  timers = fakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",
@@ -149,7 +152,7 @@ afterEach(async () => {
   await act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
+  timers[Symbol.dispose]();
 });
 
 async function render() {

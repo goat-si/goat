@@ -1,6 +1,4 @@
-// @vitest-environment jsdom
 import { EnvironmentId, type EditorId } from "@goat/contracts";
-import * as NodeAssert from "node:assert/strict";
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -41,6 +39,10 @@ const EMPTY_CAPABILITIES = {
   editorIds: [],
 };
 
+function assertDefined<T>(value: T): asserts value is NonNullable<T> {
+  expect(value).toBeTruthy();
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -63,7 +65,7 @@ it.each(["src/index.ts", "logs/build:2026"])(
       root.render(createElement(Harness));
     });
     try {
-      NodeAssert.ok(menu);
+      assertDefined(menu);
       const target = { ...BASE_TARGET, filePath };
       expect(menu.buildItems(target).map((item) => item.id)).toEqual([
         "copy-relative",
@@ -142,7 +144,7 @@ describe("buildFileContextMenuItems", () => {
     expect(items[0]).toMatchObject({ label: "Open" });
     expect(items[1]).toMatchObject({ label: "Reveal in Finder" });
     const openWith = items[2];
-    NodeAssert.ok(openWith);
+    assertDefined(openWith);
     expect(openWith.children?.map((child) => child.id)).toEqual(["editor:vscode", "editor:cursor"]);
   });
 

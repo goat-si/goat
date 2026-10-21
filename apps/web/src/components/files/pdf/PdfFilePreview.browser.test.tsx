@@ -1,7 +1,7 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import "~/index.css";
 import { BrowserDocumentFrame } from "../BrowserDocumentFrame";
 import { PdfPageInput } from "./PdfToolbar";
 import { isPdfFindShortcut } from "./pdfShortcuts";
@@ -99,7 +99,11 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(new Uint8Array([1]))),
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new ArrayBuffer(1),
+    })),
   );
   vi.stubGlobal(
     "ResizeObserver",
@@ -136,6 +140,8 @@ beforeEach(() => {
   load.mockReset().mockImplementation(async () => makeDocument());
   openLink.mockReset().mockResolvedValue(undefined);
   host = document.createElement("div");
+  host.className = "flex";
+  host.style.cssText = "width: 632px; height: 468px;";
   document.body.append(host);
   root = createRoot(host);
 });

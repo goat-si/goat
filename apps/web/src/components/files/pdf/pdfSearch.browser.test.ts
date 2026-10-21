@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { describe, expect, it } from "vite-plus/test";
 import { findPdfMatches, highlightPdfText, pageText } from "./pdfSearch";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
