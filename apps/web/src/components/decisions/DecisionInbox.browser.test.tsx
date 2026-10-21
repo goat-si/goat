@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
@@ -55,10 +54,17 @@ vi.mock("../../state/decisionInbox", async () => {
 vi.mock("../../state/threads", () => ({
   threadEnvironment: { respondToApproval: "approval", respondToUserInput: "userInput" },
 }));
+// Browser mocks snapshot their exports, so forward to the registry each test creates.
 vi.mock("../../rpc/atomRegistry", () => ({
-  get appAtomRegistry() {
-    return state.registry;
-  },
+  appAtomRegistry: new Proxy(
+    {},
+    {
+      get: (_target, key) => {
+        const value = Reflect.get(state.registry!, key);
+        return typeof value === "function" ? value.bind(state.registry) : value;
+      },
+    },
+  ),
 }));
 vi.mock("../../state/session", async () => {
   const { Atom } = await import("effect/reactivity");

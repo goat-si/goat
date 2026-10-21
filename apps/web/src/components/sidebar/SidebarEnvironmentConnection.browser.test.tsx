@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import type { EnvironmentShellSync } from "@goat/client-runtime/state/presentation";
 import { EnvironmentId } from "@goat/contracts";
 import { act } from "react";

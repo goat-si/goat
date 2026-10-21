@@ -1,19 +1,27 @@
-// @vitest-environment jsdom
-import * as NodeVM from "node:vm";
 import html from "../../index.html?raw";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { createStore } from "zustand/vanilla";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createMemoryStorage, resolveStorage } from "./storage";
 
 const bootScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 
-beforeEach(() => {
+function runBootScript(
+  fakeWindow: {
+    localStorage: Storage;
+    matchMedia: () => { matches: boolean };
+  },
+  doc: Document,
+) {
+  new Function("window", "document", bootScript!)(fakeWindow, doc);
+}
+
+function setup() {
   window.localStorage.clear();
-  document.documentElement.className = "";
-  delete document.documentElement.dataset.themeId;
-  document.head.innerHTML = "<meta name='theme-color'>";
-});
+  const doc = document.implementation.createHTMLDocument();
+  doc.head.innerHTML = "<meta name='theme-color'>";
+  return { document: doc, [Symbol.dispose]: () => window.localStorage.clear() };
+}
 
 describe("browser storage migration integration", () => {
   it("hydrates persist middleware from the old namespace and writes only the new one", () => {
@@ -35,26 +43,28 @@ describe("browser storage migration integration", () => {
   });
 
   it("applies legacy theme and appearance preferences before React mounts", () => {
+    using test = setup();
     window.localStorage.setItem("t3code:theme", "t3-ocean"); // goat-rename: legacy
     window.localStorage.setItem("t3code:theme-appearance-mode", "light"); // goat-rename: legacy
-    NodeVM.runInNewContext(bootScript!, {
-      window: { localStorage: window.localStorage, matchMedia: () => ({ matches: true }) },
-      document: window.document,
-    });
-    expect(window.document.documentElement.dataset.themeId).toBe("ocean");
-    expect(window.document.documentElement.classList.contains("dark")).toBe(false);
+    runBootScript(
+      { localStorage: window.localStorage, matchMedia: () => ({ matches: true }) },
+      test.document,
+    );
+    expect(test.document.documentElement.dataset.themeId).toBe("ocean");
+    expect(test.document.documentElement.classList.contains("dark")).toBe(false);
     expect(window.localStorage.getItem("goat:theme")).toBe("t3-ocean"); // goat-rename: legacy
     expect(window.localStorage.getItem("t3code:theme")).toBe("t3-ocean"); // goat-rename: legacy
   });
 
   it("prefers the GOAT boot preference over the old theme", () => {
+    using test = setup();
     window.localStorage.setItem("t3code:theme", "t3-ocean"); // goat-rename: legacy
     window.localStorage.setItem("goat:theme", "grove");
-    NodeVM.runInNewContext(bootScript!, {
-      window: { localStorage: window.localStorage, matchMedia: () => ({ matches: false }) },
-      document: window.document,
-    });
-    expect(window.document.documentElement.dataset.themeId).toBe("grove");
+    runBootScript(
+      { localStorage: window.localStorage, matchMedia: () => ({ matches: false }) },
+      test.document,
+    );
+    expect(test.document.documentElement.dataset.themeId).toBe("grove");
     expect(window.localStorage.getItem("t3code:theme")).toBe("t3-ocean"); // goat-rename: legacy
   });
 });
