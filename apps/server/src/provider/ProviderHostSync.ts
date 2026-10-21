@@ -330,6 +330,10 @@ const make = Effect.gen(function* () {
   const localCloud = Effect.gen(function* () {
     const snapshots = yield* providers.getProviders;
     const counts = yield* activeCloudRuns;
+    const hub = yield* settings.getSettings.pipe(
+      Effect.map(({ hub }) => hub.enabled && hub.cloudHolder === "hub"),
+      Effect.orElseSucceed(() => false),
+    );
     const label = (instanceId: string) => {
       const auth = snapshots.find((provider) => provider.instanceId === instanceId)?.auth;
       return auth?.label ?? auth?.email;
@@ -360,7 +364,10 @@ const make = Effect.gen(function* () {
         ),
       { concurrency: 3 },
     );
-    return cloudReadinessFromHolders(holders);
+    // A hub that cannot read a login still claims the launch: another holder is another account.
+    return cloudReadinessFromHolders(
+      hub ? holders.map((holder) => ({ ...holder, hub: true })) : holders,
+    );
   });
 
   const localRow = (includeCloud: boolean) =>

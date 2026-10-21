@@ -1479,7 +1479,11 @@ const make = Effect.gen(function* () {
           ),
         );
       if (!isCloudExecution(capabilities)) return;
-      yield* permissions.require(scope, "cloud.launch");
+      yield* permissions.requireCloudApproval(
+        scope,
+        yield* permissions.require(scope, "cloud.launch"),
+        { target: `delegate:${modelSelection.instanceId}` },
+      );
       if (Option.isNone(cloudSources))
         return yield* failure("orchestration_error", "Cloud source preflight is unavailable.");
       const project = Option.getOrUndefined(

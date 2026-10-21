@@ -26,9 +26,19 @@ older way: `goat_cloud_holders`, then `goat_provider_diagnose`. Diagnosis-only h
 are `runtime: "update_required"` and are never chosen. If this environment's matrix
 cannot be read, its holders are not ready.
 
-Selection is deliberately small: the caller's `holder`, else a ready current holder with the
-fewest active cloud runs, then this environment, then hosts by name. Fallback chains, budgets and
-scheduling belong to the agentic resource work, not here.
+Selection is deliberately small: the caller's `holder`, else the hub, else a ready current
+holder with the fewest active cloud runs, then this environment, then hosts by name. The hub is
+the environment with `hub.enabled` and `hub.cloudHolder: "hub"` (the default); its matrix cells
+carry `hub: true`, so every device finds it in the same table. The hub counts as an explicit
+choice: when it has no usable login or cannot be reached the launch fails, because any other
+holder bills a different account. Fallback chains, budgets and scheduling belong to the agentic
+resource work, not here.
+
+With goatclaw on, the `cloud.launch` capability alone does not admit a launch from
+`goat_cloud_launch`, a cloud `goat_thread_launch` or a cloud `delegate_task`. The calling
+run must have been started by a person from a web or mobile client, or the call names a
+decision from the same caller that a person answered `approve`. Each admission is an
+`audit_events` row, which is also what makes a decision good for one launch.
 
 ## Launching on a holder
 

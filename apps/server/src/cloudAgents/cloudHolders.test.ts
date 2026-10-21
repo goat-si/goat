@@ -89,6 +89,73 @@ describe("chooseHolder", () => {
       ),
     ).toMatchObject({ ok: false, message: expect.stringContaining("Cursor Cloud is disabled.") });
   });
+
+  it("sends launches to the hub, from the hub itself or from another device", () => {
+    const idle = holder({ host: "idle", activeRuns: 0 });
+    expect(
+      chooseHolder(
+        "cursorCloud",
+        [idle, holder({ host: "hub", activeRuns: 7, hub: true })],
+        undefined,
+      ),
+    ).toMatchObject({ ok: true, holder: { host: "hub" } });
+    expect(
+      chooseHolder(
+        "cursorCloud",
+        [idle, holder({ host: null, activeRuns: 7, hub: true })],
+        undefined,
+      ),
+    ).toMatchObject({ ok: true, holder: { host: null } });
+    // A person or agent naming a holder still wins over the hub default.
+    expect(
+      chooseHolder("cursorCloud", [idle, holder({ host: "hub", hub: true })], "idle"),
+    ).toMatchObject({ ok: true, holder: { host: "idle" } });
+  });
+
+  it("fails on a hub without a usable login instead of billing another holder's account", () => {
+    const idle = holder({ host: "idle" });
+    expect(
+      chooseHolder(
+        "cursorCloud",
+        [idle, holder({ host: "hub", hub: true, ready: false, reason: "Not signed in." })],
+        undefined,
+      ),
+    ).toEqual({
+      ok: false,
+      message:
+        "hub holds no usable Cursor Cloud login: Not signed in. It is the hub, which holds cloud launches; sign in there or set hub.cloudHolder to auto.",
+    });
+    expect(
+      chooseHolder(
+        "cursorCloud",
+        [
+          idle,
+          holder({
+            host: "hub",
+            hub: true,
+            ready: false,
+            runtime: "unreachable",
+            reason: "timed out",
+          }),
+        ],
+        undefined,
+      ),
+    ).toEqual({ ok: false, message: "hub is unreachable: timed out" });
+  });
+
+  it("carries the hub claim through a matrix cell", () => {
+    const readiness = cloudReadinessFromHolders([holder({ hub: true })]);
+    expect(readiness.cursorCloud.hub).toBe(true);
+    expect(readiness.claudeCloud.hub).toBeUndefined();
+    expect(
+      holderFromCloudCell({
+        provider: "cursorCloud",
+        host: "hub",
+        runtime: "current",
+        cell: readiness.cursorCloud,
+      }),
+    ).toMatchObject({ host: "hub", hub: true });
+  });
 });
 
 const diagnosis = (overrides: Partial<ProviderDiagnosis>): ProviderDiagnosis => ({

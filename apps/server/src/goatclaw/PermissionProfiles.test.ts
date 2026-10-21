@@ -406,3 +406,106 @@ it.effect(
       expect(error.message).toContain("exceeds the caller");
     }).pipe(Effect.provide(fixture("owner"))),
 );
+
+const personRun = (threadId: string, createdBy: string, source: string, status = "running") =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const runId = `${threadId}:run`;
+    const messageId = `${threadId}:message`;
+    yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES (${runId}, ${threadId}, 1, 'codex', ${status}, '2026-10-21', ${JSON.stringify({ userMessageId: messageId })})`;
+    yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES (${messageId}, ${threadId}, ${runId}, 'user', 0, '2026-10-21', '2026-10-21', ${JSON.stringify({ createdBy, creationSource: source })})`;
+  });
+const decision = (
+  id: string,
+  fromThread: string | null,
+  answer: string | null,
+  answeredBy: string,
+) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO decision_items (id, from_thread_id, title, context, options_json, required_profile, status, answer, answered_by, created_at, updated_at)
+      VALUES (${id}, ${fromThread}, 'Launch?', '', '[]', 'owner', ${answer === null ? "open" : "answered"}, ${answer}, ${answer === null ? null : answeredBy}, '2026-10-21', '2026-10-21')`;
+  });
+
+it.effect(
+  "lets a cloud launch through only for a person's turn or one person-approved decision",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      const sql = yield* SqlClient.SqlClient;
+      const approve = (scope: McpInvocationScope, decisionId?: string) =>
+        profiles.resolve(scope).pipe(
+          Effect.flatMap((effective) =>
+            profiles.requireCloudApproval(scope, effective, {
+              decisionId,
+              target: "cursorCloud@local",
+            }),
+          ),
+          Effect.flip,
+          Effect.map((error) => error.message),
+          Effect.orElseSucceed(() => "admitted"),
+        );
+      for (const id of ["person", "agent", "relayed", "idle"]) yield* seed(id);
+      yield* personRun("person", "user", "web");
+      yield* personRun("agent", "agent", "mcp");
+      yield* personRun("relayed", "user", "server");
+      yield* personRun("idle", "user", "mobile", "completed");
+      expect(yield* approve(threadScope("person"))).toBe("admitted");
+      for (const id of ["agent", "relayed", "idle"])
+        expect(yield* approve(threadScope(id))).toContain("bills a paid account");
+      expect(yield* approve(outside)).toContain("bills a paid account");
+
+      yield* decision("approved", "agent", "approve", "client:phone");
+      yield* decision("declined", "agent", "decline", "client:phone");
+      yield* decision("open", "agent", null, "");
+      yield* decision("self", "agent", "approve", "thread:agent");
+      yield* decision("elsewhere", "person", "approve", "client:phone");
+      expect(yield* approve(threadScope("agent"), "declined")).toContain("not been approved");
+      expect(yield* approve(threadScope("agent"), "open")).toContain("not been approved");
+      expect(yield* approve(threadScope("agent"), "self")).toContain("a person approves");
+      expect(yield* approve(threadScope("agent"), "elsewhere")).toContain(
+        "not asked by this caller",
+      );
+      expect(yield* approve(threadScope("agent"), "missing")).toContain("not asked by this caller");
+      expect(yield* approve(threadScope("agent"), "approved")).toBe("admitted");
+      expect(yield* approve(threadScope("agent"), "approved")).toContain("already started");
+
+      expect(
+        yield* sql<{
+          actor: string;
+          profile: string;
+          target: string;
+          outcome: string;
+          decision_id: string | null;
+        }>`
+        SELECT actor, profile, target, outcome, decision_id FROM audit_events WHERE action = 'cloud.launch' ORDER BY id`,
+      ).toEqual([
+        {
+          actor: "thread:person",
+          profile: "owner",
+          target: "cursorCloud@local",
+          outcome: "person_request",
+          decision_id: null,
+        },
+        {
+          actor: "thread:agent",
+          profile: "owner",
+          target: "cursorCloud@local",
+          outcome: "decision",
+          decision_id: "approved",
+        },
+      ]);
+    }).pipe(Effect.provide(fixture("owner"))),
+);
+
+it.effect("leaves cloud launches ungated while goatclaw is off", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const effective = yield* profiles.resolve(outside);
+    yield* profiles.requireCloudApproval(outside, effective, { target: "cursorCloud@local" });
+    const sql = yield* SqlClient.SqlClient;
+    expect(yield* sql`SELECT id FROM audit_events`).toEqual([]);
+  }).pipe(Effect.provide(fixture("worker", false))),
+);

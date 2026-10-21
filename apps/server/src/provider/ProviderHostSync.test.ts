@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   AuthSessionId,
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentAuthorizationError,
   type AuthEnvironmentScope,
   type AuthClientSession,
@@ -92,6 +93,7 @@ const harness = (options: {
   readonly answer?: (call: Call) => Effect.Effect<unknown, Dispatch.SshRemoteDispatchError>;
   readonly installer?: { readonly stdout: string; readonly stderr: string; readonly code: number };
   readonly providers?: ReadonlyArray<unknown>;
+  readonly hub?: boolean;
   readonly cloud?: Partial<
     Record<
       "claudeCloud" | "cursorCloud" | "devinCloud",
@@ -174,7 +176,12 @@ const harness = (options: {
           listInstances: Effect.succeed([]),
         }),
         Layer.mock(ProviderAuth.ProviderAuthService)({}),
-        Layer.mock(ServerSettings.ServerSettingsService)({}),
+        Layer.mock(ServerSettings.ServerSettingsService)({
+          getSettings: Effect.succeed({
+            ...DEFAULT_SERVER_SETTINGS,
+            hub: { enabled: options.hub === true, cloudHolder: "hub" },
+          }),
+        }),
         Layer.mock(Handoffs.Handoffs)({
           create: (input) =>
             Effect.sync(() => {
@@ -322,6 +329,27 @@ it.effect("reports cloud readiness from diagnosis, not from the CLI signed-in fl
     expect(
       state.calls.map(({ call }) => ({ arguments: call.arguments, timeoutMs: call.timeoutMs })),
     ).toEqual([{ arguments: { localOnly: true, cloud: true }, timeoutMs: 120_000 }]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("marks every cloud cell on a hub that holds cloud launches, signed in or not", () => {
+  const { layer } = harness({
+    hub: true,
+    cloud: { cursorCloud: { ready: true } },
+    answer: () => Effect.succeed({ rows: [] }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { localOnly: true, cloud: true },
+      { kind: "client", sessionId: viewer },
+    );
+    const cloud = result.rows[0]?.cloud;
+    expect([cloud?.claudeCloud.hub, cloud?.cursorCloud.hub, cloud?.devinCloud.hub]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   }).pipe(Effect.provide(layer));
 });
 

@@ -122,6 +122,7 @@ const cloudCell = (holder: CloudHolder): ProviderHostCloudCell => ({
   ...(holder.reason === undefined ? {} : { reason: holder.reason }),
   ...(holder.command === undefined ? {} : { command: holder.command }),
   ...(holder.activeRuns === undefined ? {} : { activeRuns: holder.activeRuns }),
+  ...(holder.hub === true ? { hub: true } : {}),
 });
 
 /** The matrix column for one machine: one cell per cloud driver, from `holderFromDiagnoses`. */
@@ -165,23 +166,31 @@ export function holderFromCloudCell(input: {
 const usable = (holder: CloudHolder) => holder.ready && holder.runtime === "current";
 
 const nameOf = (holder: CloudHolder) => holder.host ?? "local";
+const byLocalThenName = (left: CloudHolder, right: CloudHolder) =>
+  left.host === null ? -1 : right.host === null ? 1 : left.host.localeCompare(right.host);
 
 export type HolderChoice =
   | { readonly ok: true; readonly holder: CloudHolder }
   | { readonly ok: false; readonly message: string };
 
 /**
- * Explicit preference first; otherwise a ready holder whose runtime takes routed calls, the
- * least loaded, then this environment, then hosts by name, so the same table always picks the
- * same holder.
+ * Explicit preference first, then the hub when it holds cloud launches; otherwise a ready holder
+ * whose runtime takes routed calls, the least loaded, then this environment, then hosts by name,
+ * so the same table always picks the same holder. The hub is held to like an explicit choice: a
+ * different holder bills a different account, so a hub without a usable login fails instead.
  */
 export function chooseHolder(
   provider: CloudAgentProvider,
   holders: ReadonlyArray<CloudHolder>,
-  preference: CloudHolderName | undefined,
+  explicit: CloudHolderName | undefined,
 ): HolderChoice {
   const label = CLOUD_AGENT_LABELS[provider];
   const candidates = holders.filter((holder) => holder.provider === provider);
+  const hub = candidates
+    .filter((holder) => holder.hub === true)
+    .toSorted(byLocalThenName)
+    .map(nameOf)[0];
+  const preference = explicit ?? hub;
   if (preference !== undefined) {
     const wanted = candidates.find((holder) => nameOf(holder) === preference);
     if (wanted === undefined)
@@ -202,7 +211,7 @@ export function chooseHolder(
     if (!wanted.ready)
       return {
         ok: false,
-        message: `${preference} holds no usable ${label} login: ${wanted.reason ?? "not ready"}`,
+        message: `${preference} holds no usable ${label} login: ${wanted.reason ?? "not ready"}${explicit === undefined ? " It is the hub, which holds cloud launches; sign in there or set hub.cloudHolder to auto." : ""}`,
       };
     return { ok: true, holder: wanted };
   }
@@ -210,8 +219,7 @@ export function chooseHolder(
     .filter(usable)
     .toSorted(
       (left, right) =>
-        (left.activeRuns ?? 0) - (right.activeRuns ?? 0) ||
-        (left.host === null ? -1 : right.host === null ? 1 : left.host.localeCompare(right.host)),
+        (left.activeRuns ?? 0) - (right.activeRuns ?? 0) || byLocalThenName(left, right),
     );
   if (ready[0] !== undefined) return { ok: true, holder: ready[0] };
   const outdated = candidates.filter(

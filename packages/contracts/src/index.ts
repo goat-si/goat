@@ -83,6 +83,7 @@ export * from "./resourceTelemetry.ts";
 export * from "./hostStatus.ts";
 export * from "./opencodex.ts";
 export * from "./hubParity.ts";
+export * from "./hubSettings.ts";
 export * from "./hostPressure.ts";
 export * from "./fleetHealth.ts";
 export * from "./fleetGoal.ts";

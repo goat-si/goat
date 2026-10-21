@@ -49,9 +49,11 @@ type Modes = {
 
 /** Server-set only: a registered cloud run's stable thread, imported task and launcher name. */
 export interface CloudRunLaunch {
-  readonly threadId: ThreadId;
+  readonly threadId?: ThreadId;
   readonly importedNativeThread?: ThreadLaunch.ThreadLaunchInput["importedNativeThread"];
   readonly externalLauncher?: string;
+  /** The caller already passed the cloud launch approval for this launch. */
+  readonly approved?: true;
 }
 
 export class ThreadLaunchMcpService extends Context.Service<
@@ -315,11 +317,20 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(unavailable));
         const capabilities = yield* adapter.getCapabilities().pipe(Effect.mapError(unavailable));
         const cloud = capabilities.sessions.executionLocation === "cloud";
-        if (cloud)
-          yield* permissions.require(scope, "cloud.launch", {
+        if (cloud) {
+          const effective = yield* permissions.require(scope, "cloud.launch", {
             forwarded: input.permissionProfileCeiling,
             runtimeMode,
           });
+          // Following a run registered from outside starts nothing billable.
+          if (
+            cloudRun?.approved !== true &&
+            cloudRun?.importedNativeThread?.cloudTask === undefined
+          )
+            yield* permissions.requireCloudApproval(scope, effective, {
+              target: `thread:${modelSelection.instanceId}`,
+            });
+        }
         if (input.workspaceStrategy?.type === "existing_worktree") {
           const project = yield* readProject;
           if (project === undefined)

@@ -19,6 +19,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema, McpServer } from "effect/ai";
 import { TestClock } from "effect/testing";
 
@@ -835,12 +836,24 @@ it.effect.each(["worker", "manager", "owner"])(
     const world = makeWorld();
     return Effect.gen(function* () {
       const service = yield* CloudAgents.CloudAgentService;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO decision_items (id, title, context, options_json, required_profile, status, answer, answered_by, created_at, updated_at)
+        VALUES ('go', 'Launch?', '', '[]', 'owner', 'answered', 'approve', 'client:phone', '2026-10-21', '2026-10-21')`;
+      const input = {
+        provider: "cursorCloud",
+        repo: "goat-si/goat",
+        prompt: "Inspect",
+        holder: "local",
+      } as const;
+      if (profile === "owner") {
+        const unapproved = yield* service
+          .launch(scope("full-access"), input, full)
+          .pipe(Effect.flip);
+        assert.include(unapproved.message, "bills a paid account");
+        assert.equal(world.launches.length, 0);
+      }
       const result = yield* service
-        .launch(
-          scope("full-access"),
-          { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Inspect", holder: "local" },
-          full,
-        )
+        .launch(scope("full-access"), { ...input, decisionId: "go" }, full)
         .pipe(Effect.result);
       if (profile === "owner") {
         assert.equal(result._tag, "Success");

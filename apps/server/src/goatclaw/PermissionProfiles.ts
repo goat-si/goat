@@ -7,6 +7,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -69,6 +70,11 @@ interface ClaimInput {
 type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
   | { readonly ok: false; readonly reason: string };
+interface CloudApprovalInput {
+  readonly decisionId?: string | undefined;
+  /** What is launched, for the audit row: "cursorCloud@local". */
+  readonly target: string;
+}
 
 export class PermissionProfiles extends Context.Service<
   PermissionProfiles,
@@ -98,6 +104,15 @@ export class PermissionProfiles extends Context.Service<
       scope: McpInvocationScope,
       initial: PermissionProfileView,
       context?: CheckContext,
+    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /**
+     * A cloud launch bills a paid account, so with goatclaw on the `cloud.launch` capability is
+     * not enough: a person started the calling run, or a person approved a decision for it.
+     */
+    readonly requireCloudApproval: (
+      scope: McpInvocationScope,
+      effective: PermissionProfileView,
+      input: CloudApprovalInput,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     readonly claim: (
       scope: McpInvocationScope,
@@ -281,6 +296,73 @@ export const layer = Layer.effect(
           "The permission profile narrowed while this launch was preparing; retry with its current ceiling.",
         );
     });
+    /** Runs started from a person's own client; relayed and automated messages do not count. */
+    const personStartedRun = Effect.fn("PermissionProfiles.personStartedRun")(function* (
+      sql: SqlClient.SqlClient,
+      threadId: ThreadId,
+    ) {
+      const rows = yield* sql<{ created_by: string | null; source: string | null }>`
+        SELECT json_extract(m.payload_json, '$.createdBy') AS created_by,
+          json_extract(m.payload_json, '$.creationSource') AS source
+        FROM orchestration_v2_projection_runs r
+        JOIN orchestration_v2_projection_messages m
+          ON m.message_id = json_extract(r.payload_json, '$.userMessageId')
+        WHERE r.thread_id = ${threadId} AND r.status IN ('starting', 'running', 'waiting')
+        ORDER BY r.ordinal DESC LIMIT 1`;
+      const row = rows[0];
+      return row?.created_by === "user" && (row.source === "web" || row.source === "mobile");
+    });
+    const requireCloudApproval = Effect.fn("PermissionProfiles.requireCloudApproval")(function* (
+      scope: McpInvocationScope,
+      effective: PermissionProfileView,
+      input: CloudApprovalInput,
+    ) {
+      if (!effective.enabled) return;
+      const sql = yield* sqlEffect;
+      const actor = ownerOf(scope);
+      const threadId = scope.thread?.threadId;
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            if (input.decisionId === undefined) {
+              if (threadId === undefined || !(yield* personStartedRun(sql, threadId)))
+                return yield* refusal(
+                  'A cloud launch bills a paid account. Launch it in a turn a person started, or ask with goat_decision_request offering an option with id "approve" and pass decisionId once a person approves.',
+                );
+            } else {
+              const decision = (yield* sql<{
+                from_thread_id: string | null;
+                status: string;
+                answer: string | null;
+                answered_by: string | null;
+              }>`SELECT from_thread_id, status, answer, answered_by FROM decision_items WHERE id = ${input.decisionId}`)[0];
+              if (decision === undefined || decision.from_thread_id !== (threadId ?? null))
+                return yield* refusal(`Decision ${input.decisionId} was not asked by this caller.`);
+              if (decision.status !== "answered" || decision.answer !== "approve")
+                return yield* refusal(`Decision ${input.decisionId} has not been approved.`);
+              if (decision.answered_by?.startsWith("client:") !== true)
+                return yield* refusal(
+                  `Decision ${input.decisionId} was answered by an agent; a person approves cloud launches.`,
+                );
+              const used = yield* sql<{ id: number }>`SELECT id FROM audit_events
+                WHERE decision_id = ${input.decisionId} AND action = 'cloud.launch' LIMIT 1`;
+              if (used.length > 0)
+                return yield* refusal(
+                  `Decision ${input.decisionId} already started a cloud launch; ask again for another.`,
+                );
+            }
+            const time = DateTime.formatIso(yield* DateTime.now);
+            yield* sql`INSERT INTO audit_events (time, actor, profile, action, target, outcome, decision_id)
+              VALUES (${time}, ${actor}, ${effective.profile.id}, 'cloud.launch', ${input.target},
+                ${input.decisionId === undefined ? "person_request" : "decision"}, ${input.decisionId ?? null})`;
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error._tag === "OrchestratorMcpFailure" ? error : storageFailure(),
+          ),
+        );
+    });
     const claim = Effect.fn("PermissionProfiles.claim")(function* (
       scope: McpInvocationScope,
       input: ClaimInput,
@@ -372,6 +454,7 @@ export const layer = Layer.effect(
       require,
       assertTarget,
       recheck,
+      requireCloudApproval,
       claim,
       complete,
       release,

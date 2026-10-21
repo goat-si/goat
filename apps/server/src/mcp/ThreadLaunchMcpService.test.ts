@@ -335,13 +335,24 @@ it.effect.each(["worker", "owner"])(
       yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
       VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
       const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
-      const result = yield* service
+      const launch = service
         .launch(
           scope,
           { title: "Cloud", message: "Inspect", standingInstructions: false },
           { runtimeMode: "full-access", interactionMode: "default" },
         )
         .pipe(Effect.result);
+      if (profile === "owner") {
+        const unrequested = yield* launch;
+        expect(unrequested._tag === "Failure" && unrequested.failure.message).toContain(
+          "bills a paid account",
+        );
+        yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+        VALUES ('caller-message', ${callerId}, 'caller-run', 'user', 0, '2026-10-21', '2026-10-21', '{"createdBy":"user","creationSource":"web"}')`;
+      }
+      const result = yield* launch;
       if (profile === "worker") {
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");

@@ -74,6 +74,7 @@ export const ProviderHostCloudCell = Schema.Struct({
   reason: holderField.reason,
   command: holderField.command,
   activeRuns: holderField.activeRuns,
+  hub: holderField.hub,
 });
 export type ProviderHostCloudCell = typeof ProviderHostCloudCell.Type;
 
