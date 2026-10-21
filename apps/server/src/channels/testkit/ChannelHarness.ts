@@ -122,9 +122,11 @@ class WorkerWorld {
   readonly commands: Array<OrchestrationV2ServerCommand> = [];
   /** Worker threads whose shell read fails, and whose commands the orchestrator refuses. */
   readonly shellFailures = new Set<string>();
+  readonly recordFailures = new Set<string>();
   readonly dispatchFailures = new Set<string>();
   readonly launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
   readonly launchFailures = new Set<string>();
+  readonly prelaunchFailures = new Set<string>();
   readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
   /** Interrupts and subagent stops sent to worker threads, by thread id. */
   readonly interrupts: Array<string> = [];
@@ -358,6 +360,10 @@ export function makeHarness(
       return ThreadManagement.ThreadManagementService.of({
         ...real,
         getThreadRecords: ((threadId: ThreadId, fields: never, filter: never) => {
+          if (world.recordFailures.has(threadId))
+            return Effect.fail(
+              new ThreadManagement.ThreadManagementThreadNotFoundError({ projectId, threadId }),
+            );
           if (!isWorker(threadId)) return real.getThreadRecords(threadId, fields, filter);
           const runs = world.runs.get(threadId) ?? [];
           const messageRunIds = (
@@ -586,6 +592,13 @@ export function makeHarness(
       Effect.gen(function* () {
         world.launches.push(input);
         const threadId = input.threadId ?? ThreadId.make("thread:worker:" + input.commandId);
+        if (world.prelaunchFailures.has(threadId))
+          return yield* new ThreadLaunch.ThreadLaunchError({
+            operation: "resolve-project",
+            commandId: input.commandId,
+            projectId: input.projectId,
+            cause: new Error("Fixture prelaunch failure"),
+          });
         if (world.launchFailures.has(threadId))
           return yield* new ThreadLaunch.ThreadLaunchError({
             operation: "create-thread",

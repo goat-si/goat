@@ -5062,4 +5062,46 @@ describe("independent remote channel review", () => {
       );
     },
   );
+  it.effect(
+    "unknown remote worker identity times out without completing or sending old blockers",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        machine.threadReadDown = true;
+        yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+        yield* runtime.drain;
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.strictEqual(waiting.review?.verdict, "failed");
+        assert.lengthOf(waiting.openQuestions, 1);
+        assert.include(waiting.openQuestions[0]!.text, "timed out");
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+        assert.isTrue(
+          machine.interrupts.some((input) => input.threadId === waiting.review?.remoteThreadId),
+        );
+        assert.strictEqual(waiting.worker?.runId, task.worker?.runId);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+  it.effect("definite remote reviewer refusal retires cleanup instead of probing forever", () => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime } = yield* startReview(machine);
+      yield* Fiber.await(machine.observerFiber!);
+      machine.refuseLaunchWith = "Reviewer refused before launch";
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).review?.verdict, "failed");
+      assert.lengthOf(
+        yield* (yield* ChannelLedger.ChannelLedger).listReviewCleanup("2099-01-01T00:00:00.000Z"),
+        0,
+      );
+      assert.lengthOf(machine.interrupts, 0);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
 });

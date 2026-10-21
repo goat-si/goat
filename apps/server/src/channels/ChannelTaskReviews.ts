@@ -30,7 +30,7 @@ import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { questionIdFor, reviewLaunchIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { completionHoldCount } from "./channelWorkerObservation.ts";
+import { completionHoldCount, isThreadMissing } from "./channelWorkerObservation.ts";
 import { parseReviewDiff, reviewDiffScript } from "./channelReviewDiff.ts";
 
 export const REVIEW_TIMEOUT_MS = 20 * 60_000;
@@ -512,6 +512,20 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.result);
     if (launched._tag === "Failure") {
+      // Later launch phases may already have a durable thread/run, so only a proven
+      // preflight refusal with a missing thread can retire cleanup ownership here.
+      const preflight =
+        launched.failure._tag === "ThreadLaunchWorkspaceMissingError" ||
+        (launched.failure._tag === "ThreadLaunchError" &&
+          launched.failure.operation === "resolve-project" &&
+          launched.failure.threadId === undefined);
+      if (preflight) {
+        const absent = yield* threads
+          .getThreadRecords(review.threadId, ["runs"])
+          .pipe(Effect.result);
+        if (absent._tag === "Failure" && isThreadMissing(absent.failure))
+          yield* cleanup.notStarted(review.threadId, owner);
+      }
       yield* finish(stored, owner, "failed", "The independent reviewer could not start.");
     }
   });
@@ -706,6 +720,7 @@ const make = Effect.gen(function* () {
       launched.failure.reason === "remote_refused" &&
       launched.failure.launchMayHaveStarted !== true
     ) {
+      yield* cleanup.notStarted(review.threadId, owner);
       yield* finish(
         stored,
         owner,
@@ -713,6 +728,52 @@ const make = Effect.gen(function* () {
         "The remote host refused the independent review launch.",
       );
     }
+  });
+
+  const unknownIdentity = Effect.fn("ChannelTaskReviews.unknownIdentity")(function* (
+    stored: ChannelLedger.ChannelStoredTask,
+    owner: string,
+  ) {
+    const review = stored.task.review!;
+    if (
+      DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(review.startedAt) <
+      REVIEW_TIMEOUT_MS
+    )
+      return 0;
+    if (review.verdict === undefined)
+      yield* finish(
+        stored,
+        owner,
+        "failed",
+        "The independent review timed out while the worker's current run could not be verified.",
+      );
+    const current = yield* ledger.getTask(stored.task.taskId);
+    if (
+      current?.task.status !== "reviewing" ||
+      current.task.generation !== stored.task.generation ||
+      current.task.worker?.runId !== review.workerRunId
+    )
+      return 0;
+    // Unknown identity must never apply an old pass or correction to newer work.
+    yield* commitTransition(
+      ledger,
+      current,
+      {
+        type: "task.question.opened",
+        payload: {
+          question: {
+            questionId: questionIdFor(current.task.taskId, current.task.version + 1),
+            text: "Independent review timed out while the worker's current run could not be verified. No review outcome or automatic correction was applied. Reconnect the worker and choose how to continue.",
+            askedAt: DateTime.formatIso(yield* DateTime.now),
+            ...(current.task.requester.externalActorId === undefined
+              ? {}
+              : { requesterExternalActorId: current.task.requester.externalActorId }),
+          },
+        },
+      },
+      { owner, narrate: true },
+    );
+    return 1;
   });
 
   const reconcile = Effect.fn("ChannelTaskReviews.reconcile")(function* (owner: string) {
@@ -763,16 +824,25 @@ const make = Effect.gen(function* () {
           changed += 1;
           continue;
         }
-        if (Option.isNone(latest) || latest.value.thread.latestRunId === null) continue;
+        if (Option.isNone(latest) || latest.value.thread.latestRunId === null) {
+          changed += yield* unknownIdentity(stored, owner);
+          continue;
+        }
         if (Option.isSome(latest)) remoteWorker = latest.value.thread;
       }
       if (stored.task.worker?.host === undefined) {
         const identity = yield* threads
           .getThreadRecords(stored.task.worker!.threadId, ["runs"])
           .pipe(Effect.option);
-        if (Option.isNone(identity)) continue;
+        if (Option.isNone(identity)) {
+          changed += yield* unknownIdentity(stored, owner);
+          continue;
+        }
         const latest = identity.value.runs.toSorted((a, b) => a.ordinal - b.ordinal).at(-1);
-        if (latest === undefined) continue;
+        if (latest === undefined) {
+          changed += yield* unknownIdentity(stored, owner);
+          continue;
+        }
         if (latest.id !== review.workerRunId) {
           yield* commitTransition(
             ledger,

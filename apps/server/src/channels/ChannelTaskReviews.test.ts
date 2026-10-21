@@ -158,6 +158,43 @@ const provide = (harness: ReturnType<typeof harnessFor>) =>
   harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 
 describe("independent channel review", () => {
+  it.effect(
+    "unknown local worker identity times out to a question without applying a verdict",
+    () => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* start(harness);
+        harness.world.recordFailures.add(task.worker!.threadId);
+        yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+        yield* runtime.drain;
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.strictEqual(waiting.review?.verdict, "failed");
+        assert.lengthOf(waiting.openQuestions, 1);
+        assert.include(waiting.openQuestions[0]!.text, "timed out");
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+        assert.include(harness.world.interrupts, task.review!.threadId);
+        yield* runtime.drain;
+        assert.lengthOf((yield* onlyTask).openQuestions, 1);
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+  it.effect("definite local prelaunch failure retires cleanup without interrupt attempts", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness, (running) => {
+        harness.world.prelaunchFailures.add(
+          reviewLaunchIdsFor(running.taskId, running.generation, running.worker!.runId!).threadId,
+        );
+      });
+      assert.strictEqual(task.review?.verdict, "failed");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.lengthOf(yield* ledger.listReviewCleanup("2099-01-01T00:00:00.000Z"), 0);
+      yield* runtime.drain;
+      assert.lengthOf(harness.world.interrupts, 0);
+    }).pipe(Effect.provide(provide(harness)));
+  });
+
   it.effect.each([null, { verdict: "pass", summary: "Malformed", findings: [{}] }])(
     "malformed reviewer output fails honestly: %j",
     (result) => {

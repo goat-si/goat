@@ -66,6 +66,10 @@ export class ChannelReviewCleanup extends Context.Service<
       remoteThreadId: ThreadId,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    readonly notStarted: (
+      reviewThreadId: ThreadId,
+      owner: string,
+    ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     readonly reconcile: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelReviewCleanup") {}
@@ -131,6 +135,22 @@ const make = Effect.gen(function* () {
       key: reviewThreadId,
       now: DateTime.formatIso(yield* DateTime.now),
       value: encode({ ...entry, remoteThreadId }),
+    });
+  });
+
+  const notStarted = Effect.fn("ChannelReviewCleanup.notStarted")(function* (
+    reviewThreadId: ThreadId,
+    owner: string,
+  ) {
+    const value = yield* ledger.getReviewDispatch("cleanup:" + reviewThreadId);
+    if (value === undefined) return;
+    const entry = decode(value);
+    if (entry.remoteThreadId !== undefined) return;
+    yield* ledger.updateReviewCleanup({
+      owner,
+      key: reviewThreadId,
+      now: DateTime.formatIso(yield* DateTime.now),
+      value: encode({ ...entry, done: true }),
     });
   });
 
@@ -278,6 +298,6 @@ const make = Effect.gen(function* () {
     }
     return changed;
   });
-  return ChannelReviewCleanup.of({ track, reserveRemote, bindRemote, reconcile });
+  return ChannelReviewCleanup.of({ track, reserveRemote, bindRemote, notStarted, reconcile });
 });
 export const layer = Layer.effect(ChannelReviewCleanup, make);
