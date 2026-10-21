@@ -405,9 +405,11 @@ process handle, so cleanup neither depends on a live parent PID nor selects a re
 PID. The replacement supervisor and server use the existing WMI detached launch,
 outside the command job, and survive the updater's exit.
 
-Before joining the job, the compiled supervisor starts an exact-artifact cleanup owner
-outside it. That process retains the supervisor's handle and removes its unique helper
-directory after exit, even when the original server drained first. Unlaunched preparation
+Cleanup initially belongs to the supervisor's job without holding its handle, so timeout
+or interruption also stops cleanup before readiness. After cleanup acknowledges its retained
+supervisor handle, it receives a non-inheritable job handle. It can then remove the exact helper
+directory after supervisor exit, even when the original server drained first; its own exit
+closes the final job handle and stops any remaining descendants. Unlaunched preparation
 remains the original caller's responsibility.
 
 The supervisor writes `last-replacement.json` (status, target, previous version) in the
