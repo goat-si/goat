@@ -25,6 +25,7 @@ export const DecisionItem = Schema.Struct({
   expiresAt: Schema.NullOr(IsoDateTime),
   status: DecisionStatus,
   answer: Schema.NullOr(Schema.String),
+  /** MCP retains the audit actor; authenticated client responses use a person-facing label. */
   answeredBy: Schema.NullOr(Schema.String),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

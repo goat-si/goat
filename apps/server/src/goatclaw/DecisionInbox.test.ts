@@ -138,7 +138,7 @@ it.effect(
       expect(yield* inbox.get(owner, item.id)).toEqual(item);
       expect(
         yield* inbox.answer(owner, { id: item.id, optionId: "wait", reason: "Keep work paused." }),
-      ).toMatchObject({ status: "answered", answer: "wait", answeredBy: "client:owner" });
+      ).toMatchObject({ status: "answered", answer: "wait", answeredBy: "You" });
       expect(
         (yield* Effect.flip(
           inbox.answer(owner, { id: item.id, optionId: "fallback", reason: "Try again" }),
@@ -272,7 +272,7 @@ it.effect(
             inbox.answer(owner, { id: item.id, optionId: "wait", reason: "Late" }),
           )).code,
         ).toBe("invalid_request");
-      }).pipe(Effect.provide(Scheduler.layer), Effect.provide(inboxLayer));
+      }).pipe(Effect.provide(Layer.merge(Scheduler.layer, inboxLayer)));
     }).pipe(Effect.scoped),
 );
 
@@ -374,6 +374,8 @@ it.effect(
         expect(sent[0]!.messageId).toBe(sent[1]!.messageId);
         expect(sent[0]!.commandId).toBe(sent[1]!.commandId);
         expect(sent[1]!.text).toContain("Answer: Wait");
+        expect(sent[1]!.text).toContain("Answered by: a paired client");
+        expect(sent[1]!.text).not.toContain("client:owner");
         expect(
           (yield* sql`SELECT delivered_at FROM decision_answer_deliveries`)[0]!.delivered_at,
         ).not.toBeNull();
@@ -604,4 +606,60 @@ it.effect("rotates failing delivery batches so the 101st answer can be delivered
       }),
     ),
   ),
+);
+
+it.effect(
+  "shows viewer-relative responder labels to clients while retaining audit and MCP actors",
+  () =>
+    Effect.gen(function* () {
+      const inbox = yield* Inbox.DecisionInbox;
+      const item = yield* inbox.create(owner, request);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, client_label, issued_at, expires_at)
+    VALUES ('owner', 'owner', '[]', 'bearer-access-token', 'Office tablet', '1970-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')`;
+      const answered = yield* inbox.answer(owner, {
+        id: item.id,
+        optionId: "wait",
+        reason: "Keep paused",
+      });
+      expect(answered.answeredBy).toBe("You");
+      expect((yield* inbox.get(owner, item.id)).answeredBy).toBe("You");
+      expect((yield* inbox.list(owner, { status: "answered" })).items[0]!.answeredBy).toBe("You");
+      const viewer = { ...owner, sessionId: "other-client" } satisfies Inbox.DecisionCaller;
+      expect((yield* inbox.get(viewer, item.id)).answeredBy).toBe("Office tablet");
+      expect((yield* inbox.list(viewer, { status: "answered" })).items[0]!.answeredBy).toBe(
+        "Office tablet",
+      );
+      yield* sql`UPDATE auth_sessions SET client_label = NULL WHERE session_id = 'owner'`;
+      expect((yield* inbox.get(viewer, item.id)).answeredBy).toBe("a paired client");
+      yield* sql`DELETE FROM auth_sessions WHERE session_id = 'owner'`;
+      expect((yield* inbox.list(viewer, {})).items[0]!.answeredBy).toBe("a paired client");
+      yield* seedThread();
+      expect((yield* inbox.get(agent, item.id)).answeredBy).toBe("client:owner");
+      expect((yield* inbox.list(agent, { status: "answered" })).items[0]!.answeredBy).toBe(
+        "client:owner",
+      );
+      expect(
+        (yield* sql`SELECT answered_by FROM decision_items WHERE id = ${item.id}`)[0]!.answered_by,
+      ).toBe("client:owner");
+      expect(
+        (yield* sql`SELECT actor FROM audit_events WHERE action = 'decision.answer'`)[0]!.actor,
+      ).toBe("client:owner");
+    }).pipe(Effect.provide(fixture())),
+);
+
+it.effect("uses an answering agent's thread title instead of its id in client history", () =>
+  Effect.gen(function* () {
+    yield* seedThread();
+    const inbox = yield* Inbox.DecisionInbox;
+    const item = yield* inbox.create(owner, request);
+    expect(
+      (yield* inbox.answer(agent, { id: item.id, optionId: "wait", reason: "Within profile" }))
+        .answeredBy,
+    ).toBe("thread:asking");
+    expect((yield* inbox.get(owner, item.id)).answeredBy).toBe("Asking thread");
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE orchestration_v2_projection_threads SET title = '' WHERE thread_id = 'asking'`;
+    expect((yield* inbox.get(owner, item.id)).answeredBy).toBe("an agent");
+  }).pipe(Effect.provide(fixture({ profile: "manager" }))),
 );

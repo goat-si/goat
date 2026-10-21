@@ -87,7 +87,7 @@ function setup(item = decision) {
       ...item,
       status: "answered" as const,
       answer: "staged",
-      answeredBy: "human",
+      answeredBy: "You",
     };
     registry.set(items, AsyncResult.success({ items: [answered] }));
     return { _tag: "Success", value: answered };
@@ -122,7 +122,7 @@ it("keeps an answer editable after failure, then records the chosen option and r
   await userEvent.click(option);
   await expect.element(screen.getByText("No open decisions.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show answered and expired" }));
-  await expect.element(screen.getByText("Answered: Stage rollout · human")).toBeVisible();
+  await expect.element(screen.getByText("Answered: Stage rollout · You")).toBeVisible();
   expect(state.run.mock.calls.at(-1)?.[1]).toEqual({
     environmentId,
     input: { id: "decision-1", optionId: "staged", reason: "Validate the migration on one host." },

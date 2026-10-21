@@ -224,6 +224,55 @@ const make = Effect.gen(function* () {
     ))[0];
     return row === undefined ? undefined : yield* toItem(row);
   });
+  const answererLabel = Effect.fn("DecisionInbox.answererLabel")(function* (
+    actor: string,
+    viewerSessionId?: string,
+  ) {
+    if (viewerSessionId !== undefined && actor === `client:${viewerSessionId}`) return "You";
+    if (actor.startsWith("client:") || actor.startsWith("mcp:")) {
+      const sessionId = actor.slice(actor.indexOf(":") + 1);
+      const row = (yield* sql<{
+        client_label: string | null;
+      }>`SELECT client_label FROM auth_sessions WHERE session_id = ${sessionId}`.pipe(
+        Effect.mapError(storageFailure),
+      ))[0];
+      return (
+        row?.client_label?.trim() || (actor.startsWith("client:") ? "a paired client" : "an agent")
+      );
+    }
+    if (actor.startsWith("thread:")) {
+      const row = (yield* sql<{
+        title: string;
+      }>`SELECT title FROM orchestration_v2_projection_threads WHERE thread_id = ${actor.slice(7)}`.pipe(
+        Effect.mapError(storageFailure),
+      ))[0];
+      return row?.title.trim() || "an agent";
+    }
+    return "an agent";
+  });
+  const presentItems = Effect.fn("DecisionInbox.presentItems")(function* (
+    caller: DecisionCaller,
+    items: ReadonlyArray<DecisionItem>,
+  ) {
+    if (caller.kind === "agent") return items;
+    // History commonly repeats one responder; resolve each identity only once per response.
+    const labels = new Map<string, string>();
+    for (const actor of new Set(
+      items.flatMap((item) => (item.answeredBy === null ? [] : [item.answeredBy])),
+    )) {
+      labels.set(actor, yield* answererLabel(actor, caller.sessionId));
+    }
+    return items.map((item) => ({
+      ...item,
+      answeredBy: item.answeredBy === null ? null : labels.get(item.answeredBy)!,
+    }));
+  });
+  const presentItem = Effect.fn("DecisionInbox.presentItem")(function* (
+    caller: DecisionCaller,
+    item: DecisionItem,
+  ) {
+    return (yield* presentItems(caller, [item]))[0]!;
+  });
   const callerLimits = Effect.fn("DecisionInbox.callerLimits")(function* (caller: DecisionCaller) {
     if (caller.kind === "client") return undefined;
     const scope = scopeOf(caller);
@@ -334,7 +383,7 @@ const make = Effect.gen(function* () {
   const get = Effect.fn("DecisionInbox.get")(function* (caller: DecisionCaller, id: string) {
     yield* expire();
     const item = yield* durable(id);
-    if (item !== undefined) return item;
+    if (item !== undefined) return yield* presentItem(caller, item);
     const row = (yield* pendingRows(id, 200)).find(
       (row) => pendingId(row.thread_id, row.runtime_request_id) === id,
     );
@@ -390,7 +439,7 @@ const make = Effect.gen(function* () {
             threadId: ThreadId.make(row.from_thread_id!),
             commandId: CommandId.make(`decision-answer:${row.id}`),
             messageId: MessageId.make(`decision-answer:${row.id}`),
-            text: `Decision answered: ${item.title}\nDecision id: ${item.id}\nAnswer: ${option?.label ?? item.answer}\nAnswered by: ${item.answeredBy}`,
+            text: `Decision answered: ${item.title}\nDecision id: ${item.id}\nAnswer: ${option?.label ?? item.answer}\nAnswered by: ${yield* answererLabel(item.answeredBy!)}`,
             attachments: [],
             mode: "queue",
             createdBy: "system",
@@ -460,9 +509,12 @@ const make = Effect.gen(function* () {
           items.push(yield* project(row, limits));
       }
       return {
-        items: items
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
-          .slice(0, limit),
+        items: yield* presentItems(
+          caller,
+          items
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+            .slice(0, limit),
+        ),
       };
     }),
     create: Effect.fn("DecisionInbox.create")(function* (caller, rawInput) {
@@ -507,7 +559,7 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError(storageFailure));
-      return (yield* durable(id))!;
+      return yield* presentItem(caller, (yield* durable(id))!);
     }),
     answer: Effect.fn("DecisionInbox.answer")(function* (caller, input) {
       yield* writeAccess(caller);
@@ -572,13 +624,13 @@ const make = Effect.gen(function* () {
             ),
           );
         yield* reconcileAudits();
-        return {
+        return yield* presentItem(caller, {
           ...item,
           status: "answered",
           answer: null,
           answeredBy: actorOf(caller),
           updatedAt: yield* now,
-        };
+        });
       }
       if (
         input.answers !== undefined ||
@@ -606,7 +658,7 @@ const make = Effect.gen(function* () {
           Effect.logWarning("Decision answer delivery queued for retry", { decisionId: item.id }),
         ),
       );
-      return (yield* durable(item.id))!;
+      return yield* presentItem(caller, (yield* durable(item.id))!);
     }),
     withdraw: Effect.fn("DecisionInbox.withdraw")(function* (caller, id) {
       yield* writeAccess(caller);
@@ -639,7 +691,7 @@ const make = Effect.gen(function* () {
           }),
         )
         .pipe(Effect.mapError((error) => (isMcpFailure(error) ? error : storageFailure())));
-      return (yield* durable(id))!;
+      return yield* presentItem(caller, (yield* durable(id))!);
     }),
   });
 });
