@@ -66,10 +66,15 @@ the running turn and give the bot thread runs it was built never to have.
   the bot workspace's new-thread default, then the text generation model; a chosen model this
   machine no longer offers falls back with a warning, because the person asked a question, not
   for a model. Reception itself stays on the text generation model so the acknowledgement is fast.
-- **Ceiling.** A turn runs at the lowest of the requester's ceiling, the default runtime mode,
-  and `auto-accept-edits`: it reads and searches freely, while commands the provider gates still
-  ask for approval in the turn's thread. Subagents it starts with `delegate_task` cannot exceed it.
-  Work that changes a repository is a coding task, at the requester's full ceiling.
+- **Access.** A turn runs at the requester's ceiling, which is `full-access` for the owner. The
+  default runtime mode does not narrow it: that setting is for people's new threads, and a
+  sandbox below full access stalled the bot on approvals for ordinary reads outside its folder.
+  The bot thread itself is `full-access` too, and `ChannelBotRegistry.ensure` switches a bot made
+  under the old `approval-required` mode in place. Read-only is therefore a promise of the prompt
+  alone: `GOAT_BOT_READ_ONLY_RULE` in `ChannelDispatcher.ts` is the one place it is stated, and
+  nothing in the sandbox backs it. A requester linked below full access keeps their ceiling, so
+  the bot never gives a person more than they could run themselves. Work that changes things is
+  a coding task.
 - **Answer.** The turn's final report is the bot's reply, delivered as written; it is not
   reworded by reception the way coding results are, because the turn already wrote it for the
   person on the chosen model.

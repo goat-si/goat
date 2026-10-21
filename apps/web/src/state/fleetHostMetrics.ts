@@ -32,11 +32,12 @@ export interface FleetHostStatusSource {
 
 /**
  * Each connected environment's host-status answer, by environment. The primary
- * answers for itself and every SSH host it holds open; see fleetHostStatusNeeded
- * for when another environment is read, since each read samples CPU. Another
- * environment fans out to its own SSH hosts only when a Fleet machine is one it
- * dispatched to; otherwise it reads itself alone. Sources lists every read,
- * answered or not, for refreshing. Mounting this starts the reads.
+ * answers for every SSH host it holds open, and for itself from a separate local
+ * read, so this machine's row never waits on a slow remote. See
+ * fleetHostStatusNeeded for when another environment is read, since each read
+ * samples CPU. Another environment fans out to its own SSH hosts only when a
+ * Fleet machine is one it dispatched to; otherwise it reads itself alone. Sources
+ * lists every read, answered or not, for refreshing. Mounting this starts the reads.
  */
 export const fleetHostReportsAtom = Atom.make((get) => {
   const environments = get(fleetEnvironmentsAtom);
@@ -53,14 +54,19 @@ export const fleetHostReportsAtom = Atom.make((get) => {
     const result = get(atom);
     const hosts = Option.getOrNull(AsyncResult.value(result))?.hosts ?? null;
     if (hosts === null) return AsyncResult.isFailure(result) ? [] : null;
-    const answer = AsyncResult.isFailure(result) ? asLastKnown(hosts) : hosts;
-    reports.set(environmentId, answer);
-    return answer;
+    return AsyncResult.isFailure(result) ? asLastKnown(hosts) : hosts;
   };
   const hasPrimary = environments.some((environment) => environment.environmentId === primary);
-  const primaryHosts = hasPrimary && primary !== null ? read(primary) : null;
-  // Wait for the primary before asking anyone it may already cover.
-  if (hasPrimary && primaryHosts === null) return { reports, sources } as const;
+  let primaryHosts: ReadonlyArray<HostStatusEntry> | null = [];
+  if (hasPrimary && primary !== null) {
+    const own = read(primary, { local: true });
+    const fanOut = read(primary);
+    primaryHosts = fanOut?.filter((entry) => entry.host !== null) ?? null;
+    const self =
+      own?.find((entry) => entry.host === null) ?? fanOut?.find((entry) => entry.host === null);
+    if (self !== undefined || primaryHosts !== null)
+      reports.set(primary, [...(self === undefined ? [] : [self]), ...(primaryHosts ?? [])]);
+  }
   const dispatchers = new Set(
     get(fleetPageAtom).snapshot.machines.flatMap((machine) =>
       machine.sshHost === null ? [] : [machine.sshHost.via],
@@ -75,8 +81,11 @@ export const fleetHostReportsAtom = Atom.make((get) => {
       primaryHosts,
       dispatchers,
     });
-    if (needed)
-      read(environment.environmentId, { local: !dispatchers.has(environment.environmentId) });
+    if (!needed) continue;
+    const hosts = read(environment.environmentId, {
+      local: !dispatchers.has(environment.environmentId),
+    });
+    if (hosts !== null) reports.set(environment.environmentId, hosts);
   }
   return { reports, sources } as const;
 }).pipe(Atom.withLabel("fleet-host-reports"));

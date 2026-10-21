@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyTextRules, findResidue } from "./engine.ts";
-import { TEXT_RULES, KEEP_RULES, isExempt } from "./rules.ts";
+import { applyPathRules, applyTextRules, findResidue, isDropped } from "./engine.ts";
+import { DROP_RULES, TEXT_RULES, KEEP_RULES, PATH_RULES, isExempt } from "./rules.ts";
 
 const server = (source: string) => applyTextRules("apps/server/src/x.ts", source, TEXT_RULES).text;
 
@@ -174,7 +174,6 @@ describe("wp9 compatibility scopes", () => {
       "apps/marketing/a.ts",
       "infra/relay/a.ts",
       ".devcontainer/devcontainer.json",
-      ".cursor/rules/a.mdc",
       "assets/icon.svg",
     ]) {
       expect(isExempt(path)).toBe(true);
@@ -347,5 +346,28 @@ describe("test residue stays useful after fixture classification", () => {
         KEEP_RULES,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("repository hygiene on an upstream checkout", () => {
+  it("moves the skills and the root project file, not look-alikes", () => {
+    expect(applyPathRules(".agents/skills/test-t3-mobile/scripts/pair-client.sh", PATH_RULES)).toBe(
+      ".agents/skills/test-goat-mobile/scripts/pair-client.sh",
+    );
+    expect(applyPathRules("t3.json", PATH_RULES)).toBe("goat.json");
+    for (const path of ["apps/marketing/src/pages/schema/t3.json.ts", "apps/web/t3.json"]) {
+      expect(applyPathRules(path, PATH_RULES)).toBe(path);
+    }
+  });
+
+  it("drops root Cursor rules only", () => {
+    expect(isDropped(".cursor/rules/cursor-cloud.mdc", DROP_RULES)).toBe(true);
+    expect(isDropped("apps/web/src/.cursor/x", DROP_RULES)).toBe(false);
+  });
+
+  it("renames skill mentions in prose", () => {
+    expect(
+      applyTextRules("AGENTS.md", "use `test-t3-app` or $test-t3-mobile", TEXT_RULES).text,
+    ).toBe("use `test-goat-app` or $test-goat-mobile");
   });
 });

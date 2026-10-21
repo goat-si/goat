@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
+import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -30,11 +32,23 @@ import {
   makeGrokAdapterV2,
 } from "@goat/provider-grok/testing";
 
+const decodeTurnCompleted = Schema.decodeUnknownOption(
+  Schema.Struct({
+    update: Schema.Struct({
+      sessionUpdate: Schema.Literal("turn_completed"),
+      prompt_id: Schema.String,
+    }),
+  }),
+);
+
 const DEFAULT_GROK_SETTINGS = Schema.decodeUnknownSync(GrokSettings)({});
 
 function layerGrokProviderAdapterRegistryReplay(
   transcript: AcpReplayTranscript,
-  options: { readonly replayGate?: ProviderReplayGate } = {},
+  options: {
+    readonly replayGate?: ProviderReplayGate;
+    readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
+  } = {},
 ) {
   const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
 
@@ -71,7 +85,29 @@ function layerGrokProviderAdapterRegistryReplay(
             ...(replayGate === undefined ? {} : { replayGate }),
             cancelMeta: GROK_ACP_CANCEL_META,
             initializeMeta: GROK_ACP_INITIALIZE_META,
-          })(runtimeInput).pipe(Effect.flatMap(makeXAiPromptCompletionRuntime)),
+          })(runtimeInput).pipe(
+            Effect.map((runtime): AcpSessionRuntime.AcpSessionRuntime["Service"] => ({
+              ...runtime,
+              handleExtNotification: (method, payload, handler) =>
+                runtime.handleExtNotification(method, payload, (params) =>
+                  handler(params).pipe(
+                    Effect.andThen(() => {
+                      if (
+                        method !== "_x.ai/session_notification" &&
+                        method !== "x.ai/session_notification"
+                      )
+                        return Effect.void;
+                      const completed = decodeTurnCompleted(params);
+                      return Option.isSome(completed)
+                        ? (options.onReplayTurnComplete?.(completed.value.update.prompt_id) ??
+                            Effect.void)
+                        : Effect.void;
+                    }),
+                  ),
+                ),
+            })),
+            Effect.flatMap(makeXAiPromptCompletionRuntime),
+          ),
         continuationRequests,
         assertComplete: makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript),
         ...(replayGate === undefined

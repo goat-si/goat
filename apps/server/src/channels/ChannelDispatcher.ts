@@ -127,11 +127,18 @@ const ENDED_RUN_STATUSES = new Set([
 const STOP_LAUNCH_GRACE_MS = 120_000;
 
 /**
- * The most a GOAT Bot turn may do on its own, whatever the requester may: read and search freely
- * and edit files without asking, while commands the provider gates still ask. Work that changes
- * a repository is a coding task, which runs at the requester's full ceiling.
+ * GOAT Bot runs with full access so reading anything never stops on an approval, which makes
+ * read-only a promise this text alone keeps. Work that changes things is a coding task.
  */
-export const BOT_TURN_RUNTIME_CEILING = "auto-accept-edits" as const;
+export const GOAT_BOT_READ_ONLY_RULE =
+  "You run with full access and are read-only by instruction: nothing in GOAT stops you, so keep this rule yourself. Read anything that helps: files anywhere on this machine, git history and status, logs, system status, and GOAT's tools. Change nothing yourself: no file edits, no commands that write, install, delete, move, or restart anything, no commits or pushes, and no settings changes in GOAT or anywhere else. Subagents you start keep the same rule. If the request needs a change, say what you found and that it needs a coding task, then report; if it is unclear whether the person wants the change, ask them first.";
+
+/**
+ * GOAT Bot hands work to the machines that have room for it; the general placement guidance is in
+ * the GOAT orchestration instructions every agent gets.
+ */
+export const GOAT_BOT_DISPATCH_RULE =
+  "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with delegate_task here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
 
 /** What a GOAT Bot turn is told besides the person's request. */
 const turnInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
@@ -141,12 +148,13 @@ const turnInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
     "Look things up directly: read and search files, read GOAT Bot's notes (" +
       files.notes +
       "), use GOAT memory, and use the channel_task_* and goat_thread_* tools to check the work GOAT Bot started and its threads. Hand research, long investigations, or anything that needs several steps to subagents with delegate_task, wait for them, and summarize what they found; do not paste their output.",
-    "Do not change any repository. If the request turns out to need code changes, say what you found and that it needs a coding task, then report.",
+    GOAT_BOT_READ_ONLY_RULE,
+    GOAT_BOT_DISPATCH_RULE,
     task.notesChangeRequested === undefined
       ? "Leave the notes file unchanged; this message did not ask to change a note."
       : "The person asked to change or forget a note (" +
         JSON.stringify(task.notesChangeRequested) +
-        "). Edit the notes file only to make that change.",
+        "). This is the one change you may make yourself: edit the notes file only to make that change.",
     ...channelWorkerRules("local"),
   ].join("\n");
 
@@ -445,7 +453,9 @@ const make = Effect.gen(function* () {
    * A GOAT Bot turn runs in the bot's own workspace on this machine, on GOAT Bot's model: the
    * one chosen in settings, else the new-thread default, else the text generation model. A
    * chosen model this machine no longer offers falls back with a warning rather than asking,
-   * because the person asked a question, not for a model.
+   * because the person asked a question, not for a model. It runs with full access, capped only
+   * by what the requester may do, so a person linked below full access never gets more through
+   * the bot than the prompt's read-only promise.
    */
   const turnTarget = (
     task: ChannelTask,
@@ -461,7 +471,6 @@ const make = Effect.gen(function* () {
         };
       }
       const all = yield* serverSettings.getSettings.pipe(Effect.orDie);
-      const settings = resolveProjectSettings(all, home.id).settings;
       // The environment's settings, not the bot workspace's: the settings page shows and saves
       // the bot's model from the same resolution, so what it says is what runs.
       const fallback = resolveGoatBotModelSelection({ ...all, goatBotModelSelection: null });
@@ -478,10 +487,7 @@ const make = Effect.gen(function* () {
         environmentId: yield* environment.getEnvironmentId,
         projectId: home.id,
         modelSelection: preferred ?? fallback,
-        runtimeMode: lowerRuntimeMode(
-          lowerRuntimeMode(task.requester.runtimeModeCeiling, settings.defaultRuntimeMode),
-          BOT_TURN_RUNTIME_CEILING,
-        ),
+        runtimeMode: task.requester.runtimeModeCeiling,
         interactionMode: "default",
         workspaceStrategy: { type: "root" },
         ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),

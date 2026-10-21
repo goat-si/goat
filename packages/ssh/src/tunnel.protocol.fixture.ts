@@ -40,6 +40,8 @@ export const protocolExecutable = (
     liveTokens?: string;
     descriptor404?: boolean;
     nodeReadiness?: boolean;
+    /** Hold SIGTERM until the stop controller releases it, then report actual exit via EOF. */
+    stopBarrier?: boolean;
     /** Advertise `drainRestart` with a per-start instance id and answer the drain endpoint. */
     drain?: boolean;
     /** Build commit time answered by `__ssh-helper commit-time`; unstamped when absent. */
@@ -254,10 +256,41 @@ if (["/.well-known/goat/activity", "/.well-known/t3/activity"].includes(req.url)
 }
 res.end(["/.well-known/goat/environment", "/.well-known/t3/environment"].includes(req.url) ? JSON.stringify(descriptor) : "ok");
   });
-  process.on("SIGTERM", () => {
-event("stop");
+  const stop = () => {
 if (fs.existsSync(runtimeFile) && JSON.parse(fs.readFileSync(runtimeFile, "utf8")).pid === process.pid) fs.unlinkSync(runtimeFile);
 server.close(() => process.exit(0));
+  };
+  let stopRequested = false;
+  const stopObservers = new Set();
+  if (${JSON.stringify(signals.stopBarrier ?? false)}) {
+    const control = net.createServer(socket => {
+      stopObservers.add(socket);
+      let pending = "";
+      socket.on("error", error => { throw error; });
+      socket.on("close", () => stopObservers.delete(socket));
+      socket.on("data", data => {
+        pending += data;
+        if (!pending.endsWith("\\n")) return;
+        if (pending === "observe\\n") {
+          if (stopRequested) socket.write("stopping\\n");
+          pending = "";
+          return;
+        }
+        if (pending !== "exit\\n" || !stopRequested) throw new Error("Unexpected stop release");
+        pending = "";
+        stop();
+      });
+      socket.write("ready\\n");
+    });
+    await new Promise(resolve => control.listen(0, "127.0.0.1", resolve));
+    fs.writeFileSync(path.join(test, "stop-port-" + process.pid), String(control.address().port));
+  }
+  process.on("SIGTERM", () => {
+event("stop");
+if (${JSON.stringify(signals.stopBarrier ?? false)}) {
+  stopRequested = true;
+  for (const socket of stopObservers) socket.write("stopping\\n");
+} else stop();
   });
   server.listen(requested, "127.0.0.1", () => {
 const record = {version: 1, pid: process.pid, port: server.address().port,
@@ -290,6 +323,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   liveTokens?: string;
   descriptor404?: boolean;
   nodeMode?: boolean;
+  stopBarrier?: boolean;
   contestedPort?: number;
   contestedAttempts?: number;
   homePrefix?: string;
@@ -443,6 +477,12 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
         },
       ),
     );
+    if (input.stopBarrier)
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          if (yield* child.isRunning) yield* child.kill({ killSignal: "SIGKILL" });
+        }).pipe(Effect.orDie),
+      );
     const ready = JSON.parse(
       yield* child.stdout.pipe(
         Stream.decodeText(),

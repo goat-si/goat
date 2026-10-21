@@ -54,9 +54,12 @@ in `apps/server/src/mcp/HostThreadsMcpService.ts`, because the remote sees an ou
 
 A `goat_thread_launch` that asks for a new worktree calls `ThreadLaunchService.checkWorktreeBase`
 before a thread exists (`apps/server/src/mcp/toolkits/project/handlers.ts`).
-`ThreadLaunchBranchError` in `apps/server/src/orchestration-v2/ThreadLaunchService.ts` refuses a
-branch that already exists. When that branch is already checked out, the error names the checkout.
-No thread is created.
+`ThreadLaunchBranchError` in `apps/server/src/orchestration-v2/ThreadLaunchService.ts` refuses an
+existing branch only when reusing it could lose work: commits its base lacks, uncommitted changes, or
+the project's main checkout. The error names the checkout and the `existing_worktree` launch, and no
+thread is created. Any other existing branch, such as one a failed launch left behind, is reused by
+`GitVcsDriver.createWorktree` with `reuseExistingBranch`, which makes the same check for SSH
+launches that skip this one.
 
 ## Tool names
 

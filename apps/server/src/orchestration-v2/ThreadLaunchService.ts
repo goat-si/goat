@@ -1,6 +1,7 @@
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { splitStandingInstructions } from "@goat/shared/standingInstructions";
 import {
@@ -43,6 +44,7 @@ import {
 } from "@goat/shared/git";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import { uniqueCommitsProblem } from "../vcs/GitVcsDriverCore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -186,12 +188,14 @@ export class ThreadLaunchBranchError extends Schema.TaggedError<ThreadLaunchBran
     workspaceRoot: Schema.String,
     branch: Schema.String,
     worktreePath: Schema.NullOr(Schema.String),
+    /** Why a launch cannot reuse the branch, such as commits its base lacks. */
+    problem: Schema.String,
   },
 ) {
   override get message(): string {
     return this.worktreePath === null
-      ? `Branch "${this.branch}" already exists in project "${this.projectTitle}" (${this.workspaceRoot}), and a new worktree needs a new branch.`
-      : `Branch "${this.branch}" is already checked out at ${this.worktreePath} in project "${this.projectTitle}".`;
+      ? `Branch "${this.branch}" already exists in project "${this.projectTitle}" (${this.workspaceRoot}) and ${this.problem}, so a new worktree cannot reuse it.`
+      : `Branch "${this.branch}" is already checked out at ${this.worktreePath} in project "${this.projectTitle}" and ${this.problem}, so a new worktree cannot reuse it.`;
   }
 }
 
@@ -335,8 +339,23 @@ const make = Effect.gen(function* () {
         const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
         if (project === undefined) return undefined;
         const cwd = project.workspaceRoot;
-        if (!(yield* git.hasCommit({ cwd, refName: `refs/heads/${branch}` }))) return undefined;
-        return { project, worktreePath: yield* git.branchWorktreePath({ cwd, branch }) };
+        // A branch left by an earlier attempt is reused when that loses nothing; an
+        // unresolvable base leaves the decision to provisioning, which fetches it first.
+        const state = yield* git.inspectExistingBranch({ cwd, branch, baseRef: strategy.baseRef });
+        if (state === null) return undefined;
+        const problem =
+          state.uniqueCommits > 0
+            ? uniqueCommitsProblem(state.uniqueCommits, strategy.baseRef)
+            : state.dirty
+              ? "has uncommitted changes there"
+              : state.worktreePath !== null &&
+                  normalizeProjectPathForComparison(state.worktreePath) ===
+                    normalizeProjectPathForComparison(cwd)
+                ? "is the project's main checkout"
+                : null;
+        return problem === null
+          ? undefined
+          : { project, worktreePath: state.worktreePath, problem };
       }).pipe(Effect.orElseSucceed(() => undefined));
       if (taken !== undefined)
         return yield* new ThreadLaunchBranchError({
@@ -345,6 +364,7 @@ const make = Effect.gen(function* () {
           workspaceRoot: taken.project.workspaceRoot,
           branch,
           worktreePath: taken.worktreePath,
+          problem: taken.problem,
         });
     }
     // `:/text` is a commit search, which cannot be asked for a commit type.
@@ -415,6 +435,8 @@ const make = Effect.gen(function* () {
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
     let createdWorktreePath: string | null = null;
+    // Only a branch this launch created is deleted on rollback; a reused one predates it.
+    let createdBranch: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
@@ -541,6 +563,10 @@ const make = Effect.gen(function* () {
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
         // Set from the fallback callback; the cast keeps TS from narrowing it to null.
         let worktreesDirectoryNotice = null as string | null;
+        let existingBranch = null as {
+          worktree: "reused" | "added";
+          fastForwarded: boolean;
+        } | null;
         const worktree = yield* git
           .createWorktree(
             {
@@ -551,10 +577,16 @@ const make = Effect.gen(function* () {
               path: null,
             },
             {
+              // A retry finds the branch and worktree an earlier failed attempt left behind.
+              reuseExistingBranch: true,
               progress: {
                 onWorktreeClaimed: (path) =>
                   Effect.sync(() => {
                     createdWorktreePath = path;
+                  }),
+                onExistingBranch: (outcome) =>
+                  Effect.sync(() => {
+                    existingBranch = outcome;
                   }),
                 onWorktreesDirectoryFallback: ({ configured, unavailable }) =>
                   Effect.sync(() => {
@@ -568,10 +600,18 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
-        createdWorktreePath = worktreePath;
+        if (existingBranch?.worktree !== "reused") createdWorktreePath = worktreePath;
+        if (existingBranch === null) createdBranch = branch;
+        const existingBranchNotice =
+          existingBranch === null
+            ? null
+            : `${existingBranch.worktree === "reused" ? "Reused the clean worktree already on" : "Checked out the existing"} branch ${branch}, which had no commits of its own${existingBranch.fastForwarded ? "; fast-forwarded it to the base" : ""}`;
+        if (existingBranchNotice !== null) {
+          yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
+        }
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
         yield* worktreesDirectoryNotice === null
-          ? setupTracker.stageStatus(threadId, "checkout", "done")
+          ? setupTracker.stageStatus(threadId, "checkout", "done", existingBranchNotice)
           : setupTracker.stageStatus(threadId, "checkout", "warning", worktreesDirectoryNotice);
       }
 
@@ -798,12 +838,32 @@ const make = Effect.gen(function* () {
           ) {
             if (branchRename !== null) yield* Fiber.interrupt(branchRename);
             const removedPath = createdWorktreePath;
+            const removedBranch = createdBranch;
             // The thread forgets the worktree only once it is gone; a failed
             // removal leaves the directory for the user to clean up rather than
             // reusing a checkout that may be half written.
             yield* git
               .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
               .pipe(
+                Effect.andThen(
+                  removedBranch === null
+                    ? Effect.void
+                    : git
+                        .deleteLocalBranch({
+                          cwd: project.workspaceRoot,
+                          refName: removedBranch,
+                          force: true,
+                        })
+                        .pipe(
+                          Effect.catchCause((deleteCause) =>
+                            Effect.logWarning("Failed to delete an abandoned thread branch", {
+                              threadId,
+                              branch: removedBranch,
+                              cause: deleteCause,
+                            }),
+                          ),
+                        ),
+                ),
                 Effect.andThen(
                   threads
                     .dispatch({

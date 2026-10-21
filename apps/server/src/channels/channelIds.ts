@@ -144,6 +144,10 @@ export const botLaunchIdsFor = (ownerId: string, replacing?: ThreadId) => {
   };
 };
 
+/** Switching a stored bot thread to full access, once per thread and moment it was needed. */
+export const botFullAccessCommandIdFor = (threadId: ThreadId, at: string) =>
+  CommandId.make(stableId("channel-bot-full-access", [threadId, at]));
+
 /** What makes two inputs under one idempotency key the same input. */
 export const contentHashFor = (message: ChannelInboundMessage) =>
   digest([

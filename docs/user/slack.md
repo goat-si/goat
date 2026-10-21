@@ -40,7 +40,12 @@ GOAT Bot screen shows only a chip for the work and its final report.
   it is on it and looks into it itself, then answers in the same conversation.
   Messages you send while it works are added to what it is doing. It uses the
   model chosen under **Settings → GOAT Bot** (by default, the default model for
-  new threads), and asks before running commands its provider treats as risky.
+  new threads). It runs with full access, never more than the person who asked
+  may use, so it can read files, logs, and status anywhere on the machine
+  without asking. It is told to change nothing itself and to start a coding
+  task or ask you when something needs changing. That rule is part of its
+  instructions; GOAT does not block changes, so link people at a lower access
+  level if they should not be able to make the bot change things.
 - Ask GOAT Bot about earlier work ("did the login PR merge?", "what did the
   docs thread do?", "when did I mention the lighthouse score?") and it looks
   it up itself and answers, without starting a coding agent. It reads the work
@@ -56,6 +61,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
   handed to subagents, on this machine or another one. A machine still on an
   older GOAT stops only the current turn; subagents it started there finish on
   their own.
+- When more than one machine is connected, GOAT Bot spreads research across
+  the ones with room to spare and tells you which machine ran what. It never
+  starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
 - Work counts as waiting on you when the agent working on it, or a subagent it

@@ -245,6 +245,10 @@ export type OrchestratorFixtureInputStep =
       readonly label: string;
     }
   | {
+      readonly type: "await_replay_turn_complete";
+      readonly nativeTurnId: string;
+    }
+  | {
       readonly type: "steer";
       readonly text: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
@@ -686,6 +690,9 @@ export function materializeFixtureInput(input: {
           break;
         case "capture_shell_snapshot":
           steps.push({ type: "capture_shell_snapshot", key: step.key });
+          break;
+        case "await_replay_turn_complete":
+          steps.push(step);
           break;
         case "release_replay_gate":
           steps.push({ type: "release_replay_gate", label: step.label });

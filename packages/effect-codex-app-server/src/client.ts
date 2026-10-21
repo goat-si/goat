@@ -166,6 +166,17 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
         Effect.flatMap((decoded) =>
           Effect.forEach(handlers, (handler) => handler(decoded), { discard: true }),
         ),
+        // One malformed notification must not end the stream, but a newer Codex
+        // whose payload the bindings reject has to be visible in the logs.
+        Effect.tapErrorTag("CodexAppServerProtocolParseError", (error) =>
+          Effect.logWarning("Dropped Codex notification that failed to decode").pipe(
+            Effect.annotateLogs({
+              method: notification.method,
+              issueCount: error.issueCount,
+              issueKinds: error.issueKinds,
+            }),
+          ),
+        ),
         Effect.ignore,
       );
     }

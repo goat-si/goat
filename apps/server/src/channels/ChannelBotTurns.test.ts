@@ -12,13 +12,14 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
-import { BOT_TURN_RUNTIME_CEILING } from "./ChannelDispatcher.ts";
+import { GOAT_BOT_DISPATCH_RULE, GOAT_BOT_READ_ONLY_RULE } from "./ChannelDispatcher.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   botMessages,
   defaultScript,
   goatInput,
+  linkSlackUser,
   makeHarness,
   modelSelection,
   onlyTask,
@@ -26,6 +27,8 @@ import {
   rpcContext,
   scratchProjectId,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
 
 const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
@@ -53,12 +56,15 @@ const turnScript = (input: ChannelReceptionInput) => {
   return defaultScript(input);
 };
 
-const harnessWith = (goatBotModelSelection: typeof botModel | null) => {
+const harnessWith = (
+  goatBotModelSelection: typeof botModel | null,
+  defaultRuntimeMode: "full-access" | "approval-required" = "full-access",
+) => {
   const harness = makeHarness({
     botWorkspace: true,
     settingsLayer: ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
-      defaultRuntimeMode: "full-access",
+      defaultRuntimeMode,
       goatBotModelSelection,
     }).pipe(Layer.orDie),
   });
@@ -82,9 +88,10 @@ const runningTurn = Effect.gen(function* () {
 
 describe("GOAT Bot turns", () => {
   it.effect(
-    "acknowledges first, then runs in its own workspace on its model below the ceiling",
+    "acknowledges first, then runs in its own workspace on its model with full access",
     () => {
-      const harness = harnessWith(botModel);
+      // The new-thread default is for people's threads; it does not narrow the bot.
+      const harness = harnessWith(botModel, "approval-required");
       return Effect.gen(function* () {
         yield* setupBot;
         const gateway = yield* ChannelGateway.ChannelGateway;
@@ -97,17 +104,39 @@ describe("GOAT Bot turns", () => {
         const launch = harness.world.launches[0]!;
         assert.strictEqual(launch.projectId, scratchProjectId);
         assert.deepStrictEqual(launch.modelSelection, botModel);
-        // The owner may run anything; a turn still stops at the bot's ceiling.
-        assert.strictEqual(launch.runtimeMode, BOT_TURN_RUNTIME_CEILING);
+        assert.strictEqual(launch.runtimeMode, "full-access");
         assert.deepStrictEqual(launch.workspaceStrategy, { type: "root" });
         assert.include(launch.initialMessage?.text ?? "", "You are GOAT Bot handling this message");
+        // Read-only is the prompt's promise now that the sandbox allows everything.
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
         assert.include(launch.initialMessage?.text ?? "", "delegate_task");
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);
         assert.include(texts, "On it.");
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("never runs a turn above what a linked Slack person may do", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("look: why is the disk full?", "Ev1"), {
+        ...slackContext,
+        runtimeModeCeiling: "full-access",
+      });
+      yield* runtime.drain;
+      const launch = harness.world.launches[0]!;
+      assert.strictEqual((yield* onlyTask).kind, "turn");
+      // The link was made at auto-accept-edits.
+      assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("follows the new-thread default when no bot model is chosen", () => {
     const harness = harnessWith(null);

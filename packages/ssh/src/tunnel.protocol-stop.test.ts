@@ -24,6 +24,7 @@ import {
   arch,
 } from "./tunnel.fixture.ts";
 import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import { awaitProtocolStop, synchronizeProtocolStop } from "./tunnel.protocol-stop.fixture.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "SSH runtime protocol selection",
@@ -41,10 +42,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const f = yield* makeProtocolFixture({
             live: true,
             kind,
+            stopBarrier: true,
             oldVersion: "1.2.2",
             ssh: SSH_RUNTIME_PROTOCOL_VERSION,
             orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
+          yield* synchronizeProtocolStop(f);
           yield* f.fs.writeFileString(`${f.test}/activity`, activity);
           const before = yield* f.snapshot;
           const layer = Layer.mergeAll(
@@ -67,7 +70,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           }).pipe(Effect.provide(layer), Effect.scoped);
           const events = yield* f.fs.readFileString(`${f.test}/events`);
           assert.equal(events.includes('"type":"stop"'), stops);
-          if (!stops) assert.deepEqual(yield* f.snapshot, before);
+          if (stops) {
+            assert.equal(yield* f.fs.readFileString(`${f.test}/stop-exits`), `${f.pid}\n`);
+            assert.notExists((yield* f.snapshot).pid);
+          } else assert.deepEqual(yield* f.snapshot, before);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
@@ -243,6 +249,55 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
+    it.live("disconnect reports the real stop deadline and preserves ownership until exit", () =>
+      Effect.gen(function* () {
+        const f = yield* makeProtocolFixture({
+          live: true,
+          kind: "managed",
+          oldVersion: "1.2.2",
+          ssh: SSH_RUNTIME_PROTOCOL_VERSION,
+          orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          stopBarrier: true,
+        });
+        const layer = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+          Layer.succeed(FileSystem.FileSystem, f.observedFs),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          SshTunnel.SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.succeed(f.runner),
+            leaveRemoteServerRunning: false,
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          yield* manager.ensureEnvironment(uploadTarget);
+          const before = yield* f.snapshot;
+          // No controller: the real process acknowledges SIGTERM but cannot exit yet.
+          yield* synchronizeProtocolStop(f);
+          f.setScriptPrefix("");
+          const result = yield* Effect.result(manager.disconnectEnvironment(uploadTarget));
+          assert.isTrue(Result.isFailure(result));
+          if (Result.isFailure(result)) {
+            assert.include(result.failure.message, `PID ${f.pid} did not stop within 2 seconds`);
+            assert.include(result.failure.message, "Its ownership files were kept");
+          }
+          yield* awaitProtocolStop(f);
+          assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+          assert.deepEqual(yield* f.snapshot, before);
+          yield* Effect.sync(() => process.kill(f.pid, 0));
+          yield* synchronizeProtocolStop(f);
+          yield* manager.disconnectEnvironment(uploadTarget);
+          assert.equal(yield* f.fs.readFileString(`${f.test}/stop-exits`), `${f.pid}\n`);
+          for (const file of ["pid", "port", "managed", "identity"])
+            assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
+        }).pipe(Effect.provide(layer), Effect.scoped);
+        assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+
     it.live.each(
       (
         [
@@ -262,7 +317,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           oldVersion: "1.2.2",
           ssh: SSH_RUNTIME_PROTOCOL_VERSION,
           orchestration: ORCHESTRATION_PROTOCOL_VERSION,
+          stopBarrier: true,
         });
+        yield* synchronizeProtocolStop(f);
         const unrelated =
           mode === "unrelated PID"
             ? yield* f.realSpawner.spawn(
@@ -322,6 +379,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const verified = mode === "runtime command";
         assert.equal(Result.isSuccess(result), verified || action === "shutdown");
         if (verified) {
+          assert.equal(yield* f.fs.readFileString(`${f.test}/stop-exits`), `${f.pid}\n`);
           assert.notExists((yield* f.snapshot).pid);
           assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
         } else {
@@ -351,6 +409,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ssh: SSH_RUNTIME_PROTOCOL_VERSION,
             orchestration: ORCHESTRATION_PROTOCOL_VERSION,
           });
+          yield* synchronizeProtocolStop(f);
           const entry = `${f.home}/dev's old entry.cjs`;
           const nextEntry = `${f.home}/new entry.cjs`;
           for (const file of [entry, nextEntry])
@@ -362,6 +421,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
                   ssh: SSH_RUNTIME_PROTOCOL_VERSION,
                   orchestration: ORCHESTRATION_PROTOCOL_VERSION,
                   nodeReadiness: true,
+                  stopBarrier: true,
                 },
                 f.state,
               ),
@@ -439,6 +499,7 @@ export PATH
             assert.include(yield* f.fs.readFileString(`${f.state}/run-t3.sh`), nextEntry);
             if (action === "disconnect") yield* manager.disconnectEnvironment(uploadTarget);
           }).pipe(Effect.provide(layer(nextEntry, false)), Effect.scoped);
+          assert.equal(yield* f.fs.readFileString(`${f.test}/stop-exits`), `${pid}\n`);
           for (const file of ["pid", "port", "managed", "identity"])
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
           assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');

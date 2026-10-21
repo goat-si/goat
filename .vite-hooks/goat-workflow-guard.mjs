@@ -15,6 +15,10 @@ const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("
 const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
 // goat-ci jobs run on a pinned GitHub-hosted image or on EPYC, never on a moving label.
 const goatCiHostedRunner = "ubuntu-24.04";
+// A manual run or a same-repository pull request goes to EPYC and a fork's pull request to the
+// hosted image (#426). The trust test is the expression itself, so it is pinned whole.
+const goatCiTrustedRunner =
+  '(github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\'';
 // goat-scope picks the matrix, ci runs it, goat-ci-result aggregates.
 const goatCiJobs = new Set(["scope", "ci", "screenshot-gate", "result"]);
 // No Actions artifacts anywhere: goat-si is on the free plan and a full artifact
@@ -148,15 +152,20 @@ function validateWorkflow(source, yaml) {
       return refuse(`jobs.${name}.container and jobs.${name}.services are forbidden`);
     }
     const runners = job["runs-on"];
+    const trusted =
+      typeof runners === "string" &&
+      runners.trim().startsWith("${{") &&
+      normalizeExpression(runners) === goatCiTrustedRunner;
     if (
       runners !== goatCiHostedRunner &&
+      !trusted &&
       (!Array.isArray(runners) ||
         runners.length !== 5 ||
         new Set(runners).size !== 5 ||
         runners.some((label) => typeof label !== "string" || !labels.has(label)))
     ) {
       return refuse(
-        `jobs.${name}.runs-on must be ${goatCiHostedRunner} or exactly self-hosted, linux, x64, goat, epyc`,
+        `jobs.${name}.runs-on must be ${goatCiHostedRunner}, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression`,
       );
     }
     if (

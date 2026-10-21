@@ -273,22 +273,22 @@ export function matchFleetHostEntries(input: {
  * always is read; it answers for itself and every SSH host it holds open.
  * Another environment is read when that answer does not cover it, or when a
  * machine in the fleet is an SSH or cloud host it dispatched to, whose metrics
- * only its own answer carries.
+ * only its own answer carries. While the primary's answer is on its way, only an
+ * environment it cannot cover (no SSH alias) is read, so neither waits on the other.
  */
 export function fleetHostStatusNeeded(input: {
   readonly environmentId: EnvironmentId;
   readonly sshAliases: ReadonlyArray<string>;
   readonly primaryEnvironmentId: EnvironmentId | null;
-  /** The primary's answer; null while it is on its way or when there is no primary. */
+  /** The primary's answer for its SSH hosts; null while it is on its way, empty with no primary. */
   readonly primaryHosts: ReadonlyArray<HostStatusEntry> | null;
   readonly dispatchers: ReadonlySet<EnvironmentId>;
 }): boolean {
   if (input.environmentId === input.primaryEnvironmentId) return true;
   if (input.dispatchers.has(input.environmentId)) return true;
-  return !(
-    input.primaryHosts?.some(
-      (entry) =>
-        entry.reachability === "ok" && entry.host !== null && input.sshAliases.includes(entry.host),
-    ) ?? false
+  if (input.primaryHosts === null) return input.sshAliases.length === 0;
+  return !input.primaryHosts.some(
+    (entry) =>
+      entry.reachability === "ok" && entry.host !== null && input.sshAliases.includes(entry.host),
   );
 }

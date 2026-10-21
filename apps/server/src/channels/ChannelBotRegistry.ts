@@ -8,6 +8,9 @@
  * thread itself was deleted, the next call starts a new bot and records it in its place; an
  * archived bot stays the bot, since unarchiving brings it back.
  *
+ * The bot always runs with full access and is read-only by its instructions, not its sandbox.
+ * A bot made while it ran approval-required is switched in place, keeping its history.
+ *
  * @module ChannelBotRegistry
  */
 import {
@@ -15,6 +18,7 @@ import {
   type ChannelEnsureBotInput,
   ChannelGatewayError,
   type ChannelGetBotStatusResult,
+  type RuntimeMode,
   type ThreadId,
   type EnvironmentId,
 } from "@goat/contracts";
@@ -32,9 +36,11 @@ import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { channelOwnerIdFor } from "./channelOwner.ts";
-import { botLaunchIdsFor } from "./channelIds.ts";
+import { botFullAccessCommandIdFor, botLaunchIdsFor } from "./channelIds.ts";
 
 const GOAT_BOT_TITLE = "GOAT bot";
+
+export const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
@@ -81,19 +87,44 @@ const make = Effect.gen(function* () {
           return { type: "active" as const };
         }
         return records.runs.length === 0
-          ? { type: "adopt" as const, projectId: thread.projectId }
+          ? {
+              type: "adopt" as const,
+              projectId: thread.projectId,
+              runtimeMode: thread.runtimeMode,
+            }
           : { type: "legacy" as const };
       }),
       // A thread this server does not know is just a stale client cache.
       Effect.catch(() => Effect.succeed({ type: "ignore" as const })),
     );
 
-  /** Whether a stored bot thread was deleted. Read failures keep the stored bot. */
-  const wasDeleted = (threadId: ThreadId) =>
-    threads.getThreadRecords(threadId, ["runs"]).pipe(
-      Effect.map((records) => records.thread.deletedAt !== null),
-      Effect.catch(() => Effect.succeed(false)),
+  /** A stored bot thread's deletion and runtime mode. A read failure keeps the stored bot as is. */
+  const inspectStored = (threadId: ThreadId) =>
+    threads.getThreadRecords(threadId, []).pipe(
+      Effect.map((records) => ({
+        deleted: records.thread.deletedAt !== null,
+        runtimeMode: records.thread.runtimeMode,
+      })),
+      Effect.orElseSucceed(() => undefined),
     );
+
+  /** A failed switch only logs: the bot still answers, and the next ensure tries again. */
+  const ensureFullAccess = (threadId: ThreadId, runtimeMode: RuntimeMode, now: string) =>
+    runtimeMode === GOAT_BOT_RUNTIME_MODE
+      ? Effect.void
+      : threads
+          .dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: botFullAccessCommandIdFor(threadId, now),
+            threadId,
+            runtimeMode: GOAT_BOT_RUNTIME_MODE,
+          })
+          .pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("GOAT bot full access switch failed", { cause }),
+            ),
+            Effect.ignore,
+          );
 
   /** Starts a bot thread in the bot's project. Ids are fixed per owner and replaced thread. */
   const launchBot = (ownerId: string, replacing?: ThreadId) =>
@@ -113,7 +144,7 @@ const make = Effect.gen(function* () {
           projectId: project.projectId,
           title: GOAT_BOT_TITLE,
           modelSelection: settings.textGenerationModelSelection,
-          runtimeMode: "approval-required",
+          runtimeMode: GOAT_BOT_RUNTIME_MODE,
           interactionMode: "default",
           workspaceStrategy: { type: "root" },
           createdBy: "system",
@@ -132,7 +163,12 @@ const make = Effect.gen(function* () {
       const now = DateTime.formatIso(yield* DateTime.now);
       if (existing !== undefined) {
         const previousThreadId = existing.bot.threadId;
-        if (!(yield* wasDeleted(previousThreadId))) return existing.bot;
+        const stored = yield* inspectStored(previousThreadId);
+        if (stored?.deleted !== true) {
+          if (stored !== undefined)
+            yield* ensureFullAccess(previousThreadId, stored.runtimeMode, now);
+          return existing.bot;
+        }
         const bot = yield* launchBot(ownerId, previousThreadId);
         return yield* ledger
           .replaceBot({ ownerId, previousThreadId, bot, now })
@@ -147,7 +183,7 @@ const make = Effect.gen(function* () {
         return yield* new ChannelGatewayError({ reason: "legacy_active" });
       }
       if (candidate.type === "adopt" && input.candidateThreadId !== undefined) {
-        return yield* ledger
+        const adopted = yield* ledger
           .setBotIfAbsent({
             ownerId,
             bot: {
@@ -158,6 +194,9 @@ const make = Effect.gen(function* () {
             now,
           })
           .pipe(Effect.mapError(persistence));
+        if (adopted.threadId === input.candidateThreadId)
+          yield* ensureFullAccess(adopted.threadId, candidate.runtimeMode, now);
+        return adopted;
       }
       const bot = yield* launchBot(ownerId);
       return yield* ledger

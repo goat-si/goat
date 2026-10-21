@@ -42,7 +42,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: `bfce4301d` `cc5003979` `095115376`
 - 경로: `.github/workflows/goat-ci.yml`, `.vite-hooks/`, `packages/ssh/src/tunnel.*.test.ts`, `.github/scripts/pr-screenshot-gate.*`, `.github/pull_request_template.md`
-- 정책: GOAT CI는 EPYC의 goat-ci 하나이고 upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다. 사이클 261020: upstream `goat/no-dom-test-environment`(#21937)가 per-file jsdom pragma를 거부한다. GOAT 자체 jsdom 테스트는 루트 `vite.config.ts`의 `DOM_TEST_ENVIRONMENT_ALLOWLIST`에 두고 하나씩 browser 테스트나 Vitest project로 옮긴다 (#514). 새 GOAT 테스트는 목록에 더하지 않는다. 사이클 261021: upstream lint 규칙(#22000 `prefer-effect-fn`, #22187 `require-disposable-render`, 테스트 시간 규칙)은 `goat/*` 이름으로 받고 `goat-rename`의 `LINT_RULE_IDS`에 더한다. 그 전부터 있던 GOAT 위반 파일은 `vite.config.ts`의 `PREFER_EFFECT_FN_BACKLOG`·`DISPOSABLE_RENDER_BACKLOG`에 두고 하나씩 옮기며 뺀다. 새 파일은 더하지 않는다.
+- 정책: GOAT CI는 goat-ci 하나이고(신뢰 실행은 EPYC, fork PR은 hosted ubuntu-24.04), upstream workflow는 goat-si/goat에서 모두 비활성이다. GOAT에 쓸모없는 새 upstream workflow는 머지에서 빼고 사이클 카드에 적는다 (`mobile-android-apk.yml`, 사이클 261013). `tunnel.test.ts`는 여러 파일로 나뉘었다. PR 템플릿의 Screenshots 섹션은 goat-ci의 `screenshot-gate` 태스크와 짝이므로, upstream 템플릿 변경을 받을 때 그 섹션을 다시 얹는다. 사이클 261020: upstream `goat/no-dom-test-environment`(#21937)가 per-file jsdom pragma를 거부한다. GOAT 자체 jsdom 테스트는 루트 `vite.config.ts`의 `DOM_TEST_ENVIRONMENT_ALLOWLIST`에 두고 하나씩 browser 테스트나 Vitest project로 옮긴다 (#514). 새 GOAT 테스트는 목록에 더하지 않는다. 사이클 261021: upstream lint 규칙(#22000 `prefer-effect-fn`, #22187 `require-disposable-render`, 테스트 시간 규칙)은 `goat/*` 이름으로 받고 `goat-rename`의 `LINT_RULE_IDS`에 더한다. 그 전부터 있던 GOAT 위반 파일은 `vite.config.ts`의 `PREFER_EFFECT_FN_BACKLOG`·`DISPOSABLE_RENDER_BACKLOG`에 두고 하나씩 옮기며 뺀다. 새 파일은 더하지 않는다.
 
 ### `cli-home` CLI `goat`와 `~/.goat`
 
@@ -121,6 +121,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #5 #10 #6
 - 경로: `apps/server/src/remoteReports`, `apps/server/src/mcp/toolkits/{remoteReport,ssh}`, `apps/server/src/persistence/Migrations/*_{RemoteReports,RemoteDispatches}*`, `packages/contracts/src/remoteReports.ts`
 - 정책: GOAT 전용. RemoteReports·RemoteDispatches 마이그레이션은 다시 실행해도 안전하게 써서(`IF NOT EXISTS`) upstream이 그 id를 가져가면 옮길 수 있다. upstream의 SSH·MCP 변경은 받고 출발지 보고, 원격 위임, 첨부 전달을 다시 얹는다.
+
+### `repo-hygiene` 저장소 루트 정리
+
+- 커밋: #661
+- 경로: `.agents/skills/test-goat-{app,mobile}`, `goat.json`, `.cursor/` (삭제), `pr-assets/` (삭제), `scripts/lib/goat-rename/rules.ts`
+- 정책: upstream의 `.agents/skills/test-t3-{app,mobile}`과 루트 `t3.json`은 `goat-rename --apply`의 경로 규칙이 `test-goat-*`, `goat.json`으로 옮기고, 본문의 스킬 이름도 바꾼다(테스트 픽스처의 샘플 이름은 upstream 그대로). upstream `.cursor/`는 drop 규칙이 지운다. upstream 체크아웃에 `--apply --root`를 먼저 돌리면 충돌이 없고, 원본을 바로 머지했다면 머지 뒤 `--apply`가 modify/delete 충돌을 같은 결과로 정리한다. `--check`는 되살아난 drop 경로를 잡는다. 결정과 이유: `devlog/_plan/261021_repo_hygiene.md`.
 
 ### `server-activity` 서버 activity와 마이그레이션 61
 
