@@ -43,6 +43,8 @@ export class MemoryQuotaService extends Context.Service<
     readonly recordStorageSample: (
       environmentId: M.EnvironmentId,
       sharedMetrics?: { readonly walBytes: number | null },
+      /** A measurement the caller just took, so one maintenance cycle walks the btrees once. */
+      measured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
     ) => Effect.Effect<M.MemoryStorageGrowth, Store.MemoryStorageError>;
     readonly readStorageGrowth: (
       environmentId: M.EnvironmentId,
@@ -645,10 +647,11 @@ const make = Effect.gen(function* () {
   const recordStorageSample = Effect.fn("MemoryQuotaService.recordStorageSample")(function* (
     environmentId: M.EnvironmentId,
     sharedMetrics?: { walBytes: number | null },
+    alreadyMeasured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
   ) {
     const now = yield* Clock.currentTimeMillis;
     const logical = yield* store.logicalBytes;
-    const measured = yield* store.measureAllocation();
+    const measured = alreadyMeasured ?? (yield* store.measureAllocation());
     const sample = yield* sampleDecode({
       measuredAtUtc: DateTime.formatIso(DateTime.makeUnsafe(now)),
       utcDay: DateTime.formatIsoDateUtc(DateTime.makeUnsafe(now)),

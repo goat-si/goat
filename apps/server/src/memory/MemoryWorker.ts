@@ -80,6 +80,14 @@ export const memoryRetryDelay = (attempt: number) =>
   [5000, 30000, 120000][Math.max(0, attempt - 1)] ?? 600000;
 // Internal ownership deadline for local work rows; this is not the hub resolution lease.
 const workClaimMs = 600000;
+/**
+ * Longest wait between recovery scans while nothing else asks for one. The scan reads each
+ * live thread's tail, so it runs when its answer can have changed (start, a memory model
+ * change, finished summary work, a full page) and otherwise only this often, which is also
+ * how late a due 24-hour consolidation can start.
+ */
+export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
+const continuationPageSize = 100;
 const isFailureCode = Schema.is(M.MemoryFailureCode);
 const safeCode = (error: unknown): M.MemoryFailureCode => {
   if (typeof error === "object" && error !== null) {
@@ -123,6 +131,8 @@ const make = Effect.gen(function* () {
   // idempotent cleanup. Finish one pass before revisiting unprovable retained rows.
   let reportCursor: string | null = null;
   let nextReportPassAt = 0;
+  let continuationScanDueAt = 0;
+  let continuationScanKey: string | undefined;
   const started = yield* Ref.make(false);
   const query = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError(workerError));
   // Memory runs on its own cheap model; the new-thread default may be unsupported here.
@@ -288,21 +298,54 @@ const make = Effect.gen(function* () {
         occurred_at: string;
       }>`SELECT sequence,event_id,stream_id,event_type,payload_json,occurred_at FROM orchestration_events WHERE application_event_version=2 AND aggregate_kind='thread' AND sequence>${watermark} ORDER BY sequence LIMIT 100`,
     );
-    const continuations = yield* query(sql<(typeof rows)[number]>`
-      SELECT e.sequence,e.event_id,e.stream_id,e.event_type,e.payload_json,e.occurred_at FROM orchestration_events e
-      JOIN orchestration_v2_projection_threads t ON t.thread_id=e.stream_id AND t.deleted_at IS NULL
-      WHERE e.application_event_version=2 AND e.aggregate_kind='thread' AND e.event_type='run.updated'
-      AND json_extract(e.payload_json,'$.status') IN ('completed','failed','interrupted','cancelled') AND e.sequence<=${watermark}
-      AND NOT EXISTS (SELECT 1 FROM orchestration_events n WHERE n.application_event_version=2 AND n.aggregate_kind='thread' AND n.stream_id=e.stream_id AND n.event_type='run.updated' AND n.sequence>e.sequence)
-      AND (EXISTS (SELECT 1 FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated' AND m.sequence<=e.sequence AND m.sequence>coalesce((SELECT max(json_extract(o.metadata_json,'$.sourceWatermark.throughSequence')) FROM memory_outbox o WHERE o.kind IN ('summary','consolidate') AND o.status='completed' AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environmentId} AND json_extract(o.metadata_json,'$.sourceThread.threadId')=e.stream_id),0)) OR (
-      EXISTS (SELECT 1 FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated' AND m.sequence<=e.sequence AND m.sequence>coalesce((SELECT max(json_extract(o.metadata_json,'$.sourceWatermark.throughSequence')) FROM memory_outbox o WHERE o.kind='consolidate' AND o.status='completed' AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environmentId} AND json_extract(o.metadata_json,'$.sourceThread.threadId')=e.stream_id),0))
-      AND ${now}-coalesce((SELECT max(json_extract(o.metadata_json,'$.completedAt')) FROM memory_outbox o WHERE o.kind='consolidate' AND o.status='completed' AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environmentId} AND json_extract(o.metadata_json,'$.sourceThread.threadId')=e.stream_id AND json_extract(o.metadata_json,'$.sourceWatermark.throughSequence')>=coalesce(json_extract(o.metadata_json,'$.observedThroughSequence'),0)),(SELECT min(CAST((julianday(m.occurred_at)-2440587.5)*86400000 AS INTEGER)) FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated'))>=86400000))
-      AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.kind IN ('summary','consolidate') AND o.status IN ('pending','running','retry','failed') AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environmentId} AND json_extract(o.metadata_json,'$.sourceThread.threadId')=e.stream_id AND coalesce(json_extract(o.metadata_json,'$.observedThroughSequence'),json_extract(o.metadata_json,'$.sourceWatermark.throughSequence'))=e.sequence)
-      ORDER BY e.sequence LIMIT 100`);
-    if (!rows.length && !continuations.length) return;
     const snapshot = yield* query(settings.getSettings);
     const modelSelection = yield* memoryModel(snapshot);
     const space = snapshot.memoryHub.mode === "disabled" ? null : snapshot.memoryHub.memorySpaceId;
+    // With memory off nothing can be recovered; turning it on changes the key and rescans.
+    const scanKey =
+      modelSelection === null ? undefined : `${space ?? ""}|${encodeSelection(modelSelection)}`;
+    const scanContinuations =
+      scanKey !== undefined && (scanKey !== continuationScanKey || now >= continuationScanDueAt);
+    // Recovers each live thread whose latest terminal run still has unsummarized messages, or
+    // whose consolidation is due. It starts from the thread projection and probes each thread's
+    // tail by index, so its cost follows the thread count instead of the event history. Any
+    // unfinished or cancelled row for that run settles it: work ids are deterministic, so
+    // re-deriving a settled run only repeats the same no-op insert.
+    const continuations = scanContinuations
+      ? yield* query(sql<(typeof rows)[number]>`
+      WITH progress AS MATERIALIZED (
+        SELECT json_extract(metadata_json,'$.sourceThread.threadId') AS thread_id,
+        max(CASE WHEN status='completed' THEN json_extract(metadata_json,'$.sourceWatermark.throughSequence') END) AS summarized,
+        max(CASE WHEN kind='consolidate' AND status='completed' THEN json_extract(metadata_json,'$.sourceWatermark.throughSequence') END) AS consolidated,
+        max(CASE WHEN kind='consolidate' AND status='completed' AND json_extract(metadata_json,'$.sourceWatermark.throughSequence')>=coalesce(json_extract(metadata_json,'$.observedThroughSequence'),0) THEN json_extract(metadata_json,'$.completedAt') END) AS consolidated_at
+        FROM memory_outbox WHERE kind IN ('summary','consolidate') AND json_extract(metadata_json,'$.sourceThread.environmentId')=${environmentId}
+        GROUP BY 1
+      ), settled AS MATERIALIZED (
+        SELECT json_extract(metadata_json,'$.sourceThread.threadId') AS thread_id,coalesce(json_extract(metadata_json,'$.observedThroughSequence'),json_extract(metadata_json,'$.sourceWatermark.throughSequence')) AS sequence
+        FROM memory_outbox WHERE kind IN ('summary','consolidate') AND status IN ('pending','running','retry','failed','cancelled') AND json_extract(metadata_json,'$.sourceThread.environmentId')=${environmentId}
+      ), latest AS MATERIALIZED (
+        SELECT t.thread_id,(SELECT x.sequence FROM orchestration_events x WHERE x.application_event_version=2 AND x.aggregate_kind='thread' AND x.stream_id=t.thread_id AND x.event_type='run.updated' ORDER BY x.sequence DESC LIMIT 1) AS sequence
+        FROM orchestration_v2_projection_threads t WHERE t.deleted_at IS NULL
+      )
+      SELECT e.sequence,e.event_id,e.stream_id,e.event_type,e.payload_json,e.occurred_at
+      FROM latest l CROSS JOIN orchestration_events e ON e.sequence=l.sequence LEFT JOIN progress p ON p.thread_id=l.thread_id
+      WHERE l.sequence<=${watermark} AND json_extract(e.payload_json,'$.status') IN ('completed','failed','interrupted','cancelled')
+      AND NOT EXISTS (SELECT 1 FROM settled s WHERE s.thread_id=l.thread_id AND s.sequence=e.sequence)
+      AND (EXISTS (SELECT 1 FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated' AND m.sequence<=e.sequence AND m.sequence>coalesce(p.summarized,0))
+      OR (EXISTS (SELECT 1 FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated' AND m.sequence<=e.sequence AND m.sequence>coalesce(p.consolidated,0))
+      AND ${now}-coalesce(p.consolidated_at,(SELECT CAST((julianday(m.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM orchestration_events m WHERE m.application_event_version=2 AND m.aggregate_kind='thread' AND m.stream_id=e.stream_id AND m.event_type='message.updated' ORDER BY m.sequence LIMIT 1))>=86400000))
+      ORDER BY e.sequence LIMIT ${continuationPageSize}`)
+      : [];
+    const settleScan = Effect.sync(() => {
+      if (!scanContinuations) return;
+      continuationScanKey = scanKey;
+      continuationScanDueAt =
+        continuations.length === continuationPageSize
+          ? 0
+          : now + MEMORY_CONTINUATION_SCAN_INTERVAL_MS;
+    });
+    if (!rows.length && !continuations.length) return yield* settleScan;
+    const continuationSequences = new Set(continuations.map((row) => row.sequence));
     const work: Store.MemoryWork[] = [];
     yield* store
       .transact(
@@ -411,7 +454,18 @@ const make = Effect.gen(function* () {
                       }),
               }),
             );
-            if (!chunk || candidate.metadata.kind !== "summary") continue;
+            if (candidate.metadata.kind !== "summary") continue;
+            if (!chunk) {
+              // Events only append, so a run invalidated by later events stays invalidated.
+              // Record that as settled, or every scan would read this source again.
+              if (continuationSequences.has(row.sequence))
+                work.push({
+                  ...candidate,
+                  id: `${workId}:chunk:${row.sequence}`,
+                  status: "cancelled",
+                });
+              continue;
+            }
             const chunkId = `${workId}:chunk:${chunk.watermark.throughSequence}`;
             work.push({
               ...candidate,
@@ -436,6 +490,7 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.mapError(workerError));
+    yield* settleScan;
   });
   const execute = Effect.fn("MemoryWorker.execute")(function* (claimed: Store.MemoryWork) {
     let work = claimed;
@@ -900,7 +955,10 @@ const make = Effect.gen(function* () {
         )
           continue;
         const work = yield* sweepStage("read-work", store.readWork(candidate.id));
-        if (work) yield* sweepStage("execute", execute(work));
+        if (!work) continue;
+        yield* sweepStage("execute", execute(work));
+        // A finished chunk can leave the rest of its run for the recovery scan.
+        if (work.kind !== "rebuild") continuationScanDueAt = 0;
       }
       if (now >= nextReportPassAt) {
         const page = yield* sweepStage(

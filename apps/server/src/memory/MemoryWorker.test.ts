@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
@@ -159,6 +160,14 @@ const decodeMessage = Schema.decodeUnknownEffect(
 const decodeOperation = Schema.decodeUnknownEffect(M.MemoryOperation);
 const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(M.OrchestrationV2RunJson));
 const encodeRun = Schema.encodeSync(Schema.fromJsonString(M.OrchestrationV2RunJson));
+// Counts finished spans by name, so a test can tell repeated work from settled work.
+const countingTracer = (counts: Map<string, number>) =>
+  Tracer.make({
+    span: (options) => {
+      counts.set(options.name, (counts.get(options.name) ?? 0) + 1);
+      return new Tracer.NativeSpan(options);
+    },
+  });
 const seed = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${threadId},NULL)`;
@@ -979,7 +988,7 @@ describe("MemoryWorker", () => {
       }).pipe(Effect.provide(live(false, (input) => inputs.push(input), local, 400000)));
     },
   );
-  it.effect("revisits consolidation at exactly 24 hours after extracting turns", () =>
+  it.effect("revisits consolidation on the first recovery scan from 24 hours on", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       yield* seed;
@@ -996,6 +1005,15 @@ describe("MemoryWorker", () => {
         0,
       );
       yield* TestClock.adjust(1);
+      yield* worker.sweepDue();
+      // The scan just before the boundary found nothing; the next scheduled one consolidates.
+      assert.strictEqual(
+        (yield* sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE kind='consolidate'`)[0]!.count,
+        0,
+      );
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
       yield* worker.sweepDue();
       assert.strictEqual(
         (yield* sql<{
@@ -1189,6 +1207,39 @@ describe("MemoryWorker", () => {
       );
     }).pipe(Effect.provide(live())),
   );
+  it.effect("settles a run that later messages invalidated instead of rereading it", () => {
+    const spans = new Map<string, number>();
+    const reads = () => spans.get("MemoryWorker.readSource") ?? 0;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(now));
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      const worker = yield* Worker.MemoryWorker;
+      const original = (yield* sql<{
+        payload_json: string;
+      }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!;
+      const message = yield* decodeMessage(original.payload_json);
+      // A follow-up message whose run never reports, so the completed run's source stays stale.
+      yield* sql`INSERT INTO orchestration_events VALUES (3,${id(30)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make("follow-up"), runId: M.RunId.make("run-queued") })},${now},2,'thread')`;
+      const sweep = worker.sweepDue().pipe(Effect.withTracer(countingTracer(spans)));
+      yield* sweep;
+      yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+      yield* sweep;
+      assert.deepStrictEqual(
+        yield* sql`SELECT kind,status FROM memory_outbox WHERE kind IN ('summary','consolidate')`,
+        [{ kind: "summary", status: "cancelled" }],
+      );
+      const settled = reads();
+      for (let pass = 0; pass < 3; pass++) {
+        yield* sweep;
+        yield* TestClock.adjust(Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+        yield* sweep;
+      }
+      assert.strictEqual(reads(), settled);
+      // Eight sweeps over one hour sample storage at its start and at its end.
+      assert.strictEqual(spans.get("MemoryStore.measureAllocation"), 2);
+    }).pipe(Effect.provide(live()));
+  });
 });
 
 it.effect.each(

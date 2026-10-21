@@ -5612,17 +5612,22 @@ const make = Effect.gen(function* () {
     const pages = yield* stored("page-count", sql<{ page_count: number }>`PRAGMA page_count`);
     const size = yield* stored("page-size", sql<{ page_size: number }>`PRAGMA page_size`);
     const free = yield* stored("freelist", sql<{ freelist_count: number }>`PRAGMA freelist_count`);
-    const allocation = yield* sql<{
-      memory_bytes: number;
-      fts_bytes: number;
-    }>`SELECT coalesce(sum(pgsize),0) AS memory_bytes,coalesce(sum(CASE WHEN name LIKE 'memory_items_fts%' THEN pgsize ELSE 0 END),0) AS fts_bytes FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%'))`.pipe(
-      Effect.map((rows) => rows[0]),
-      Effect.catch(() => Effect.succeed(undefined)),
-    );
+    // The name constraint lets dbstat walk only memory btrees. Unfiltered, it reads every
+    // page of the shared database, which takes seconds once orchestration history is large.
     const tableAllocations = yield* sql<{
       name: string;
       bytes: number;
-    }>`SELECT name,sum(pgsize) AS bytes FROM dbstat GROUP BY name`.pipe(Effect.option);
+    }>`SELECT name,sum(pgsize) AS bytes FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%')) GROUP BY name`.pipe(
+      Effect.option,
+    );
+    const allocation = Option.isSome(tableAllocations)
+      ? {
+          memory_bytes: tableAllocations.value.reduce((sum, row) => sum + row.bytes, 0),
+          fts_bytes: tableAllocations.value
+            .filter((row) => row.name.startsWith("memory_items_fts"))
+            .reduce((sum, row) => sum + row.bytes, 0),
+        }
+      : undefined;
     const tables: M.MemoryStorageTableUsage[] = [];
     for (const table of M.MemoryStorageTable.literals) {
       const exists = yield* stored(
