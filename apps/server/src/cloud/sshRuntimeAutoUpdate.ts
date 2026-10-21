@@ -40,7 +40,7 @@ import { automaticUpdateChannel, arbitrateAutomaticTargets } from "./autoUpdateP
 import { decodeServicePreflightResult } from "./servicePreflight.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 import { bashScriptArg, defaultWindowsGitBash } from "./sshRuntimeGitBash.ts";
-import { windowsJobCommand } from "./sshRuntimeWindowsJob.ts";
+import { windowsJobCommand, WindowsJobCompilationError } from "./sshRuntimeWindowsJob.ts";
 
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 30_000;
@@ -53,6 +53,25 @@ export interface SshRuntimeProcessResult {
   readonly stdout: string;
   readonly stderr: string;
 }
+
+const processFailure = (error: unknown): SshRuntimeProcessResult | undefined => {
+  if (error instanceof WindowsJobCompilationError)
+    return { code: error.code, stdout: "", stderr: error.message };
+  if (
+    error instanceof Error &&
+    !(error instanceof TypeError) &&
+    !(error instanceof RangeError) &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    Object.hasOwn(NodeOS.constants.errno, error.code)
+  )
+    return {
+      code: null,
+      stdout: "",
+      stderr: `Runtime command filesystem or spawn failure (${error.code}).`,
+    };
+  return undefined;
+};
 
 /**
  * The host commands an SSH runtime runs to replace itself. `runDetached` starts its own
@@ -181,17 +200,19 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
             await dispose();
           }
         })
-        .catch((error: unknown) => ({
-          code: null,
-          stdout: "",
-          stderr: error instanceof Error ? error.message : String(error),
-        }))
-        .then((result) => {
+        .catch((error: unknown) => {
+          const failure = processFailure(error);
+          if (failure === undefined) throw error;
+          return failure;
+        })
+        .finally(() => {
           done = true;
           clearTimeout(bound);
-          return result;
         });
-      void closed.then((result) => resume(Effect.succeed(result)));
+      void closed.then(
+        (result) => resume(Effect.succeed(result)),
+        (error) => resume(Effect.die(error)),
+      );
       // Interruption waits for the group to end, so a server shutting down cannot drop the kill.
       return Effect.promise(async () => {
         controller.abort();
@@ -225,26 +246,34 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           // Files, never pipes: the drain stops this server mid-script, and a write to a closed pipe
           // would kill the script before it releases the replacement lock and drain fence.
           const stdout = NodeFS.openSync(stdoutFile, "w", 0o600);
-          const stderr = NodeFS.openSync(stderrFile, "w", 0o600);
           // Never killed from here: once it drains this server, the script and the supervisor it
           // starts own the host until the replacement answers or the previous version is restored.
           // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
           const scriptArg = bashScriptArg(input.shell, scriptFile);
-          const { child, dispose } = await spawnOwnedCommand(
-            input.shell,
-            [scriptArg, ...input.args],
-            {
-              cwd: input.cwd,
-              detached: true,
-              windowsHide: true,
-              env: input.env,
-              stdio: ["ignore", stdout, stderr],
-            },
-            controller.signal,
-          ).finally(() => {
-            NodeFS.closeSync(stdout);
-            NodeFS.closeSync(stderr);
-          });
+          let stderr: number | undefined;
+          const { child, dispose } = await (async () => {
+            try {
+              stderr = NodeFS.openSync(stderrFile, "w", 0o600);
+              return await spawnOwnedCommand(
+                input.shell,
+                [scriptArg, ...input.args],
+                {
+                  cwd: input.cwd,
+                  detached: true,
+                  windowsHide: true,
+                  env: input.env,
+                  stdio: ["ignore", stdout, stderr],
+                },
+                controller.signal,
+              );
+            } finally {
+              try {
+                NodeFS.closeSync(stdout);
+              } finally {
+                if (stderr !== undefined) NodeFS.closeSync(stderr);
+              }
+            }
+          })();
           // The detached process now owns the update. Cancellation can no longer stop it.
           if (child.pid !== undefined) preparation.resolve();
           const code = await new Promise<number | null>((resolve) => {
@@ -258,10 +287,15 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
             bound.unref();
             child.once("close", () => clearTimeout(bound));
           });
-          const read = (file: string) => NodeFS.promises.readFile(file, "utf8").catch(() => "");
-          const result = { code, stdout: await read(stdoutFile), stderr: await read(stderrFile) };
-          await dispose();
-          return result;
+          try {
+            return {
+              code,
+              stdout: await NodeFS.promises.readFile(stdoutFile, "utf8"),
+              stderr: await NodeFS.promises.readFile(stderrFile, "utf8"),
+            };
+          } finally {
+            await dispose();
+          }
         } finally {
           await NodeFS.promises.rm(dir, { recursive: true, force: true });
         }
@@ -273,7 +307,8 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
         },
         (error) => {
           preparation.resolve();
-          resume(Effect.die(error));
+          const failure = processFailure(error);
+          resume(failure === undefined ? Effect.die(error) : Effect.succeed(failure));
         },
       );
       return Effect.promise(async () => {
