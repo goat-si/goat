@@ -14,9 +14,9 @@
 import type { QuotaPool } from "@goat/contracts";
 
 /** Assumed use of an account that reports no quota windows. */
-const UNKNOWN_QUOTA_PERCENT = 35;
+export const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
-const LOAD_PENALTY = 40;
+export const LOAD_PENALTY = 40;
 /** Reasons are cut to this length; the chip has room for one short line. */
 const PLACEMENT_REASON_CHARS = 200;
 
