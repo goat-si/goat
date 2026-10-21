@@ -105,7 +105,7 @@ const MAX_NOTICED_RUNS = 1000;
 const label = (selection: Pick<ModelSelection, "instanceId" | "model">) =>
   selection.instanceId + "/" + selection.model;
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
@@ -458,7 +458,7 @@ export const make = Effect.gen(function* () {
 export const layer = Layer.effect(Fallback, make);
 
 /** The fleet keys one goat_fallback_chain_set writes, computed from \`fleet\`. */
-export function chainPatch(fleet: FleetSettings, input: GoatFallbackChainSetInput) {
+function chainPatch(fleet: FleetSettings, input: GoatFallbackChainSetInput) {
   const chains = { ...fleet.fallbackChains };
   if (input.chain === null) delete chains[input.id];
   else chains[input.id] = input.chain;

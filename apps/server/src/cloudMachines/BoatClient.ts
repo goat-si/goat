@@ -21,7 +21,7 @@ import type * as HttpClientResponse from "effect/http/HttpClientResponse";
  * response body or header is logged, so neither the key nor a raw Boat error leaves this module.
  */
 
-export const BOAT_API_BASE = "https://boat.dev/api/v1";
+const BOAT_API_BASE = "https://boat.dev/api/v1";
 const REQUEST_TIMEOUT = "20 seconds";
 
 export interface BoatSandbox {
@@ -89,7 +89,7 @@ const SshKeyEnvelope = Schema.Struct({
 const fail = (reason: CloudMachineError["reason"]) => new CloudMachineError({ reason });
 
 /** Maps an HTTP failure to a safe reason; the body is read only for Boat's error code. */
-export function boatErrorReason(status: number, body: unknown): CloudMachineError["reason"] {
+function boatErrorReason(status: number, body: unknown): CloudMachineError["reason"] {
   const code = Option.match(decodeApiError(body), {
     onNone: () => "",
     onSome: (value) => value.code ?? "",

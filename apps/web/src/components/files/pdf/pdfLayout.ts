@@ -3,12 +3,12 @@ export interface PdfSize {
   readonly height: number;
 }
 export type PdfZoom = "fit-width" | "fit-page" | number;
-export const PDF_GAP = 16;
+const PDF_GAP = 16;
 export const clampScale = (scale: number) =>
   Math.min(5, Math.max(0.1, Number.isFinite(scale) ? scale : 1));
 
 /** Each page fits independently: a landscape insert must not overflow portrait fit-width. */
-export function pageScale(size: PdfSize, container: PdfSize, zoom: PdfZoom) {
+function pageScale(size: PdfSize, container: PdfSize, zoom: PdfZoom) {
   if (typeof zoom === "number") return clampScale(zoom);
   const width = Math.max(1, container.width - PDF_GAP * 2) / size.width;
   return clampScale(

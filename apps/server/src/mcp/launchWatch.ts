@@ -115,7 +115,7 @@ export const EXCERPT_MAX_CHARS = 1_500;
 const SUMMARY_MAX_CHARS = 120;
 
 /** Run statuses after which a run does no more work. */
-export const TERMINAL_RUN_STATUSES = [
+const TERMINAL_RUN_STATUSES = [
   "completed",
   "failed",
   "cancelled",
@@ -287,7 +287,7 @@ export function recordContact(watch: LaunchWatch, now: number): LaunchWatch {
     : { ...watch, lastEpisode: watch.outage.episode, outage: null, updatedAt: now };
 }
 
-export function notificationOutcome(
+function notificationOutcome(
   status: LaunchWatchTerminalStatus,
 ): OrchestrationV2Notification["outcome"] {
   switch (status) {

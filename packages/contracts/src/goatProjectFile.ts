@@ -109,6 +109,19 @@ export const GoatProjectFile = Schema.Struct({
         'How new worktrees populate git submodules: "recursive" (the default) initializes nested submodules too, "top-level" initializes only those declared by this repository, and "none" leaves every submodule empty for a setup script to handle. A project or environment setting in GOAT overrides this.',
     }),
   ),
+  worktreeSparseExclude: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty(
+        { description: "A repository-relative directory." },
+        GOAT_PROJECT_FILE_PATH_MAX_LENGTH,
+      ),
+    )
+      .annotate({
+        description:
+          'Repository-relative directories that new worktrees leave out through sparse checkout, such as vendored reference code (e.g. [".repos/"]). Run "git sparse-checkout disable" in a worktree to bring them back.',
+      })
+      .check(Schema.isMaxLength(32)),
+  ),
   scripts: Schema.optionalKey(
     Schema.Array(GoatProjectFileScript)
       .annotate({

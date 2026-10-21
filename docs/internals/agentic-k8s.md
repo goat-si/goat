@@ -664,13 +664,12 @@ no goal threads until the goal controller provides it.
 
 ## Interfaces between T1, T2 and T3
 
-T1 depends on T2 and T3 only through these `Context.Service` tags. Each tag has a default layer
-in `apps/server/src/fleet/defaults.ts` so T1 merges before the others, and the defaults keep T1 a
-small, honest vertical slice instead of a controller that looks complete: the default placement
-allows **this machine only** and refuses every SSH host with reason `placement_unavailable`, the
-default health classifies local threads from local projections and reports `unknown` for anything
-else, the default rescheduler refuses, and the default fallback returns `Exhausted` (so usage limits
-wait for the reset, as today). Remote goals arrive when T2 and T3 replace these layers.
+T1 depends on T2 and T3 through these `Context.Service` tags so tests can supply bounded
+implementations without replacing the controller. `apps/server/src/fleet/defaults.ts` retains
+only a refusing rescheduler for local goal tests; it is not the server's health implementation.
+The server composes health and rescheduling in `fleet/health/layer.ts`, with placement supplied
+by `fleet/resources`. Wiring these layers does not by itself authorize remote goal execution:
+the worker still enforces its remote authority and durable-dispatch prerequisites (#575).
 
 ```ts
 // apps/server/src/fleet/resources/Placement.ts (T3)

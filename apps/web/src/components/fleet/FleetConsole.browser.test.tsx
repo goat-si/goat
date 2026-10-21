@@ -65,7 +65,7 @@ const snapshot = {
       machineKind: null,
       environmentId,
       sshHost: null,
-      cloudState: null,
+      boat: null,
       running: 9,
       attention: 2,
       reported: 3,

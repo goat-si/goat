@@ -1,4 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  BOAT_MACHINE_STATUS_LABEL,
+  type BoatMachineIdentity,
+} from "@goat/client-runtime/cloud-machines";
 import type { FleetSnapshot } from "@goat/client-runtime/state/fleet";
 import type { FleetHeatTier, FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
 import { cpuPercent, memoryPercent } from "@goat/client-runtime/state/host-metrics";
@@ -16,6 +20,7 @@ import { environmentThreadShells } from "~/state/threads";
 import { useUiStateStore } from "~/uiStateStore";
 
 import { platformLabel } from "../settings/hostStatusView";
+import { BoatIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { FleetConnection } from "./fleetConnection";
@@ -158,6 +163,7 @@ function hostDetail(row: FleetHostRow, lastSeen: HostLastSeen, now: number): str
 
 function HostRow({
   row,
+  boat,
   samples,
   lastSeen,
   observedAt,
@@ -166,6 +172,7 @@ function HostRow({
   reading,
 }: {
   readonly row: FleetHostRow;
+  readonly boat: BoatMachineIdentity | null;
   readonly samples: ReadonlyArray<HostSample>;
   readonly lastSeen: HostLastSeen;
   readonly observedAt: number;
@@ -183,7 +190,9 @@ function HostRow({
       : row.tone === "unsupported"
         ? "Update GOAT to report"
         : metrics === undefined
-          ? "Unreachable"
+          ? boat !== null && boat.status !== "running" && boat.status !== "unknown"
+            ? BOAT_MACHINE_STATUS_LABEL[boat.status]
+            : "Unreachable"
           : null;
   // The graph's rounded helpers, so a reading on a threshold gets the same color as the ring.
   const cpu = metrics === undefined ? null : cpuPercent(metrics);
@@ -208,6 +217,9 @@ function HostRow({
                 : "border border-muted-foreground",
           )}
         />
+        {boat !== null ? (
+          <BoatIcon role="img" aria-label="Boat" className="size-3 shrink-0" />
+        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={<span className="truncate font-medium outline-hidden" tabIndex={0} />}
@@ -367,6 +379,11 @@ function FleetConsoleExpanded(props: {
   const quotas = quotaRows(rows).slice(0, 3);
   const { totals } = snapshot;
   const reporting = rows.filter((row) => row.tone === "ok").length;
+  const boatByMachine = new Map(
+    snapshot.machines.flatMap((machine) =>
+      machine.boat === null ? [] : [[machine.id, machine.boat] as const],
+    ),
+  );
 
   return (
     <>
@@ -436,6 +453,7 @@ function FleetConsoleExpanded(props: {
                 <HostRow
                   key={row.key}
                   row={row}
+                  boat={row.machineId === null ? null : (boatByMachine.get(row.machineId) ?? null)}
                   lastSeen={status.lastSeen}
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
