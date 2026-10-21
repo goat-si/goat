@@ -1,3 +1,4 @@
+import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@goat/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
@@ -794,6 +795,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               via {thread.source.externalLauncher}
             </span>
           ) : null}
+          <ThreadHistoryArchiveHint
+            state={thread.source.historyArchive}
+            variant="icon"
+            className="inline-flex shrink-0 items-center text-muted-foreground/65"
+          />
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {canOperatePreview && discoveredPorts.length > 0 && (

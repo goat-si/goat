@@ -7,10 +7,23 @@ export interface ThreadArchiveGateSlot {
   readonly install: (restore: (threadId: string) => Effect.Effect<void>) => void;
 }
 
+/**
+ * Set by work that only records archive state on a thread. Its command reads the thread, and
+ * restoring the history there would undo the archive it is recording.
+ */
+export class SkipThreadArchiveRestore extends Context.Reference<boolean>(
+  "goat/orchestration-v2/SkipThreadArchiveRestore",
+  { defaultValue: () => false },
+) {}
+
 export const makeThreadArchiveGateSlot = (): ThreadArchiveGateSlot => {
   let current: (threadId: string) => Effect.Effect<void> = () => Effect.void;
   return {
-    restore: (threadId) => Effect.suspend(() => current(threadId)),
+    // Untraced: it runs before every gated read; a restore opens its own span.
+    restore: Effect.fnUntraced(function* (threadId: string) {
+      if (yield* SkipThreadArchiveRestore) return;
+      yield* current(threadId);
+    }),
     install: (restore) => {
       current = restore;
     },

@@ -500,6 +500,25 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
 ) {}
 
 /** Run ordinals can skip values: a queued run moves past newer runs when it starts. */
+/** A metadata update that only records where the tool history lives. */
+function isHistoryArchiveOnlyUpdate(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): boolean {
+  const {
+    type: _type,
+    commandId: _commandId,
+    threadId: _threadId,
+    historyArchive,
+    ...rest
+  } = command;
+  return historyArchive !== undefined && Object.values(rest).every((value) => value === undefined);
+}
+
+function withoutHistoryArchive<T extends { readonly historyArchive?: unknown }>(thread: T) {
+  const { historyArchive: _historyArchive, ...rest } = thread;
+  return rest;
+}
+
 function nextRunOrdinal(projection: Pick<OrchestrationV2ThreadProjection, "runs">): number {
   return projection.runs.reduce((max, run) => Math.max(max, run.ordinal), 0) + 1;
 }
@@ -3552,7 +3571,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     requestId: command.commandId,
                   };
           return {
-            ...thread,
+            ...(command.historyArchive === null ? withoutHistoryArchive(thread) : thread),
             ...(command.title === undefined ? {} : { title: command.title }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
@@ -3605,7 +3624,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : command.regenerateTitle === false || command.title !== undefined
                 ? { titleRegeneration: null }
                 : {}),
-            updatedAt: now,
+            ...(command.historyArchive == null ? {} : { historyArchive: command.historyArchive }),
+            // Moving history to or from the archive is housekeeping, not activity: keeping
+            // updatedAt keeps the thread idle and in place in every list.
+            updatedAt: isHistoryArchiveOnlyUpdate(command) ? thread.updatedAt : now,
           };
         }
         case "thread.pull-request.link":

@@ -1683,6 +1683,9 @@ export function threadShellFromProjection(
     ...(projection.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: projection.thread.externalLauncher }),
+    ...(projection.thread.historyArchive === undefined
+      ? {}
+      : { historyArchive: projection.thread.historyArchive }),
     ...(projection.thread.sideChatOf == null ? {} : { sideChatOf: projection.thread.sideChatOf }),
     ...(projection.thread.linkedPullRequest === undefined
       ? {}
@@ -1948,6 +1951,9 @@ function shellFromState(input: {
     ...(input.state.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: input.state.thread.externalLauncher }),
+    ...(input.state.thread.historyArchive === undefined
+      ? {}
+      : { historyArchive: input.state.thread.historyArchive }),
     ...(input.state.thread.sideChatOf == null ? {} : { sideChatOf: input.state.thread.sideChatOf }),
     ...(input.state.thread.linkedPullRequest === undefined
       ? {}

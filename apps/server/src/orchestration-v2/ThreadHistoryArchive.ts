@@ -10,9 +10,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import type { SqlError } from "effect/sql/SqlError";
 
 import * as ServerConfig from "../config.ts";
@@ -62,6 +64,12 @@ export interface ThreadHistoryArchivePass {
   readonly deletedArchives: number;
 }
 
+/** Where a thread's tool history now lives; null when it is back in the database. */
+export interface ThreadHistoryArchiveChange {
+  readonly threadId: string;
+  readonly state: "archived" | "deleted" | null;
+}
+
 export interface ThreadHistoryArchiveStats {
   readonly threads: number;
   readonly fileBytes: number;
@@ -80,6 +88,8 @@ export class ThreadHistoryArchive extends Context.Service<
     /** Copies an archived thread's turn items back. True when something was restored. */
     readonly restore: (threadId: string) => Effect.Effect<boolean, ThreadHistoryArchiveError>;
     readonly stats: Effect.Effect<ThreadHistoryArchiveStats, ThreadHistoryArchiveError>;
+    /** Every archive, restore and hard delete, as it commits. */
+    readonly changes: Stream.Stream<ThreadHistoryArchiveChange>;
   }
 >()("goat/orchestration-v2/ThreadHistoryArchive") {}
 
@@ -116,8 +126,21 @@ type ArchiveRow = {
 
 type ItemKey = { readonly id: string; readonly updatedAt: string };
 
-/** Items in these states still have someone waiting on them, so their thread stays whole. */
+/**
+ * Work or questions in these states still have someone waiting on them, so their thread stays
+ * whole. Other item types can stay `running` on finished threads (a todo list does), so the
+ * status alone does not count.
+ */
 const LIVE_ITEM_STATUSES = new Set(["pending", "running", "waiting"]);
+const LIVE_ITEM_TYPES = new Set([
+  "command_execution",
+  "dynamic_tool",
+  "subagent",
+  "human_handoff",
+  "secret_request",
+  "user_input_request",
+  "approval_request",
+]);
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -151,6 +174,9 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.orElseSucceed(() => []))).map((row) => row.thread_id),
   );
   const restoreFailedUntil = new Map<string, number>();
+  const changes = yield* PubSub.unbounded<ThreadHistoryArchiveChange>();
+  const announce = (threadId: string, state: ThreadHistoryArchiveChange["state"]) =>
+    PubSub.publish(changes, { threadId, state });
 
   const fileNameFor = (threadId: string) =>
     `${NodeCrypto.createHash("sha256").update(threadId).digest("hex").slice(0, 32)}.jsonl.zst`;
@@ -171,13 +197,14 @@ const make = Effect.gen(function* () {
         readonly ordinal: number;
         readonly updated_at: string;
         readonly status: string;
+        readonly type: string;
       }>`
-        SELECT turn_item_id, ordinal, updated_at, status FROM orchestration_v2_projection_turn_items
+        SELECT turn_item_id, ordinal, updated_at, status, type FROM orchestration_v2_projection_turn_items
         WHERE thread_id = ${threadId} AND (ordinal, turn_item_id) > (${afterOrdinal}, ${afterId})
         ORDER BY ordinal, turn_item_id LIMIT ${PAGE_ROWS}
       `;
       for (const row of page) {
-        if (LIVE_ITEM_STATUSES.has(row.status)) return undefined;
+        if (LIVE_ITEM_STATUSES.has(row.status) && LIVE_ITEM_TYPES.has(row.type)) return undefined;
         keys.push({ id: row.turn_item_id, updatedAt: row.updated_at });
       }
       yield* Effect.yieldNow;
@@ -394,6 +421,7 @@ const make = Effect.gen(function* () {
       VALUES (${threadId}, 'archived', ${row.archived_at}, ${fileName}, ${fileBytes}, ${rawBytes}, ${items.length}, ${events.length}, ${row.sha256}, ${row.frames_json}, 0)
     `;
     pending.add(threadId);
+    yield* announce(threadId, "archived");
     yield* deleteArchivedRows(threadId, items, events);
     return { rawBytes, fileBytes };
   });
@@ -450,6 +478,7 @@ const make = Effect.gen(function* () {
     yield* sql`DELETE FROM orchestration_v2_thread_history_archives WHERE thread_id = ${threadId}`;
     yield* fs.remove(path.join(directory, row.file_name)).pipe(Effect.ignore);
     pending.delete(threadId);
+    yield* announce(threadId, null);
     return true;
   });
 
@@ -531,6 +560,7 @@ const make = Effect.gen(function* () {
       // The row changes first: a crash before the file goes leaves only a stray file to sweep.
       yield* sql`UPDATE orchestration_v2_thread_history_archives SET state = 'deleted', file_bytes = 0 WHERE thread_id = ${row.thread_id}`;
       pending.delete(row.thread_id);
+      yield* announce(row.thread_id, "deleted");
       yield* fs.remove(path.join(directory, row.file_name)).pipe(Effect.ignore);
     }
     return rows.length;
@@ -592,7 +622,12 @@ const make = Effect.gen(function* () {
     Effect.mapError(fail("stats")),
   );
 
-  return ThreadHistoryArchive.of({ runPass, restore, stats });
+  return ThreadHistoryArchive.of({
+    runPass,
+    restore,
+    stats,
+    changes: Stream.fromPubSub(changes),
+  });
 });
 
 export const layer = Layer.effect(ThreadHistoryArchive, make);

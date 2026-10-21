@@ -72,6 +72,7 @@ import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchRea
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
 import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
 import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
@@ -1119,6 +1120,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
     ),
   ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(

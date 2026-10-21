@@ -48,8 +48,11 @@ const seed = Effect.gen(function* () {
       VALUES (${threadId}, 'project', ${threadId}, 'codex', 'full-access', 'default', ${at}, ${at}, '{}')`;
     for (let n = 0; n < items; n++) {
       const id = `${threadId}:item-${n}`;
-      const status = liveLast && n === items - 1 ? "waiting" : "completed";
-      const type = liveLast && n === items - 1 ? "human_handoff" : "command_execution";
+      // The last item: a handoff someone waits on, or a todo list left running on a
+      // finished thread, which nobody waits on.
+      const last = n === items - 1;
+      const status = last ? (liveLast ? "waiting" : "running") : "completed";
+      const type = last ? (liveLast ? "human_handoff" : "todo_list") : "command_execution";
       const output = `out-${n}-` + "x".repeat(n * 997);
       yield* sql`INSERT INTO orchestration_v2_projection_turn_items
         (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json)

@@ -450,6 +450,9 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
  */
 const SideChatOf = Schema.optional(Schema.NullOr(ThreadId));
 
+export const OrchestrationV2ThreadHistoryArchive = Schema.Literals(["archived", "deleted"]);
+export type OrchestrationV2ThreadHistoryArchive = typeof OrchestrationV2ThreadHistoryArchive.Type;
+
 export function isSideChatThread(thread: {
   readonly sideChatOf?: ThreadId | null | undefined;
 }): boolean {
@@ -477,6 +480,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -2083,6 +2091,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   launchedBy: Schema.optional(OrchestrationV2ThreadLauncher),
   /** Who started this thread's cloud run outside GOAT, such as "Grok Bot"; descriptive only. */
   externalLauncher: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+  /**
+   * Where the thread's tool history lives when not in the database: `archived` restores when the
+   * thread is opened, `deleted` is gone. Absent while the history is in the database.
+   */
+  historyArchive: Schema.optional(OrchestrationV2ThreadHistoryArchive),
   sideChatOf: SideChatOf,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2996,6 +3009,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Records where the tool history lives; null means back in the database. Server-issued. */
+    historyArchive: Schema.optional(Schema.NullOr(OrchestrationV2ThreadHistoryArchive)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
