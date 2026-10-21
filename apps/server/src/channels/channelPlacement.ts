@@ -12,11 +12,11 @@
  */
 
 /** Assumed use of an account that reports no quota windows. */
-export const UNKNOWN_QUOTA_PERCENT = 35;
+const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
-export const LOAD_PENALTY = 40;
+const LOAD_PENALTY = 40;
 /** Reasons are cut to this length; the chip has room for one short line. */
-export const PLACEMENT_REASON_CHARS = 200;
+const PLACEMENT_REASON_CHARS = 200;
 
 export interface PlacementWindow {
   readonly label: string;

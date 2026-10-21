@@ -22,7 +22,7 @@ import {
   retryManagedTunnelRegistration,
 } from "./managedTunnelStartup.ts";
 
-export const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
+const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const cloudLink = yield* CloudLink.CloudLink;

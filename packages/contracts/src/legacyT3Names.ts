@@ -146,19 +146,19 @@ export const LEGACY_SSH_ARCHIVE_VERSION_KEY = "T3_ARCHIVE_VERSION";
 export const LEGACY_SSH_NODE_SCRIPT_PATH_KEY = "T3_NODE_SCRIPT_PATH";
 
 /** Peer-visible vocabulary: readers accept both forever; writers use the GOAT spelling. */
-export const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
+const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
 export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";
 export const THREAD_LINK_PROTOCOLS = [
   LEGACY_THREAD_LINK_PROTOCOL,
   GOAT_THREAD_LINK_PROTOCOL,
 ] as const;
-export const LEGACY_CONTEXT_LINK_PROTOCOL = "t3-context";
+const LEGACY_CONTEXT_LINK_PROTOCOL = "t3-context";
 export const GOAT_CONTEXT_LINK_PROTOCOL = "goat-context";
 export const CONTEXT_LINK_PROTOCOLS = [
   LEGACY_CONTEXT_LINK_PROTOCOL,
   GOAT_CONTEXT_LINK_PROTOCOL,
 ] as const;
-export const LEGACY_CITATION_LINK_PROTOCOL = "t3-citation";
+const LEGACY_CITATION_LINK_PROTOCOL = "t3-citation";
 export const GOAT_CITATION_LINK_PROTOCOL = "goat-citation";
 export const CITATION_LINK_PROTOCOLS = [
   LEGACY_CITATION_LINK_PROTOCOL,
@@ -168,9 +168,12 @@ export const LEGACY_CONTEXT_ENVELOPE_TAG = "t3_context";
 export const GOAT_CONTEXT_ENVELOPE_TAG = "goat_context";
 export const LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-t3-context-fragment";
 export const GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-goat-context-fragment";
-export const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
+const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
 export const GOAT_CONTEXT_CLIPBOARD_MIME = "application/x-goat-context-fragment+json";
-/** Native iOS clipboard type; HTML remains the portable flavor. */
+/**
+ * Native iOS clipboard type, read by T3ComposerEditorModule.swift without a TypeScript import.
+ * @public
+ */
 export const LEGACY_CONTEXT_CLIPBOARD_UTI = "app.t3.context-fragment";
 export const GOAT_CONTEXT_CLIPBOARD_UTI = "app.goat.context-fragment";
 export const CONTEXT_CLIPBOARD_MIMES = [
@@ -199,12 +202,24 @@ export const LEGACY_ACTIVITY_PATH = "/.well-known/t3/activity";
 export const GOAT_ACTIVITY_PATH = "/.well-known/goat/activity";
 export const LEGACY_ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 export const GOAT_ORCHESTRATION_PROTOCOL_HEADER = "x-goat-orchestration-protocol";
+/**
+ * Persisted V1 checkpoint namespace in repositories shared with older runtimes (structure/server.md).
+ * @public
+ */
 export const LEGACY_CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
 export const GOAT_CHECKPOINT_REFS_PREFIX = "refs/goat/checkpoints";
 export const LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
 export const GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/goat/orchestration-v2/checkpoints";
+/**
+ * Older runtimes' persisted refresh checkpoint; retained by the D17 compatibility contract.
+ * @public
+ */
 export const LEGACY_PRE_REFRESH_REF = "refs/t3code/pre-refresh";
 export const GOAT_PRE_REFRESH_REF = "refs/goat/pre-refresh";
+/**
+ * Legacy ref namespace in existing repositories, including checkpoints read by older runtimes.
+ * @public
+ */
 export const LEGACY_REFS_ROOT = "refs/t3";
 export const GOAT_REFS_ROOT = "refs/goat";
 

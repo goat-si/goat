@@ -10,7 +10,7 @@ export type BrowserAddressSuggestion = {
   title: string;
 } & ({ kind: "navigate" | "history" } | { kind: "tab"; tabId: string });
 
-export const BROWSER_ADDRESS_SUGGESTION_LIMIT = 6;
+const BROWSER_ADDRESS_SUGGESTION_LIMIT = 6;
 
 function pageUrl(raw: string): string | null {
   try {

@@ -56,10 +56,7 @@ export const choiceAt = (choices: DeliveredChoices, number: number): string | un
  * The option whose label equals `text`, ignoring case and surrounding space. The returned
  * label is the one that was offered, so a project question matches the real name.
  */
-export const matchingOption = (
-  text: string,
-  options: ReadonlyArray<string>,
-): string | undefined => {
+const matchingOption = (text: string, options: ReadonlyArray<string>): string | undefined => {
   const wanted = text.trim().toLowerCase();
   if (wanted === "") return undefined;
   return options.find((option) => option.toLowerCase() === wanted);

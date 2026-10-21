@@ -15,10 +15,11 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsIcon } from "~/components/solar";
 import { ConnectionCatalogUnreadableAlert } from "../desktop/ConnectionCatalogUnreadableNotice";
 import { ConnectionEnvironmentsSection } from "../settings/ConnectionEnvironmentsSection";
+import { BoatIcon } from "../Icons";
 import { FleetCloudAgents } from "./FleetCloudAgents";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
-import { describeMachine } from "./describeMachine";
+import { fleetMachineSubtitle } from "./describeMachine";
 import { fleetConnectionLegend, UNKNOWN_FLEET_CONNECTION } from "./fleetConnection";
 import { FleetConnectionIcon } from "./FleetConnectionGlyph";
 import { fleetHeatDemo } from "./fleetHeatDemo";
@@ -50,11 +51,6 @@ function machineWork(machine: FleetMachine): string {
 
 const isBusy = (machine: FleetMachine) =>
   machine.running + machine.attention + machine.reported > 0;
-
-const machineSubtitle = (machine: FleetMachine) =>
-  [describeMachine(machine.os, machine.machineKind), machine.subtitle]
-    .filter((part) => part !== null)
-    .join(" · ");
 
 function groupThreadsByMachine(threads: ReadonlyArray<FleetThread>) {
   const grouped = new Map<string, FleetThread[]>();
@@ -160,8 +156,11 @@ export function FleetPage() {
 
             {selectedMachine ? (
               <div className="flex items-center gap-2 text-sm">
-                <span>
+                <span className="inline-flex items-center gap-1.5">
                   Showing <span className="font-medium">{selectedMachine.label}</span>
+                  {selectedMachine.boat !== null ? (
+                    <BoatIcon role="img" aria-label="Boat" className="size-3.5" />
+                  ) : null}
                 </span>
                 <Button size="compact" variant="ghost" onClick={() => setSelected(null)}>
                   Show all
@@ -169,27 +168,35 @@ export function FleetPage() {
               </div>
             ) : null}
 
-            {listed.map((machine) => (
-              <section key={machine.id} aria-label={machine.label} className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  aria-pressed={selected === machine.id}
-                  onClick={() => toggleMachine(machine.id)}
-                  className="flex items-baseline gap-2 rounded-md text-left outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            {listed.map((machine) => {
+              const subtitle = fleetMachineSubtitle(machine);
+              return (
+                <section
+                  key={machine.id}
+                  aria-label={machine.label}
+                  className="flex flex-col gap-1"
                 >
-                  <span className="text-sm font-medium">{machine.label}</span>
-                  {machineSubtitle(machine) ? (
-                    <span className="text-xs text-muted-foreground">
-                      {machineSubtitle(machine)}
+                  <button
+                    type="button"
+                    aria-pressed={selected === machine.id}
+                    onClick={() => toggleMachine(machine.id)}
+                    className="flex items-baseline gap-2 rounded-md text-left outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    {machine.boat !== null ? (
+                      <BoatIcon aria-hidden className="size-3.5 shrink-0 self-center" />
+                    ) : null}
+                    <span className="text-sm font-medium">{machine.label}</span>
+                    {subtitle !== null ? (
+                      <span className="text-xs text-muted-foreground">{subtitle}</span>
+                    ) : null}
+                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                      {machineWork(machine)}
                     </span>
-                  ) : null}
-                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                    {machineWork(machine)}
-                  </span>
-                </button>
-                <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />
-              </section>
-            ))}
+                  </button>
+                  <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />
+                </section>
+              );
+            })}
 
             {idle.length > 0 ? (
               <p className="text-xs text-muted-foreground">

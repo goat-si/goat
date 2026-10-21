@@ -83,6 +83,7 @@ import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatch from "./sshRemote/SshRemoteDispatch.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
@@ -1102,6 +1103,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
     Layer.provide(

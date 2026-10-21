@@ -27,7 +27,7 @@ import { PersistenceDecodeError, PersistenceSqlError } from "../../persistence/E
 export type GoalStoreError = PersistenceSqlError | PersistenceDecodeError;
 
 /** Events kept per goal; older ones are trimmed on write. */
-export const GOAL_EVENT_LIMIT = 200;
+const GOAL_EVENT_LIMIT = 200;
 
 /** What the controller keeps per slot beyond the public worker status. */
 const WorkerDetail = Schema.Struct({
@@ -258,7 +258,7 @@ const decodeError = (operation: string) => (cause: Schema.SchemaError) =>
 const GOAL_COLUMNS =
   "id, owner_json, title, spec_json, generation, status_json, deletion_requested_at, created_at, updated_at";
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const sqlError = (operation: string) => (cause: unknown) =>
     new PersistenceSqlError({ operation, cause });

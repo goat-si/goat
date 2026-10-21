@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./opencodexCompat": {
+      "types": "./src/opencodexCompat.ts",
+      "import": "./src/opencodexCompat.ts"
+    },
     "./sshFailure": {
       "types": "./src/sshFailure.ts",
       "import": "./src/sshFailure.ts"

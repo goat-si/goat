@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { SshEnsureSupersededError, SshPreparationTimeoutError } from "./errors.ts";
 
-export const SSH_PREPARATION_TIMEOUT_MS = 900_000;
+const SSH_PREPARATION_TIMEOUT_MS = 900_000;
 export const supersededPreparation = () =>
   new SshEnsureSupersededError({
     message: "SSH preparation superseded by a newer connection intent.",

@@ -69,10 +69,10 @@ import {
  */
 
 /** A holder's answer is reused this long, so a launch does not re-run every sign-in probe. */
-export const HOLDER_CACHE_TTL_MS = 60_000;
+const HOLDER_CACHE_TTL_MS = 60_000;
 const HOST_DEADLINE_MS = 120_000;
 /** How long a registration waits to learn whether its holder can follow the run. */
-export const REGISTER_ATTACH_WAIT_MS = 20_000;
+const REGISTER_ATTACH_WAIT_MS = 20_000;
 const MISSING_HOLDERS = "does not have goat_cloud_holders";
 const MISSING_MATRIX = "does not have goat_provider_host_matrix";
 
@@ -129,7 +129,7 @@ interface StoredRun {
 }
 
 /** A project whose repository identity names owner/name, compared without case. */
-export function projectMatchesRepository(
+function projectMatchesRepository(
   identity:
     | {
         readonly canonicalKey: string;

@@ -127,6 +127,12 @@ to check out.
 
 ## Providers
 
+`apps/server/src/opencodex/OpenCodexInventory.ts` reads this machine's OpenCodex through
+loopback health/readiness probes and read-only CLI status commands. It defaults existing
+installs to adopted ownership and caches discovery for host-status polling. Its optional
+`metrics.opencodex` travels through the existing host-status fan-out; older hosts omit it.
+Child link records remain Home-owned, so a missing Child link directory is normal.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.
@@ -177,6 +183,12 @@ Codex Home routing belongs to `apps/server/src/provider/OpenCodexRoute.ts`.
 It observes OpenCodex on the Codex execution host. OpenCodex owns link keys
 and tunnel lifecycle; GOAT's route selection stays on the Codex instance.
 The shared status contract is `packages/contracts/src/codexRoute.ts`.
+
+Proposed (not implemented): a hub environment that is the OpenCodex Home for the fleet. Devices
+join through OpenCodex Remote Link or Hub mode, driven over GOAT's SSH sessions, and GOAT checks
+each device's parity and reads the Home's quota pool.
+
+> Decision record: [ADR-0021](decisions/ADR-0021-goatclaw-hub.md)
 
 ## Source control
 
