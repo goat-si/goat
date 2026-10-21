@@ -143,6 +143,13 @@ export const MEMORY_FTS_INDEXED_TEXT_MAX_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_WARNING_BYTES = 100663296;
 export const MEMORY_FTS_ALLOCATED_BRAKE_BYTES = 134217728;
 export const MEMORY_FTS_ALLOCATED_RESUME_BYTES = 100663296;
+/**
+ * Steady-state ceiling for every memory_* btree on one server, measured with dbstat. Local
+ * writes that add content are refused at or above it; forgetting always proceeds.
+ */
+export const MEMORY_STORE_BUDGET_BYTES = 104857600;
+/** Where a healthy memory store sits. Storage samples above it log a warning. */
+export const MEMORY_STORE_TARGET_BYTES = 52428800;
 export const MEMORY_STORAGE_SAMPLE_MAX_DAYS = 30;
 export const MEMORY_STORAGE_SAMPLE_MAX_UTF8_BYTES = 16384;
 export const MEMORY_STORAGE_SAMPLE_MAX_TABLES = 64;

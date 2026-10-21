@@ -24,6 +24,7 @@ import revisionSizeMigration from "../persistence/Migrations/093_MemoryRevisionC
 import reportMigration from "../persistence/Migrations/082_MemoryReportLifecycle.ts";
 import usageMigration from "../persistence/Migrations/083_MemoryUsageCounters.ts";
 import revertMigration from "../persistence/Migrations/084_MemoryRevertResults.ts";
+import threadIndexMigration from "../persistence/Migrations/095_MemorySummaryWorkThreadIndex.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation } from "./MemoryDecider.ts";
@@ -54,6 +55,7 @@ const setup = Layer.effectDiscard(
     yield* reportMigration;
     yield* usageMigration;
     yield* revertMigration;
+    yield* threadIndexMigration;
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY,event_id TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT,occurred_at TEXT,application_event_version INTEGER,aggregate_kind TEXT)`;
     yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY,deleted_at TEXT)`;
@@ -1205,6 +1207,38 @@ describe("MemoryWorker", () => {
         }),
         [],
       );
+    }).pipe(Effect.provide(live())),
+  );
+  it.effect("drains a summary work history far above the store budget to its live threads", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const worker = yield* Worker.MemoryWorker;
+      const threads = 2000;
+      const runs = 45;
+      // Half the threads are live; the rest were deleted or dropped by history compaction.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads - 1})
+        INSERT INTO orchestration_v2_projection_threads SELECT 'synthetic-'||i,CASE WHEN i%4=1 THEN ${now} END FROM n WHERE i%4!=3`;
+      // Every run left a row the size of a real one; only the newest per thread completed.
+      yield* sql`WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<${threads * runs - 1})
+        INSERT INTO memory_outbox (id,space,memory_id,kind,status,metadata_json,attempt,next_attempt_at)
+        SELECT 'synthetic:'||i,${space},${memoryId},'summary',CASE WHEN i%${runs}=${runs - 1} THEN 'completed' ELSE 'cancelled' END,
+        json_object('kind','summary','sourceThread',json_object('environmentId',${environmentId},'threadId','synthetic-'||CAST(i/${runs} AS INTEGER)),
+          'observedThroughSequence',i%${runs},'sourceWatermark',json_object('fromEventId',${id(10)},'toEventId',${id(11)},'throughSequence',i%${runs}),
+          'memoryId',${memoryId},'operationId',${id(4)},'revisionId',${id(5)},'modelSelection',json_object('instanceId','codex','model','fixture'),
+          'evidence',printf('%.1100c','x')),1,0
+        FROM n`;
+      assert.isAbove((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_BUDGET_BYTES);
+      const rows = () =>
+        sql<{
+          count: number;
+        }>`SELECT count(*) AS count FROM memory_outbox WHERE id LIKE 'synthetic:%'`.pipe(
+          Effect.map((result) => result[0]!.count),
+        );
+      // One sweep runs the whole paged pass: the one-time compaction of an old store.
+      yield* worker.sweepDue();
+      assert.strictEqual(yield* rows(), threads / 2);
+      assert.isBelow((yield* store.measureAllocation()).memoryBytes!, M.MEMORY_STORE_TARGET_BYTES);
     }).pipe(Effect.provide(live())),
   );
   it.effect("settles a run that later messages invalidated instead of rereading it", () => {

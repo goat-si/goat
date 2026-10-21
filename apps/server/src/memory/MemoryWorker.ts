@@ -88,6 +88,8 @@ const workClaimMs = 600000;
  */
 export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
+/** Outbox rows one retention statement examines; the pass yields to the event loop between pages. */
+export const MEMORY_RETENTION_PAGE_ROWS = 64;
 const isFailureCode = Schema.is(M.MemoryFailureCode);
 const safeCode = (error: unknown): M.MemoryFailureCode => {
   if (typeof error === "object" && error !== null) {
@@ -133,6 +135,7 @@ const make = Effect.gen(function* () {
   let nextReportPassAt = 0;
   let continuationScanDueAt = 0;
   let continuationScanKey: string | undefined;
+  let retentionDueAt = 0;
   const started = yield* Ref.make(false);
   const query = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError(workerError));
   // Memory runs on its own cheap model; the new-thread default may be unsupported here.
@@ -969,6 +972,20 @@ const make = Effect.gen(function* () {
         if (reportCursor === null) nextReportPassAt = now + 60_000;
       }
       yield* sweepStage("maintenance", maintenance.cycle(environmentId));
+      if (now >= retentionDueAt) {
+        // One pass walks the whole outbox in fixed pages. On a store from before retention the
+        // first pass is the one-time compaction; later passes find little to delete.
+        let after: number | null = 0;
+        while (after !== null) {
+          const page: { readonly nextRowId: number | null } = yield* sweepStage(
+            "maintenance",
+            store.pruneSettledSummaryWork(environmentId, after, MEMORY_RETENTION_PAGE_ROWS),
+          );
+          after = page.nextRowId;
+          yield* Effect.yieldNow;
+        }
+        retentionDueAt = now + Maintenance.MEMORY_STORAGE_SAMPLE_INTERVAL_MS;
+      }
     },
     Effect.mapError(workerError),
     sweepLock.withPermits(1),

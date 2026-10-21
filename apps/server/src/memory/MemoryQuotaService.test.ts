@@ -167,6 +167,28 @@ const sample = (day: number, value = day): M.MemoryStorageSample => {
   };
 };
 describe("MemoryQuotaService", () => {
+  it.effect("refuses added content while the measured store is at its budget", () =>
+    Effect.gen(function* () {
+      const store = yield* Store.MemoryStore;
+      const quota = yield* Quota.MemoryQuotaService;
+      const measured = (day: number, bytes: number) =>
+        store.recordSample(env, { ...sample(day), memoryAllocatedBytes: bytes });
+      yield* measured(0, M.MEMORY_STORE_BUDGET_BYTES);
+      const refused = yield* Effect.flip(quota.commit(decision(), env, Effect.void));
+      assert.deepInclude(refused, {
+        _tag: "MemoryCapacityError",
+        dimension: "live_payload_bytes",
+        current: M.MEMORY_STORE_BUDGET_BYTES,
+        limit: M.MEMORY_STORE_BUDGET_BYTES,
+      });
+      yield* measured(1, M.MEMORY_STORE_BUDGET_BYTES - 1);
+      yield* quota.commit(decision(), env, Effect.void);
+      // Forgetting is how a full store gets back under budget, so it is never refused.
+      yield* measured(2, M.MEMORY_STORE_BUDGET_BYTES);
+      const forgotten = yield* quota.commit(decision(forget()), env, Effect.void);
+      assert.strictEqual(forgotten.receipt.outcome, "deleted");
+    }).pipe(checkUsage, Effect.provide(services)),
+  );
   it.effect("admits quota equality and refuses plus one atomically", () =>
     Effect.gen(function* () {
       const store = yield* Store.MemoryStore;

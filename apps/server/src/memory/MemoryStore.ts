@@ -1766,6 +1766,22 @@ export class MemoryStore extends Context.Service<
       MemoryStorageError
     >;
     readonly cleanupDerived: (limit: number) => Effect.Effect<number, MemoryStorageError>;
+    /** Memory btree bytes from the current storage sample, or null before the first one. */
+    readonly measuredMemoryBytes: (
+      environment: M.EnvironmentId,
+    ) => Effect.Effect<number | null, MemoryStorageError>;
+    /**
+     * Deletes summary work rows that no scan or summary can read again, among the pageRows
+     * outbox rows after afterRowId. nextRowId is null once the page reached the end.
+     */
+    readonly pruneSettledSummaryWork: (
+      environment: M.EnvironmentId,
+      afterRowId: number,
+      pageRows: number,
+    ) => Effect.Effect<
+      { readonly removed: number; readonly nextRowId: number | null },
+      MemoryStorageError
+    >;
     readonly mergeFts: () => Effect.Effect<boolean, MemoryStorageError>;
     readonly recordSample: (
       environment: M.EnvironmentId,
@@ -5708,6 +5724,57 @@ const make = Effect.gen(function* () {
       Effect.as(true),
       Effect.catch(() => Effect.succeed(false)),
     );
+  });
+  const measuredMemoryBytes = Effect.fn("MemoryStore.measuredMemoryBytes")(function* (
+    environment: M.EnvironmentId,
+  ) {
+    const rows = yield* stored(
+      "sample-memory-bytes",
+      sql<{
+        bytes: number | null;
+      }>`SELECT json_extract(current_sample_json,'$.memoryAllocatedBytes') AS bytes FROM memory_compaction_state WHERE space=${`_environment:${environment}`}`,
+    );
+    return rows[0]?.bytes ?? null;
+  });
+  // Completion already keeps one completed row per thread and kind. What remains are rows
+  // for threads that are gone and cancelled or failed rows behind a newer run. The recovery
+  // scan reads only each live thread's newest row, so neither can matter again. A page holds
+  // a fixed number of outbox rows, so one call costs the same on any backlog.
+  const pruneSettledSummaryWork = Effect.fn("MemoryStore.pruneSettledSummaryWork")(function* (
+    environment: M.EnvironmentId,
+    afterRowId: number,
+    pageRows: number,
+  ) {
+    const page = yield* stored(
+      "summary-work-page",
+      sql<{
+        last: number | null;
+        rows: number;
+      }>`SELECT max(rowid) AS last,count(*) AS rows FROM (SELECT rowid FROM memory_outbox WHERE rowid>${afterRowId} ORDER BY rowid LIMIT ${Math.max(1, pageRows)})`,
+    );
+    const last = page[0]?.last ?? null;
+    if (last === null) return { removed: 0, nextRowId: null };
+    const removed = yield* stored(
+      "summary-work-prune",
+      sql<{ id: string }>`DELETE FROM memory_outbox WHERE rowid IN (
+        SELECT o.rowid FROM memory_outbox o NOT INDEXED
+        WHERE o.rowid>${afterRowId} AND o.rowid<=${last} AND o.kind IN ('summary','consolidate')
+        AND o.status IN ('completed','cancelled','failed') AND json_extract(o.metadata_json,'$.kind')='summary'
+        AND json_extract(o.metadata_json,'$.sourceThread.environmentId')=${environment}
+        AND (
+          NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_threads t WHERE t.thread_id=json_extract(o.metadata_json,'$.sourceThread.threadId') AND t.deleted_at IS NULL)
+          OR (o.status IN ('cancelled','failed') AND EXISTS (
+            SELECT 1 FROM memory_outbox n WHERE n.kind IN ('summary','consolidate')
+            AND json_extract(n.metadata_json,'$.sourceThread.threadId')=json_extract(o.metadata_json,'$.sourceThread.threadId')
+            AND coalesce(json_extract(n.metadata_json,'$.observedThroughSequence'),json_extract(n.metadata_json,'$.sourceWatermark.throughSequence'))
+              >coalesce(json_extract(o.metadata_json,'$.observedThroughSequence'),json_extract(o.metadata_json,'$.sourceWatermark.throughSequence'))))
+        )
+      ) RETURNING id`,
+    );
+    return {
+      removed: removed.length,
+      nextRowId: (page[0]?.rows ?? 0) < Math.max(1, pageRows) ? null : last,
+    };
   });
   const recordSample = Effect.fn("MemoryStore.recordSample")(function* (
     environment: M.EnvironmentId,
@@ -12268,6 +12335,8 @@ const make = Effect.gen(function* () {
     putFtsState,
     index,
     measureAllocation,
+    measuredMemoryBytes,
+    pruneSettledSummaryWork,
     mergeFts,
     cleanupDerived,
     recordSample,
