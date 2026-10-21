@@ -79,5 +79,5 @@ export function computerUseStatusText(input: {
     return `${names.join(" and ")} ${names.length > 1 ? "are" : "is"} off. Choose Set up to allow it again.`;
   }
   if (input.status.running) return "Running";
-  return input.status.failure ?? "Starts with the next agent session";
+  return input.status.failure ?? "Starts with the next agent turn";
 }

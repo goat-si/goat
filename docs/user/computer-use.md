@@ -17,10 +17,10 @@ You can turn it on or off at any time in **Settings → Integrations → Compute
 use**. Pick the environment whose computer agents should use, then turn on
 **Computer use**. On mobile, use **Settings → Agent behavior → Computer use**.
 
-Agent sessions you start afterwards get the computer use tools. Sessions that
-were already running keep the tools they started with, so start a new session
-after changing the setting. Agents running in the cloud do not get computer use,
-because it controls the computer that runs GOAT.
+Agents get the computer use tools from their next turn, including sessions that
+are already open; Pi picks them up the next time it starts. Plan mode and
+read-only sessions never get them. Agents running in the cloud and Muse Code do
+not get computer use, because it controls the computer that runs GOAT.
 
 ## macOS permissions
 

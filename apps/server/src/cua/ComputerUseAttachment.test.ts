@@ -29,6 +29,7 @@ const fakeDriver = (input: { readonly enabled: boolean; readonly running: boolea
       return input.running ? Option.some(mcp) : Option.none();
     }),
     lastFailure: Effect.succeed(Option.none()),
+    status: Effect.succeed({ platform: "darwin", running: input.running }),
   });
   return { service: Option.some(service), calls };
 };

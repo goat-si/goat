@@ -5943,6 +5943,7 @@ it.effect(
                   Effect.as(Option.some(cuaDriver)),
                 ),
                 lastFailure: Effect.succeed(Option.none()),
+                status: Effect.succeed({ platform: "darwin", running: true }),
               }),
             ),
           }),

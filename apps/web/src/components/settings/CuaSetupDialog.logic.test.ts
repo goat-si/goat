@@ -42,7 +42,7 @@ describe("computerUseStatusText", () => {
         error: null,
         missingGrants: [],
       }),
-    ).toBe("Starts with the next agent session");
+    ).toBe("Starts with the next agent turn");
     expect(
       computerUseStatusText({ enabled: false, status: mac, error: null, missingGrants: [] }),
     ).toBeNull();

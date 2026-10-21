@@ -172,7 +172,7 @@ function ComputerUseControls({
         {...searchableSetting("computer-use")}
         serverScoped
         settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. New agent sessions get the tools; turning this off stops computer use right away.`}
+        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Agents get the tools from their next turn; turning this off stops computer use right away.`}
         status={statusText ? <span role="status">{statusText}</span> : undefined}
         control={
           <div className="flex items-center gap-2">

@@ -79,7 +79,7 @@ Setup proves the macOS grants from inside the driver (`verify`): Electron's chec
 then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
 `health_report`'s bundle identity for this process, and capture non-blank pixels plus an
 accessibility tree of a GOAT window. `check_permissions` alone cannot show that capture works.
-The check's driver is always stopped afterwards; the next agent session starts its own.
+The check's driver is always stopped afterwards; the next agent turn starts its own.
 
 `stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
 checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the

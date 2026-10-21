@@ -124,8 +124,8 @@ export function CuaSetupDialog({
           </DialogTitle>
           <DialogDescription>
             {verified
-              ? "Agent sessions you start from now on can see and use apps on this Mac."
-              : `Agents can see and use apps on ${hostLabel} in the background, without taking over your cursor. Sessions started afterwards get the computer use tools.`}
+              ? "From their next turn, agents can see and use apps on this Mac."
+              : `Agents can see and use apps on ${hostLabel} in the background, without taking over your cursor. They get the computer use tools from their next turn.`}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
