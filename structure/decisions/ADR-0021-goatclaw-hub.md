@@ -32,10 +32,10 @@
     provider, some trigger probes, and a Child cannot read all of them.
 - **Decision.**
   - The hub is the OpenCodex Home. macOS and Linux devices join as Remote Link Children; devices Remote Link does not
-  - Every part is hub-agnostic. Which device is the hub is the person's choice; moving it is a consent-gated flow
-    that keeps the old Home as rollback until every device passes parity through the new one.
     serve (Windows, password-only SSH) join as Hub-mode clients. GOAT runs OpenCodex's own commands over its
     existing SSH sessions, passes its pinned host key as the expected fingerprint, and never holds a link or data key.
+  - Every part is hub-agnostic. Which device is the hub is the person's choice; moving it is a consent-gated flow
+    that keeps the old Home as rollback until every device passes parity through the new one.
   - GOAT computes a parity verdict per device from read-only evidence (role, link identity, one non-billed relayed
     request, served-by header, runtime freshness, Codex settings digest, client wiring, local-provider leak) and
     repairs with `ocx sync`, `ocx restart`, `ocx link reconnect`, then re-links behind a decision.
