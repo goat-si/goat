@@ -230,6 +230,9 @@ const fixture = Effect.fn(function* (
     grantPermissions: Effect.sync(() => {
       allowed = true;
     }),
+    denyPermissions: Effect.sync(() => {
+      allowed = false;
+    }),
     crash: Effect.sync(() => exits.at(-1)!()),
     constructors,
     counts: () => ({ starts, stops, destroys }),
@@ -585,6 +588,29 @@ describe("DesktopCuaDriver verification", () => {
         // A failed check never leaves its driver or SDK client running.
         assert.equal(test.counts().starts, test.counts().destroys);
         assert.equal(test.clientsOpen(), 0);
+      }),
+    ),
+  );
+
+  it.effect("an early failure leaves the agent's running driver alone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin" });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        // Grants revoked after the driver started: the check stops before its own restart.
+        yield* test.denyPermissions;
+        const result = yield* test.verify;
+        assert.deepEqual(
+          result.steps.map((step) => [step.id, step.ok]),
+          [["grants", false]],
+        );
+        // Stopping it here would leave the server holding a dead descriptor it was never told about.
+        assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+        assert.equal(yield* test.pendingReports, 0);
+        yield* test.request("reuse");
+        assert.equal((yield* test.next).status, "ready");
+        assert.equal(test.counts().starts, 1);
       }),
     ),
   );

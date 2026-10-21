@@ -284,7 +284,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
   // check_permissions only reports booleans, so the grants count as working once the
   // restarted driver also reads a GOAT window's accessibility tree and captures its pixels.
+  /** The generation the running check spawned; serialized by the mutex. */
+  let checkHost: OwnedHost | undefined;
   const verify = Effect.gen(function* () {
+    checkHost = undefined;
     const steps: CuaVerificationStep[] = [];
     /** Records a step; a defined failure detail fails it. Returns whether it passed. */
     const record = (id: CuaVerificationStepId, failure: string | undefined) => {
@@ -326,6 +329,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const connection: Option.Option<EmbeddedDriverConnection> =
       path && stopped
         ? yield* spawn(path).pipe(
+            Effect.tap((entry) =>
+              Effect.sync(() => {
+                checkHost = entry;
+              }),
+            ),
             Effect.flatMap((entry) =>
               Effect.tryPromise(() => entry?.started ?? Promise.reject(new Error("closed"))),
             ),
@@ -418,8 +426,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     return done();
   }).pipe(
     Effect.scoped,
-    // Nothing else holds this generation, so it never outlives the check.
-    Effect.ensuring(stop),
+    // Only the check's own generation is stopped here: nothing else holds it. A driver that was
+    // already serving an agent is retired only by the restart step, which reports "stopped".
+    Effect.ensuring(
+      Effect.suspend(() => (checkHost !== undefined && owned === checkHost ? stop : Effect.void)),
+    ),
     mutex.withPermits(1),
     Effect.withSpan("desktop.cua.verify"),
   );
