@@ -1,4 +1,4 @@
-# ADR-0020 — decision recorded under "Computer use"
+# ADR-0022 — decision recorded under "Computer use"
 
 - Contract owner: [server.md](../server.md#computer-use)
 - Commit: `ba39b38a3` in #665 (pin, telemetry opt-outs, identity), on top of the ports of

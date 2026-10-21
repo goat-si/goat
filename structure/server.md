@@ -248,7 +248,7 @@ Such a turn's provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseP
 of `cua-driver mcp`; it follows the lease over `/api/computer-use/lease`
 (`ComputerUseLeaseRoute.ts`) and kills its driver child when the lease ends.
 
-> Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
+> Decision record: [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md)
 
 ## Services
 
