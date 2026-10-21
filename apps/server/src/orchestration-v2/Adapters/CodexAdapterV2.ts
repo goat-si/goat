@@ -512,6 +512,32 @@ function codexDynamicToolOutput(
   return item.success === false ? { success: false } : undefined;
 }
 
+type CodexImageGenerationItem = Extract<
+  CodexSchema.V2ItemCompletedNotification__ThreadItem,
+  { type: "imageGeneration" }
+>;
+
+// Codex 0.164 uploads generated images to its attachment store and sends a
+// `fileId` in place of inline bytes when that succeeds. The app-server has no
+// request that reads an attachment back, so such an image is only shown when
+// Codex also saved it locally (`savedPath`).
+function codexImageGenerationProjection(
+  item: CodexImageGenerationItem,
+): CodexDynamicToolProjection {
+  const inputImages = item.inputImages?.map((image) => image.path) ?? [];
+  return {
+    toolName: "imageGeneration",
+    input: {
+      prompt: item.revisedPrompt ?? "",
+      ...(inputImages.length === 0 ? {} : { inputImages }),
+    },
+    ...("result" in item
+      ? { output: [{ type: "image", mimeType: "image/png", data: item.result }] }
+      : {}),
+    status: "completed",
+  };
+}
+
 const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(function* (
   item: CodexDynamicToolItem,
 ): Effect.fn.Return<CodexDynamicToolProjection, never, Crypto.Crypto> {
@@ -1170,10 +1196,21 @@ type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
  * state and resume controls; other statuses stay provider or transport errors.
  */
 function codexExhaustionHttpStatus(errorInfo: CodexErrorInfo | null | undefined): number | null {
-  return typeof errorInfo === "object" &&
-    errorInfo !== null &&
-    "responseTooManyFailedAttempts" in errorInfo
-    ? (errorInfo.responseTooManyFailedAttempts.httpStatusCode ?? null)
+  if (
+    typeof errorInfo !== "object" ||
+    errorInfo === null ||
+    !("responseTooManyFailedAttempts" in errorInfo)
+  ) {
+    return null;
+  }
+  // Codex 0.164 accepts unknown error variants as arbitrary JSON, so the
+  // nested value is only trusted once it has the known shape.
+  const attempts = errorInfo.responseTooManyFailedAttempts;
+  return typeof attempts === "object" &&
+    attempts !== null &&
+    "httpStatusCode" in attempts &&
+    typeof attempts.httpStatusCode === "number"
+    ? attempts.httpStatusCode
     : null;
 }
 
@@ -4090,12 +4127,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const buildDynamicToolArtifacts = Effect.fn("CodexAdapterV2.buildDynamicToolArtifacts")(
           function* (
             context: ActiveCodexTurnContext,
-            item:
-              | CodexDynamicToolItem
-              | Extract<
-                  CodexSchema.V2ItemCompletedNotification__ThreadItem,
-                  { type: "imageGeneration" }
-                >,
+            item: CodexDynamicToolItem | CodexImageGenerationItem,
           ) {
             const updatedAt = yield* DateTime.now;
             const status = codexItemStatus(
@@ -4113,12 +4145,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
             const projection: CodexDynamicToolProjection =
               item.type === "imageGeneration"
-                ? {
-                    toolName: "imageGeneration",
-                    input: { prompt: item.revisedPrompt ?? "" },
-                    output: [{ type: "image", mimeType: "image/png", data: item.result }],
-                    status: "completed",
-                  }
+                ? codexImageGenerationProjection(item)
                 : yield* projectCodexDynamicToolItem(item).pipe(
                     Effect.provideService(Crypto.Crypto, crypto),
                   );
@@ -5307,9 +5334,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   updated.set(payload.turnId, paths);
                   return updated;
                 });
-              } else if (payload.item.result) {
+              } else if ("fileId" in payload.item || payload.item.result) {
                 // Keep inline bytes on the tool output so the existing image asset
                 // ingestion/serving path owns their storage and wire projection.
+                if ("fileId" in payload.item) {
+                  yield* Effect.logWarning(
+                    "Codex generated image has only an attachment id and no local copy",
+                  ).pipe(Effect.annotateLogs({ fileId: payload.item.fileId }));
+                }
                 const artifacts = yield* buildDynamicToolArtifacts(context, payload.item);
                 yield* emitProviderEvent({
                   type: "node.updated",

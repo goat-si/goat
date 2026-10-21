@@ -320,12 +320,18 @@ Acceptance:
   files or logs on the machine, comparing threads, web research; research fans out to subagents.
 - Coding worker (a coding thread in a project): anything that changes a repository or runs in one.
 - The bot MUST pick the cheapest of these that can answer correctly.
+- With more than one machine connected, the bot SHOULD place each lane on a machine that has
+  what it needs and room to spare, by launch or delegation, instead of doing it all on its own
+  machine. Lanes it starts keep its read-only rule; it never starts a paid cloud machine unless
+  asked. `GOAT_BOT_DISPATCH_RULE` in `ChannelDispatcher.ts` states this.
 
 Acceptance:
 
 - A history question launches nothing before its first answer. A "why is the disk full" question
   launches one bot turn.
   A "fix the bug" request launches one coding worker.
+- With an idle SSH host connected, a bot turn that fans research out starts a lane there and its
+  answer says which machine ran what.
 
 ## Comparison with other bots
 

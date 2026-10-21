@@ -1,4 +1,0 @@
-interface:
-  display_name: "Test GOAT Mobile"
-  short_description: "Test iOS and Android in GOAT's Device panel"
-  default_prompt: "Use $test-t3-mobile to verify the affected native mobile flow through GOAT's Device panel and AgentDevice."
