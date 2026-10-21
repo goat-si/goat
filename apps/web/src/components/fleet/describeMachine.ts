@@ -29,7 +29,7 @@ const OS_NAMES: Partial<Record<ExecutionEnvironmentPlatformOs, string>> = {
  * Names a host by its OS and hardware shape, such as "MacBook", "Mac Studio", "Linux
  * server" or "Windows laptop". Null when the server has reported neither.
  */
-export function describeMachine(
+function describeMachine(
   os: ExecutionEnvironmentPlatformOs | null,
   kind: EnvironmentMachineKind | null,
 ): string | null {
