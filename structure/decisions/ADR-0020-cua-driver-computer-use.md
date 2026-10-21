@@ -153,7 +153,9 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
     task, or a sender thread that classifies unattended) aimed at a person's running turn is
     therefore queued behind that turn instead of steering it
     (`gateUnattendedSteering`, applied where `ThreadManagementService` sends) while computer use
-    is on. It then starts its own turn, which this message classifies as unattended. Steering
+    is on. The same gate runs when a message that queued behind a slow-starting turn would be
+    promoted into it once the turn can steer, so that delayed path keeps the message as its own
+    turn too. It then starts its own turn, which this message classifies as unattended. Steering
     into an unattended turn is unchanged, since that turn has no direct driver, and so is all
     steering while computer use is off, when no turn holds a driver. A sender this host cannot
     classify, such as a thread on another machine, counts as unattended. A person promoting the

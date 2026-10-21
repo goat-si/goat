@@ -1302,6 +1302,13 @@ const make = Effect.gen(function* () {
             return true;
           if (decision.type === "wait") return false;
           if (decision.type !== "steer") return true;
+          // The same admission gate as an immediate steer: an unattended message promoted into
+          // a person's turn would reach it without computer use admission. It keeps its own turn.
+          const gated = yield* unattendedSteeringMode(input, {
+            type: "steer_active",
+            targetRunId: decision.run.id,
+          });
+          if (gated.type !== "steer_active") return true;
           attempt += 1;
           return yield* orchestrator
             .dispatch({
