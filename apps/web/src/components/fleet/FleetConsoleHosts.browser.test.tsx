@@ -64,7 +64,8 @@ const machine = (id: string, overrides: object) => ({
   machineKind: null,
   environmentId: null,
   sshHost: null,
-  cloudState: null,
+  boat: null,
+  answering: false,
   running: 0,
   attention: 0,
   reported: 0,
@@ -102,8 +103,8 @@ import FleetConsole from "./FleetConsole";
 function setup() {
   const value = {
     machines: [
-      machine("laptop", { environmentId: EnvironmentId.make(fixture.primary) }),
-      machine("studio", { environmentId: EnvironmentId.make(fixture.studio) }),
+      machine("laptop", { environmentId: EnvironmentId.make(fixture.primary), answering: true }),
+      machine("studio", { environmentId: EnvironmentId.make(fixture.studio), answering: true }),
       machine("headless", {
         kind: "ssh",
         sshHost: { via: EnvironmentId.make(fixture.primary), alias: "headless" },
