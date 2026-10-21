@@ -15,6 +15,10 @@ const workflowPath = ".github/workflows/goat-ci.yml";
 const upstreamPath = ".github/workflows/upstream.yaml";
 const runnerLabels = ["self-hosted", "linux", "x64", "goat", "epyc"];
 const baseJob = { "runs-on": runnerLabels, steps: [{ run: "echo ok" }] };
+const trustedRunner =
+  '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
+const lightRunner = trustedRunner.replace('"epyc"]', '"epyc-light"]');
+const gateJob = { ...baseJob, "runs-on": lightRunner };
 const validWorkflow = `on:
   push:
 jobs:
@@ -67,7 +71,7 @@ function screenshotWorkflow(patch: Record<string, unknown> = {}) {
     on: { pull_request: null },
     jobs: {
       ci: baseJob,
-      "screenshot-gate": { ...baseJob, permissions: screenshotPermissions, ...patch },
+      "screenshot-gate": { ...gateJob, permissions: screenshotPermissions, ...patch },
     },
   });
 }
@@ -243,32 +247,56 @@ describe("goat pre-push workflow guard", () => {
     expect(f.hook(f.record(f.sha)).status).toBe(0);
   });
 
-  it("allows the scope and result jobs on the pinned hosted image or EPYC, nothing else", () => {
-    const jobs = { scope: baseJob, ci: baseJob, result: baseJob };
-    const allowed = fixture({ workflow: JSON.stringify({ on: { pull_request: null }, jobs }) });
-    expect(allowed.hook(allowed.record(allowed.sha)).status).toBe(0);
-    const pinned = fixture({
+  it.each(["ubuntu-24.04", lightRunner])("allows the gate jobs on %s", (runner) => {
+    const gate = { ...gateJob, "runs-on": runner };
+    const f = fixture({
       workflow: JSON.stringify({
         on: { pull_request: null },
-        jobs: { ...jobs, scope: { ...baseJob, "runs-on": "ubuntu-24.04" } },
+        jobs: { scope: gate, ci: { ...baseJob, "runs-on": trustedRunner }, result: gate },
       }),
     });
-    expect(pinned.hook(pinned.record(pinned.sha)).status).toBe(0);
-    const hosted = fixture({
+    expect(f.hook(f.record(f.sha)).status).toBe(0);
+  });
+
+  // A gate job on the matrix's runners waits behind it; the matrix on the light runners would
+  // take the only runners the gates can use.
+  it.each([
+    ["scope", "the matrix's EPYC expression", trustedRunner],
+    ["result", "the matrix's EPYC labels", runnerLabels],
+    [
+      "scope",
+      "the light labels without the fork fallback",
+      ["self-hosted", "linux", "x64", "goat", "epyc-light"],
+    ],
+    ["result", "a moving hosted image", "ubuntu-latest"],
+    [
+      "result",
+      "an edited light expression",
+      lightRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
+    ],
+  ])("refuses jobs.%s on %s", (name, _label, runner) => {
+    const f = fixture({
       workflow: JSON.stringify({
         on: { pull_request: null },
-        jobs: { ...jobs, scope: { ...baseJob, "runs-on": "ubuntu-latest" } },
+        jobs: { ci: baseJob, [name]: { ...gateJob, "runs-on": runner } },
       }),
     });
-    const refused = hosted.hook(hosted.record(hosted.sha));
-    expect(refused.status).not.toBe(0);
+    const refused = f.hook(f.record(f.sha));
+    expect(refused.status).toBe(1);
     expect(refused.stderr).toContain(
-      "jobs.scope.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
+      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run epyc-light expression`,
     );
   });
 
-  const trustedRunner =
-    '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
+  it.each([
+    ["light expression", lightRunner],
+    ["light labels", ["self-hosted", "linux", "x64", "goat", "epyc-light"]],
+  ])("refuses the ci matrix on the %s", (_label, runner) => {
+    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runner }) });
+    const refused = f.hook(f.record(f.sha));
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
+  });
 
   it("allows the trusted-run expression that keeps fork pull requests on the hosted image", () => {
     const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": trustedRunner }) });

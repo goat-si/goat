@@ -81,7 +81,8 @@
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/channelGateway.ts",
         "packages/contracts/src/ipc.ts",
-        "packages/contracts/src/hubProxy.ts"
+        "packages/contracts/src/hubProxy.ts",
+        "packages/contracts/src/quotaPool.ts"
       ]
     },
     {

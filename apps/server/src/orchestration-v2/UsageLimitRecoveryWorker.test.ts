@@ -1,5 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import { RunId, ThreadId, type OrchestrationV2ServerCommand } from "@goat/contracts";
+import {
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  type FleetSettings,
+  type OrchestrationV2ServerCommand,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,6 +41,8 @@ const sweep = (options: {
   readonly coversThreads: boolean;
   readonly switched: ReadonlySet<string>;
   readonly goalThreads?: ReadonlySet<string>;
+  readonly candidates?: ReadonlyArray<ProjectionStore.ProjectionLimitRecoveryCandidate>;
+  readonly fleet?: FleetSettings;
 }) =>
   Effect.gen(function* () {
     yield* TestClock.setTime(NOW);
@@ -60,10 +68,10 @@ const sweep = (options: {
                 queried.push(
                   "autoResume=" +
                     input.autoResume +
-                    " withoutReset=" +
-                    (input.withoutReset === true),
+                    " triggers=" +
+                    input.fallbackTriggers?.join(","),
                 );
-                return [candidate("a"), candidate("b"), candidate("goal")];
+                return options.candidates ?? [candidate("a"), candidate("b"), candidate("goal")];
               }),
           }),
         ),
@@ -88,6 +96,14 @@ const sweep = (options: {
         Layer.provide(
           ServerSettings.ServerSettingsService.layerTest({
             autoResumeLimitedThreads: options.autoResume,
+            fleet: options.fleet ?? {
+              fallbackChains: {
+                default: {
+                  scope: "goals_and_threads",
+                  steps: [{ instanceId: ProviderInstanceId.make("codex"), model: "a" }],
+                },
+              },
+            },
           }),
         ),
         Layer.provide(
@@ -116,6 +132,29 @@ const sweep = (options: {
   }).pipe(Effect.scoped);
 
 describe("UsageLimitRecoveryWorker fallback branch", () => {
+  it.effect("reconsiders an armed run before dispatching its due timed resume", () =>
+    Effect.gen(function* () {
+      const armed = candidate("a");
+      const result = yield* sweep({
+        autoResume: true,
+        coversThreads: true,
+        switched: new Set(["a"]),
+        candidates: [
+          {
+            ...armed,
+            usageLimitResetAt: DateTime.formatIso(DateTime.makeUnsafe(NOW)),
+            limitRecovery: {
+              runId: armed.latestRunId!,
+              resetAt: DateTime.formatIso(DateTime.makeUnsafe(NOW)),
+              autoResume: true,
+            },
+          },
+        ],
+      });
+      assert.deepEqual(result.asked, ["a"]);
+      assert.deepEqual(result.armed, []);
+    }),
+  );
   it.effect("switches a covered thread instead of arming its reset, and arms the rest", () =>
     Effect.gen(function* () {
       const result = yield* sweep({
@@ -125,7 +164,7 @@ describe("UsageLimitRecoveryWorker fallback branch", () => {
         goalThreads: new Set(["goal"]),
       });
       assert.deepStrictEqual(result, {
-        queried: ["autoResume=true withoutReset=true"],
+        queried: ["autoResume=true triggers=usage_limit"],
         asked: ["a", "b"],
         armed: ["b"],
       });
@@ -142,7 +181,7 @@ describe("UsageLimitRecoveryWorker fallback branch", () => {
           switched: new Set(),
         });
         assert.deepStrictEqual(result, {
-          queried: ["autoResume=true withoutReset=true"],
+          queried: ["autoResume=false triggers=usage_limit"],
           asked: ["a", "b", "goal"],
           armed: [],
         });
@@ -157,12 +196,12 @@ describe("UsageLimitRecoveryWorker fallback branch", () => {
         switched: new Set(["a"]),
       });
       assert.deepStrictEqual(result, {
-        queried: ["autoResume=true withoutReset=false"],
+        queried: ["autoResume=true triggers="],
         asked: [],
         armed: ["a", "b", "goal"],
       });
       const off = yield* sweep({ autoResume: false, coversThreads: false, switched: new Set() });
-      assert.deepStrictEqual(off.queried, ["autoResume=false withoutReset=false"]);
+      assert.deepStrictEqual(off.queried, ["autoResume=false triggers="]);
     }),
   );
 });

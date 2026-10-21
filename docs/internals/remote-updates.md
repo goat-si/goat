@@ -355,11 +355,13 @@ update with its own migration check, never a stale client reconnecting.
 
 ## Server auto-update
 
-Launcher-managed servers enable `automaticServerUpdates` by default. The root parks
-at activation, checks after 10 minutes, then every six hours. Only publishable
-stable and nightly builds participate, always on their own channel. Desktop-managed
-and foreground servers and dev, PR and preview builds never do. The newest target must be strictly
-newer and differ from the launcher's last failed or rolled-back target.
+Launcher-managed servers and client-launched SSH runtimes enable
+`automaticServerUpdates` by default. The root parks at activation, checks after 10
+minutes, then every six hours. Only publishable stable and nightly builds participate,
+always on their own channel. Desktop-managed and foreground servers and dev, PR and
+preview builds never do. The newest target must be strictly newer and differ from the
+last failed or rolled-back target. Both paths share `autoUpdatePolicy.ts`; only
+activation and the failed-target record differ.
 
 A release without a valid publication time is ineligible. SHA-256 of
 `environmentId:targetVersion`, taking the first four bytes as an unsigned big-endian
@@ -369,12 +371,49 @@ the window determines eligibility, so retries and restarts never move a server
 into an earlier cohort.
 
 Preparation uses the same checksum verification and preflight as manual updates.
-Activation calls `ServerSelfUpdate.update` with actor `auto-update` and without
-`confirmReplacement`, retaining both idle checks and admission closure. Busy
+Under the launcher, activation calls `ServerSelfUpdate.update` with actor `auto-update`
+and without `confirmReplacement`, retaining both idle checks and admission closure, and
+the launcher's last update record is the failed-target memory. Busy
 activation retries every 10 minutes using the installed runtime; it does not
 redownload. Opt-out is checked again before activation. Discovery or preparation
 failure logs and waits for the next six-hour check. The scheduler shares the manual
 updater's in-flight guard and never creates a second replacement path.
+
+### Client-launched SSH runtimes
+
+A runtime started by `run-t3.sh` updates itself when its launch records
+(`~/.goat/ssh-launch/runtime/pid` and `managed`) name its own process and it runs in
+the default `~/.goat` home on a POSIX host. Windows hosts, whose supervisor needs a
+native detached spawn, stay client-driven. Preparation runs the same host download a
+client would, verified against `SHA256SUMS`, checks the executable against its install
+record, and runs `__service-preflight`. Activation checks idle, then runs the owning
+launch script in its own session with the target release as the requested version.
+The script checks the candidate against the protocol the target binary reports. The
+runtime only moves to a target whose protocol it already serves, so the script takes
+its idle-only refresh path and the target's supervisor accepts this version again on
+rollback. A release that changes the protocol is left to clients: a client on that
+release finds the runtime incompatible and replaces it as before. The script holds the host replacement lock, checks idle again, drains (which
+closes admission) and starts the ADR-0013 supervisor. The drain stops this server, so
+nothing in it can interrupt the swap. A busy check, a cancelled drain, or a client
+holding the lock retries in 10 minutes.
+
+The supervisor writes `last-replacement.json` (status, target, previous version) in the
+launch state directory for every swap it runs. A `rolled-back` or `failed` record is the
+failed-target memory, so it covers swaps started by clients as well, and it survives the
+rollback because the restored server reads the file the supervisor wrote.
+
+Clients sharing a runtime hold no lock or lease. A new client marks its automatic idle
+refresh of an older runtime with `automatic: true` on the drain request. The runtime
+arbitrates it with `arbitrateAutomaticTargets` against its own prepared target and
+answers `cancelled` without draining unless the request is the newest same-channel,
+strictly newer, never-failed candidate, and while `automaticServerUpdates` is off it
+drops every marked request. Manual and confirmed updates, incompatible
+replacements, and requests from older clients carry no marker and behave as before,
+so a runtime on a dev build, or an older client moving a runtime to its release, is
+unchanged. Compatibility after an update is still `hostCompatibilityOf`: a runtime newer
+than a client keeps serving it while the client's protocol is in range, and names the
+client as the side to update once it is not. Runtimes without `drainRestart` stay
+attach-only because the launch script refuses to drain them.
 
 ## Migration plan
 
@@ -388,7 +427,8 @@ updater's in-flight guard and never creates a second replacement path.
    so it can update without the app, preserving its identity, data, and port
    (this also narrows issue #1, where the desktop and SSH servers on one host are
    separate environments); serve the previous protocol only when a protocol bump
-   needs it. The idle-only service scheduler is implemented as described above.
+   needs it. The idle-only scheduler is implemented as described above, for service
+   installs and client-launched SSH runtimes.
 
 ## Test plan
 

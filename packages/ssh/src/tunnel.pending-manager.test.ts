@@ -621,6 +621,7 @@ describe("SSH pending replacement reconciliation", () => {
           yield* manager.ensureEnvironment(uploadTarget, { refreshRuntime: true });
           assert.equal(f.count.launches, 2);
           assert.include(f.launchScripts[1]!, "REFRESH_IF_IDLE=1");
+          assert.include(f.launchScripts[1]!, "DRAIN_AUTOMATIC=0");
           f.setMode("ready");
           yield* manager.ensureEnvironment(uploadTarget, {
             refreshRuntime: true,
@@ -779,6 +780,7 @@ describe("SSH pending replacement reconciliation", () => {
           },
         });
         assert.include(f.launchScripts[0]!, "DRAIN_FORCE=1");
+        assert.include(f.launchScripts[0]!, "DRAIN_AUTOMATIC=0");
         assert.equal((yield* manager.status(uploadTarget)).status?.state, "update_waiting");
         const observed = [...phases];
         f.setMode("ready");
@@ -788,6 +790,7 @@ describe("SSH pending replacement reconciliation", () => {
         yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
         assert.equal(f.count.launches, 2);
         assert.include(f.launchScripts[1]!, "DRAIN_FORCE=0");
+        assert.include(f.launchScripts[1]!, "DRAIN_AUTOMATIC=0");
         assert.deepEqual(phases, observed);
         assert.equal(f.count.prompts, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);

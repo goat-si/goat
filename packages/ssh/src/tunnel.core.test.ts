@@ -52,6 +52,7 @@ import {
   isRemoteLaunch,
 } from "./tunnel.fixture.ts";
 import { nextVersion, shell, fixture } from "./tunnel.runnerSwitch.fixture.ts";
+import { killGroupWithTestOwner } from "./testParentLifetime.fixture.ts";
 import { makeEnsureFlightFixture } from "./tunnel.ensure-flight.fixture.ts";
 
 // Archive acquisition stays local to these transport doubles.
@@ -1611,16 +1612,20 @@ describe("archive runner script", () => {
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const child = yield* spawner.spawn(
-        ChildProcess.make(remoteShell, args, {
-          env: {
-            PATH: pathPrefix ? `${pathPrefix}:${process.env.PATH ?? ""}` : (process.env.PATH ?? ""),
-            HOME: home,
-          },
-          extendEnv: false,
-          ...(bytes === undefined
-            ? {}
-            : { stdin: { stream: Stream.make(bytes), endOnDone: true } }),
-        }),
+        killGroupWithTestOwner(
+          ChildProcess.make(remoteShell, args, {
+            env: {
+              PATH: pathPrefix
+                ? `${pathPrefix}:${process.env.PATH ?? ""}`
+                : (process.env.PATH ?? ""),
+              HOME: home,
+            },
+            extendEnv: false,
+            ...(bytes === undefined
+              ? {}
+              : { stdin: { stream: Stream.make(bytes), endOnDone: true } }),
+          }),
+        ),
       );
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [

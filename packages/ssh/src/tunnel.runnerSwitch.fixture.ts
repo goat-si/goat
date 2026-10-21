@@ -11,6 +11,7 @@ import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
 import {
   exitWithTestOwner,
   exitWithTestParent,
+  killGroupWithTestOwner,
   TEST_OWNER_FILE,
 } from "./testParentLifetime.fixture.ts";
 import {
@@ -35,11 +36,13 @@ export const shell = Effect.fn("test.runnerSwitch.shell")(function* (
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* spawner.spawn(
-    ChildProcess.make(remoteShell, ["-s", "--", ...args], {
-      env: { HOME: home, PATH: pathValue, LC_ALL: "C" },
-      extendEnv: false,
-      stdin: { stream: Stream.make(encoder.encode(script)), endOnDone: true },
-    }),
+    killGroupWithTestOwner(
+      ChildProcess.make(remoteShell, ["-s", "--", ...args], {
+        env: { HOME: home, PATH: pathValue, LC_ALL: "C" },
+        extendEnv: false,
+        stdin: { stream: Stream.make(encoder.encode(script)), endOnDone: true },
+      }),
+    ),
   );
   return yield* Effect.all(
     {

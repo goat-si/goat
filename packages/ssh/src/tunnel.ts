@@ -203,6 +203,16 @@ export interface RemoteGoatRunnerOptions {
   readonly confirmReplacement?: boolean;
   /** Drain window for a replacement, in seconds (default 60, at most 300). */
   readonly replacementGraceSeconds?: number;
+  /**
+   * A person asked for this refresh. Only refreshes without it, and without
+   * `confirmReplacement`, are automatic and let the runtime arbitrate the target.
+   */
+  readonly manualRefresh?: boolean;
+  /**
+   * The protocol the candidate build speaks, when it is not this build's own: a runtime that
+   * replaces itself with a newer release builds the launch script on that release's behalf.
+   */
+  readonly candidateProtocol?: { readonly ssh: number; readonly orchestration: number };
 }
 
 export interface PreparedRemoteRuntime {
@@ -1633,6 +1643,7 @@ REFRESH_LIVE_VERSION=@@GOAT_REFRESH_LIVE_VERSION@@
 EXPECTED_LIVE_RUNNER_SHA256=@@GOAT_LIVE_RUNNER_SHA256@@
 OWNING_LAUNCH=@@GOAT_OWNING_LAUNCH@@
 DRAIN_FORCE=@@GOAT_DRAIN_FORCE@@
+DRAIN_AUTOMATIC=@@GOAT_DRAIN_AUTOMATIC@@
 DRAIN_GRACE_SECONDS=@@GOAT_DRAIN_GRACE_SECONDS@@
 RUNNER_PUBLISHED=0; REFRESH_DECISION=; LEGACY_PENDING=0; LEGACY_COMMITTED=0
 LEGACY_TERMINATED=0; LEGACY_IDENTITY_LINK=; LEGACY_PUBLICATION_STARTED=0
@@ -2420,7 +2431,12 @@ if [ "$NEEDS_OWNED_UPGRADE" = 1 ]; then
   # A lost response or a dead SSH owner cannot prove the server stopped draining.
   printf '%s\\n' "$UPGRADE_INSTANCE" > "$STATE_DIR/draining.next.$$"
   mv "$STATE_DIR/draining.next.$$" "$STATE_DIR/draining"
-  drain_result="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
+  # Only an automatic refresh of an older runtime is a request the runtime may arbitrate. A
+  # reconciliation retry keeps the marker: the runtime joins a drain that is still active and
+  # arbitrates only a request that would start a new one.
+  drain_automatic=0
+  if [ "$DRAIN_AUTOMATIC" = 1 ] && [ "$REPLACEMENT_REASON" = older ]; then drain_automatic=1; fi
+  drain_result="$(GOAT_RUNTIME_DRAIN_AUTOMATIC="$drain_automatic" "$RUNNER_CANDIDATE_FILE.pin" __ssh-helper drain --port "$UPGRADE_PORT" --instance-id "$UPGRADE_INSTANCE" --target-version "$TARGET_VERSION" --grace-seconds "$DRAIN_GRACE_SECONDS" $drain_force --token-file "$DEFAULT_SERVER_HOME/userdata/runtime-control.token" 2>/dev/null || true)"
   case "$drain_result" in
     drained) ;;
     cancelled) rm -f "$STATE_DIR/draining" "$PREVIOUS_RUNNER"; DRAIN_UNCERTAIN=0; emit_pending busy ;;
@@ -2810,6 +2826,8 @@ function buildRemoteRunnerSetupScript(
   return applyScriptPlaceholders(REMOTE_RUNNER_SETUP_SCRIPT, {
     GOAT_OWNING_LAUNCH: verifyOwnedBeforePublication ? "1" : "0",
     GOAT_DRAIN_FORCE: input?.confirmReplacement === true ? "1" : "0",
+    GOAT_DRAIN_AUTOMATIC:
+      input?.confirmReplacement !== true && input?.manualRefresh !== true ? "1" : "0",
     GOAT_DRAIN_GRACE_SECONDS: String(
       Math.min(
         Math.max(
@@ -2876,8 +2894,10 @@ capture_reconnect_baseline() {
     GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
     GOAT_RUNNER_SCRIPT: stripTrailingNewlines(buildRemoteGoatRunnerScript(input)),
     GOAT_PROTOCOL_GUARD: applyScriptPlaceholders(REMOTE_PROTOCOL_GUARD_SCRIPT, {
-      GOAT_SSH_PROTOCOL: String(SSH_RUNTIME_PROTOCOL_VERSION),
-      GOAT_ORCHESTRATION_PROTOCOL: String(ORCHESTRATION_PROTOCOL_VERSION),
+      GOAT_SSH_PROTOCOL: String(input?.candidateProtocol?.ssh ?? SSH_RUNTIME_PROTOCOL_VERSION),
+      GOAT_ORCHESTRATION_PROTOCOL: String(
+        input?.candidateProtocol?.orchestration ?? ORCHESTRATION_PROTOCOL_VERSION,
+      ),
       GOAT_RECONNECT_LIVE_GUARD: reconnect
         ? `  # A folded reconnect may only attach to the owned selection; a race must re-enter preparation.
   if [ "$LIVE_STATUS" != live ] || [ "$LIVE_VERSION" != "$SELECTED_VERSION" ] ||
@@ -6748,8 +6768,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         previousIntent.requestedRunner.archiveVersion === input.runner.archiveVersion;
       const intent = {
         target: input.resolvedTarget,
+        // A person's request stays manual on every retry, so the runtime never arbitrates it.
         requestedRunner: sameIntent
-          ? previousIntent.requestedRunner
+          ? {
+              ...previousIntent.requestedRunner,
+              ...(input.runner.manualRefresh === true ? { manualRefresh: true } : {}),
+            }
           : { ...input.runner, confirmReplacement: false },
         generation,
         ...(managedPin === undefined ? {} : { managedPin }),
@@ -7690,6 +7714,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                           !pendingReplacements.has(key))) &&
                       runner.refreshOwnedRuntimeOnFirstConnection === true,
                     confirmReplacement: preparationOptions.confirmReplacement === true,
+                    ...(preparationOptions.refreshRuntime === true ? { manualRefresh: true } : {}),
                   };
             const entry = yield* ensureTunnelEntry(
               key,

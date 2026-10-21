@@ -358,6 +358,189 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
+] as const)("%s fallback candidates preserve trigger and recovery policy", ([, layer]) =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const resetAt = DateTime.formatIso(DateTime.add(now, { hours: 1 }));
+    const ids: Record<string, ThreadId> = {};
+    for (const failure of [
+      "usage_limit",
+      "provider_error",
+      "transport_error",
+      "unknown",
+      "permission_error",
+    ] as const) {
+      const threadId = yield* addRolledBackRecoveryCandidate(`fallback-${failure}`);
+      ids[failure] = threadId;
+      const original = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      yield* store.apply({
+        id: EventId.make(`fallback:${failure}:failed`),
+        type: "run.updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...original, status: "failed" },
+      });
+      yield* store.apply({
+        id: EventId.make(`fallback:${failure}:error`),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`fallback:${failure}:error`),
+          threadId,
+          runId: original.id,
+          nodeId: original.rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "failed",
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "error",
+          failure: {
+            class: failure,
+            message: "Failed",
+            code: null,
+            retryable: null,
+            ...(failure === "usage_limit" ? { resetAt } : {}),
+          },
+        },
+      });
+    }
+    const options = { now, autoResume: false, snooze: false };
+    const selected = Effect.fn("selected")(function* (
+      input: Parameters<typeof store.getLimitRecoveryCandidates>[0],
+    ) {
+      return (yield* store.getLimitRecoveryCandidates(input)).map((row) => row.id).toSorted();
+    });
+    assert.deepEqual(yield* selected(options), []);
+    assert.deepEqual(yield* selected({ ...options, autoResume: true }), [ids.usage_limit]);
+    assert.deepEqual(yield* selected({ ...options, fallbackTriggers: ["provider_error"] }), [
+      ids.provider_error,
+    ]);
+    assert.deepEqual(yield* selected({ ...options, fallbackTriggers: ["transport_error"] }), [
+      ids.transport_error,
+    ]);
+    const fallbackOptions = {
+      ...options,
+      fallbackTriggers: ["usage_limit", "provider_error", "transport_error"] as const,
+    };
+    assert.deepEqual(
+      yield* selected(fallbackOptions),
+      [ids.provider_error, ids.transport_error, ids.usage_limit].toSorted(),
+    );
+    for (const failure of ["provider_error", "transport_error"] as const) {
+      const threadId = ids[failure]!;
+      const executed = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      yield* store.apply({
+        id: EventId.make(`fallback:${failure}:cancelled`),
+        type: "run.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          ...executed,
+          id: RunId.make(`fallback:${failure}:cancelled`),
+          ordinal: executed.ordinal + 1,
+          status: "cancelled",
+          startedAt: null,
+          completedAt: now,
+        },
+      });
+      assert.equal((yield* store.getThreadShell(threadId))!.status, "cancelled");
+      const candidate = (yield* store.getLimitRecoveryCandidates(fallbackOptions)).find(
+        (row) => row.id === threadId,
+      );
+      assert.isDefined(candidate);
+      assert.equal(candidate!.latestRunId, executed.id);
+      assert.equal(candidate!.lastErrorClass, failure);
+      assert.equal(candidate!.status, "failed");
+    }
+    const threadId = ids.usage_limit!;
+    const projection = yield* store.getThreadProjection(threadId);
+    const recovery = { runId: projection.runs[0]!.id, resetAt, autoResume: true, snooze: false };
+    const update = Effect.fn("updateRecoveryFixture")(function* (
+      patch: Partial<OrchestrationV2AppThread>,
+    ) {
+      yield* store.apply({
+        id: EventId.make("fallback:metadata"),
+        type: "thread.metadata-updated",
+        threadId,
+        occurredAt: now,
+        payload: { ...projection.thread, limitRecovery: recovery, ...patch },
+      });
+    });
+    yield* update({});
+    assert.deepEqual(yield* selected({ ...options, autoResume: true }), []);
+    assert.include(yield* selected(fallbackOptions), threadId);
+    assert.deepEqual(yield* selected({ ...options, now: DateTime.makeUnsafe(resetAt) }), [
+      threadId,
+    ]);
+    for (const patch of [
+      { snoozedUntil: DateTime.add(now, { minutes: 30 }) },
+      { archivedAt: now },
+      { deletedAt: now },
+      { settledOverride: "settled" as const },
+    ]) {
+      yield* update(patch);
+      assert.notInclude(yield* selected(fallbackOptions), threadId);
+    }
+    yield* update({});
+    const due = (yield* store.getLimitRecoveryCandidates(fallbackOptions)).find(
+      (row) => row.id === threadId,
+    )!;
+    assert.deepEqual(due.limitRecovery, recovery);
+    assert.equal(due.usageLimitResetAt, resetAt);
+    yield* update({ limitRecovery: { ...recovery, autoResume: false, snooze: false } });
+    assert.notInclude(yield* selected(fallbackOptions), threadId);
+    yield* update({ limitRecovery: { ...recovery, autoResume: false, snooze: true } });
+    assert.include(yield* selected(fallbackOptions), threadId);
+    const request = d10DecisionFixture(threadId, "fallback-pending").requests[0]!;
+    yield* saveD10Request(threadId, request);
+    assert.notInclude(yield* selected(fallbackOptions), threadId);
+    yield* saveD10Request(threadId, { ...request, status: "resolved", resolvedAt: now });
+    assert.include(yield* selected(fallbackOptions), threadId);
+    yield* store.apply({
+      id: EventId.make("fallback-stop"),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: TurnItemId.make("fallback-stop"),
+        threadId,
+        runId: recovery.runId,
+        nodeId: projection.runs[0]!.rootNodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 3,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "run_interrupt_request",
+        message: "Stopped",
+      },
+    });
+    assert.notInclude(yield* selected(fallbackOptions), threadId);
+    yield* update({ limitRecovery: recovery });
+    assert.include(yield* selected({ ...options, now: DateTime.makeUnsafe(resetAt) }), threadId);
+    assert.include(
+      yield* selected({ ...fallbackOptions, now: DateTime.makeUnsafe(resetAt) }),
+      threadId,
+    );
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  ["memory", ProjectionStore.layerMemory],
+  ["SQL", layerTest],
 ] as const)(
   "%s shells use the latest subagent owner for duplicate provider-thread ids",
   ([, layer]) =>
