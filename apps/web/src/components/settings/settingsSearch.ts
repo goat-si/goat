@@ -25,6 +25,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/goat-bot"
+  | "/settings/decision-inbox"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
@@ -87,6 +88,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/memory": "Memory",
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
+  "/settings/decision-inbox": "Decision inbox",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
@@ -136,6 +138,12 @@ const SOURCE_CONTROL_HOST_SEARCH_ITEMS = sourceControlClients.definitions.flatMa
 );
 
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "decision-inbox",
+    title: "Decision inbox",
+    to: "/settings/decision-inbox",
+    searchTerms: ["decisions approvals questions pending answers"],
+  },
   {
     id: "memory-records",
     title: "Memory",
@@ -1202,6 +1210,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/decision-inbox": null,
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };

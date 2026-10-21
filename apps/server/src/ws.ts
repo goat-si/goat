@@ -1,3 +1,4 @@
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
@@ -71,6 +72,7 @@ import {
   WS_METHODS,
   WsChannelRpcGroup,
   WsCoreRpcGroup,
+  WsDecisionRpcGroup,
   WsCoreServerRpcGroup,
   WsCoreWorkspaceRpcGroup,
   WsHubNodesRpcGroup,
@@ -1313,6 +1315,7 @@ export const layerWsRpc = (
   Layer.unwrap(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const decisions = yield* DecisionInbox.DecisionInbox;
       const requireCatalogHost = RpcAuthorization.requireConnectionCatalogHost(currentSession);
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -1335,6 +1338,12 @@ export const layerWsRpc = (
         .getEnvironmentId;
       // Channel calls act for the authenticated session; nothing here comes from client input.
       const channelOwner = ownerFromSession(channelEnvironmentId, currentSession);
+      const decisionCaller = {
+        kind: "client",
+        environmentId: channelEnvironmentId,
+        sessionId: currentSessionId,
+        scopes: currentSession.scopes,
+      } satisfies DecisionInbox.DecisionCaller;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const sshWorkspace = yield* SshWorkspaceSync.SshWorkspaceSync;
@@ -2125,6 +2134,13 @@ export const layerWsRpc = (
           slackChannelSettings.configure(input, channelOwner),
         [SLACK_CHANNEL_WS_METHODS.disconnect]: (input) => slackChannelSettings.disconnect(input),
         [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: () => slackChannelSettings.streamStatus(),
+      });
+      const decisionHandlers = WsDecisionRpcGroup.middleware(RpcInstrumentation).of({
+        [WS_METHODS.decisionList]: (input) => decisions.list(decisionCaller, input),
+        [WS_METHODS.decisionGet]: (input) => decisions.get(decisionCaller, input.id),
+        [WS_METHODS.decisionRequest]: (input) => decisions.create(decisionCaller, input),
+        [WS_METHODS.decisionAnswer]: (input) => decisions.answer(decisionCaller, input),
+        [WS_METHODS.decisionWithdraw]: (input) => decisions.withdraw(decisionCaller, input.id),
       });
       const handlers = ServerWsCoreRpcGroup.of({
         [WS_METHODS.connectionCatalogServe]: () =>
@@ -3547,6 +3563,7 @@ export const layerWsRpc = (
       });
       // toLayer derives services from every handler key, so narrow each part with Pick.
       return Layer.mergeAll(
+        WsDecisionRpcGroup.middleware(RpcInstrumentation).toLayer(decisionHandlers),
         WsHubNodesRpcGroup.middleware(RpcInstrumentation).toLayer(hubNodesHandlers),
         WsMemoryImportRpcGroup.middleware(RpcInstrumentation).toLayer(importHandlers),
         WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).toLayer(memoryHandlers),

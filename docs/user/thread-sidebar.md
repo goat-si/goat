@@ -155,6 +155,12 @@ Use **Go to thread** for more context or to
 [attach files to an answer](./question-attachments.md). A request whose provider session cannot
 resume stays listed with answering turned off.
 
+For durable requests with a recommendation and an expiry, open **Settings → Decision inbox**.
+It includes pending thread requests from the selected environments. Choose an option and explain your
+answer; the asking thread receives the result. Expired requests never choose an option automatically.
+Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
+questions can still be answered in their asking thread.
+
 ### See everything running
 
 On web and desktop, **Fleet** in the rail beside the thread sidebar shows how many threads are

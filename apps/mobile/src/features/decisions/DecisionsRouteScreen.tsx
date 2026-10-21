@@ -69,6 +69,19 @@ function FocusedDecisionsContent(props: {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
+          <Text className="text-sm text-foreground-muted">
+            Pending questions and approvals from threads.
+          </Text>
+          <Button
+            label="Decision inbox and history"
+            tone="secondary"
+            onPress={() =>
+              navigation.navigate("SettingsSheet", {
+                screen: "SettingsContent",
+                params: { screen: "SettingsDecisionInbox" },
+              })
+            }
+          />
           {state.loadingRefs.length > 0 ? (
             <Text className="text-sm text-foreground-muted">
               {current ? "Checking more decisions…" : "Loading decisions…"}
@@ -99,7 +112,7 @@ function FocusedDecisionsContent(props: {
           ) : null}
           {state.items.length === 0 && !partial ? (
             <EmptyState
-              title="No decisions waiting"
+              title="No pending thread requests"
               detail="Pending questions and approvals from connected environments will appear here."
             />
           ) : null}

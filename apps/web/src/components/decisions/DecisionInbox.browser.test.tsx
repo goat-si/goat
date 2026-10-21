@@ -264,7 +264,7 @@ it("never calls partial loading or detail failures all caught up", async () => {
   expect(link("Open affected thread").getAttribute("href")).toBe("/primary/b");
   await act(async () => write([]));
   expect(container.textContent).toContain(
-    "All caught up. No decisions waiting on connected environments.",
+    "All caught up. No pending thread requests on connected environments.",
   );
 });
 

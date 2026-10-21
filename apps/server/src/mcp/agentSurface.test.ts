@@ -1,3 +1,5 @@
+import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
@@ -96,6 +98,7 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 
 const toolkits = {
+  decision: DecisionToolkit,
   attachment: AttachmentToolkit,
   channel: ChannelToolkit,
   computerUse: ComputerUseToolkit,
@@ -128,6 +131,7 @@ const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations))
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const dependencies = Layer.mergeAll(
+  Layer.mock(DecisionInbox.DecisionInbox)({}),
   Layer.mock(Profiles.PermissionProfiles)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
@@ -231,7 +235,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(177); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub parity, permission profile, and computer use tools.
+  expect(entries).toHaveLength(181); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub parity, permission profile, computer use, and decision tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);

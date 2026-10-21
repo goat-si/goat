@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type DecisionListInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -22,7 +23,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import {
   createAtomCommandScheduler,
@@ -1050,6 +1051,26 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: refreshCloudMachines,
     });
 
+  const listDecisions = createEnvironmentRpcCommand(runtime, {
+    label: "environment-data:decision:list",
+    tag: WS_METHODS.decisionList,
+  });
+  const queryDecisions = Effect.fn("DecisionInbox.list")(function* (target: {
+    environmentId: EnvironmentId;
+    input: DecisionListInput;
+  }) {
+    const registry = yield* AtomRegistry.AtomRegistry;
+    const result = yield* Effect.promise(() => listDecisions.run(registry, target));
+    return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
+  });
+  const decisionItems = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:decision:list:query",
+    idleTtlMs: 0,
+    execute: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      queryDecisions(target),
+    refreshTrigger: (target) => listDecisions.permissionAtom(target.environmentId),
+  });
+
   return {
     cloudMachines,
     cloudAgentRuns,
@@ -1213,6 +1234,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:remote-launches",
       tag: WS_METHODS.remoteLaunchesList,
       staleTimeMs: 5_000,
+    }),
+    decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
+      decisionItems({ environmentId: target.environmentId, input: target }),
+    answerDecision: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:decision:answer",
+      tag: WS_METHODS.decisionAnswer,
     }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",

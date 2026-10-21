@@ -1,3 +1,6 @@
+import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
+import * as PendingQuestionsMcpService from "./mcp/PendingQuestionsMcpService.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -1188,7 +1191,27 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
-  Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(
+    DecisionInbox.layerRunning.pipe(
+      Layer.provideMerge(DecisionInbox.layer),
+      Layer.provide(PermissionProfiles.layer),
+      Layer.provide(
+        PendingQuestionsMcpService.layer.pipe(
+          Layer.provide(HostThreadsMcpService.layer),
+          Layer.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            ),
+          ),
+          Layer.provide(ThreadResultService.layer),
+        ),
+      ),
+      Layer.provide(RemoteDispatchCoordinator.layer),
+      Layer.provide(LaunchWatchService.layer),
+      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provideMerge(layerOrchestrationApplication),
+    ),
+  ),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
       // One instance, shared with the auto-update scheduler, so arbitration sees its target.

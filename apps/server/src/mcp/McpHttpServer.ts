@@ -1,3 +1,5 @@
+import { DecisionToolkit } from "./toolkits/decision/tools.ts";
+import * as DecisionHandlers from "./toolkits/decision/handlers.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   OrchestratorMcpFailure,
@@ -1230,6 +1232,7 @@ const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, 
 /** The registration layers mounted by /mcp, including image and memory tools.
  * Kept separate from domain construction so catalog contracts can be checked without live state. */
 export const catalogRegistrations = {
+  decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
   previewStandard: toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard),
@@ -1373,6 +1376,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 export const layer = Layer.mergeAll(
+  catalogRegistrations.decision,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

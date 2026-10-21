@@ -1,3 +1,4 @@
+import { SettingsDecisionInboxRouteScreen } from "./features/settings/SettingsDecisionInboxRouteScreen";
 import { SettingsHubNodesRouteScreen } from "./features/settings/SettingsHubNodesRouteScreen";
 import { NotesRouteScreen } from "./features/notes/NotesRouteScreen";
 import { NoteRouteScreen } from "./features/notes/NoteRouteScreen";
@@ -364,6 +365,11 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsHubNodesRouteScreen,
       linking: "hub-devices",
       options: { title: "Devices on this hub" },
+    }),
+    SettingsDecisionInbox: createNativeStackScreen({
+      screen: SettingsDecisionInboxRouteScreen,
+      linking: "decision-inbox",
+      options: { title: "Decision inbox" },
     }),
     SettingsScheduledTasks: createNativeStackScreen({
       screen: SettingsScheduledTasksRouteScreen,

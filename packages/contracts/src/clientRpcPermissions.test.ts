@@ -140,3 +140,14 @@ it("SSH setup separates read, settings and runtime-maintenance authority", () =>
     "orchestration:operate",
   ]);
 });
+
+it("decision reads and mutations carry environment scopes", () => {
+  for (const method of [WS_METHODS.decisionList, WS_METHODS.decisionGet])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:read"]);
+  for (const method of [
+    WS_METHODS.decisionRequest,
+    WS_METHODS.decisionAnswer,
+    WS_METHODS.decisionWithdraw,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});

@@ -1,3 +1,4 @@
+import * as Decisions from "./decisions.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -709,6 +710,11 @@ export const WS_METHODS = {
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
 
   // Markdown notes on this environment
+  decisionList: "decision.list",
+  decisionGet: "decision.get",
+  decisionRequest: "decision.request",
+  decisionAnswer: "decision.answer",
+  decisionWithdraw: "decision.withdraw",
   notesList: "notes.list",
   notesRead: "notes.read",
   notesWrite: "notes.write",
@@ -2771,7 +2777,37 @@ export const WsNotesRpcGroup = RpcGroup.make(
   WsNotesWorkTargetProjectsRpc,
 ).middleware(RpcScopeAuthorization);
 
-export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup).merge(WsNotesRpcGroup);
+const decisionRpcErrors = Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]);
+export const WsDecisionRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.decisionList, {
+    payload: Decisions.DecisionListInput,
+    success: Decisions.DecisionListResult,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionGet, {
+    payload: Decisions.DecisionGetInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionRequest, {
+    payload: Decisions.DecisionRequestInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionAnswer, {
+    payload: Decisions.DecisionAnswerInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+  Rpc.make(WS_METHODS.decisionWithdraw, {
+    payload: Decisions.DecisionGetInput,
+    success: Decisions.DecisionItem,
+    error: decisionRpcErrors,
+  }),
+).middleware(RpcScopeAuthorization);
+export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
+  .merge(WsNotesRpcGroup)
+  .merge(WsDecisionRpcGroup);
 
 const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
 const MemoryImportRpcErrors = Schema.Union([

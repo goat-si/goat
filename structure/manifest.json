@@ -356,7 +356,10 @@
         "packages/contracts/src/permissionProfiles.ts",
         "apps/server/src/fleet/pressure/HostPressureMonitor.ts",
         "apps/server/src/fleet/pressure/PressureNudger.ts",
-        "packages/contracts/src/hostPressure.ts"
+        "packages/contracts/src/hostPressure.ts",
+        "apps/server/src/goatclaw/DecisionInbox.ts",
+        "apps/server/src/persistence/Migrations/098_DecisionInbox.ts",
+        "packages/contracts/src/decisions.ts"
       ]
     },
     {

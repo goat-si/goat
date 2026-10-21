@@ -20,6 +20,11 @@ import { SLACK_CHANNEL_WS_METHODS } from "./slackChannel.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.decisionList]: AuthOrchestrationReadScope,
+  [WS_METHODS.decisionGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.decisionRequest]: AuthOrchestrationOperateScope,
+  [WS_METHODS.decisionAnswer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.decisionWithdraw]: AuthOrchestrationOperateScope,
   [WS_METHODS.sshHostStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostSyncStart]: AuthProvidersManageScope,

@@ -157,3 +157,16 @@ placement refuses a critical host. Settings: `fleet.pressure` in
 `packages/contracts/src/hostPressure.ts`.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-host-pressure.md)
+
+## Durable decisions
+
+`apps/server/src/goatclaw/DecisionInbox.ts` and `packages/contracts/src/decisions.ts` keep durable
+requests alongside projections of pending provider questions. Projections retain the existing response
+path and its dispatch-time mode guard; approvals and questions above an agent's ceiling remain human-only.
+A client's owner override requires authenticated settings-write and orchestration-operate scopes.
+
+`apps/server/src/persistence/Migrations/098_DecisionInbox.ts` keeps decision state and append-only audit
+metadata outside the orchestration log. Answer delivery commits to an outbox before sending a stable
+thread message; the shared Scheduler retries each delivery independently. Projected answers keep an
+audit intent before dispatch and reconcile it from the committed command receipt, so restart cannot
+silently lose the answer's audit trail. Expiry closes requests without choosing a recommendation.

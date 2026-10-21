@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  InboxIcon,
   BrainIcon,
   BlocksIcon,
   BotIcon,
@@ -76,6 +77,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/integrations": BlocksIcon,
   "/settings/goat-bot": MessageCircleIcon,
+  "/settings/decision-inbox": InboxIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
