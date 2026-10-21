@@ -125,10 +125,11 @@ const spawnOwnedCommand = async (
   signal?: AbortSignal,
 ) => {
   signal?.throwIfAborted();
-  const owned =
-    HostProcess.Platform.defaultValue() === "win32"
-      ? await windowsJobCommand({ command, args, env: options.env })
-      : { command, args, dispose: async () => {} };
+  // Yield on both platforms: a synchronous spawn from a macrotask can emit its nextTick
+  // error before callers' Promise continuations attach their listeners.
+  const owned = await (HostProcess.Platform.defaultValue() === "win32"
+    ? windowsJobCommand({ command, args, env: options.env })
+    : { command, args, dispose: async () => {} });
   try {
     signal?.throwIfAborted();
     return {
