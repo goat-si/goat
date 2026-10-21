@@ -811,6 +811,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "computer-use",
+    title: "Computer use",
+    to: "/settings/integrations",
+    targetId: "computer",
+    searchTerms: [
+      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions",
+    ],
+  },
+  {
     id: "goat-bot-home",
     title: "Runs on",
     to: "/settings/goat-bot",

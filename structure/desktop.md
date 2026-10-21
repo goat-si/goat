@@ -75,6 +75,12 @@ starting and reports `unavailable` until they are granted. Packaged builds start
 driver, retires a crashed one, and passes the same telemetry and update-check opt-outs as the
 standalone host ([server.md](server.md#computer-use)).
 
+Setup proves the macOS grants from inside the driver (`verify`): Electron's check comes first,
+then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
+`health_report`'s bundle identity for this process, and capture non-blank pixels plus an
+accessibility tree of a GOAT window. `check_permissions` alone cannot show that capture works.
+The check's driver is always stopped afterwards; the next agent session starts its own.
+
 `stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
 checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the
 driver, cursor theme tool and Wayland helper on Linux, and the driver, UIA worker and cursor theme

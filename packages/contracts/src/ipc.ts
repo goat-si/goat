@@ -19,6 +19,7 @@ import {
   SshRuntimeUpdateMode,
 } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import type { DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
@@ -1182,7 +1183,11 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
-export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
+export const SystemSettingsPaneSchema = Schema.Literals([
+  "full-disk-access",
+  "accessibility",
+  "screen-recording",
+]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 /**
@@ -1309,6 +1314,8 @@ export interface DesktopBridge {
   openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   checkSystemPermission?: (pane: SystemSettingsPane) => Promise<boolean>;
   restartCuaDriver?: () => Promise<void>;
+  /** Restarts the local driver and proves its macOS grants from inside the driver. */
+  verifyCuaDriver?: () => Promise<DesktopCuaVerification>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
    */
