@@ -124,6 +124,7 @@ const spawnOwnedCommand = async (
   options: NodeChildProcess.SpawnOptions & { env: NodeJS.ProcessEnv },
   signal?: AbortSignal,
 ) => {
+  signal?.throwIfAborted();
   const owned =
     HostProcess.Platform.defaultValue() === "win32"
       ? await windowsJobCommand({ command, args, env: options.env })
@@ -208,55 +209,78 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       });
     }),
   runDetached: (input) =>
-    Effect.promise(async () => {
-      const dir = await NodeFS.promises.mkdtemp(
-        NodePath.join(NodeOS.tmpdir(), "goat-runtime-update-"),
+    Effect.callback<SshRuntimeProcessResult>((resume) => {
+      const controller = new AbortController();
+      const preparation = Promise.withResolvers<void>();
+      const operation = (async () => {
+        const dir = await NodeFS.promises.mkdtemp(
+          NodePath.join(NodeOS.tmpdir(), "goat-runtime-update-"),
+        );
+        try {
+          const scriptFile = NodePath.join(dir, "launch.sh");
+          const stdoutFile = NodePath.join(dir, "stdout");
+          const stderrFile = NodePath.join(dir, "stderr");
+          await NodeFS.promises.writeFile(scriptFile, input.script, { mode: 0o600 });
+          // Files, never pipes: the drain stops this server mid-script, and a write to a closed pipe
+          // would kill the script before it releases the replacement lock and drain fence.
+          const stdout = NodeFS.openSync(stdoutFile, "w", 0o600);
+          const stderr = NodeFS.openSync(stderrFile, "w", 0o600);
+          // Never killed from here: once it drains this server, the script and the supervisor it
+          // starts own the host until the replacement answers or the previous version is restored.
+          // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
+          const scriptArg = bashScriptArg(input.shell, scriptFile);
+          const { child, dispose } = await spawnOwnedCommand(
+            input.shell,
+            [scriptArg, ...input.args],
+            {
+              cwd: input.cwd,
+              detached: true,
+              windowsHide: true,
+              env: input.env,
+              stdio: ["ignore", stdout, stderr],
+            },
+            controller.signal,
+          ).finally(() => {
+            NodeFS.closeSync(stdout);
+            NodeFS.closeSync(stderr);
+          });
+          // The detached process now owns the update. Cancellation can no longer stop it.
+          if (child.pid !== undefined) preparation.resolve();
+          const code = await new Promise<number | null>((resolve) => {
+            child.once("error", () => resolve(null));
+            child.once("close", resolve);
+            // Still alive here means the script never drained this server: it is stuck before the
+            // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
+            const bound = setTimeout(() => {
+              if (child.pid !== undefined) stopProcessTree(child, "SIGTERM");
+            }, DETACHED_TIMEOUT_MS);
+            bound.unref();
+            child.once("close", () => clearTimeout(bound));
+          });
+          const read = (file: string) => NodeFS.promises.readFile(file, "utf8").catch(() => "");
+          const result = { code, stdout: await read(stdoutFile), stderr: await read(stderrFile) };
+          await dispose();
+          return result;
+        } finally {
+          await NodeFS.promises.rm(dir, { recursive: true, force: true });
+        }
+      })();
+      void operation.then(
+        (result) => {
+          preparation.resolve();
+          resume(Effect.succeed(result));
+        },
+        (error) => {
+          preparation.resolve();
+          resume(Effect.die(error));
+        },
       );
-      try {
-        const scriptFile = NodePath.join(dir, "launch.sh");
-        const stdoutFile = NodePath.join(dir, "stdout");
-        const stderrFile = NodePath.join(dir, "stderr");
-        await NodeFS.promises.writeFile(scriptFile, input.script, { mode: 0o600 });
-        // Files, never pipes: the drain stops this server mid-script, and a write to a closed pipe
-        // would kill the script before it releases the replacement lock and drain fence.
-        const stdout = NodeFS.openSync(stdoutFile, "w", 0o600);
-        const stderr = NodeFS.openSync(stderrFile, "w", 0o600);
-        // Never killed from here: once it drains this server, the script and the supervisor it
-        // starts own the host until the replacement answers or the previous version is restored.
-        // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
-        const scriptArg = bashScriptArg(input.shell, scriptFile);
-        const { child, dispose } = await spawnOwnedCommand(
-          input.shell,
-          [scriptArg, ...input.args],
-          {
-            cwd: input.cwd,
-            detached: true,
-            windowsHide: true,
-            env: input.env,
-            stdio: ["ignore", stdout, stderr],
-          },
-        ).finally(() => {
-          NodeFS.closeSync(stdout);
-          NodeFS.closeSync(stderr);
-        });
-        const code = await new Promise<number | null>((resolve) => {
-          child.once("error", () => resolve(null));
-          child.once("close", resolve);
-          // Still alive here means the script never drained this server: it is stuck before the
-          // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
-          const bound = setTimeout(() => {
-            if (child.pid !== undefined) stopProcessTree(child, "SIGTERM");
-          }, DETACHED_TIMEOUT_MS);
-          bound.unref();
-          child.once("close", () => clearTimeout(bound));
-        });
-        const read = (file: string) => NodeFS.promises.readFile(file, "utf8").catch(() => "");
-        const result = { code, stdout: await read(stdoutFile), stderr: await read(stderrFile) };
-        await dispose();
-        return result;
-      } finally {
-        await NodeFS.promises.rm(dir, { recursive: true, force: true });
-      }
+      return Effect.promise(async () => {
+        controller.abort();
+        // Before detach, wait for compilation and both temporary directories to be released.
+        // After detach this is already resolved; the updater must outlive its former caller.
+        await preparation.promise;
+      });
     }),
   sha256: (file) =>
     Effect.promise(() =>
