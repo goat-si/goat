@@ -179,8 +179,20 @@ export function applyChannelTaskEvent(
     }
     // The worker takes the follow-up; the task keeps running until the run that took it settles.
     case "task.followup.received":
+      if (
+        event.payload.expectedWorkerRunId !== undefined &&
+        event.payload.expectedWorkerRunId !== task.worker?.runId
+      ) {
+        return reject("The correction names an old worker run.");
+      }
       if (task.status === "reviewing" && task.review?.verdict !== "blockers") {
         return reject("An open review cannot forward findings.");
+      }
+      if (
+        task.status === "reviewing" &&
+        event.payload.expectedWorkerRunId !== task.review?.workerRunId
+      ) {
+        return reject("A review correction must name the reviewed worker run.");
       }
       return { ok: true, task: { ...base, status: "running" } };
     case "task.completion.proposed": {

@@ -8057,6 +8057,44 @@ it.layer(layerTest)("automated continuation", (it) => {
     creationSource: "server" as const,
   });
 
+  it.effect(
+    "review correction run fence rejects newer work and preserves the original receipt",
+    () =>
+      Effect.gen(function* () {
+        const { orchestrator, threadId, run } = yield* seedFailedThread("review-fence");
+        const correction = {
+          type: "message.dispatch" as const,
+          threadId,
+          commandId: CommandId.make("review-fence:correct"),
+          messageId: MessageId.make("review-fence:correct"),
+          expectedLatestRunId: run.id,
+          text: "Correct this finding.",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" as const },
+          createdBy: "user" as const,
+          creationSource: "server" as const,
+        };
+        const first = yield* orchestrator.dispatch(correction);
+        const replay = yield* orchestrator.dispatch(correction);
+        assert.strictEqual(replay.sequence, first.sequence);
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+        const stale = yield* orchestrator
+          .dispatch({
+            ...correction,
+            commandId: CommandId.make("review-fence:stale"),
+            messageId: MessageId.make("review-fence:stale"),
+          })
+          .pipe(Effect.result);
+        assert.strictEqual(stale._tag, "Failure");
+        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 2);
+        assert.isFalse(
+          (yield* orchestrator.getThreadProjection(threadId)).messages.some(
+            (message) => message.id === "review-fence:stale",
+          ),
+        );
+      }),
+  );
+
   it.effect("starts a new run when the continuation targets the failed run", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, run } = yield* seedFailedThread("accepted");

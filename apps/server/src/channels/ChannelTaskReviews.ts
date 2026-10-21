@@ -5,7 +5,6 @@ import {
   type ChannelTask,
   type ChannelTaskReview,
   type RunId,
-  CommandId,
   RemoteOriginReportsWaitResult,
   ReviewLedgerDecisionInput,
   RunId as RunIdSchema,
@@ -25,13 +24,14 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ReviewService from "../review/ReviewService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
-import { shellSingleQuote } from "../sshRemote/remoteBrowse.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { questionIdFor, reviewLaunchIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { completionHoldCount } from "./channelWorkerObservation.ts";
+import { parseReviewDiff, reviewDiffScript } from "./channelReviewDiff.ts";
 
 export const REVIEW_TIMEOUT_MS = 20 * 60_000;
 const REMOTE_READ_MS = 15_000;
@@ -68,7 +68,6 @@ const Reservation = Schema.fromJsonString(
   }),
 );
 const decodeReservation = Schema.decodeUnknownSync(Reservation);
-const encodeReservation = Schema.encodeSync(Reservation);
 const LocalBrief = Schema.fromJsonString(
   Schema.Struct({
     text: Schema.String,
@@ -94,6 +93,7 @@ export class ChannelTaskReviews extends Context.Service<
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const cleanup = yield* ChannelReviewCleanup.ChannelReviewCleanup;
   const slack = yield* SlackChannelSettings.SlackChannelSettings;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -224,6 +224,14 @@ const make = Effect.gen(function* () {
       );
     }
     const result = parsed.value;
+    if (result.verdict === "pass" && result.findings.length !== 0) {
+      return yield* finish(
+        stored,
+        owner,
+        "failed",
+        "The reviewer returned a contradictory pass with findings.",
+      );
+    }
     if (
       result.verdict === "blockers" &&
       !result.findings.some((finding) => finding.decision === "accepted")
@@ -302,6 +310,7 @@ const make = Effect.gen(function* () {
               inputId: ids.followupId,
               generation: task.generation,
               from: "independent reviewer",
+              expectedWorkerRunId: review.workerRunId,
               text:
                 review.summary +
                 "\n" +
@@ -473,6 +482,7 @@ const make = Effect.gen(function* () {
         "skipped",
         "The requester no longer permits the review launch.",
       );
+    yield* cleanup.track(task, owner);
     const launched = yield* launches
       .launch({
         commandId: ids.commandId,
@@ -526,7 +536,9 @@ const make = Effect.gen(function* () {
         },
         Effect.succeed(task.requester.runtimeModeCeiling),
       );
-    const saved = yield* ledger.getReviewDispatch(ids.correlationId);
+    const saved =
+      (yield* ledger.getReviewDispatch(ids.correlationId)) ??
+      (yield* ledger.getReviewDispatch("cleanup:" + review.threadId));
     if (saved !== undefined) {
       const reservation = decodeReservation(saved);
       const observed = yield* call("goat_origin_reports_wait", {
@@ -539,6 +551,7 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.flatMap(decodeWait), Effect.option);
       // A reservation may represent a lost response or an in-flight launch. Never re-dispatch.
       if (Option.isNone(observed) || observed.value.observedRun == null) return;
+      yield* cleanup.bindRemote(review.threadId, observed.value.threadId, owner);
       if (review.remoteThreadId === undefined) {
         yield* commitTransition(
           ledger,
@@ -597,29 +610,23 @@ const make = Effect.gen(function* () {
       .runHostScript({
         host: target.host,
         timeoutMs: REMOTE_READ_MS,
-        script: [
-          "set -eu",
-          "cd " + shellSingleQuote(cwd),
-          "export GIT_OPTIONAL_LOCKS=0",
-          "base=" +
-            shellSingleQuote(
-              task.target!.workspaceStrategy.type === "worktree"
-                ? (task.target!.workspaceStrategy.baseRef ?? "origin/HEAD")
-                : "origin/HEAD",
-            ),
-          'base=$(git merge-base HEAD "$base")',
-          'git --no-pager diff --no-ext-diff "$base" --',
-        ].join("\n"),
+        script: reviewDiffScript(
+          cwd,
+          task.target!.workspaceStrategy.type === "worktree"
+            ? (task.target!.workspaceStrategy.baseRef ?? "origin/HEAD")
+            : "origin/HEAD",
+        ),
       })
       .pipe(Effect.option);
     if (Option.isNone(diff))
       return yield* finish(stored, owner, "failed", "Could not read the remote worker diff.");
-    if (diff.value.stdout.length > MAX_DIFF_LENGTH)
+    const completeDiff = parseReviewDiff(diff.value.stdout);
+    if (completeDiff === undefined)
       return yield* finish(
         stored,
         owner,
         "skipped",
-        "The diff exceeds the independent review limit.",
+        "The remote diff was incomplete, unsupported, or exceeded the review limit.",
       );
     if (!(yield* authorize(task, owner)))
       return yield* finish(
@@ -629,12 +636,7 @@ const make = Effect.gen(function* () {
         "The requester no longer permits the review launch.",
       );
     const readKey = NodeCrypto.randomBytes(32).toString("base64url");
-    const inserted = yield* ledger.reserveReviewDispatch({
-      owner,
-      key: ids.correlationId,
-      value: encodeReservation({ readKey }),
-      now: DateTime.formatIso(yield* DateTime.now),
-    });
+    const inserted = yield* cleanup.reserveRemote(task, owner, readKey);
     if (!inserted) return;
     const bot = yield* ledger.getBot(stored.ownerId);
     const launched = yield* ssh
@@ -650,7 +652,7 @@ const make = Effect.gen(function* () {
                   worktreePath: cwd,
                 },
           title: "Review: " + task.title,
-          message: brief(task, diff.value.stdout),
+          message: brief(task, completeDiff),
           modelSelection: review.reviewerModel,
           runtimeMode: "approval-required",
           callerRuntimeMode: task.requester.runtimeModeCeiling,
@@ -673,6 +675,8 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.result);
+    if (launched._tag === "Success")
+      yield* cleanup.bindRemote(review.threadId, ThreadId.make(launched.success.threadId), owner);
     if (launched._tag === "Success" && !launched.success.reportsSupported) {
       yield* finish(
         stored,
@@ -711,49 +715,14 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const stopReviewer = Effect.fn("ChannelTaskReviews.stopReviewer")(function* (
-    stored: ChannelLedger.ChannelStoredTask,
-  ) {
-    const task = stored.task;
-    const review = task.review!;
-    const ids = reviewLaunchIdsFor(task.taskId, task.generation, review.workerRunId);
-    if (task.worker?.host === undefined) {
-      yield* threads
-        .interruptThread({
-          projectId: task.target!.projectId,
-          threadId: review.threadId,
-          commandId: CommandId.make(ids.commandId + ":stop"),
-          reason: "The channel review no longer needs a result.",
-        })
-        .pipe(Effect.ignore);
-    } else if (review.remoteThreadId !== undefined) {
-      yield* ssh
-        .callHostTool(
-          {
-            host: task.worker.host,
-            tool: "goat_thread_interrupt",
-            arguments: {
-              threadId: review.remoteThreadId,
-              clientRequestId: ids.commandId + ":stop",
-            },
-            writes: true,
-            timeoutMs: REMOTE_READ_MS,
-          },
-          Effect.succeed(task.requester.runtimeModeCeiling),
-        )
-        .pipe(Effect.ignore);
-    }
-  });
-
   const reconcile = Effect.fn("ChannelTaskReviews.reconcile")(function* (owner: string) {
     if (!(yield* ledger.isOwner(owner))) return 0;
-    let changed = 0;
+    let changed = yield* cleanup.reconcile(owner);
     for (const stored of yield* ledger.listTaskReviews()) {
       const review = stored.task.review;
       if (review === undefined) continue;
       if (stored.task.status === "cancelled") {
         if (review.verdict !== undefined) continue;
-        yield* stopReviewer(stored);
         yield* finish(stored, owner, "failed", "The task was cancelled during review.");
         changed += 1;
         continue;
@@ -794,15 +763,35 @@ const make = Effect.gen(function* () {
           changed += 1;
           continue;
         }
-        if (Option.isNone(latest) && review.verdict === "pass") continue;
+        if (Option.isNone(latest) || latest.value.thread.latestRunId === null) continue;
         if (Option.isSome(latest)) remoteWorker = latest.value.thread;
+      }
+      if (stored.task.worker?.host === undefined) {
+        const identity = yield* threads
+          .getThreadRecords(stored.task.worker!.threadId, ["runs"])
+          .pipe(Effect.option);
+        if (Option.isNone(identity)) continue;
+        const latest = identity.value.runs.toSorted((a, b) => a.ordinal - b.ordinal).at(-1);
+        if (latest === undefined) continue;
+        if (latest.id !== review.workerRunId) {
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.worker.bound",
+              payload: { worker: { ...stored.task.worker!, runId: latest.id } },
+            },
+            { owner },
+          );
+          changed += 1;
+          continue;
+        }
       }
       if (review.verdict !== undefined) yield* settle(stored, owner);
       else if (
         DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(review.startedAt) >=
         REVIEW_TIMEOUT_MS
       ) {
-        yield* stopReviewer(stored);
         yield* finish(
           stored,
           owner,

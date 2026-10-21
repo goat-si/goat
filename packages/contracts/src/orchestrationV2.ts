@@ -3119,6 +3119,8 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    /** Compare under command serialization; replayed receipts still return their original run. */
+    expectedLatestRunId: Schema.optional(RunId),
     memoryGrantCeiling: MemoryTaskGrantCeilingField,
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,

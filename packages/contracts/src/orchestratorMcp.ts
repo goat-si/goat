@@ -793,7 +793,21 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
-});
+  expectedLatestRunId: Schema.optional(
+    RunId.annotate({
+      description:
+        "Compare at the destination server before enqueue. Use a direct destination call, without host; relay sends cannot preserve this fence.",
+    }),
+  ),
+}).check(
+  Schema.makeFilter(
+    (input) => input.expectedLatestRunId === undefined || input.host === undefined,
+    {
+      message:
+        "A run-fenced send must call the destination directly; host/relay sends do not preserve the fence.",
+    },
+  ),
+);
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 
 export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
@@ -1039,6 +1053,7 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   providers: Schema.Array(OrchestratorMcpProviderCapability),
   features: Schema.Struct({
     appOwnedSubagents: Schema.Boolean,
+    runFencedThreadSend: Schema.optional(Schema.Boolean),
     asyncPolling: Schema.Boolean,
     cancellation: Schema.Boolean,
     batchThreadCreation: Schema.Boolean,

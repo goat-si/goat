@@ -2686,6 +2686,7 @@ const make = Effect.gen(function* () {
         ),
         features: {
           appOwnedSubagents: true,
+          runFencedThreadSend: true,
           asyncPolling: true,
           cancellation: true,
           batchThreadCreation: true,
@@ -3893,6 +3894,9 @@ const make = Effect.gen(function* () {
           }),
           threadId: input.threadId,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
+          ...(input.expectedLatestRunId === undefined
+            ? {}
+            : { expectedLatestRunId: input.expectedLatestRunId }),
           messageId,
           text: input.message,
           attachments: [],

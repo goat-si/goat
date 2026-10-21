@@ -76,7 +76,11 @@ recall present the two kinds of evidence separately.
 ordinary server-owned thread because the completed worker has no active run to delegate from.
 Reviews and finding decisions use the task event ledger; dispatch receipts keep private remote
 report capabilities outside client snapshots. A reserved remote dispatch is probed after restart,
-never blindly repeated, because a lost response does not prove the launch failed.
+never blindly repeated, because a lost response does not prove the launch failed. Cleanup ownership
+is retained separately from task snapshots and dispatch payloads, with capped retry backoff; a new
+worker generation cannot erase an older reviewer's identity. Automatic corrections carry the
+reviewed run through ordinary message admission, which compares it under serialization before
+enqueue. Older remotes must advertise this support; human follow-ups do not need that fence.
 
 MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.md`](mcp-toolkits.md).
 `CHANNEL_MCP_TOOL_NAMES` has no tool that sends to an arbitrary channel.

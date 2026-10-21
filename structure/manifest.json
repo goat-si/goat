@@ -252,6 +252,7 @@
         "apps/server/src/persistence/Migrations/071_ChannelLedger.ts",
         "apps/server/src/channels/ChannelReceptionService.ts",
         "apps/server/src/channels/ChannelTaskReviews.ts",
+        "apps/server/src/channels/ChannelReviewCleanup.ts",
         "apps/server/src/channels/ChannelDispatcher.ts",
         "apps/server/src/channels/ChannelRemoteWorkers.ts",
         "apps/server/src/channels/channelDispatchAuthority.ts",

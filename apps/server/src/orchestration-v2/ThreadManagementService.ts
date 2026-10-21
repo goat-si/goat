@@ -172,6 +172,7 @@ export type ThreadManagementTerminalRunStatus = Extract<
 >;
 
 export interface ThreadManagementSendInput {
+  readonly expectedLatestRunId?: RunId;
   readonly projectId: ProjectId;
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
@@ -1169,6 +1170,9 @@ const make = Effect.gen(function* () {
       const dispatchMode = yield* unattendedSteeringMode(input, requestedMode);
       const dispatched = yield* dispatch({
         type: "message.dispatch",
+        ...(input.expectedLatestRunId === undefined
+          ? {}
+          : { expectedLatestRunId: input.expectedLatestRunId }),
         memoryGrantCeiling: input.memoryGrantCeiling ?? "none",
         commandId,
         threadId: input.threadId,

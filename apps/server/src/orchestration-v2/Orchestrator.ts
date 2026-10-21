@@ -5206,6 +5206,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) {
     let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    if (
+      command.expectedLatestRunId !== undefined &&
+      projection.runs.toSorted((left, right) => left.ordinal - right.ordinal).at(-1)?.id !==
+        command.expectedLatestRunId
+    ) {
+      return yield* new OrchestratorCommandRejectedError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The thread has moved beyond the reviewed run.",
+      });
+    }
     const admissionSelection = command.modelSelection ?? projection.thread.modelSelection;
     const admissionAdapter = yield* providerAdapters
       .get(admissionSelection.instanceId)

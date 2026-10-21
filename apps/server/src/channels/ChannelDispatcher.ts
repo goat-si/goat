@@ -1058,6 +1058,32 @@ const make = Effect.gen(function* () {
         onSome: (value) =>
           value.runs.toSorted((left, right) => left.ordinal - right.ordinal).at(-1),
       });
+      if (event.payload.expectedWorkerRunId !== undefined) {
+        if (records._tag === "None" || newest === undefined) return;
+        const ownIds = new Set<string>([
+          turnSteerIdsFor(event.payload.inputId).messageId,
+          turnSteerIdsFor(event.payload.inputId, "queued").messageId,
+        ]);
+        const delivered = records.value.runs.some(
+          (run) => run.userMessageId !== null && ownIds.has(run.userMessageId),
+        );
+        if (newest.id !== event.payload.expectedWorkerRunId && !delivered) {
+          yield* commitTransition(
+            ledger,
+            stored,
+            { type: "task.worker.bound", payload: { worker: { ...worker, runId: newest.id } } },
+            {
+              owner,
+              ...(stored.pendingAnswerMessageId !== undefined &&
+              ownIds.has(stored.pendingAnswerMessageId)
+                ? { pendingAnswerMessageId: null }
+                : {}),
+            },
+          );
+          yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          return;
+        }
+      }
       if (newest?.status === "cancelled") {
         const latest = (yield* ledger.getTask(event.taskId)) ?? stored;
         if (latest.pendingAnswerMessageId !== undefined) {
@@ -1086,6 +1112,9 @@ const make = Effect.gen(function* () {
             // First into the running run when it can take steering; the second attempt only
             // queues, which the thread accepts whatever its run is doing.
             mode: attempt === "first" ? "auto" : "queue",
+            ...(event.payload.expectedWorkerRunId === undefined
+              ? {}
+              : { expectedLatestRunId: event.payload.expectedWorkerRunId }),
             createdBy: "user",
             creationSource: "server",
           })
@@ -1107,11 +1136,43 @@ const make = Effect.gen(function* () {
       if (
         sent._tag === "Failure" &&
         rejected(sent.failure) &&
+        event.payload.expectedWorkerRunId === undefined &&
         (yield* Ref.get(refused)) === undefined
       ) {
         sent = yield* send("queued");
       }
       if (sent._tag === "Failure") {
+        if (event.payload.expectedWorkerRunId !== undefined && rejected(sent.failure)) {
+          const current = yield* threads
+            .getThreadRecords(worker.threadId, ["runs"])
+            .pipe(Effect.option);
+          if (current._tag === "None") return;
+          const latestRun = current.value.runs
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+            .at(-1);
+          if (latestRun !== undefined && latestRun.id !== event.payload.expectedWorkerRunId) {
+            const latest = yield* ledger.getTask(event.taskId);
+            if (latest !== undefined && latest.task.generation === event.payload.generation) {
+              yield* commitTransition(
+                ledger,
+                latest,
+                {
+                  type: "task.worker.bound",
+                  payload: { worker: { ...worker, runId: latestRun.id } },
+                },
+                {
+                  owner,
+                  ...(latest.pendingAnswerMessageId ===
+                  turnSteerIdsFor(event.payload.inputId).messageId
+                    ? { pendingAnswerMessageId: null }
+                    : {}),
+                },
+              );
+            }
+            yield* ledger.completeForward({ owner, sequence: pending.sequence });
+            return;
+          }
+        }
         const refusal = yield* Ref.get(refused);
         if (refusal !== undefined || rejected(sent.failure)) {
           // Read again: an earlier follow-up's question may have moved the task since.

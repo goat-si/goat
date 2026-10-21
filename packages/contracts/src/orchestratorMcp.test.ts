@@ -15,6 +15,8 @@ import {
   OrchestratorMcpReviewFindingsRecordResult,
   OrchestratorMcpReviewFindingsExportInput,
   OrchestratorMcpThreadWaitInput,
+  OrchestratorMcpThreadSendInput,
+  OrchestratorMcpCapabilitiesResult,
 } from "./orchestratorMcp.ts";
 
 const decodePendingRequestRespondInput = Schema.decodeUnknownSync(
@@ -391,3 +393,50 @@ it("decodes review history without accepting server-owned outcome fields as inpu
 });
 
 const decodeThreadWaitInput = Schema.decodeUnknownSync(OrchestratorMcpThreadWaitInput);
+
+it("run-fenced sends are destination-local and ordinary host sends retain their wire shape", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadSendInput);
+  expect(
+    decode({ threadId: "worker", message: "correct", expectedLatestRunId: "old-run" })
+      .expectedLatestRunId,
+  ).toBe("old-run");
+  expect(() =>
+    decode({
+      threadId: "worker",
+      host: "remote",
+      message: "correct",
+      expectedLatestRunId: "old-run",
+    }),
+  ).toThrow();
+  expect(decode({ threadId: "worker", host: "remote", message: "human followup" })).toEqual({
+    threadId: "worker",
+    host: "remote",
+    message: "human followup",
+  });
+});
+it("capability snapshots remain compatible when run-fenced send support is absent", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpCapabilitiesResult);
+  const old = {
+    parentThreadId: null,
+    inheritedProviderInstanceId: null,
+    inheritedModel: null,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    providers: [],
+    features: {
+      appOwnedSubagents: true,
+      asyncPolling: true,
+      cancellation: true,
+      batchThreadCreation: true,
+      threadManagement: true,
+      incrementalThreadRead: true,
+      scheduledTasks: true,
+      maxBatchThreads: 20,
+    },
+  };
+  expect(decode(old).features.runFencedThreadSend).toBeUndefined();
+  expect(
+    decode({ ...old, features: { ...old.features, runFencedThreadSend: true } }).features
+      .runFencedThreadSend,
+  ).toBe(true);
+});

@@ -19,10 +19,12 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ReviewService from "../review/ReviewService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { reviewLaunchIdsFor } from "./channelIds.ts";
@@ -156,6 +158,98 @@ const provide = (harness: ReturnType<typeof harnessFor>) =>
   harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 
 describe("independent channel review", () => {
+  it.effect.each([null, { verdict: "pass", summary: "Malformed", findings: [{}] }])(
+    "malformed reviewer output fails honestly: %j",
+    (result) => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* start(harness);
+        yield* finishReviewer(harness, task, result);
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).review?.verdict, "failed");
+        assert.notInclude((yield* onlyTask).resultSummary!, "review passed");
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+
+  it.effect("a persisted local correction cannot follow a different worker run", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness);
+      yield* finishReviewer(harness, task, blockers);
+      const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+      yield* reviews.reconcile(runtime.ownerToken);
+      yield* reviews.reconcile(runtime.ownerToken);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const pending = (yield* ledger.listPendingForwards(50))[0]!;
+      assert.strictEqual(pending.event.type, "task.followup.received");
+      if (pending.event.type !== "task.followup.received") throw new Error("expected correction");
+      assert.strictEqual(pending.event.payload.expectedWorkerRunId, task.worker!.runId);
+      const newer = harness.world.addRun(
+        task.worker!.threadId,
+        MessageId.make("newer-before-correction"),
+      );
+      yield* (yield* ChannelDispatcher.ChannelDispatcher).forward(pending, runtime.ownerToken);
+      assert.lengthOf(harness.world.sends, 0);
+      assert.strictEqual((yield* onlyTask).worker!.runId, newer.id);
+      assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+    }).pipe(Effect.provide(provide(harness)));
+  });
+
+  it.effect(
+    "durably retries superseded reviewer cleanup after restart without holding new work",
+    () => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* start(harness);
+        const reviewerThread = task.review!.threadId;
+        harness.world.interruptFailures.add(reviewerThread);
+        harness.world.addRun(task.worker!.threadId, MessageId.make("superseding-work"));
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, "running");
+        assert.deepStrictEqual(harness.world.interrupts, [reviewerThread]);
+        yield* runtime.drain;
+        assert.lengthOf(harness.world.interrupts, 1);
+        const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+          Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(layerNoSshHosts))),
+        );
+        harness.world.interruptFailures.delete(reviewerThread);
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual(harness.world.interrupts, [reviewerThread, reviewerThread]);
+        assert.strictEqual(harness.world.latestRun(reviewerThread)?.status, "cancelled");
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 2);
+        yield* restarted.reconcile(runtime.ownerToken);
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          done: number;
+        }>`SELECT json_extract(value_json, '$.done') AS done FROM channel_runtime_state WHERE key = ${"review:cleanup:" + reviewerThread}`;
+        assert.deepStrictEqual(rows, [{ done: 1 }]);
+        assert.lengthOf(harness.world.launches, 2);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+
+  it.effect.each(["high", "critical", "info"])(
+    "rejects contradictory pass with %s findings",
+    (severity) => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* start(harness);
+        yield* finishReviewer(harness, task, {
+          ...pass,
+          findings: [{ ...blockers.findings[0]!, severity }],
+        });
+        yield* runtime.drain;
+        const done = yield* onlyTask;
+        assert.strictEqual(done.review?.verdict, "failed");
+        assert.notInclude(done.resultSummary!, "review passed");
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 1);
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+
   it.effect("a failed launch completes with its reason and cannot report a pass", () => {
     const harness = harnessFor();
     return Effect.gen(function* () {

@@ -243,7 +243,11 @@ export const ChannelTaskReview = Schema.Struct({
   finishedAt: Schema.optional(IsoDateTime),
   // Orchestration also imports channel chips; resolve its shared finding contract lazily.
   findings: Schema.Array(Schema.suspend(() => ReviewLedgerEntry)),
-});
+}).check(
+  Schema.makeFilter((review) => review.verdict !== "pass" || review.findings.length === 0, {
+    message: "A passing review cannot carry findings.",
+  }),
+);
 export type ChannelTaskReview = typeof ChannelTaskReview.Type;
 
 export const ChannelTask = Schema.Struct({
@@ -377,6 +381,8 @@ export const ChannelTaskEvent = Schema.Union([
     from: TrimmedNonEmptyString,
     /** The generation it was written to; a later generation's worker never receives it. */
     generation: PositiveInt,
+    /** Automatic review corrections belong only to this completed worker run. */
+    expectedWorkerRunId: Schema.optional(RunId),
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
   taskEvent("task.review.started", { review: ChannelTaskReview }),

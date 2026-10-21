@@ -486,7 +486,17 @@ export class ChannelLedger extends Context.Service<
       readonly key: string;
       readonly value: string;
       readonly now: string;
+      readonly cleanup?: { readonly key: string; readonly value: string };
     }) => Effect.Effect<boolean, ChannelLedgerError>;
+    readonly listReviewCleanup: (
+      now: string,
+    ) => Effect.Effect<ReadonlyArray<string>, ChannelLedgerError>;
+    readonly updateReviewCleanup: (input: {
+      readonly owner: string;
+      readonly key: string;
+      readonly value: string;
+      readonly now: string;
+    }) => Effect.Effect<void, ChannelLedgerError>;
     readonly setWorkerCursor: (input: {
       readonly owner: string;
       readonly cursor: number;
@@ -1992,15 +2002,52 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            if (input.cleanup !== undefined) {
+              const owned = yield* sql<{
+                readonly key: string;
+              }>`SELECT key FROM channel_runtime_state WHERE key = ${"review:cleanup:" + input.cleanup.key}`;
+              if (owned.length > 0) return false;
+            }
             const rows = yield* sql<{ readonly key: string }>`
           INSERT INTO channel_runtime_state (key, value_json, updated_at)
           VALUES (${"review:" + input.key}, ${input.value}, ${input.now})
           ON CONFLICT (key) DO NOTHING RETURNING key
         `;
+            if (rows.length === 1 && input.cleanup !== undefined) {
+              yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
+                VALUES (${"review:cleanup:" + input.cleanup.key}, ${input.cleanup.value}, ${input.now})`;
+            }
             return rows.length === 1;
           }),
         )
         .pipe(Effect.mapError(toLedgerError("reserveReviewDispatch"))),
+
+    listReviewCleanup: (now) =>
+      sql<{ readonly value_json: string }>`
+        SELECT r.value_json FROM channel_runtime_state r
+        LEFT JOIN channel_tasks t ON t.task_id = json_extract(r.value_json, '$.taskId')
+        WHERE r.key LIKE 'review:cleanup:%'
+          AND json_extract(r.value_json, '$.done') = 0
+          AND json_extract(r.value_json, '$.nextAttemptAt') <= ${now}
+          AND NOT (COALESCE(t.status, '') = 'reviewing'
+            AND json_extract(t.task_json, '$.review.threadId') = json_extract(r.value_json, '$.threadId')
+            AND json_type(t.task_json, '$.review.verdict') IS NULL)
+        ORDER BY json_extract(r.value_json, '$.nextAttemptAt'), r.key LIMIT 20
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => row.value_json)),
+        Effect.mapError(toLedgerError("listReviewCleanup")),
+      ),
+
+    updateReviewCleanup: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            yield* sql`UPDATE channel_runtime_state SET value_json = ${input.value}, updated_at = ${input.now}
+        WHERE key = ${"review:cleanup:" + input.key}`;
+          }),
+        )
+        .pipe(Effect.mapError(toLedgerError("updateReviewCleanup"))),
 
     setWorkerCursor: (input) =>
       sql

@@ -128,6 +128,7 @@ class WorkerWorld {
   readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
   /** Interrupts and subagent stops sent to worker threads, by thread id. */
   readonly interrupts: Array<string> = [];
+  readonly interruptFailures = new Set<string>();
   readonly subagentStops: Array<string> = [];
   /** Command ids the orchestrator refuses for good, as a persisted rejection would. */
   readonly rejectedCommands = new Set<string>();
@@ -512,6 +513,22 @@ export function makeHarness(
           // repeated message id lands where it landed the first time, as command receipts do.
           const steeredInto = world.steered.get(input.messageId);
           const latest = world.latestRun(input.threadId);
+          const replay = (world.runs.get(input.threadId) ?? []).some(
+            (run) => run.userMessageId === input.messageId,
+          );
+          if (
+            input.expectedLatestRunId !== undefined &&
+            latest?.id !== input.expectedLatestRunId &&
+            !replay
+          ) {
+            return Effect.fail(
+              new Orchestrator.OrchestratorCommandRejectedError({
+                commandId: input.commandId,
+                commandType: "message.dispatch",
+                cause: "The thread has moved beyond the reviewed run.",
+              }),
+            );
+          }
           if (steeredInto !== undefined) {
             const run = (world.runs.get(input.threadId) ?? []).find((r) => r.id === steeredInto);
             return Effect.succeed({ run, delivery: "steered" } as never);
@@ -542,6 +559,13 @@ export function makeHarness(
         interruptThread: (input) => {
           if (!isWorker(input.threadId)) return real.interruptThread(input);
           world.interrupts.push(input.threadId);
+          if (world.interruptFailures.has(input.threadId))
+            return Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: input.commandId,
+                commandType: "run.interrupt",
+              }),
+            );
           const latest = world.latestRun(input.threadId);
           if (latest !== undefined && latest.status === "running") {
             world.setStatus(input.threadId, latest.ordinal, "cancelled");

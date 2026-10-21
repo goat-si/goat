@@ -64,6 +64,7 @@ import { resumeBranchFor } from "./channelReplica.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import { reviewLaunchIdsFor } from "./channelIds.ts";
 import {
   botMessages,
@@ -118,6 +119,10 @@ class RemoteMachine {
   readonly threads = new Map<string, Array<RemoteRun>>();
   readonly launches: Array<SshRemoteDispatch.SshLaunchInput> = [];
   readonly sends: Array<Readonly<Record<string, unknown>>> = [];
+  readonly sendReceipts = new Map<string, { runId: string; messageId: string }>();
+  threadReadDown = false;
+  stopOnInterrupt = false;
+  runFencedThreadSend = true;
   readonly calls: Array<{
     readonly tool: string;
     readonly ceiling: string;
@@ -458,8 +463,11 @@ class RemoteMachine {
         }) =>
           Effect.gen(function* () {
             const machine = machineFor(input.host);
-            if (input.script.includes("base=$(git merge-base"))
-              return { stdout: "+remote guard\n", stderr: "" };
+            if (input.script.includes("GOAT_REVIEW_DIFF_OK"))
+              return {
+                stdout: "GOAT_REVIEW_DIFF_OK 14\n+remote guard\n\nGOAT_REVIEW_DIFF_END\n",
+                stderr: "",
+              };
             const kind = input.script.includes("git bundle create") ? "capture" : "apply";
             assert.include(
               input.script,
@@ -513,6 +521,8 @@ class RemoteMachine {
             }
             switch (call.tool) {
               case "goat_thread_read": {
+                if (machine.threadReadDown)
+                  return yield* machine.unreachable("worker identity unavailable");
                 const runs = machine.threads.get(String(call.arguments.threadId));
                 if (runs === undefined) return yield* machine.refused("thread_not_found");
                 return { thread: { worktreePath: null, latestRunId: runs.at(-1)?.runId ?? null } };
@@ -527,6 +537,7 @@ class RemoteMachine {
                 if (machine.capabilitiesUnreachable) return yield* machine.unreachable("timed out");
                 if (machine.offeredModels === undefined) break;
                 return {
+                  features: { runFencedThreadSend: machine.runFencedThreadSend },
                   providers: [...new Set(machine.offeredModels.map((entry) => entry.instance))].map(
                     (instance) => ({
                       providerInstanceId: instance,
@@ -604,6 +615,11 @@ class RemoteMachine {
                 const refused = machine.refuseInterruptWith;
                 yield* Deferred.succeed(attempted, undefined);
                 if (refused !== undefined) return yield* machine.refused(refused);
+                if (machine.stopOnInterrupt) {
+                  for (const run of machine.threads.get(String(call.arguments.threadId)) ?? []) {
+                    if (!TERMINAL.has(run.status)) run.status = "cancelled";
+                  }
+                }
                 // An older GOAT has no stopCascade argument and refuses it before anything runs.
                 if (call.arguments.stopCascade === true && machine.refuseStopCascade) {
                   return yield* new SshRemoteDispatch.SshRemoteDispatchError({
@@ -615,6 +631,9 @@ class RemoteMachine {
                 return {};
               }
               case "goat_thread_send": {
+                const key = String(call.arguments.clientRequestId);
+                const receipt = machine.sendReceipts.get(key);
+                if (receipt !== undefined) return receipt;
                 machine.sends.push(call.arguments);
                 if (machine.refuseSendWith !== undefined) {
                   return yield* machine.refused(machine.refuseSendWith);
@@ -624,7 +643,14 @@ class RemoteMachine {
                   ([, b]) => b.threadId === threadId,
                 )![0];
                 const previous = machine.runs(correlationId).at(-1)?.runId ?? null;
+                if (
+                  call.arguments.expectedLatestRunId !== undefined &&
+                  call.arguments.expectedLatestRunId !== previous
+                ) {
+                  return yield* machine.refused("orchestration_error");
+                }
                 const runId = machine.startRun(correlationId);
+                machine.sendReceipts.set(key, { runId, messageId: "remote-message" });
                 if (machine.staleQuestionOnSend) {
                   machine.report(correlationId, "needs_input", "Stale question?", previous);
                 }
@@ -4836,4 +4862,204 @@ describe("independent remote channel review", () => {
       assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
+  it.effect(
+    "defers old blockers on unknown worker identity through restart and never sends into a newer run",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, correlation } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        yield* (yield* ChannelTaskReviews.ChannelTaskReviews).reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).review?.verdict, "blockers");
+        const newRun = machine.startRun(correlation);
+        machine.threadReadDown = true;
+        const restarted = yield* ChannelTaskReviews.ChannelTaskReviews.pipe(
+          Effect.provide(ChannelTaskReviews.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).status, "reviewing");
+        assert.lengthOf(yield* (yield* ChannelLedger.ChannelLedger).listPendingForwards(50), 0);
+        machine.threadReadDown = false;
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).worker?.runId, newRun);
+        assert.strictEqual((yield* onlyTask).status, "running");
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "cleanup resolves a lost launch reply and survives cancellation retry and transient interrupt failure",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        machine.loseNextLaunchAnswer = true;
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        const remoteReviewer = machine.thread(reviewCorrelation);
+        assert.isUndefined((yield* onlyTask).review?.remoteThreadId);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          { type: "task.cancelled", payload: { reason: "Cancel during uncertain launch" } },
+          { owner: runtime.ownerToken },
+        );
+        machine.refuseInterruptWith = "transient_failure";
+        yield* reviews.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).status, "cancelled");
+        assert.deepStrictEqual(
+          machine.interrupts.map((input) => input.threadId),
+          [remoteReviewer],
+        );
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          { type: "task.retry.requested", payload: { generation: 2 } },
+          { owner: runtime.ownerToken },
+        );
+        assert.isUndefined((yield* onlyTask).review);
+        const cleanupSql = yield* SqlClient.SqlClient;
+        yield* cleanupSql`DELETE FROM channel_runtime_state WHERE key = ${"review:" + reviewCorrelation}`;
+        const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+          Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(machine.layer))),
+        );
+        machine.refuseInterruptWith = undefined;
+        machine.stopOnInterrupt = true;
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.lengthOf(machine.interrupts, 1);
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.deepStrictEqual(
+          machine.interrupts.map((input) => input.threadId),
+          [remoteReviewer, remoteReviewer],
+        );
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 2);
+        yield* restarted.reconcile(runtime.ownerToken);
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          done: number;
+        }>`SELECT json_extract(value_json, '$.done') AS done FROM channel_runtime_state WHERE key = ${"review:cleanup:" + task.review!.threadId}`;
+        assert.deepStrictEqual(rows, [{ done: 1 }]);
+        assert.isUndefined(yield* ledger.getReviewDispatch(reviewCorrelation));
+        assert.isDefined(yield* ledger.getReviewDispatch("cleanup:" + task.review!.threadId));
+        assert.lengthOf(machine.launches, 2);
+        assert.strictEqual((yield* onlyTask).generation, 2);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "a persisted remote correction is discarded after a newer run even by a restarted dispatcher",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, writes, correlation } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const pending = (yield* ledger.listPendingForwards(50))[0]!;
+        assert.strictEqual(pending.event.type, "task.followup.received");
+        if (pending.event.type !== "task.followup.received") throw new Error("expected correction");
+        assert.strictEqual(pending.event.payload.expectedWorkerRunId, task.worker!.runId);
+        const next = machine.startRun(correlation);
+        yield* Effect.gen(function* () {
+          yield* (yield* ChannelRemoteWorkers).forward(pending, runtime.ownerToken);
+          yield* writes.waitForForward(pending.sequence);
+        }).pipe(Effect.provide(Layer.fresh(remoteWorkersLayer).pipe(Layer.provide(machine.layer))));
+        assert.lengthOf(machine.sends, 0);
+        assert.strictEqual((yield* onlyTask).worker!.runId, next);
+        assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "old hosts refuse only fenced automatic corrections while ordinary followups still send",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, writes } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const automatic = (yield* ledger.listPendingForwards(50))[0]!;
+        machine.runFencedThreadSend = false;
+        const workers = yield* ChannelRemoteWorkers;
+        yield* workers.forward(automatic, runtime.ownerToken);
+        yield* writes.waitForForward(automatic.sequence);
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.lengthOf(machine.sends, 0);
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: {
+              questionId: waiting.openQuestions[0]!.questionId,
+              answer: "Continue manually",
+            },
+          },
+          { owner: runtime.ownerToken, forward: true },
+        );
+        const human = (yield* ledger.listPendingForwards(50))[0]!;
+        yield* workers.forward(human, runtime.ownerToken);
+        yield* writes.waitForForward(human.sequence);
+        assert.lengthOf(machine.sends, 1);
+        assert.isUndefined(machine.sends[0]!.expectedLatestRunId);
+        assert.include(String(machine.sends[0]!.message), "Continue manually");
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
 });

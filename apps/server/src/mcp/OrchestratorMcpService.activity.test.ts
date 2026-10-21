@@ -307,6 +307,13 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
 });
 
 it("readThread and sendToThread reach threads in other projects", async () => {
+  const sendInputs: Array<ThreadManagementService.ThreadManagementSendInput> = [];
+  const fencedInput = {
+    threadId: ThreadId.make("thread-mcp-orchestrator-foreign"),
+    message: "hi",
+    clientRequestId: "review-receipt",
+    expectedLatestRunId: RunId.make("reviewed-run"),
+  };
   let parentShell: OrchestrationV2ThreadShell | null = null;
   let parentRuns: ReadonlyArray<unknown> = [
     makeRun({ id: RunId.make("run-parent-live"), ordinal: 1, status: "running" }),
@@ -402,11 +409,13 @@ it("readThread and sendToThread reach threads in other projects", async () => {
                     threadId: input.threadId,
                   }),
                 ),
-          sendToThread: () =>
-            Effect.succeed({
+          sendToThread: (input) => {
+            sendInputs.push(input);
+            return Effect.succeed({
               run: { id: "run-foreign", status: "queued" },
               delivery: "started",
-            } as unknown as ThreadManagementService.ThreadManagementSendResult),
+            } as unknown as ThreadManagementService.ThreadManagementSendResult);
+          },
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
         ServerSettings.layerTest(),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
@@ -442,18 +451,18 @@ it("readThread and sendToThread reach threads in other projects", async () => {
     expect(foreign.thread.projectId).toBe(foreignProjectId);
     expect(foreign.items.map((item) => item.text)).toEqual(["Foreign thread said hello"]);
 
-    const sent = yield* service.sendToThread(makeScope(), {
-      threadId: foreignThreadId,
-      message: "hi",
-    });
+    const sent = yield* service.sendToThread(makeScope(), fencedInput);
+    const replay = yield* service.sendToThread(makeScope(), fencedInput);
+    expect(replay.messageId).toBe(sent.messageId);
+    expect(sendInputs[0]?.expectedLatestRunId).toBe(fencedInput.expectedLatestRunId);
+    expect(sendInputs).toHaveLength(2);
     expect(sent.threadId).toBe(foreignThreadId);
 
     parentRuns = [];
     yield* service.readThread(makeScope(), { threadId: foreignThreadId });
-    const stale = yield* service
-      .sendToThread(makeScope(), { threadId: foreignThreadId, message: "hi again" })
-      .pipe(Effect.flip);
+    const stale = yield* service.sendToThread(makeScope(), fencedInput).pipe(Effect.flip);
     expect(stale.code).toBe("parent_not_active");
+    expect(sendInputs).toHaveLength(2);
     const staleInterrupt = yield* service
       .interruptThread(makeScope(), { threadId: foreignThreadId })
       .pipe(Effect.flip);
@@ -514,10 +523,9 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       ...makeScope(),
       thread: { ...makeScope().thread!, providerInstanceId: customCodexInstanceId },
     };
-    const switched = yield* service
-      .sendToThread(switchedScope, { threadId: foreignThreadId, message: "wrong owner" })
-      .pipe(Effect.flip);
+    const switched = yield* service.sendToThread(switchedScope, fencedInput).pipe(Effect.flip);
     expect(switched.code).toBe("parent_not_active");
+    expect(sendInputs).toHaveLength(3);
     const mismatched = yield* service
       .sendToThread(makeScope(), { threadId: foreignThreadId, message: "stale provider" })
       .pipe(Effect.flip);

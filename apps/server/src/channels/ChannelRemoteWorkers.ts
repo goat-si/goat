@@ -74,6 +74,7 @@ import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import {
   answerForwardIdsFor,
+  turnSteerIdsFor,
   questionIdFor,
   remoteBranchFor,
   remoteCorrelationFor,
@@ -243,6 +244,7 @@ const RemoteWorkerState = Schema.Struct({
   ),
   /** Answers already sent, by task event id. */
   forwarded: Schema.Array(Schema.String),
+  correctionAttempts: Schema.optional(Schema.Array(Schema.String)),
   /** A finished run seen once; it settles the task if a second look finds nothing newer. */
   settleRunId: Schema.optional(Schema.String),
   outageNoticed: Schema.Boolean,
@@ -2678,6 +2680,93 @@ const make = Effect.gen(function* () {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const ids = answerForwardIdsFor(event.eventId);
+      const expected =
+        event.type === "task.followup.received" ? event.payload.expectedWorkerRunId : undefined;
+      const readWorkerIdentity = () =>
+        callHost(
+          {
+            host: state.host,
+            tool: "goat_thread_read",
+            arguments: { threadId: worker.threadId, limit: 1 },
+            writes: false,
+            timeoutMs: READ_TIMEOUT_MS,
+          },
+          authorityFor(stored.task.taskId, stored.task.generation, owner),
+        ).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ thread: Schema.Struct({ latestRunId: Schema.NullOr(RunId) }) }),
+            ),
+          ),
+          Effect.option,
+        );
+      const discardCorrection = Effect.fn("ChannelRemoteWorkers.discardCorrection")(function* (
+        runId: RunId,
+      ) {
+        const current = yield* ledger.getTask(event.taskId);
+        if (current !== undefined && current.task.generation === stored.task.generation) {
+          yield* commitTransition(
+            ledger,
+            current,
+            { type: "task.worker.bound", payload: { worker: { ...worker, runId } } },
+            {
+              owner,
+              ...(event.type === "task.followup.received" &&
+              current.pendingAnswerMessageId === turnSteerIdsFor(event.payload.inputId).messageId
+                ? { pendingAnswerMessageId: null }
+                : {}),
+            },
+          );
+        }
+        yield* ledger.completeForward({ owner, sequence: pending.sequence });
+      });
+      if (expected !== undefined) {
+        const capabilities = yield* callHost(
+          {
+            host: state.host,
+            tool: "orchestrator_capabilities",
+            arguments: {},
+            writes: false,
+            timeoutMs: READ_TIMEOUT_MS,
+          },
+          authorityFor(stored.task.taskId, stored.task.generation, owner),
+        ).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Struct({
+                features: Schema.optional(
+                  Schema.Struct({ runFencedThreadSend: Schema.optional(Schema.Boolean) }),
+                ),
+              }),
+            ),
+          ),
+          Effect.option,
+        );
+        if (capabilities._tag === "None") return;
+        if (capabilities.value.features?.runFencedThreadSend !== true) {
+          yield* askAgain(
+            owner,
+            stored,
+            "This host cannot safely accept a correction for the reviewed run. Update it or continue the worker manually.",
+            { clearPendingAnswer: true },
+          );
+          return yield* ledger.completeForward({ owner, sequence: pending.sequence });
+        }
+        const current = yield* readWorkerIdentity();
+        if (current._tag === "None" || current.value.thread.latestRunId === null) return;
+        if (
+          current.value.thread.latestRunId !== expected &&
+          !(state.correctionAttempts ?? []).includes(event.eventId)
+        ) {
+          return yield* discardCorrection(current.value.thread.latestRunId);
+        }
+        yield* writeState(owner, stored.task.taskId, state.generation, (value) => ({
+          ...value,
+          correctionAttempts: [
+            ...new Set([...(value.correctionAttempts ?? []), event.eventId]),
+          ].slice(-20),
+        }));
+      }
       const sent = yield* callHost(
         {
           host: state.host,
@@ -2692,6 +2781,7 @@ const make = Effect.gen(function* () {
               answer,
             mode: "queue",
             clientRequestId: ids.commandId,
+            ...(expected === undefined ? {} : { expectedLatestRunId: expected }),
           },
           writes: true,
           timeoutMs: SEND_TIMEOUT_MS,
@@ -2700,6 +2790,21 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
         const code = remoteCode(sent.failure);
+        if (expected !== undefined) {
+          const current = yield* readWorkerIdentity();
+          if (current._tag === "None" || current.value.thread.latestRunId === null) return;
+          if (current.value.thread.latestRunId !== expected)
+            return yield* discardCorrection(current.value.thread.latestRunId);
+          if (code === "invalid_request") {
+            yield* askAgain(
+              owner,
+              stored,
+              "This host cannot safely accept a correction for the reviewed run. Update it or continue the worker manually.",
+              { clearPendingAnswer: true },
+            );
+            return yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          }
+        }
         if (
           code === "runtime_mode_escalation_denied" ||
           code === "interaction_mode_escalation_denied"

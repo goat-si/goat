@@ -32,6 +32,7 @@ import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import * as SlackChannelRuntime from "./slack/SlackChannelRuntime.ts";
 import * as SlackChannelSettingsLive from "./slack/SlackChannelSettings.live.ts";
@@ -84,7 +85,11 @@ export const makeLayerServices = <E, R>(
   ).pipe(
     // Workers on other machines; needs SshRemoteDispatch from the server.
     Layer.provideMerge(
-      ChannelRemoteWorkers.layer.pipe(Layer.provideMerge(ChannelTaskReviews.layer)),
+      ChannelRemoteWorkers.layer.pipe(
+        Layer.provideMerge(
+          ChannelTaskReviews.layer.pipe(Layer.provideMerge(ChannelReviewCleanup.layer)),
+        ),
+      ),
     ),
     Layer.provideMerge(layerSlack),
     Layer.provideMerge(layerGateway),
