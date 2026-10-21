@@ -10,7 +10,8 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { setupBaseDir } from "./browser.ts";
 
-it.effect(
+// A passwd entry cannot carry a drive-letter home, and sudo with getent is a POSIX setup path.
+it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "sudo browser setup resolves the invoking user's home and respects explicit overrides",
   () =>
     Effect.gen(function* () {
