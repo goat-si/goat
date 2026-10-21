@@ -277,6 +277,41 @@ export function worktreeFolderName(branch: string, platform: NodeJS.Platform): s
   return isWindowsReservedFileName(safe) ? `${safe}-branch` : safe;
 }
 
+/** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
+const isGitCommandError = Schema.is(GitCommandError);
+
+export function isSameWorktreePath(left: string, right: string, platform: NodeJS.Platform) {
+  const trim = (value: string) => value.replace(/(?<=[^\\/:])[\\/]+$/u, "");
+  return platform === "win32"
+    ? normalizeProjectPathForComparison(trim(left)) ===
+        normalizeProjectPathForComparison(trim(right))
+    : trim(left) === trim(right);
+}
+
+export function uniqueCommitsProblem(count: number, baseRef: string): string {
+  return `has ${count} commit${count === 1 ? "" : "s"} that ${baseRef} does not`;
+}
+
+/** Why an existing branch cannot be reused, plus the launch that continues it. */
+export function existingBranchConflictDetail(input: {
+  readonly branch: string;
+  readonly problem: string;
+  readonly worktreePath: string | null;
+  readonly suggestedPath: string;
+}): string {
+  const workspace = JSON.stringify({
+    type: "existing_worktree",
+    worktreePath: input.worktreePath ?? input.suggestedPath,
+    branch: input.branch,
+  });
+  const relaunch = `relaunch with workspaceStrategy (goat_ssh_thread_launch: workspace) ${workspace}`;
+  const resume =
+    input.worktreePath === null
+      ? `To continue it, run git worktree add "${input.suggestedPath}" ${input.branch}, then ${relaunch}.`
+      : `To continue in that worktree, ${relaunch}.`;
+  return `Branch ${input.branch} already exists and ${input.problem}, so GOAT will not reuse or reset it. ${resume} To start fresh, launch with a different branch name.`;
+}
+
 const C_QUOTE_ESCAPES: Record<string, number> = {
   a: 7,
   b: 8,
@@ -3818,6 +3853,51 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const readBranchTip = (cwd: string, branch: string) =>
+    executeGit(
+      "GitVcsDriver.readBranchTip",
+      cwd,
+      ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`],
+      { allowNonZeroExit: true, timeoutMs: 10_000 },
+    ).pipe(Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : null)));
+
+  const inspectExistingBranch: GitVcsDriver.GitVcsDriver["Service"]["inspectExistingBranch"] =
+    Effect.fn("inspectExistingBranch")(function* (input) {
+      const tip = yield* readBranchTip(input.cwd, input.branch);
+      if (tip === null) return null;
+      const baseSha = (yield* runGitStdout("GitVcsDriver.inspectExistingBranch.base", input.cwd, [
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        `${input.baseRef}^{commit}`,
+      ])).trim();
+      // A record whose folder is gone still claims the branch until pruned.
+      yield* runGit("GitVcsDriver.inspectExistingBranch.prune", input.cwd, ["worktree", "prune"], {
+        timeoutMs: 15_000,
+      });
+      const worktreePath =
+        (yield* readWorktreeRecords("GitVcsDriver.inspectExistingBranch.find", input.cwd)).find(
+          (record) => record.branch === `refs/heads/${input.branch}`,
+        )?.path ?? null;
+      const uniqueCommits = Number(
+        (yield* runGitStdout("GitVcsDriver.inspectExistingBranch.count", input.cwd, [
+          "rev-list",
+          "--count",
+          "--end-of-options",
+          `${baseSha}..${tip}`,
+        ])).trim(),
+      );
+      const dirty =
+        worktreePath !== null &&
+        (yield* runGitStdout("GitVcsDriver.inspectExistingBranch.status", worktreePath, [
+          "-c",
+          "status.showUntrackedFiles=normal",
+          "status",
+          "--porcelain",
+        ])).trim() !== "";
+      return { tip, baseSha, uniqueCommits, worktreePath, dirty };
+    });
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -3849,37 +3929,184 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(location.directory, repoName, sanitizedBranch);
     }
-    const args = input.newRefName
-      ? ["worktree", "add", "-b", input.newRefName, "--", worktreePath, input.refName]
-      : ["worktree", "add", "--", worktreePath, input.refName];
+    const targetPath = worktreePath;
+    const newBranch = input.newRefName;
+    const reuse = newBranch !== undefined && options?.reuseExistingBranch === true;
+    const state = reuse
+      ? yield* inspectExistingBranch({ cwd: input.cwd, branch: newBranch, baseRef: input.refName })
+      : null;
+    const existingTip = newBranch
+      ? reuse
+        ? (state?.tip ?? null)
+        : yield* readBranchTip(input.cwd, newBranch)
+      : null;
+    // "reused": bind the branch's clean worktree; "added": check the existing branch out.
+    let existing: "reused" | "added" | null = null;
+    if (newBranch && state !== null) {
+      const checkedOutAt = state.worktreePath;
+      const startSha = state.baseSha;
+      const conflict = (problem: string) =>
+        new GitCommandError({
+          operation: "GitVcsDriver.createWorktree",
+          command: "git worktree add",
+          cwd: input.cwd,
+          reason: "branch_already_exists",
+          detail: existingBranchConflictDetail({
+            branch: newBranch,
+            problem,
+            worktreePath: checkedOutAt,
+            suggestedPath: targetPath,
+          }),
+        });
+      if (state.uniqueCommits > 0) {
+        return yield* conflict(uniqueCommitsProblem(state.uniqueCommits, input.refName));
+      }
+      if (checkedOutAt !== null) {
+        const realTarget = yield* fileSystem
+          .realPath(targetPath)
+          .pipe(Effect.orElseSucceed(() => targetPath));
+        if (
+          !isSameWorktreePath(checkedOutAt, targetPath, hostPlatform) &&
+          !isSameWorktreePath(checkedOutAt, realTarget, hostPlatform)
+        ) {
+          return yield* conflict(
+            `is checked out at ${checkedOutAt}, outside this launch's worktree folder ${targetPath}`,
+          );
+        }
+        if (state.dirty) {
+          return yield* conflict(`its worktree ${checkedOutAt} has uncommitted changes`);
+        }
+        if (existingTip !== startSha) {
+          yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
+            "merge",
+            "--ff-only",
+            "--quiet",
+            startSha,
+          ]);
+        }
+        existing = "reused";
+      } else {
+        if (existingTip !== startSha) {
+          yield* runGit("GitVcsDriver.createWorktree.fastForward", input.cwd, [
+            "branch",
+            "--force",
+            "--",
+            newBranch,
+            startSha,
+          ]);
+        }
+        existing = "added";
+      }
+      if (progress?.onExistingBranch) {
+        yield* progress.onExistingBranch({
+          worktree: existing,
+          fastForwarded: existingTip !== startSha,
+        });
+      }
+    }
+    const args =
+      newBranch && existing === null
+        ? ["worktree", "add", "-b", newBranch, "--", worktreePath, input.refName]
+        : [
+            "worktree",
+            "add",
+            "--",
+            worktreePath,
+            existing === "added" ? newBranch! : input.refName,
+          ];
     const onCheckoutProgress = progress?.onCheckoutProgress;
+    const pathExisted = yield* fileSystem
+      .exists(worktreePath)
+      .pipe(Effect.orElseSucceed(() => true));
+    // A failed or interrupted add (a timed-out Windows checkout, say) can leave the new branch
+    // and a half-written worktree behind, which a retry of the same launch would trip over.
+    const rollbackAdd = Effect.fn("GitVcsDriver.createWorktree.rollback")(function* (
+      failure: Cause.Cause<GitCommandError>,
+    ) {
+      const error = Cause.squash(failure);
+      if (
+        pathExisted ||
+        (isGitCommandError(error) &&
+          (error.reason === "branch_already_exists" || error.reason === "path_already_exists"))
+      ) {
+        return;
+      }
+      const branchCreated =
+        newBranch !== undefined &&
+        existingTip === null &&
+        (yield* readBranchTip(input.cwd, newBranch)) !== null;
+      const realTarget = yield* fileSystem.realPath(targetPath).pipe(Effect.option);
+      if (!branchCreated && Option.isNone(realTarget)) return;
+      const claimed = (yield* readWorktreeRecords(
+        "GitVcsDriver.createWorktree.rollbackList",
+        input.cwd,
+      )).some(
+        (record) =>
+          isSameWorktreePath(record.path, targetPath, hostPlatform) ||
+          (Option.isSome(realTarget) &&
+            isSameWorktreePath(record.path, realTarget.value, hostPlatform)),
+      );
+      if (claimed) {
+        // Git locks a worktree while adding it; a second --force removes a locked one.
+        yield* runGit("GitVcsDriver.createWorktree.rollbackWorktree", input.cwd, [
+          "worktree",
+          "remove",
+          "--force",
+          "--force",
+          "--",
+          targetPath,
+        ]);
+      }
+      yield* fileSystem.remove(targetPath, { recursive: true }).pipe(Effect.ignore);
+      if (branchCreated) {
+        yield* runGit("GitVcsDriver.createWorktree.rollbackBranch", input.cwd, [
+          "branch",
+          "-D",
+          "--",
+          newBranch!,
+        ]);
+      }
+    });
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    yield* executeGitWithStableDiagnostics(
-      "GitVcsDriver.createWorktree",
-      input.cwd,
-      ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
-      {
-        fallbackErrorDetail: "git worktree add failed",
-        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-        ...(onCheckoutProgress
-          ? {
-              // Git only prints checkout progress when stderr is a tty or the
-              // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
-              env: { GIT_PROGRESS_DELAY: "0" },
-              progress: {
-                onStderrLine: (line) => {
-                  const parsed = parseGitCheckoutProgressLine(line);
-                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
+    if (existing !== "reused") {
+      yield* executeGitWithStableDiagnostics(
+        "GitVcsDriver.createWorktree",
+        input.cwd,
+        ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
+        {
+          fallbackErrorDetail: "git worktree add failed",
+          timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+          ...(onCheckoutProgress
+            ? {
+                // Git only prints checkout progress when stderr is a tty or the
+                // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
+                env: { GIT_PROGRESS_DELAY: "0" },
+                progress: {
+                  onStderrLine: (line) => {
+                    const parsed = parseGitCheckoutProgressLine(line);
+                    return parsed ? onCheckoutProgress(parsed) : Effect.void;
+                  },
                 },
-              },
-            }
-          : {}),
-      },
-    );
+              }
+            : {}),
+        },
+      ).pipe(
+        Effect.onError((cause) =>
+          rollbackAdd(cause).pipe(
+            Effect.catchCause((rollbackCause) =>
+              Effect.logWarning("worktree add rollback failed; the retry reports what is left", {
+                worktreePath: targetPath,
+                cause: rollbackCause,
+              }),
+            ),
+          ),
+        ),
+      );
 
-    if (progress?.onWorktreeClaimed) {
-      yield* progress.onWorktreeClaimed(worktreePath);
+      if (progress?.onWorktreeClaimed) {
+        yield* progress.onWorktreeClaimed(worktreePath);
+      }
     }
 
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
@@ -4648,6 +4875,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     listRefs,
     createWorktree: (input, options) =>
       withListRefsInvalidation(input.cwd, createWorktree(input, options)),
+    inspectExistingBranch,
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
     fetchPullRequestHeadCommit,

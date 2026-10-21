@@ -109,6 +109,142 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
 });
 
 it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
+  it.effect.each(["running", "completed"] as const)(
+    "seeds a family only after its remote task is finished (%s)",
+    (status) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-remote-" });
+        const destDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "migrate-dev-db-remote-dest-",
+        });
+        const source = yield* createFixtureSource(sourceDir);
+        yield* withDatabase(
+          source,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO orchestration_v2_projection_subagents
+          (subagent_id, thread_id, run_id, parent_node_id, provider, origin, status, updated_at, payload_json)
+          VALUES ('remote-task', 'fork-thread', 'run-fork-thread', 'parent-node', 'codex', 'app_owned',
+            ${status}, '2026-08-01', '{"remote":{"host":"fixture-host","threadId":"remote-child","correlationId":"fixture"}}')`;
+            yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+          (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+          VALUES ('remote-item', 'fork-thread', 'run-fork-thread', 1, 'subagent', 'running', '2026-08-01', '{}')`;
+          }),
+        );
+        const result = yield* runMigrateDevDb(
+          { baseDir: destDir, source, projects: 5, threadsPerProject: 100 },
+          { sharedHome: sourceDir },
+        );
+        const threads = yield* withDatabase(
+          result.databasePath,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              thread_id: string;
+            }>`SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
+          }),
+        );
+        assert.deepEqual(
+          threads.map((row) => row.thread_id),
+          status === "running" ? [] : ["fork-thread", "stopped-thread"],
+        );
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "pending request=%s controls retention of a stopped family",
+    (pending) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-pending-" });
+        const destDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "migrate-dev-db-pending-dest-",
+        });
+        const source = yield* createFixtureSource(sourceDir);
+        if (pending)
+          yield* withDatabase(
+            source,
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              yield* sql`INSERT INTO orchestration_v2_projection_runtime_requests
+          (runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json)
+          VALUES ('pending-request', 'fork-thread', 'node-1', 'user_input', 'pending', '2026-08-01', '{}')`;
+            }),
+          );
+        const result = yield* runMigrateDevDb(
+          { baseDir: destDir, source, projects: 5, threadsPerProject: 100 },
+          { sharedHome: sourceDir },
+        );
+        const threads = yield* withDatabase(
+          result.databasePath,
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              thread_id: string;
+            }>`SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
+          }),
+        );
+        assert.deepEqual(
+          threads.map((row) => row.thread_id),
+          pending ? [] : ["fork-thread", "stopped-thread"],
+        );
+      }),
+  );
+
+  it.effect("retains a stopped family with stale terminal items and its history", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const sourceDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-stale-" });
+      const destDir = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-stale-dest-" });
+      const source = yield* createFixtureSource(sourceDir);
+      yield* withDatabase(
+        source,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          for (const threadId of ["stopped-thread", "fork-thread", "running-thread"] as const) {
+            yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+            (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+            VALUES (${`item-${threadId}`}, ${threadId}, ${`run-${threadId}`}, 1,
+              'command_execution', 'running', '2026-08-01', '{}')`;
+          }
+        }),
+      );
+      const result = yield* runMigrateDevDb(
+        { baseDir: destDir, source, projects: 5, threadsPerProject: 100 },
+        { sharedHome: sourceDir },
+      );
+      yield* withDatabase(
+        result.databasePath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const threads = yield* sql<{ thread_id: string }>`
+          SELECT thread_id FROM orchestration_v2_projection_threads ORDER BY thread_id`;
+          assert.deepEqual(
+            threads.map((row) => row.thread_id),
+            ["fork-thread", "stopped-thread"],
+          );
+          const items = yield* sql<{ turn_item_id: string }>`
+          SELECT turn_item_id FROM orchestration_v2_projection_turn_items ORDER BY turn_item_id`;
+          assert.deepEqual(
+            items.map((row) => row.turn_item_id),
+            ["item-fork-thread", "item-stopped-thread"],
+          );
+          const events = yield* sql<{ stream_id: string }>`
+          SELECT stream_id FROM orchestration_events ORDER BY stream_id`;
+          assert.deepEqual(
+            events.map((row) => row.stream_id),
+            ["fork-thread", "stopped-thread"],
+          );
+          assert.deepEqual(
+            yield* sql`SELECT runtime_request_id FROM orchestration_v2_projection_runtime_requests`,
+            [],
+          );
+        }),
+      );
+    }),
+  );
+
   it.effect("keeps stopped thread families from live projects and clears pending work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

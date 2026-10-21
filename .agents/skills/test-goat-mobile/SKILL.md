@@ -1,5 +1,5 @@
 ---
-name: test-t3-mobile
+name: test-goat-mobile
 description: Test GOAT's native iOS and Android app through its Device panel and returned AgentDevice command. Use for mobile verification, native-client builds, Metro launch, and mobile pairing against isolated development state.
 ---
 
@@ -23,7 +23,7 @@ from the dev-runner output. Use the worktree's ignored `.t3` state. Never run
 against `~/.t3/userdata`. The Browser panel is not required for this workflow.
 
 Test with meaningful project and thread data. Read the shared
-[SQLite fixture reference](../test-t3-app/references/sqlite-fixtures.md) only
+[SQLite fixture reference](../test-goat-app/references/sqlite-fixtures.md) only
 when inspecting or seeding SQLite. Stop the test server before fixture writes.
 
 ## Launch GOAT Dev
@@ -52,7 +52,7 @@ arguments stored in `agent_device_command` and the Bash array
 `agent_device_target_args`:
 
 ```bash
-.agents/skills/test-t3-mobile/scripts/pair-client.sh \
+.agents/skills/test-goat-mobile/scripts/pair-client.sh \
   <server-port> <base-dir> <device-reachable-backend-origin> \
   "$agent_device_command" "${agent_device_target_args[@]}"
 ```
