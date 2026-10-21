@@ -51,6 +51,7 @@ export type GoatMcpToolSummaryAction =
   | "worktree-cleanup"
   | "project-list"
   | "project-read"
+  | "repository-snapshot"
   | "project-create"
   | "project-update"
   | "project-delete"
@@ -556,6 +557,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   goat_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
+  goat_repository_snapshot: tool(
+    ["Read", "Reading", "Read", "a repository snapshot"],
+    "repository-snapshot",
+  ),
   goat_project_create: tool(
     ["Register", "Registering", "Registered", "a project"],
     "project-create",

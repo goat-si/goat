@@ -1,3 +1,5 @@
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import { goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
@@ -29,6 +31,8 @@ import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  OrchestratorMcpFailure,
+  type RepositoryLaunchSelection,
   SSH_PREFLIGHT_STEP_ORDER,
   type SshPreflightReport,
   TurnItemId,
@@ -86,6 +90,8 @@ const profileLayer = (id?: string) => {
 };
 
 type LaunchOptions = {
+  readonly repository?: RepositoryLaunchSelection;
+  readonly repositoryRefused?: boolean;
   readonly profile?: string;
   readonly notifyOnCompletion?: boolean;
   readonly notifyWebhook?: boolean;
@@ -172,6 +178,19 @@ const launchRaw = (options: LaunchOptions = {}) =>
         getThreadShell: () => Effect.succeed(caller),
       }),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+      Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({
+        check: () =>
+          options.repositoryRefused
+            ? Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message:
+                    "Repository launch refused: selected checkout missing; candidate: /repos/project",
+                }),
+              )
+            : Effect.succeed(["Repository verified; dependency freshness unknown."]),
+      }),
       Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
       Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(CloudMachineService.CloudMachineService)({}),
@@ -241,6 +260,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
         cwd: "/remote/project",
         title: "Audit",
         message: "Review the change",
+        ...(options.repository === undefined ? {} : { repository: options.repository }),
         ...(options.notifyOnCompletion === undefined
           ? {}
           : { notifyOnCompletion: options.notifyOnCompletion }),
@@ -270,6 +290,26 @@ const launchFromThread = (options: LaunchOptions = {}) =>
       return yield* Effect.die("Expected a successful SSH launch result.");
     return { result: response, ...launched };
   });
+
+it.effect("refuses an unverified repository before launching or registering a watch", () =>
+  Effect.gen(function* () {
+    const result = yield* launchRaw({
+      repository: { key: "github.com/owner/repo" },
+      repositoryRefused: true,
+    });
+    expect(result.response).toMatchObject({ code: "invalid_request" });
+    expect(result.launchInputs).toEqual([]);
+    expect(result.registrations).toEqual([]);
+  }),
+);
+
+it.effect("includes repository warnings in a successful SSH launch", () =>
+  Effect.gen(function* () {
+    const result = yield* launchFromThread({ repository: { key: "github.com/owner/repo" } });
+    expect(result.result.notes).toContain("Repository verified; dependency freshness unknown.");
+    expect(result.launchInputs).toHaveLength(1);
+  }),
+);
 
 it.effect("forwards the calling thread and this machine as the remote thread's launcher", () =>
   Effect.gen(function* () {
@@ -563,6 +603,8 @@ const fixture = (sourceFault?: "missing" | "size") =>
             getThreadShell: () => Ref.get(shell),
           }),
           Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+          Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+          Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
           Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
           Layer.mock(SshHostSetup.SshHostSetup)({}),
           Layer.mock(CloudMachineService.CloudMachineService)({}),
@@ -662,6 +704,32 @@ it.effect("rejects non-pending SSH attachments before dispatch", () =>
       })
       .pipe(Effect.provide(f.layer));
     expect(declaredFailure(result)).toMatchObject({ code: "invalid_request" });
+    f.assertNoDispatch();
+  }),
+);
+it.effect("rejects nested reference write and root grants before SSH dispatch", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    for (const extra of [
+      { roots: ["/arbitrary"] },
+      { access: "read-write" },
+      { operation: "write" },
+    ]) {
+      const result = yield* f
+        .call({
+          ...args,
+          references: [
+            {
+              mode: "snapshot",
+              repositoryKey: "invalid.example/acme/sibling",
+              files: ["source.ts"],
+              ...extra,
+            },
+          ],
+        })
+        .pipe(Effect.provide(f.layer));
+      expect(declaredFailure(result)).toMatchObject({ code: "invalid_request" });
+    }
     f.assertNoDispatch();
   }),
 );
@@ -840,6 +908,8 @@ it.effect.each([undefined, 2])("passes the SSH report limit to the coordinator (
       Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+      Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
       Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
       Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(CloudMachineService.CloudMachineService)({}),
@@ -926,6 +996,8 @@ const handoff = (
             };
           }),
       }),
+      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+      Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
@@ -1161,6 +1233,8 @@ const createCloudMachine = (grant: {
       }),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+      Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
       Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
       Layer.mock(SshHostSetup.SshHostSetup)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
@@ -1312,6 +1386,8 @@ const runtimeFixture = (
         ),
     }),
     Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+    Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+    Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
     Layer.mock(CloudMachineService.CloudMachineService)({}),
     Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
     Layer.mock(LaunchWatchService.LaunchWatchService)({}),

@@ -30,6 +30,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as RepositoryInventory from "../project/RepositoryInventory.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import payload from "../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 import { HOST_STATUS_REMOTE_TIMEOUT_MS } from "./HostStatusMcpService.ts";
@@ -147,19 +148,39 @@ const run = <A, E>(
   const refreshes: Array<string> = [];
   const queries: Array<{ projectId: unknown; includeSubagents: boolean }> = [];
   let connectedReads = 0;
+  let repositoryReads = 0;
+  let parityReads = 0;
+  const inventory = {
+    installed: false,
+    binaries: [],
+    ownership: "none" as const,
+    service: { available: false },
+    runtime: { port: 10100, healthy: false, ready: false },
+    link: { role: "none" as const, available: false, links: [], childSettingsApplied: false },
+  };
   const providers = { current: options.providers ?? [] };
   const layer = HostStatusMcpService.layer.pipe(
-    Layer.provide(Layer.mock(HubParity.HubParity)({ latest: () => Effect.succeed(undefined) })),
+    Layer.provide(
+      Layer.mock(HubParity.HubParity)({
+        latest: () => Effect.succeed(undefined),
+        readLocal: Effect.sync(() => {
+          parityReads += 1;
+          return inventory;
+        }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(RepositoryInventory.RepositoryInventory, {
+        read: Effect.sync(() => {
+          repositoryReads += 1;
+          return { sampledAt: 0, entries: [], truncated: false };
+        }),
+        readFresh: Effect.succeed({ sampledAt: 0, entries: [], truncated: false }),
+      }),
+    ),
     Layer.provide(
       Layer.mock(OpenCodexInventory.OpenCodexInventory)({
-        read: Effect.succeed({
-          installed: false,
-          binaries: [],
-          ownership: "none" as const,
-          service: { available: false },
-          runtime: { port: 10100, healthy: false, ready: false },
-          link: { role: "none" as const, available: false, links: [], childSettingsApplied: false },
-        }),
+        read: Effect.succeed(inventory),
       }),
     ),
     Layer.provide(
@@ -245,9 +266,46 @@ const run = <A, E>(
     yield* TestClock.setTime(now);
     const service = yield* HostStatusMcpService.HostStatusMcpService;
     const value = yield* body(service).pipe(Effect.result);
-    return { value, calls, refreshes, queries, connectedReads: () => connectedReads };
+    return {
+      value,
+      calls,
+      refreshes,
+      queries,
+      connectedReads: () => connectedReads,
+      repositoryReads,
+      parityReads,
+    };
   }).pipe(Effect.provide(layer));
 };
+
+it.effect.each([
+  { repositories: false, parityEvidence: false },
+  { repositories: true, parityEvidence: false },
+  { repositories: false, parityEvidence: true },
+  { repositories: true, parityEvidence: true },
+])("keeps repository and parity collection independent: %j", (flags) =>
+  Effect.gen(function* () {
+    const result = yield* run({}, (service) => service.read(scope, { local: true, ...flags }));
+    expect(result.value._tag).toBe("Success");
+    expect(result.repositoryReads).toBe(Number(flags.repositories));
+    expect(result.parityReads).toBe(Number(flags.parityEvidence));
+    expect(result.calls).toHaveLength(0);
+    if (result.value._tag === "Success")
+      expect(result.value.success.hosts[0]?.repositories !== undefined).toBe(flags.repositories);
+  }),
+);
+
+it.effect("rejects remote parity evidence before collecting repository inventory", () =>
+  Effect.gen(function* () {
+    const result = yield* run({ hosts: ["box"] }, (service) =>
+      service.read(scope, { host: "box", repositories: true, parityEvidence: true }),
+    );
+    expect(result.value._tag).toBe("Failure");
+    expect(result.repositoryReads).toBe(0);
+    expect(result.parityReads).toBe(0);
+    expect(result.calls).toHaveLength(0);
+  }),
+);
 
 it.effect("includes this machine's OpenCodex pool in its decoded host metrics", () =>
   Effect.gen(function* () {
@@ -318,6 +376,42 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
     expect(refreshes).toEqual(["codex"]);
   }),
+);
+
+it.effect(
+  "includes repository inventory only when requested and forwards that request to the selected host",
+  () =>
+    Effect.gen(function* () {
+      const { value, calls } = yield* run(
+        {
+          hostCall: () =>
+            Effect.succeed({
+              hosts: [
+                {
+                  host: null,
+                  reachability: "ok",
+                  repositories: { sampledAt: 123, entries: [], truncated: true },
+                },
+              ],
+            }),
+        },
+        (service) =>
+          Effect.gen(function* () {
+            expect(
+              (yield* service.read(scope, { local: true })).hosts[0]?.repositories,
+            ).toBeUndefined();
+            expect(
+              (yield* service.read(scope, { local: true, repositories: true })).hosts[0]
+                ?.repositories,
+            ).toEqual({ sampledAt: 0, entries: [], truncated: false });
+            return yield* service.read(scope, { host: "box", repositories: true });
+          }),
+      );
+      expect(value._tag).toBe("Success");
+      if (value._tag === "Success")
+        expect(value.success.hosts[0]?.repositories?.truncated).toBe(true);
+      expect(calls[0]?.arguments).toEqual({ local: true, repositories: true });
+    }),
 );
 
 it.effect("judges each host by the protocols it serves, not by its version string", () =>

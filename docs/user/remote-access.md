@@ -353,6 +353,31 @@ it and no work is running.
 
 ### Start a worktree on a saved SSH host
 
+Before asking an agent to start work on another machine, it can check registered
+checkouts with `goat_host_status {host, repositories:true}`. The inventory includes
+local Git state; ahead/behind does not fetch from the remote, and unknown dependency
+freshness does not mean dependencies are installed. An agent can pass the inventory's
+origin key as `repository: {key, candidateHosts}` to `goat_ssh_thread_launch` to
+refuse an unverified checkout and report matching candidates. This check does not
+copy uncommitted work or prepare stopped hosts. Use the canonical checkout path from
+the inventory; diagnosis does not browse aliases or wake candidate hosts.
+
+To give a worker sibling source code without mounting the sibling checkout, add
+`references: [{mode:"snapshot", repositoryKey:"example.com/team/sibling", files:["src/api.ts"]}]`
+to `goat_thread_launch` or `goat_ssh_thread_launch`. The worker receives the requested
+committed text, including local unpushed commits; dirty files are excluded. Use `checkout`
+from the inventory when more than one checkout matches, and `revision` to pin a local
+commit. For an SSH launch, an omitted source `host` means the selected host; `host:null`
+means the caller's machine. The source must already be ready and support snapshots.
+
+`goat_repository_snapshot` previews the same read. Capturing source requires an existing
+file-read grant or full-access caller authority, checked again before returning content.
+Snapshots support up to eight files, 16 KiB per file, 32 KiB per repository and 64 KiB per
+brief. Secret paths and credential-like assignments (including prefixed keys such as
+`DB_PASSWORD` and `AWS_SECRET_ACCESS_KEY`, with quoted or unquoted values after `:` or `=`), symlinks, submodules, binary content
+and partial clones are refused. This copies data only: it grants no source filesystem or
+host credential, and does not restrict permissions a worker already had.
+
 In the desktop app, save the host in **Settings → Connections**, then open a new
 thread in a project on this device. In the workspace menu, choose **Worktree on SSH**
 and the saved host. Send your message to start the thread there.

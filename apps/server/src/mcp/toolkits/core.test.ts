@@ -1,3 +1,5 @@
+import * as RepositoryReferenceMcpService from "../RepositoryReferenceMcpService.ts";
+import * as RepositoryLaunchMcpService from "../RepositoryLaunchMcpService.ts";
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as PermissionSettings from "../../serverSettings.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -243,6 +245,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_queue_promote_to_steer",
     "goat_queue_read",
     "goat_queue_reorder",
+    "goat_repository_snapshot",
     "goat_review_findings_export",
     "goat_review_findings_record",
     "goat_scheduler_status",
@@ -296,7 +299,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(163);
+  expect(names.size).toBe(164);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -1556,6 +1559,8 @@ it.effect.each([false, true])(
             }),
         }),
         Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
+        Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+        Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
         Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
         Layer.mock(SshHostSetup.SshHostSetup)({}),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({

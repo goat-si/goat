@@ -16,6 +16,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
+import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
 import { OpenCodexInventorySnapshot } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
 
@@ -205,6 +206,7 @@ export type HostCompatibility = typeof HostCompatibility.Type;
  * `lastKnown: true` repeats the last successful metrics.
  */
 export const HostStatusEntry = Schema.Struct({
+  repositories: Schema.optional(RepositoryInventorySnapshot),
   host: Schema.NullOr(TrimmedNonEmptyString),
   reachability: HostStatusReachability,
   lastKnown: Schema.optional(Schema.Literal(true)),
@@ -246,6 +248,10 @@ const HostAlias = TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate(
 });
 
 export const GoatHostStatusInput = Schema.Struct({
+  repositories: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Include a bounded inventory of registered projects and their Git worktrees. Local tracking refs only; no fetch or install. Cached for up to 15 seconds.",
+  }),
   parityEvidence: Schema.optional(Schema.Boolean).annotate({
     description:
       "With local:true, collect fresh read-only hub parity evidence, including one GET /v1/models.",

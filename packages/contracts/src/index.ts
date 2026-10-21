@@ -81,6 +81,8 @@ export * from "./connectionCatalog.ts";
 export * from "./previewCapture.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./hostStatus.ts";
+export * from "./repositoryInventory.ts";
+export * from "./repositoryReference.ts";
 export * from "./opencodex.ts";
 export * from "./hubParity.ts";
 export * from "./hubSettings.ts";

@@ -333,6 +333,9 @@ export function summarizeGoatToolCalls(
     case "project-read":
       label = phrase("Read", "read", quantity(countEntities(projectIds), "project"));
       break;
+    case "repository-snapshot":
+      label = phrase("Read", "read", `repository snapshots ${times}`);
+      break;
     case "project-create":
       label = phrase("Registered", "register", quantity(countEntities(projectIds), "project"));
       break;
