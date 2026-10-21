@@ -5230,6 +5230,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const latest = latestExecutedRun(projection.runs);
       if (
         latest?.id !== command.automatedContinuationOfRunId ||
+        (yield* stopReachedRun(command, command.threadId, latest.id)) ||
+        (command.modelSelection !== undefined &&
+          !modelSelectionsEqual(command.modelSelection, projection.thread.modelSelection)) ||
         latest.status !== "failed" ||
         projection.runs.some((run) => run.status === "queued") ||
         projection.thread.archivedAt !== null ||

@@ -22,6 +22,11 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import { modelSelectionCommandType } from "@goat/shared/model";
+import {
+  latestExecutedRun,
+  latestRootProviderFailure,
+  threadErrorSummary,
+} from "@goat/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -75,7 +80,7 @@ export interface FallbackShape {
   /** Whether any chain opted into ordinary threads, so the recovery sweep looks for them. */
   readonly coversThreads: Effect.Effect<boolean>;
   /**
-   * Moves an ordinary thread that failed with a usage limit to its chain's next model, with a
+   * Moves an ordinary thread with a configured failure trigger to its chain's next model, with a
    * notice and a continuation. True when it switched; false leaves the thread to the recovery
    * sweep's wait-for-reset.
    */
@@ -271,9 +276,6 @@ const make = Effect.gen(function* () {
       const shell = yield* threads.getThreadShell(threadId);
       if (
         shell === null ||
-        shell.status !== "failed" ||
-        shell.lastErrorClass == null ||
-        shell.latestRunId === null ||
         shell.archivedAt !== null ||
         shell.deletedAt !== null ||
         shell.settledOverride === "settled" ||
@@ -281,13 +283,43 @@ const make = Effect.gen(function* () {
         (yield* snoozed(shell))
       )
         return false;
-      const runId = shell.latestRunId;
-      const failure = shell.lastErrorClass;
       const { runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
-      // The failed run's model, not the thread's: a restart after the selection command
-      // already moved the thread finds the same step and replays the same command ids.
-      const failedRun = runs.find((run) => run.id === runId);
-      if (failedRun === undefined) return false;
+      const failedRun = latestExecutedRun(runs);
+      if (failedRun?.status !== "failed") return false;
+      const runId = failedRun.id;
+      const continuation = "fleet-fallback:" + threadId + ":" + runId + ":continue";
+      // A completed hop owns this run even if the chain or selection changed since delivery.
+      if ((yield* threads.receiptStatus(CommandId.make(continuation))) === "accepted") return true;
+      if (runs.some((run) => run.status === "queued")) return false;
+      const { turnItems, providerSessions } = yield* threads.getThreadRecords(
+        threadId,
+        ["turnItems", "providerSessions"],
+        {
+          turnItemTypes: ["error", "run_interrupt_request"],
+          turnItemRunIds: [runId],
+        },
+      );
+      if (
+        turnItems.some((item) => item.type === "run_interrupt_request") ||
+        (shell.limitRecovery?.runId === runId &&
+          !shell.limitRecovery.autoResume &&
+          !shell.limitRecovery.snooze)
+      )
+        return false;
+      const session = providerSessions
+        .filter((entry) => entry.providerInstanceId === shell.providerInstanceId)
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt) ||
+            right.id.localeCompare(left.id),
+        )[0];
+      const summary = threadErrorSummary(
+        latestRootProviderFailure(failedRun, turnItems),
+        session?.lastError ?? null,
+      );
+      const failure = summary.lastErrorClass;
+      if (failure === null) return false;
+      // A restart after selection must resolve the original chain and replay that hop's receipts.
       const current = failedRun.modelSelection;
       const resolved = ordinaryThreadChain(settings, current);
       if (resolved === null) return false;
@@ -302,10 +334,12 @@ const make = Effect.gen(function* () {
           // This read skips the notice; automatedContinuationOfRunId makes the orchestrator
           // refuse a continuation that loses the race after it.
           const latest = yield* threads.getThreadShell(threadId);
+          const latestRuns = yield* threads.getThreadRecords(threadId, ["runs"]);
+          const latestExecuted = latestExecutedRun(latestRuns.runs);
           if (
             latest === null ||
-            latest.latestRunId !== runId ||
-            latest.status !== "failed" ||
+            latestExecuted?.id !== runId ||
+            latestExecuted.status !== "failed" ||
             latest.archivedAt !== null ||
             latest.settledOverride === "settled" ||
             latest.pendingRuntimeRequest != null ||
@@ -329,20 +363,20 @@ const make = Effect.gen(function* () {
               failure +
               " on " +
               label(current) +
-              (shell.usageLimitResetAt == null
+              (summary.usageLimitResetAt == null
                 ? ""
-                : "; that limit resets at " + shell.usageLimitResetAt) +
+                : "; that limit resets at " + summary.usageLimitResetAt) +
               " (fallback chain " +
               resolved.id +
               ").",
           );
-          const continuation = "fleet-fallback:" + threadId + ":" + runId + ":continue";
           yield* threads.dispatch({
             type: "message.dispatch",
             commandId: CommandId.make(continuation),
             messageId: MessageId.make(continuation),
             threadId,
             automatedContinuationOfRunId: runId,
+            modelSelection: target,
             text: "Continue where you left off.",
             attachments: [],
             dispatchMode: { type: "start_immediately" },
