@@ -381,8 +381,9 @@ updater's in-flight guard and never creates a second replacement path.
 
 A runtime started by `run-t3.sh` updates itself when its launch records
 (`~/.goat/ssh-launch/runtime/pid` and `managed`) name its own process and it runs in
-the default `~/.goat` home on a POSIX host. Windows hosts, whose supervisor needs a
-native detached spawn, stay client-driven. Preparation runs the same host download a
+the default `~/.goat` home. Windows hosts take part when Git for Windows bash is
+found (the OpenSSH DefaultShell or a standard install path) and otherwise stay
+client-driven. Preparation runs the same host download a
 client would, verified against `SHA256SUMS`, checks the executable against its install
 record, and runs `__service-preflight`. Activation checks idle, then runs the owning
 launch script in its own session with the target release as the requested version.
@@ -394,6 +395,13 @@ release finds the runtime incompatible and replaces it as before. The script hol
 closes admission) and starts the ADR-0013 supervisor. The drain stops this server, so
 nothing in it can interrupt the swap. A busy check, a cancelled drain, or a client
 holding the lock retries in 10 minutes.
+
+On Windows, the command supervisor owns a kill-on-close Job Object before starting
+Git Bash. It stays alive while descendants hold command output, even if Bash exits
+first. Timeout and cancellation terminate that supervisor through its retained native
+process handle, so cleanup neither depends on a live parent PID nor selects a reused
+PID. The replacement supervisor and server use the existing WMI detached launch,
+outside the command job, and survive the updater's exit.
 
 The supervisor writes `last-replacement.json` (status, target, previous version) in the
 launch state directory for every swap it runs. A `rolled-back` or `failed` record is the

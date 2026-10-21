@@ -14,16 +14,23 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import { SSH_REPLACEMENT_ID_ENV } from "../serverOwnerLock.ts";
+import { bashScriptArg, resolveWindowsGitBash } from "./sshRuntimeGitBash.ts";
 import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
 
 const PID = 4242;
 const target = "1.1.0";
+const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
+
+const isShellCommand = (command: string) =>
+  command === "/bin/sh" || NodePath.win32.basename(command).toLowerCase() === "bash.exe";
 
 const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* (
   options: {
     readonly ownVersion?: string;
     readonly otherBaseDir?: boolean;
     readonly platform?: NodeJS.Platform;
+    /** Windows only. Undefined means Git Bash was not found. */
+    readonly gitBash?: string;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -46,9 +53,11 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     preflight: undefined as Record<string, unknown> | undefined,
     launchOutput: '{"status":"ready","remotePort":3773}\n',
     installs: [] as string[],
+    installCommands: [] as string[],
     movedAside: [] as string[],
     preflights: [] as ReadonlyArray<string>[],
     launches: [] as {
+      readonly shell: string;
       readonly script: string;
       readonly args: ReadonlyArray<string>;
       readonly env: NodeJS.ProcessEnv;
@@ -60,8 +69,9 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
   const host = SshRuntimeAutoUpdate.SshRuntimeHost.of({
     run: (input) =>
       Effect.sync(() => {
-        if (input.command === "/bin/sh") {
+        if (isShellCommand(input.command)) {
           const version = /GOAT_ARCHIVE_VERSION='([^']+)'/.exec(input.stdin ?? "")?.[1] ?? "";
+          state.installCommands.push(input.command);
           state.installs.push(input.stdin ?? "");
           if (state.installCode !== 0) return { code: state.installCode, stdout: "", stderr: "" };
           files.set(NodePath.join(versionDir(version), ".install-complete"), `${version}\n`);
@@ -93,7 +103,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       }),
     sha256: (file) =>
       Effect.sync(() =>
-        file.endsWith("/goat")
+        /[/\\]goat(?:\.exe)?$/u.test(file)
           ? state.executableSha256
           : files.has(file)
             ? "runner-sha"
@@ -138,6 +148,9 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     homeDir: home,
     pid: PID,
     platform: options.platform ?? "linux",
+    ...(options.platform === "win32"
+      ? { resolveGitBash: () => Effect.succeed(options.gitBash) }
+      : {}),
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {
@@ -194,6 +207,36 @@ it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
         expect(h.runtime.supported).toBe(false);
         expect(yield* h.runtime.owned).toBe(false);
       }),
+  );
+
+  it.effect("is owned on Windows when Git Bash resolves", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ platform: "win32", gitBash: GIT_BASH });
+      expect(h.runtime.supported).toBe(true);
+      expect(yield* h.runtime.owned).toBe(true);
+      h.files.set(NodePath.join(h.stateDir, "pid"), "1\n");
+      expect(yield* h.runtime.owned).toBe(false);
+    }),
+  );
+
+  it.effect("downloads and activates a Windows runtime through Git Bash", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ platform: "win32", gitBash: GIT_BASH });
+      yield* h.runtime.prepare(target);
+      expect(h.state.installCommands).toEqual([GIT_BASH]);
+      expect(h.state.preflights[0]?.[0]).toMatch(/[/\\]goat\.exe$/u);
+      expect(yield* h.runtime.activate(target)).toBe("requested");
+      const launch = h.state.launches[0];
+      expect(launch?.shell).toBe(GIT_BASH);
+      expect(launch?.args).toEqual(["runtime"]);
+      expect(launch?.env.HOME).toBe(h.home);
+      // layerHost hands Git Bash a forward-slash script path; /bin/sh keeps the native path.
+      const scriptFile = "C:\\Users\\me\\AppData\\Local\\Temp\\goat-runtime-update\\launch.sh";
+      expect(bashScriptArg(GIT_BASH, scriptFile)).toBe(
+        "C:/Users/me/AppData/Local/Temp/goat-runtime-update/launch.sh",
+      );
+      expect(bashScriptArg("/bin/sh", scriptFile)).toBe(scriptFile);
+    }),
   );
 
   it.effect("prepares through the checksum-verified host download and the preflight", () =>
@@ -397,6 +440,7 @@ it.effect("the detached launcher returns the script's output through files", () 
   Effect.gen(function* () {
     const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
     const result = yield* host.runDetached({
+      shell: "/bin/sh",
       script: ['printf "%s\\n" "$1"', 'printf "%s\\n" "$GOAT_TEST_MARKER" >&2', "exit 3"].join(
         "\n",
       ),
@@ -444,4 +488,84 @@ it.effect("a host command whose shell exits first still stops what it left runni
     expect(descendant).toBeGreaterThan(0);
     expect(() => process.kill(descendant, 0)).toThrow();
   }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+);
+
+const GIT_BASH_ENV = {
+  SystemRoot: "C:\\Windows",
+  ProgramFiles: "C:\\Program Files",
+  ProgramW6432: "D:\\W6432",
+  "ProgramFiles(x86)": "C:\\Program Files (x86)",
+  LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+} satisfies NodeJS.ProcessEnv;
+
+const PROGRAM_FILES_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
+const W6432_BASH = "D:\\W6432\\Git\\bin\\bash.exe";
+const X86_BASH = "C:\\Program Files (x86)\\Git\\bin\\bash.exe";
+const LOCAL_BASH = "C:\\Users\\me\\AppData\\Local\\Programs\\Git\\bin\\bash.exe";
+
+const defaultShellOutput = (value: string) =>
+  ["", "HKEY_LOCAL_MACHINE\\SOFTWARE\\OpenSSH", `    DefaultShell    REG_SZ    ${value}`, ""].join(
+    "\r\n",
+  );
+
+const findGitBash = (options: {
+  readonly registry?: string;
+  readonly existing?: ReadonlyArray<string>;
+  readonly env?: NodeJS.ProcessEnv;
+}) =>
+  resolveWindowsGitBash({
+    readOpenSshDefaultShell: () => Effect.succeed(options.registry),
+    exists: (path) => Effect.succeed(options.existing?.includes(path) ?? false),
+    env: options.env ?? GIT_BASH_ENV,
+  });
+
+it.effect("prefers the OpenSSH DefaultShell when it is Git Bash", () =>
+  Effect.gen(function* () {
+    const preferred = "E:\\Tools\\Git\\bin\\bash.exe";
+    const found = yield* findGitBash({
+      registry: defaultShellOutput(preferred),
+      existing: [preferred, PROGRAM_FILES_BASH],
+    });
+    expect(found).toBe(preferred);
+  }),
+);
+
+it.effect("rejects System32 and bare bash, then uses a standard Git install", () =>
+  Effect.gen(function* () {
+    const system32 = yield* findGitBash({
+      registry: defaultShellOutput("C:\\Windows\\System32\\bash.exe"),
+      existing: ["C:\\Windows\\System32\\bash.exe", PROGRAM_FILES_BASH, LOCAL_BASH],
+    });
+    expect(system32).toBe(PROGRAM_FILES_BASH);
+    const mixedCase = yield* findGitBash({
+      registry: defaultShellOutput("C:/WINDOWS/system32/bash.exe"),
+      existing: ["C:/WINDOWS/system32/bash.exe", W6432_BASH],
+    });
+    expect(mixedCase).toBe(W6432_BASH);
+    const bare = yield* findGitBash({
+      registry: defaultShellOutput("bash"),
+      existing: [X86_BASH, LOCAL_BASH],
+    });
+    expect(bare).toBe(X86_BASH);
+    const otherShell = yield* findGitBash({
+      registry: defaultShellOutput(
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      ),
+      existing: [LOCAL_BASH],
+    });
+    expect(otherShell).toBe(LOCAL_BASH);
+  }),
+);
+
+it.effect("returns undefined when no Git Bash exists", () =>
+  Effect.gen(function* () {
+    expect(yield* findGitBash({ existing: [] })).toBeUndefined();
+    expect(
+      yield* findGitBash({
+        registry: defaultShellOutput("C:\\Windows\\System32\\bash.exe"),
+        existing: ["C:\\Windows\\System32\\bash.exe"],
+      }),
+    ).toBeUndefined();
+    expect(yield* findGitBash({ registry: "not a registry query" })).toBeUndefined();
+  }),
 );
