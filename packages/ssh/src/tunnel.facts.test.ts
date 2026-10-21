@@ -17,8 +17,9 @@ const current = {
   orchestration: ORCHESTRATION_PROTOCOL_VERSION,
 };
 
-// Each case runs two full launches through fake executables, each a Node start.
-const LAUNCHES_TIMEOUT_MS = 60_000;
+// Each case runs two full launches through fake executables, each a Node start. A case takes about
+// 11 s on a hosted runner but 50-60 s on the shared EPYC host, where every runner shares one machine.
+const LAUNCHES_TIMEOUT_MS = 180_000;
 
 type Fixture = Effect.Success<ReturnType<typeof makeProtocolFixture>>;
 
