@@ -34,6 +34,13 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import {
+  AddHubDevice,
+  HubActionResult,
+  HubDeviceActionButtons,
+  useHubActions,
+  type HubActions,
+} from "./HubDeviceActions";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -130,6 +137,8 @@ function HubControls({
   const atom = hostStatusAtom(environmentId);
   const result = useAtomValue(atom);
   const reachesHosts = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const [adding, setAdding] = useState(false);
+  const actions = useHubActions(environmentId, () => registry.refresh(atom));
   useLiveRefresh(() => refreshHostStatus(registry, atom), {
     key: `hub:${environmentId}`,
     intervalMs: HOST_STATUS_REFRESH_MS,
@@ -219,22 +228,44 @@ function HubControls({
         {...searchableSetting("hub-devices")}
         title="Devices"
         headerAction={
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={result.waiting}
-            onClick={() => registry.refresh(atom)}
-          >
-            Refresh
-          </Button>
+          <span className="flex items-center gap-1">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={adding || !actions.allowed}
+              onClick={() => setAdding(true)}
+            >
+              Add device to hub
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={result.waiting}
+              onClick={() => registry.refresh(atom)}
+            >
+              Refresh
+            </Button>
+          </span>
         }
       >
+        {adding ? (
+          <AddHubDevice
+            actions={actions}
+            suggestions={
+              snapshot?.devices
+                .filter((device) => device.transport === "standalone")
+                .map((device) => device.alias) ?? []
+            }
+            onClose={() => setAdding(false)}
+          />
+        ) : null}
         <HubDevices
           environmentId={environmentId}
           snapshot={snapshot}
           reading={result._tag === "Initial"}
           failed={result._tag === "Failure"}
           reachesHosts={reachesHosts}
+          actions={actions}
           onVerified={() => registry.refresh(atom)}
         />
       </SettingsSection>
@@ -248,6 +279,7 @@ function HubDevices(props: {
   readonly reading: boolean;
   readonly failed: boolean;
   readonly reachesHosts: boolean;
+  readonly actions: HubActions;
   readonly onVerified: () => void;
 }) {
   const message = props.reading
@@ -255,8 +287,11 @@ function HubDevices(props: {
     : props.failed
       ? "Could not read devices. Try Refresh."
       : props.snapshot === null || props.snapshot.devices.length === 0
-        ? "No devices yet. Link one from OpenCodex on this machine with ocx link add, and it shows here on the next read."
+        ? "No devices yet. Add one with Add device to hub."
         : null;
+  // A device that left the hub drops out of the list; its result stays readable here.
+  const listed = new Set(props.snapshot?.devices.map((device) => device.alias) ?? []);
+  const recent = props.actions.entries.filter((entry) => !listed.has(entry.alias));
   return (
     <>
       {message === null ? (
@@ -266,12 +301,21 @@ function HubDevices(props: {
               key={device.alias}
               environmentId={props.environmentId}
               device={device}
+              actions={props.actions}
               onVerified={props.onVerified}
             />
           ))}
         </ul>
       ) : (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">{message}</p>
+      )}
+      {recent.length === 0 ? null : (
+        <section aria-label="Recent actions" className="space-y-2 px-3 py-3 sm:px-4">
+          <h3 className="text-xs font-medium text-muted-foreground">Recent actions</h3>
+          {recent.map((entry) => (
+            <HubActionResult key={entry.alias} entry={entry} actions={props.actions} />
+          ))}
+        </section>
       )}
       {props.reachesHosts ? null : (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
@@ -285,10 +329,12 @@ function HubDevices(props: {
 function HubDeviceRow({
   environmentId,
   device,
+  actions,
   onVerified,
 }: {
   readonly environmentId: EnvironmentId;
   readonly device: HubDevice;
+  readonly actions: HubActions;
   readonly onVerified: () => void;
 }) {
   const canVerify = useAtomValue(serverEnvironment.verifyHubDevice.permissionAtom(environmentId));
@@ -328,6 +374,7 @@ function HubDeviceRow({
         >
           {verifying ? "Verifying…" : "Verify"}
         </Button>
+        <HubDeviceActionButtons device={device} actions={actions} />
       </div>
       <p className="text-xs text-muted-foreground">
         {[
@@ -356,6 +403,7 @@ function HubDeviceRow({
           {error}
         </p>
       ) : null}
+      <HubActionResult entry={actions.entry(device.alias)} actions={actions} />
       <DeviceFallback alias={device.alias} fallback={device.fallback} />
     </li>
   );
