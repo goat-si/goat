@@ -2031,8 +2031,14 @@ describe("channel worker memory grants", () => {
         }
         yield* runtime.drain;
         const task = yield* onlyTask;
-        assert.strictEqual(task.status, "running");
         assert.include(task.requester.grantedScopes, "memory:write");
+        if (change === "removed") {
+          assert.strictEqual(task.status, "failed");
+          assert.isUndefined(task.target);
+          assert.lengthOf(harness.world.launches, 0);
+          return;
+        }
+        assert.strictEqual(task.status, "running");
         const expected = change === "read" ? "read" : undefined;
         assert.strictEqual(task.target?.memoryGrantCeiling, expected);
         assert.strictEqual(harness.world.launches[0]?.initialMessage?.memoryGrantCeiling, expected);

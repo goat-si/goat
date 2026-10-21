@@ -250,6 +250,8 @@
         "apps/server/src/persistence/Migrations/071_ChannelLedger.ts",
         "apps/server/src/channels/ChannelReceptionService.ts",
         "apps/server/src/channels/ChannelDispatcher.ts",
+        "apps/server/src/channels/ChannelRemoteWorkers.ts",
+        "apps/server/src/channels/channelDispatchAuthority.ts",
         "apps/server/src/channels/ChannelBotRegistry.ts",
         "apps/server/src/channels/ChannelBotTimeline.ts",
         "packages/client-runtime/src/goatBot/",

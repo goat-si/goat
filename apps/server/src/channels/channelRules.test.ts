@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  ChannelDispatchTarget,
   ChannelGatewayError,
   ChannelTask,
   ChannelTaskEvent,
@@ -15,6 +16,7 @@ import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 const decodeTask = Schema.decodeUnknownSync(ChannelTask);
 const decodeWorkerResult = Schema.decodeUnknownSync(ChannelWorkerResult);
 const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
+const decodeTarget = Schema.decodeUnknownSync(ChannelDispatchTarget);
 const NOW = "2026-10-12T00:00:00.000Z";
 
 const task = (overrides: Record<string, unknown> = {}) =>
@@ -326,6 +328,48 @@ describe("linked account permissions", () => {
       }),
     );
   });
+});
+
+it("records an automatic host atomically and unpins only that host on a new generation", () => {
+  const initial = task({ status: "received", worker: undefined, generation: 2 });
+  const target = decodeTarget({
+    environmentId: "remote-env",
+    projectId: "remote-project",
+    modelSelection: { instanceId: "codex", model: "requested-model" },
+    runtimeMode: "auto",
+    interactionMode: "default",
+    workspaceStrategy: { type: "worktree" },
+    remote: {
+      host: "studio",
+      cwd: "/repo",
+      automatic: { sourceProjectId: "local-project", canonicalKey: "github.com/org/repo" },
+    },
+    placementReason: "studio · Codex · 20% weekly used",
+  });
+  const claim = applyChannelTaskEvent(
+    initial,
+    event("task.dispatch.claimed", { generation: 2, target, leaseExpiresAt: NOW }),
+  );
+  assert.isTrue(claim.ok);
+  if (!claim.ok) return;
+  assert.strictEqual(claim.task.host, "studio");
+  assert.deepStrictEqual(claim.task.target, target);
+  const failed = applyChannelTaskEvent(
+    claim.task,
+    event("task.failed", { generation: 2, reason: "stopped" }, 6),
+  );
+  assert.isTrue(failed.ok);
+  if (!failed.ok) return;
+  const retry = applyChannelTaskEvent(
+    failed.task,
+    event("task.retry.requested", { generation: 3 }, 7),
+  );
+  assert.isTrue(retry.ok);
+  if (!retry.ok) return;
+  assert.isUndefined(retry.task.host);
+  assert.strictEqual(retry.task.projectId, "local-project");
+  // Retain the previous target's authority ceiling for the next selection.
+  assert.deepStrictEqual(retry.task.target, target);
 });
 
 describe("terminal check evidence", () => {

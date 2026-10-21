@@ -101,6 +101,9 @@ export function applyChannelTaskEvent(
           status: "dispatching",
           target: event.payload.target,
           projectId: event.payload.target.projectId,
+          ...(event.payload.target.remote === undefined
+            ? {}
+            : { host: event.payload.target.remote.host }),
         },
       };
     case "task.brief.frozen":
@@ -205,6 +208,7 @@ export function applyChannelTaskEvent(
       };
     }
     case "task.retry.requested": {
+      const automatic = base.target?.remote?.automatic;
       const {
         proposedCompletion: _proposed,
         briefVersion: _briefVersion,
@@ -213,12 +217,18 @@ export function applyChannelTaskEvent(
         resultSummary: _summary,
         completionReport: _report,
         observed: _observed,
+        host,
         ...rest
       } = base;
       return {
         ok: true,
         task: {
           ...rest,
+          ...(automatic === undefined
+            ? host === undefined
+              ? {}
+              : { host }
+            : { projectId: automatic.sourceProjectId }),
           status: "received",
           generation: event.payload.generation,
           openQuestions: [],

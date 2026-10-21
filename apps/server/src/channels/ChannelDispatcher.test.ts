@@ -86,3 +86,31 @@ it.effect(
     }).pipe(Effect.provide(harness.layer));
   },
 );
+
+it.effect("uses a ready sibling when the configured instance could not initialize", () => {
+  const harness = makeHarness({
+    providerInstances: [
+      { instanceId: "codex", missing: true },
+      { instanceId: "codex-work", weeklyUsedPercent: 20 },
+    ],
+  });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    yield* ledger.claimOwnership({ token: "missing-provider-owner", now, staleBefore: now });
+    const input = yield* gateway.ingest(
+      goatInput("do: use the ready account", "missing-instance"),
+      rpcContext,
+    );
+    yield* reception.receive(input.inputId, "missing-provider-owner");
+    const task = yield* onlyTask;
+    yield* dispatcher.dispatch(task.taskId, "missing-provider-owner");
+    assert.strictEqual((yield* onlyTask).status, "running");
+    assert.strictEqual(harness.world.launches[0]?.modelSelection.instanceId, "codex-work");
+    assert.strictEqual(harness.world.launches[0]?.modelSelection.model, "gpt-6.1-sol");
+  }).pipe(Effect.provide(harness.layer));
+});

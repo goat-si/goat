@@ -962,3 +962,15 @@ it("rejects reserved hub keys before merging even a mixed settings patch", () =>
     expect(FOLDED_SERVER_SETTINGS.standingInstructions).not.toBe("must not land");
   }
 });
+
+describe("channel automatic placement opt-in", () => {
+  it("persists both directions without replacing independent settings", () => {
+    const current = { ...DEFAULT_SERVER_SETTINGS, memoryEnabled: false };
+    const enabled = applyServerSettingsPatch(current, { channelAutoPlacement: true });
+    expect(enabled.channelAutoPlacement).toBe(true);
+    expect(enabled.memoryEnabled).toBe(false);
+    const disabled = applyServerSettingsPatch(enabled, { channelAutoPlacement: false });
+    expect(disabled.channelAutoPlacement).toBe(false);
+    expect(disabled.memoryEnabled).toBe(false);
+  });
+});

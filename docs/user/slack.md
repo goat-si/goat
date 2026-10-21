@@ -73,6 +73,15 @@ GOAT Bot screen shows only a chip for the work and its final report.
   starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
+- **Settings → GOAT Bot → Automatically choose a worker computer** lets work
+  use an already-connected SSH computer with the same repository and requested
+  model. It is off by default. Turning it on allows the worker's instructions,
+  notes and named skills to go to the selected computer. GOAT prefers ready
+  accounts with more quota left and less channel work, and shows why it chose
+  one. Naming a computer keeps work there. Unknown or unavailable repositories
+  are skipped; GOAT does not prepare computers or sign in for this choice.
+  Retrying automatically placed work chooses again; a running worker never
+  moves automatically.
 - Work counts as waiting on you when the agent working on it, or a subagent it
   started in GOAT, needs your approval or an answer. That includes a subagent
   running in GOAT on another machine. Subagents that run on another service

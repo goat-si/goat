@@ -21,6 +21,7 @@ import {
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
+  resolveProjectProviderInstanceEnabled,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { prependStandingInstructions } from "@goat/shared/standingInstructions";
@@ -29,6 +30,8 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as FiberMap from "effect/FiberMap";
+import * as Semaphore from "effect/Semaphore";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -67,6 +70,7 @@ import {
   workerLaunchIdsFor,
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { channelWorkerRules, workerHeader } from "./channelWorkerBrief.ts";
@@ -204,6 +208,8 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
+  const placements = yield* FiberMap.make<string>();
+  const placementGate = yield* Semaphore.make(1);
   /** Remote dispatches handed off but not yet claimed, by task, with whose work they are. */
   const remoteReservations = yield* Ref.make<ReadonlyMap<string, ChannelRequester>>(new Map());
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
@@ -299,15 +305,25 @@ const make = Effect.gen(function* () {
    * that offers the model can take the work when it has more quota left or less channel work
    * running; the configured account stays a candidate and wins ties. The reason is for the chip.
    */
-  const placeLocally = (selection: ModelSelection) =>
+  const placeLocally = (selection: ModelSelection, projectId: ProjectId) =>
     Effect.gen(function* () {
       const configured = yield* providers.getInstance(selection.instanceId);
-      if (configured === undefined) return { modelSelection: selection, reason: undefined };
-      const siblings = (yield* providers.listInstances).filter(
-        (instance) =>
-          instance.instanceId === selection.instanceId ||
-          (instance.enabled && instance.driverKind === configured.driverKind),
-      );
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const driver =
+        configured?.driverKind ?? settings.providerInstances[selection.instanceId]?.driver;
+      if (driver === undefined)
+        return {
+          modelSelection: selection,
+          reason: undefined,
+          candidates: [] as Array<PlacementCandidate<ModelSelection>>,
+        };
+      const siblings = (yield* providers.listInstances)
+        .toSorted((left, right) => String(left.instanceId).localeCompare(String(right.instanceId)))
+        .filter(
+          (instance) =>
+            instance.instanceId === selection.instanceId ||
+            (instance.enabled && instance.driverKind === driver),
+        );
       const load = yield* localTasksByInstance;
       const candidates = yield* Effect.forEach(siblings, (instance) =>
         Effect.gen(function* () {
@@ -324,7 +340,11 @@ const make = Effect.gen(function* () {
           const offers =
             snapshot.models.length === 0 ||
             snapshot.models.some((candidate) => candidate.slug === selection.model);
-          if (!isConfigured && !(ready && offers)) return [];
+          if (
+            !(ready && offers) ||
+            !resolveProjectProviderInstanceEnabled(settings, projectId, instance.instanceId)
+          )
+            return [];
           const windows = snapshot.usageLimits?.windows ?? [];
           const candidate: PlacementCandidate<ModelSelection> = {
             value: isConfigured ? selection : { ...selection, instanceId: instance.instanceId },
@@ -333,6 +353,7 @@ const make = Effect.gen(function* () {
               instance.displayName ?? snapshot.displayName ?? String(instance.instanceId),
             preferred: isConfigured,
             windows: windows.length === 0 ? null : windows,
+            checkedAt: snapshot.usageLimits?.checkedAt,
             activeTasks: load.get(instance.instanceId) ?? 0,
             model: selection.model,
             quotaPool:
@@ -345,25 +366,13 @@ const make = Effect.gen(function* () {
           return [candidate];
         }),
       );
-      // listInstances leaves out instances that failed to start; the configured one still runs.
       const pool = candidates.flat();
-      const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const placed = choosePlacement(
-        pool.length === 0
-          ? [
-              {
-                value: selection,
-                host: null,
-                providerLabel: String(selection.instanceId),
-                preferred: true,
-                windows: null,
-                activeTasks: 0,
-              },
-            ]
-          : pool,
-        now,
-      );
-      return { modelSelection: placed?.chosen.value ?? selection, reason: placed?.reason };
+      const placed = choosePlacement(pool, DateTime.toEpochMillis(yield* DateTime.now));
+      return {
+        modelSelection: placed?.chosen.value ?? selection,
+        reason: placed?.reason,
+        candidates: pool,
+      };
     });
 
   /**
@@ -393,7 +402,7 @@ const make = Effect.gen(function* () {
     });
 
   /** The launch settings for a task, or the question to ask when they cannot be chosen. */
-  const resolveTarget = (stored: ChannelLedger.ChannelStoredTask) =>
+  const resolveTarget = (stored: ChannelLedger.ChannelStoredTask, allowRemote = false) =>
     Effect.gen(function* () {
       const task = stored.task;
       const bot = yield* ledger.getBot(stored.ownerId);
@@ -448,20 +457,16 @@ const make = Effect.gen(function* () {
         });
       }
       const modelSelection = preferred ?? projectModel;
-      if (!(yield* modelOffered(modelSelection))) {
-        return {
-          type: "question" as const,
-          text:
-            "The model for " +
-            chosen.title +
-            " is not available. Pick a default model for it in GOAT and answer here.",
-        };
-      }
       const isGit = yield* fileSystem
         .exists(path.join(chosen.workspaceRoot, ".git"))
         .pipe(Effect.orElseSucceed(() => false));
       const memoryGrantCeiling = yield* requesterMemoryCeiling(task);
-      const placed = yield* placeLocally(modelSelection);
+      const placed = yield* placeLocally(modelSelection, chosen.id);
+      if (!allowRemote && placed.candidates.length === 0)
+        return {
+          type: "question" as const,
+          text: "No ready account offers the requested model. Check the project’s provider settings.",
+        };
       const target: ChannelDispatchTarget = {
         environmentId: yield* environment.getEnvironmentId,
         projectId: chosen.id,
@@ -476,7 +481,7 @@ const make = Effect.gen(function* () {
         ...(placed.reason === undefined ? {} : { placementReason: placed.reason }),
         ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
       };
-      return { type: "target" as const, target };
+      return { type: "target" as const, target, requestedSelection: modelSelection };
     });
 
   /**
@@ -528,6 +533,26 @@ const make = Effect.gen(function* () {
   const launch = (initial: ChannelLedger.ChannelStoredTask, owner: string) =>
     Effect.gen(function* () {
       if (initial.task.target === undefined) return;
+      if (
+        (yield* requesterForDispatch(initial.task).pipe(
+          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        )) === undefined
+      ) {
+        yield* commitTransition(
+          ledger,
+          initial,
+          {
+            type: "task.failed",
+            payload: {
+              generation: initial.task.generation,
+              reason: "permission_changed",
+              summary: "The requester’s permission to start this work changed.",
+            },
+          },
+          { owner, narrate: true },
+        );
+        return;
+      }
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       const supervisor = initial.task.kind === "turn" && settings.goatclaw.enabled;
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
@@ -557,6 +582,25 @@ const make = Effect.gen(function* () {
       );
       const task = stored.task;
       const target = task.target!;
+      if (
+        (yield* requesterForDispatch(task).pipe(
+          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        )) === undefined
+      ) {
+        return yield* commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.failed",
+            payload: {
+              generation: task.generation,
+              reason: "permission_changed",
+              summary: "The requester’s permission to start this work changed.",
+            },
+          },
+          { owner, narrate: true },
+        ).pipe(Effect.asVoid);
+      }
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
       // Only a requester at full access may act through the supervisor's owner profile; anyone
       // linked lower keeps the default profile, so the bot never gives them more than they hold.
@@ -686,10 +730,187 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const autoPlace = Effect.fn("ChannelDispatcher.autoPlace")(function* (
+    initial: ChannelLedger.ChannelStoredTask,
+    owner: string,
+  ) {
+    const requester = yield* requesterForDispatch(initial.task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+    );
+    if (requester === undefined) return;
+    const stored = initial;
+    const resolved = yield* resolveTarget({ ...stored, task: { ...stored.task, requester } }, true);
+    if (resolved.type === "question")
+      return yield* askRequester(
+        stored,
+        resolved.text,
+        owner,
+        "choices" in resolved ? { choices: resolved.choices } : {},
+      );
+    if (!("requestedSelection" in resolved)) return;
+    const shells = yield* projects.listShells();
+    const project = shells.find((shell) => shell.id === resolved.target.projectId);
+    const identities = yield* Effect.serviceOption(
+      RepositoryIdentityResolver.RepositoryIdentityResolver,
+    );
+    const identity =
+      project === undefined || Option.isNone(identities)
+        ? null
+        : yield* identities.value.resolve(project.workspaceRoot);
+    const provider = yield* providers.getInstance(resolved.requestedSelection.instanceId);
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+    const driver =
+      provider?.driverKind ??
+      settings.providerInstances[resolved.requestedSelection.instanceId]?.driver;
+    const candidates =
+      identity === null || driver === undefined
+        ? []
+        : yield* remoteWorkers.placementCandidates(
+            stored,
+            { ...resolved.target, modelSelection: resolved.requestedSelection },
+            identity.canonicalKey,
+            driver,
+            owner,
+          );
+    const claimed = yield* Effect.gen(function* () {
+      const current = yield* ledger.getTask(stored.task.taskId);
+      if (
+        current === undefined ||
+        current.task.status !== "received" ||
+        current.task.generation !== stored.task.generation ||
+        current.task.version !== stored.task.version
+      )
+        return;
+      const who = yield* requesterForDispatch(current.task).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      );
+      if (who === undefined) {
+        yield* commitTransition(
+          ledger,
+          current,
+          {
+            type: "task.failed",
+            payload: {
+              generation: current.task.generation,
+              reason: "permission_changed",
+              summary: "The requester’s permission to start this work changed.",
+            },
+          },
+          { owner, narrate: true },
+        );
+        return;
+      }
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const local = yield* placeLocally(resolved.requestedSelection, resolved.target.projectId);
+      const pool = [
+        ...local.candidates.map((candidate): PlacementCandidate<ChannelDispatchTarget> => ({
+          ...candidate,
+          value: { ...resolved.target, modelSelection: candidate.value },
+        })),
+        ...(settings.channelAutoPlacement ? candidates : []),
+      ];
+      const busy = yield* ledger.listTasksByStatus(["dispatching", "running", "waiting_input"]);
+      if (
+        (yield* ledger.countBusyTasks({ ownerId: who.ownerId, principalId: who.principalId })) >=
+        WORKERS_PER_REQUESTER
+      )
+        return;
+      const placed = choosePlacement(
+        pool.map((candidate) => ({
+          ...candidate,
+          activeTasks: busy.filter(
+            ({ task }) =>
+              task.kind !== "turn" &&
+              (task.status !== "waiting_input" || task.worker !== undefined) &&
+              task.target !== undefined &&
+              (task.target.remote?.host ?? null) === candidate.host,
+          ).length,
+        })),
+        DateTime.toEpochMillis(yield* DateTime.now),
+      );
+      if (placed === undefined)
+        return yield* askRequester(
+          current,
+          "No ready account on an eligible machine offers the requested model.",
+          owner,
+        ).pipe(Effect.as(undefined));
+      const memory = yield* requesterMemoryCeiling({ ...current.task, requester: who });
+      const target: ChannelDispatchTarget = {
+        ...placed.chosen.value,
+        ...(placed.chosen.value.remote?.automatic === undefined
+          ? {}
+          : {
+              remote: {
+                ...placed.chosen.value.remote,
+                automatic: {
+                  ...placed.chosen.value.remote.automatic,
+                  runtimeModeCeiling: who.runtimeModeCeiling,
+                },
+              },
+            }),
+        runtimeMode: lowerRuntimeMode(placed.chosen.value.runtimeMode, who.runtimeModeCeiling),
+        memoryGrantCeiling: memory,
+        placementReason:
+          (placed.reason ?? "This machine · usage not reported") +
+          (settings.channelAutoPlacement && candidates.length === 0
+            ? " · no verified remote candidate for this repository"
+            : ""),
+      };
+      // An auto probe uses the same authority as its launch; a narrowed grant invalidates it.
+      if (
+        target.remote !== undefined &&
+        (who.runtimeModeCeiling !== requester.runtimeModeCeiling ||
+          memory !== (resolved.target.memoryGrantCeiling ?? "none"))
+      )
+        return;
+      return yield* commitTransition(
+        ledger,
+        current,
+        {
+          type: "task.dispatch.claimed",
+          payload: {
+            generation: current.task.generation,
+            target,
+            leaseExpiresAt: DateTime.formatIso(yield* DateTime.now),
+          },
+        },
+        { owner, narrate: true },
+      );
+    }).pipe(placementGate.withPermit);
+    if (claimed === undefined) return;
+    if (claimed.target?.remote !== undefined)
+      return yield* remoteWorkers.launch(claimed.taskId, owner);
+    const current = yield* ledger.getTask(claimed.taskId);
+    if (current !== undefined) yield* launch(current, owner);
+  });
+
   const dispatch: ChannelDispatcher["Service"]["dispatch"] = (taskId, owner) =>
     Effect.gen(function* () {
       const stored = yield* ledger.getTask(taskId);
       if (stored === undefined) return;
+      let dispatchRequester = stored.task.requester;
+      if (stored.task.status === "received") {
+        const requester = yield* requesterForDispatch(stored.task).pipe(
+          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        );
+        if (requester === undefined) {
+          yield* commitTransition(
+            ledger,
+            stored,
+            {
+              type: "task.failed",
+              payload: {
+                generation: stored.task.generation,
+                reason: "permission_changed",
+                summary: "The requester’s permission to start this work changed.",
+              },
+            },
+            { owner, narrate: true },
+          );
+          return;
+        }
+        dispatchRequester = requester;
+      }
       // A generation that may already run on another machine never starts anywhere else.
       if (stored.task.status === "received" || stored.task.status === "dispatching") {
         const elsewhere = yield* remoteWorkers.attemptedElsewhere(stored);
@@ -735,11 +956,37 @@ const make = Effect.gen(function* () {
           principalId: requester.principalId,
         })) + inFlight;
       if (busy >= WORKERS_PER_REQUESTER) return;
+      if (
+        stored.task.kind !== "turn" &&
+        stored.task.host === undefined &&
+        (yield* serverSettings.getSettings.pipe(Effect.orDie)).channelAutoPlacement
+      ) {
+        yield* Ref.update(remoteReservations, (map) => new Map(map).set(taskId, requester));
+        yield* FiberMap.run(
+          placements,
+          taskId,
+          autoPlace(stored, owner).pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning("channel automatic placement failed", { taskId }),
+            ),
+            Effect.ensuring(Ref.update(remoteReservations, (map) => withoutKey(map, taskId))),
+          ),
+          { onlyIfMissing: true },
+        );
+        return;
+      }
       if (stored.task.host !== undefined) {
         yield* Ref.update(remoteReservations, (map) => new Map(map).set(taskId, requester));
-        return yield* remoteWorkers.dispatch(taskId, owner, yield* remoteHints(stored));
+        return yield* remoteWorkers.dispatch(
+          taskId,
+          owner,
+          yield* remoteHints({ ...stored, task: { ...stored.task, requester: dispatchRequester } }),
+        );
       }
-      const resolved = yield* resolveTarget(stored);
+      const resolved = yield* resolveTarget({
+        ...stored,
+        task: { ...stored.task, requester: dispatchRequester },
+      });
       if (resolved.type === "question") {
         return yield* askRequester(
           stored,
@@ -760,7 +1007,7 @@ const make = Effect.gen(function* () {
             leaseExpiresAt: claimedAt,
           },
         },
-        { owner },
+        { owner, narrate: resolved.target.placementReason !== undefined },
       );
       if (claimed === undefined) return;
       const reread = yield* ledger.getTask(taskId);

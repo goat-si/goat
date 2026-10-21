@@ -721,3 +721,18 @@ describe("automatic server updates", () => {
     expect(() => decodeServerSettingsPatch({ automaticServerUpdates })).toThrow();
   });
 });
+
+describe("channel automatic placement settings", () => {
+  it("requires an explicit opt-in and uses normal settings write permission", () => {
+    expect(decodeServerSettings({}).channelAutoPlacement).toBe(false);
+    const patch = decodeServerSettingsPatch({ channelAutoPlacement: true });
+    expect(patch.channelAutoPlacement).toBe(true);
+    expect(requiredScopesForServerSettingsPatch(patch)).toContain("settings:write");
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings(patch))).channelAutoPlacement,
+    ).toBe(true);
+    expect(decodeServerSettingsPatch({ channelAutoPlacement: false }).channelAutoPlacement).toBe(
+      false,
+    );
+  });
+});

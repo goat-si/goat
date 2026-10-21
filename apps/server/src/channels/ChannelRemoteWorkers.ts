@@ -1,7 +1,7 @@
 /**
  * ChannelRemoteWorkers - runs ledger tasks on another machine and brings their reports back.
  *
- * A task whose requester asked for another machine (an SSH alias this machine knows) runs in
+ * A task placed on another machine (an SSH alias this machine knows) runs in
  * that machine's own GOAT, in one of its existing projects, through the same SSH launch the
  * goat_ssh_thread_launch tool uses. The launch carries an origin report binding whose id
  * derives from the task and generation. The remote stores that binding before it creates the
@@ -46,7 +46,7 @@ import {
   RemoteRunHolds,
   RunId,
   RuntimeRequestId,
-  type RuntimeMode,
+  RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -60,6 +60,7 @@ import * as FiberMap from "effect/FiberMap";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import type * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -79,7 +80,8 @@ import {
 } from "./channelIds.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
-import { choosePlacement } from "./channelPlacement.ts";
+import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import {
   applyReplicaScript,
   captureReplicaScript,
@@ -110,6 +112,8 @@ const BACKOFF_START_MS = 5_000;
 const BACKOFF_MAX_MS = 300_000;
 const INBOX_LIMIT = 200;
 const MAX_PROJECT_PAGES = 5;
+const AUTO_PLACEMENT_HOST_LIMIT = 8;
+const AUTO_PLACEMENT_HOST_TIMEOUT_MS = 5_000;
 /** Copying a worker's work off its machine runs a bounded git script there. */
 const REPLICA_TIMEOUT_MS = 120_000;
 /** Copies untouched this long belong to finished or abandoned tasks; active ones are rewritten each turn. */
@@ -204,6 +208,12 @@ const RemoteWorkerState = Schema.Struct({
   readKey: Schema.String,
   launchStartedAt: Schema.String,
   attempts: Schema.Number,
+  connection: Schema.optional(
+    Schema.Struct({
+      memoryGrantCeiling: Schema.Literals(["none", "read", "read_write"]),
+      runtimeModeCeiling: Schema.optional(RuntimeMode),
+    }),
+  ),
   remoteThreadId: Schema.optional(Schema.String),
   cursor: Schema.Number,
   knownRun: Schema.optional(
@@ -274,6 +284,15 @@ const RemoteWorkerState = Schema.Struct({
 });
 export type RemoteWorkerState = typeof RemoteWorkerState.Type;
 
+const connectionFor = (state: RemoteWorkerState, existingOnly = false) =>
+  state.connection === undefined
+    ? {}
+    : {
+        requireReady: true as const,
+        memoryGrantCeiling: state.connection.memoryGrantCeiling,
+        ...(existingOnly ? { existingSessionOnly: true as const } : {}),
+      };
+
 const encodeState = Schema.encodeSync(Schema.fromJsonString(RemoteWorkerState));
 const decodeStateOption = Schema.decodeUnknownOption(Schema.fromJsonString(RemoteWorkerState));
 const decodeState = (json: string | undefined) => {
@@ -318,6 +337,17 @@ const OfferedProviders = Schema.Struct({
 });
 type OfferedProviders = typeof OfferedProviders.Type;
 const decodeOffered = Schema.decodeUnknownEffect(OfferedProviders);
+const decodeProjectProviderDiagnosis = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    diagnoses: Schema.Array(
+      Schema.Struct({
+        instanceId: Schema.String,
+        ready: Schema.Boolean,
+        checks: Schema.Array(Schema.Struct({ id: Schema.String, status: Schema.String })),
+      }),
+    ),
+  }),
+);
 /** The quota windows goat_host_status reports for each provider account on that machine. */
 const decodeHostQuotas = Schema.decodeUnknownEffect(
   Schema.Struct({
@@ -330,6 +360,7 @@ const decodeHostQuotas = Schema.decodeUnknownEffect(
               Schema.Struct({
                 instanceId: Schema.String,
                 limits: Schema.Struct({
+                  checkedAt: Schema.optional(Schema.String),
                   quotaPool: Schema.optional(
                     Schema.Struct({ provider: Schema.String, homeId: Schema.String }),
                   ),
@@ -420,6 +451,14 @@ export type RemoteResolution =
 export class ChannelRemoteWorkers extends Context.Service<
   ChannelRemoteWorkers,
   {
+    /** Ready same-repository candidates on existing SSH connections; never prepares a host. */
+    readonly placementCandidates: (
+      stored: ChannelLedger.ChannelStoredTask,
+      local: ChannelDispatchTarget,
+      canonicalKey: string,
+      driverKind: string,
+      owner: string,
+    ) => Effect.Effect<ReadonlyArray<PlacementCandidate<ChannelDispatchTarget>>>;
     /** SSH aliases this machine knows; no network. Empty when the config cannot be read. */
     readonly knownHosts: Effect.Effect<ReadonlyArray<string>>;
     /** Picks the remote project and launch settings for a received task with a host. */
@@ -768,17 +807,93 @@ const make = Effect.gen(function* () {
   );
 
   /** A remote call's authority: the requester's ceiling, while this owner still runs the task. */
-  const authorityFor = (taskId: ChannelTaskId, generation: number, owner: string) =>
-    Effect.gen(function* () {
-      if (!(yield* ledger.isOwner(owner).pipe(Effect.orElseSucceed(() => false)))) {
+  const authorityFor = Effect.fn("ChannelRemoteWorkers.authorityFor")(function* (
+    taskId: ChannelTaskId,
+    generation: number,
+    owner: string,
+    starting = false,
+    stopping = false,
+    expected?: RemoteWorkerState,
+    evidenceOnly = false,
+  ) {
+    if (!(yield* ledger.isOwner(owner).pipe(Effect.orElseSucceed(() => false)))) {
+      return yield* new Superseded();
+    }
+    const stored = yield* ledger.getTask(taskId).pipe(Effect.orElseSucceed(() => undefined));
+    if (stored === undefined || stored.task.generation !== generation) {
+      return yield* new Superseded();
+    }
+    const state = yield* readState(taskId).pipe(Effect.orElseSucceed(() => undefined));
+    if (expected?.connection !== undefined && state?.connection === undefined)
+      return yield* new Superseded();
+    const requester = yield* requesterForDispatch(stored.task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (requester === undefined) return yield* new Superseded();
+    const terminalEvidence = evidenceOnly && state !== undefined && awaitingEvidence(stored, state);
+    if (!starting && state?.connection === undefined) {
+      if (stored.task.target?.remote?.automatic !== undefined) return yield* new Superseded();
+      if (
+        expected !== undefined &&
+        (state === undefined ||
+          state.generation !== generation ||
+          expected.host !== state.host ||
+          expected.cwd !== state.cwd ||
+          expected.correlationId !== state.correlationId ||
+          expected.remoteThreadId !== state.remoteThreadId ||
+          state.host !== stored.task.target?.remote?.host ||
+          state.cwd !== stored.task.target?.remote?.cwd ||
+          (!["dispatching", "running", "waiting_input"].includes(stored.task.status) &&
+            !(stopping && stored.task.status === "cancelled") &&
+            !terminalEvidence))
+      )
+        return yield* new Superseded();
+      return requester.runtimeModeCeiling;
+    }
+    if (
+      state?.connection !== undefined &&
+      (!starting || expected?.connection !== undefined || state.generation === generation)
+    ) {
+      const target = stored.task.target;
+      const remote = target?.remote;
+      const ceiling = state.connection.runtimeModeCeiling;
+      if (
+        expected?.connection !== undefined &&
+        (expected.host !== state.host ||
+          expected.cwd !== state.cwd ||
+          expected.generation !== state.generation ||
+          expected.correlationId !== state.correlationId ||
+          expected.remoteThreadId !== state.remoteThreadId ||
+          expected.connection.runtimeModeCeiling !== ceiling ||
+          expected.connection.memoryGrantCeiling !== state.connection.memoryGrantCeiling)
+      )
+        return yield* new Superseded();
+      if (
+        state.generation !== generation ||
+        remote?.automatic === undefined ||
+        state.host !== remote.host ||
+        stored.task.host !== state.host ||
+        state.cwd !== remote.cwd ||
+        state.correlationId !== remoteCorrelationFor(taskId, generation) ||
+        ceiling === undefined ||
+        ceiling !== remote.automatic.runtimeModeCeiling ||
+        lowerRuntimeMode(ceiling, requester.runtimeModeCeiling) !== ceiling ||
+        state.connection.memoryGrantCeiling !== (target?.memoryGrantCeiling ?? "none") ||
+        (state.remoteThreadId !== undefined &&
+          (stored.task.worker?.threadId !== state.remoteThreadId ||
+            stored.task.worker.host !== state.host ||
+            stored.task.worker.environmentId !== target?.environmentId)) ||
+        (!["dispatching", "running", "waiting_input"].includes(stored.task.status) &&
+          !(stopping && stored.task.status === "cancelled") &&
+          !terminalEvidence)
+      ) {
         return yield* new Superseded();
       }
-      const stored = yield* ledger.getTask(taskId).pipe(Effect.orElseSucceed(() => undefined));
-      if (stored === undefined || stored.task.generation !== generation) {
-        return yield* new Superseded();
-      }
-      return stored.task.requester.runtimeModeCeiling;
-    });
+      return ceiling;
+    }
+    return requester.runtimeModeCeiling;
+  });
 
   const callHost = (
     input: {
@@ -787,11 +902,21 @@ const make = Effect.gen(function* () {
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly writes: boolean;
       readonly timeoutMs: number;
+      readonly existingSessionOnly?: true;
+      readonly requireReady?: true;
+      readonly memoryGrantCeiling?: MemoryTaskGrantCeiling;
     },
     authorize: Effect.Effect<RuntimeMode, Superseded>,
   ) => ssh.callHostTool(input, authorize);
 
-  const listRemoteProjects = (host: string, authorize: Effect.Effect<RuntimeMode, Superseded>) =>
+  const listRemoteProjects = (
+    host: string,
+    authorize: Effect.Effect<RuntimeMode, Superseded>,
+    connection: Pick<
+      SshRemoteDispatch.SshHostToolCall,
+      "existingSessionOnly" | "requireReady" | "memoryGrantCeiling"
+    > = {},
+  ) =>
     Effect.gen(function* () {
       const projects: Array<RemoteProject> = [];
       let cursor: number | null = 0;
@@ -803,6 +928,7 @@ const make = Effect.gen(function* () {
             arguments: { cursor, limit: 100 },
             writes: false,
             timeoutMs: READ_TIMEOUT_MS,
+            ...connection,
           },
           authorize,
         );
@@ -857,6 +983,126 @@ const make = Effect.gen(function* () {
     return projects.length === 1 && !askedForOne ? projects[0] : undefined;
   };
 
+  const placementCandidates: ChannelRemoteWorkers["Service"]["placementCandidates"] = Effect.fn(
+    "ChannelRemoteWorkers.placementCandidates",
+  )(function* (stored, local, canonicalKey, driverKind, owner) {
+    const known = yield* knownHosts;
+    const connected = yield* ssh.connectedHosts.pipe(Effect.orElseSucceed(() => []));
+    const hosts = [...new Set(connected)]
+      .filter((host) => known.includes(host))
+      .toSorted()
+      .slice(0, AUTO_PLACEMENT_HOST_LIMIT);
+    const authorize = authorityFor(stored.task.taskId, stored.task.generation, owner, true);
+    const connection = {
+      requireReady: true,
+      existingSessionOnly: true,
+      memoryGrantCeiling: local.memoryGrantCeiling ?? "none",
+    } as const;
+    const results = yield* Effect.forEach(
+      hosts,
+      (host) =>
+        Effect.gen(function* () {
+          const projects = yield* listRemoteProjects(host, authorize, connection);
+          const matches = projects.filter((project) => canonicalKeyOf(project) === canonicalKey);
+          if (matches.length !== 1) return [];
+          const project = matches[0]!;
+          const read = (tool: string, args: Readonly<Record<string, unknown>>) =>
+            callHost(
+              {
+                host,
+                tool,
+                arguments: args,
+                writes: false,
+                timeoutMs: AUTO_PLACEMENT_HOST_TIMEOUT_MS,
+                ...connection,
+              },
+              authorize,
+            );
+          const environment = yield* read("goat_environment_read", {}).pipe(
+            Effect.flatMap(decodeEnvironment),
+          );
+          const offered = yield* read("orchestrator_capabilities", {}).pipe(
+            Effect.flatMap(decodeOffered),
+          );
+          const diagnosed = yield* read("goat_provider_diagnose", {
+            driver: driverKind,
+            cwd: project.workspaceRoot,
+          }).pipe(Effect.flatMap(decodeProjectProviderDiagnosis));
+          const permitted = new Set(
+            diagnosed.diagnoses
+              .filter(
+                (provider) =>
+                  provider.ready &&
+                  provider.checks.some(
+                    (check) => check.id === "project_provider" && check.status === "pass",
+                  ),
+              )
+              .map((provider) => provider.instanceId),
+          );
+          const status = yield* read("goat_host_status", { local: true }).pipe(
+            Effect.flatMap(decodeHostQuotas),
+            Effect.option,
+          );
+          const quotas = new Map(
+            (Option.isSome(status) ? (status.value.hosts[0]?.metrics?.quotas ?? []) : []).map(
+              (quota) => [quota.instanceId, quota.limits] as const,
+            ),
+          );
+          return offered.providers
+            .filter(
+              (provider) =>
+                provider.canRunChildTask === true &&
+                permitted.has(provider.providerInstanceId) &&
+                provider.driverKind === driverKind &&
+                provider.models.some((model) => model.id === local.modelSelection.model),
+            )
+            .toSorted((left, right) =>
+              left.providerInstanceId.localeCompare(right.providerInstanceId),
+            )
+            .map((provider): PlacementCandidate<ChannelDispatchTarget> => ({
+              host,
+              providerLabel: provider.displayName ?? provider.providerInstanceId,
+              preferred: false,
+              windows: quotas.get(provider.providerInstanceId)?.windows ?? null,
+              checkedAt: quotas.get(provider.providerInstanceId)?.checkedAt,
+              model: local.modelSelection.model,
+              quotaPool:
+                Option.isSome(status) &&
+                status.value.hosts[0]?.metrics?.quotaPool?.producer.homeId ===
+                  quotas.get(provider.providerInstanceId)?.quotaPool?.homeId
+                  ? status.value.hosts[0]?.metrics?.quotaPool?.providers.find(
+                      (item) =>
+                        item.provider ===
+                        quotas.get(provider.providerInstanceId)?.quotaPool?.provider,
+                    )
+                  : undefined,
+              activeTasks: 0,
+              value: {
+                ...local,
+                environmentId: environment.environmentId,
+                projectId: ProjectId.make(project.id),
+                modelSelection: {
+                  ...local.modelSelection,
+                  instanceId: ProviderInstanceId.make(provider.providerInstanceId),
+                },
+                workspaceStrategy: { type: "worktree", baseRef: "HEAD" },
+                remote: {
+                  host,
+                  cwd: project.workspaceRoot,
+                  automatic: { sourceProjectId: local.projectId, canonicalKey },
+                },
+              },
+            }));
+        }).pipe(
+          Effect.timeoutOption(AUTO_PLACEMENT_HOST_TIMEOUT_MS),
+          Effect.map(Option.getOrElse((): Array<PlacementCandidate<ChannelDispatchTarget>> => [])),
+          Effect.catch(() => Effect.succeed([])),
+        ),
+      { concurrency: 4 },
+    );
+    return results.flat();
+  });
+
   /**
    * The account to run a model on over there, with the reason for the chip. Another account of
    * the same provider that offers the model can take the work when it has more quota left; the
@@ -874,15 +1120,20 @@ const make = Effect.gen(function* () {
       const configured = providers.find(
         (provider) => provider.providerInstanceId === selection.instanceId,
       );
-      if (configured === undefined) return { modelSelection: selection, reason: undefined };
+      if (configured === undefined)
+        return { modelSelection: selection, reason: undefined, available: offered === undefined };
       const candidates = providers.filter(
         (provider) =>
-          provider === configured ||
+          (provider === configured &&
+            provider.canRunChildTask !== false &&
+            provider.models.some((entry) => entry.id === selection.model)) ||
           (configured.driverKind !== undefined &&
             provider.driverKind === configured.driverKind &&
             provider.canRunChildTask === true &&
             provider.models.some((entry) => entry.id === selection.model)),
       );
+      if (candidates.length === 0)
+        return { modelSelection: selection, reason: undefined, available: false };
       const status = yield* callHost(
         {
           host,
@@ -915,6 +1166,7 @@ const make = Effect.gen(function* () {
             providerLabel: provider.displayName ?? provider.providerInstanceId,
             preferred: provider === configured,
             windows: windows.length === 0 ? null : windows,
+            checkedAt: quota?.limits.checkedAt,
             activeTasks: 0,
             model: selection.model,
             quotaPool:
@@ -929,7 +1181,11 @@ const make = Effect.gen(function* () {
         }),
         DateTime.toEpochMillis(yield* DateTime.now),
       );
-      return { modelSelection: placed?.chosen.value ?? selection, reason: placed?.reason };
+      return {
+        modelSelection: placed?.chosen.value ?? selection,
+        reason: placed?.reason,
+        available: true,
+      };
     });
 
   const resolve: ChannelRemoteWorkers["Service"]["resolve"] = (stored, local, owner) =>
@@ -943,7 +1199,7 @@ const make = Effect.gen(function* () {
       }
       // Only requesters with orchestration:operate create tasks (ChannelReceptionService), so
       // the scope is already checked; the remote enforces their runtime-mode ceiling.
-      const authorize = Effect.succeed(task.requester.runtimeModeCeiling);
+      const authorize = authorityFor(task.taskId, task.generation, owner, true);
       const listed = yield* listRemoteProjects(host, authorize).pipe(Effect.result);
       if (listed._tag === "Failure") {
         yield* Effect.logWarning("channel remote project list failed", {
@@ -1049,13 +1305,22 @@ const make = Effect.gen(function* () {
       // A machine that answers but cannot list its models (an older GOAT) cannot confirm a
       // preference, so only the project's own model runs there and the launch decides.
       const offered = capabilities._tag === "Success" ? capabilities.success : undefined;
-      const isOffered = (model: ModelSelection) =>
-        offered !== undefined &&
-        offered.providers.some(
-          (provider) =>
-            provider.providerInstanceId === model.instanceId &&
-            provider.models.some((entry) => entry.id === model.model),
+      const isOffered = (model: ModelSelection) => {
+        const configured = offered?.providers.find(
+          (provider) => provider.providerInstanceId === model.instanceId,
         );
+        return (
+          offered !== undefined &&
+          offered.providers.some(
+            (provider) =>
+              (provider === configured ||
+                (configured?.driverKind !== undefined &&
+                  provider.driverKind === configured.driverKind &&
+                  provider.canRunChildTask === true)) &&
+              provider.models.some((entry) => entry.id === model.model),
+          )
+        );
+      };
       const preferred = local.preferredModelSelection;
       // A Slack connection's model is a preference, as on this machine: when that machine does
       // not offer it, or cannot say, the project's model runs the work instead of a question
@@ -1078,7 +1343,43 @@ const make = Effect.gen(function* () {
               : REMOTE_COPY.defaultModelMissing(host, chosen.title),
         } as const;
       }
-      const placed = yield* placeOnHost(host, modelSelection, offered, authorize);
+      const driver = offered?.providers.find(
+        (provider) => provider.providerInstanceId === modelSelection.instanceId,
+      )?.driverKind;
+      const diagnosed =
+        driver === undefined
+          ? Option.none()
+          : yield* callHost(
+              {
+                host,
+                tool: "goat_provider_diagnose",
+                arguments: { driver, cwd: chosen.workspaceRoot },
+                writes: false,
+                timeoutMs: READ_TIMEOUT_MS,
+                requireReady: true,
+              },
+              authorize,
+            ).pipe(Effect.flatMap(decodeProjectProviderDiagnosis), Effect.option);
+      const permitted = Option.isNone(diagnosed)
+        ? offered
+        : {
+            providers:
+              offered?.providers.map((provider) => {
+                const diagnosis = diagnosed.value.diagnoses.find(
+                  (entry) => entry.instanceId === provider.providerInstanceId,
+                );
+                const policy = diagnosis?.checks.find((check) => check.id === "project_provider");
+                return policy === undefined || policy.status === "pass"
+                  ? provider
+                  : { ...provider, canRunChildTask: false };
+              }) ?? [],
+          };
+      const placed = yield* placeOnHost(host, modelSelection, permitted, authorize);
+      if (!placed.available)
+        return {
+          type: "question",
+          text: "No ready account on " + host + " offers the requested model.",
+        } as const;
       const target: ChannelDispatchTarget = {
         environmentId: environment.success.environmentId,
         projectId: chosen.id,
@@ -1195,10 +1496,15 @@ const make = Effect.gen(function* () {
     });
 
   /** One look at the report binding without waiting; tells whether the launch happened. */
-  const probe = (state: RemoteWorkerState, authorize: Effect.Effect<RuntimeMode, Superseded>) =>
+  const probe = (
+    state: RemoteWorkerState,
+    authorize: Effect.Effect<RuntimeMode, Superseded>,
+    existingOnly = false,
+  ) =>
     callHost(
       {
         host: state.host,
+        ...connectionFor(state, existingOnly),
         tool: "goat_origin_reports_wait",
         arguments: {
           correlationId: state.correlationId,
@@ -1236,8 +1542,21 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const remote = task.target?.remote;
       if (remote === undefined) return;
+      const requester = yield* requesterForDispatch(task).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      );
       const now = yield* nowIso;
       let state = yield* readState(taskId);
+      if (
+        requester === undefined &&
+        (state === undefined || state.generation !== task.generation || state.attempts === 0)
+      )
+        return yield* failTask(
+          owner,
+          stored,
+          "permission_changed",
+          "The requester's permission to start this work changed.",
+        );
       const moved =
         state !== undefined &&
         state.generation === task.generation &&
@@ -1263,6 +1582,14 @@ const make = Effect.gen(function* () {
           readKey: NodeCrypto.randomBytes(32).toString("hex"),
           launchStartedAt: now,
           attempts: 0,
+          ...(remote.automatic === undefined
+            ? {}
+            : {
+                connection: {
+                  memoryGrantCeiling: task.target?.memoryGrantCeiling ?? "none",
+                  runtimeModeCeiling: remote.automatic.runtimeModeCeiling,
+                },
+              }),
           cursor: 0,
           inbox: [],
           dropped: 0,
@@ -1279,8 +1606,47 @@ const make = Effect.gen(function* () {
         state = decodeState(json);
         if (state === undefined) return;
       }
-      const authorize = authorityFor(taskId, task.generation, owner);
+      const authorize = authorityFor(taskId, task.generation, owner, false, false, state);
       const elapsed = Date.parse(now) - Date.parse(state.launchStartedAt);
+      if (remote.automatic !== undefined) {
+        if (
+          remote.automatic.runtimeModeCeiling === undefined ||
+          state.connection?.runtimeModeCeiling === undefined
+        ) {
+          if (elapsed > LAUNCH_GRACE_MS)
+            yield* failTask(
+              owner,
+              stored,
+              "permission_changed",
+              "The selected worker's recorded authority is incomplete. Check the original worker before retrying.",
+            );
+          return;
+        }
+        const identity = yield* callHost(
+          {
+            host: state.host,
+            tool: "goat_environment_read",
+            arguments: {},
+            writes: false,
+            timeoutMs: READ_TIMEOUT_MS,
+            ...connectionFor(state),
+          },
+          authorize,
+        ).pipe(Effect.flatMap(decodeEnvironment), Effect.result);
+        if (identity._tag === "Failure") {
+          if (!(identity.failure instanceof Superseded) && elapsed > LAUNCH_GRACE_MS)
+            yield* failTask(owner, stored, "host_unavailable", REMOTE_COPY.unreachable(state.host));
+          return;
+        }
+        if (identity.success.environmentId !== task.target?.environmentId) {
+          return yield* failTask(
+            owner,
+            stored,
+            "host_changed",
+            "The selected machine's GOAT identity changed. Check the original worker before retrying.",
+          );
+        }
+      }
 
       if (state.attempts > 0) {
         // An earlier attempt may have started the thread: look before launching again.
@@ -1320,11 +1686,32 @@ const make = Effect.gen(function* () {
           REMOTE_COPY.launchUncertain(state.host),
         );
       }
+      if (requester === undefined)
+        return yield* failTask(
+          owner,
+          stored,
+          "permission_changed",
+          "The requester's permission to start this work changed.",
+        );
 
+      const callerCeiling = state.connection?.runtimeModeCeiling ?? requester.runtimeModeCeiling;
       // The project may have gone since the dispatcher chose it; ask instead of recreating it.
-      const listed = yield* listRemoteProjects(state.host, authorize).pipe(Effect.result);
-      if (listed._tag === "Failure") return;
-      if (!listed.success.some((project) => project.workspaceRoot === remote.cwd)) {
+      const listed = yield* listRemoteProjects(state.host, authorize, connectionFor(state)).pipe(
+        Effect.result,
+      );
+      if (listed._tag === "Failure") {
+        if (elapsed > LAUNCH_GRACE_MS)
+          yield* failTask(owner, stored, "host_unavailable", REMOTE_COPY.unreachable(state.host));
+        return;
+      }
+      if (
+        !listed.success.some(
+          (project) =>
+            project.workspaceRoot === remote.cwd &&
+            (remote.automatic === undefined ||
+              canonicalKeyOf(project) === remote.automatic.canonicalKey),
+        )
+      ) {
         return yield* askAgain(owner, stored, REMOTE_COPY.projectGone(state.host));
       }
 
@@ -1384,6 +1771,7 @@ const make = Effect.gen(function* () {
         .launchThread(
           {
             host: state.host,
+            ...(state.connection === undefined ? {} : { requireReady: true as const }),
             cwd: remote.cwd,
             workspace:
               resume !== undefined
@@ -1406,7 +1794,7 @@ const make = Effect.gen(function* () {
             modelSelection: target.modelSelection,
             runtimeMode: target.runtimeMode,
             // The remote session may grant no more than the person who asked.
-            callerRuntimeMode: task.requester.runtimeModeCeiling,
+            callerRuntimeMode: callerCeiling,
             // Omitted when none: an older remote refuses any ceiling it cannot verify.
             ...(target.memoryGrantCeiling === undefined
               ? {}
@@ -1420,7 +1808,11 @@ const make = Effect.gen(function* () {
             },
             reportNote: REPORTING_NOTE,
           },
-          authorize.pipe(Effect.asVoid),
+          authorityFor(taskId, task.generation, owner, true, false, state).pipe(
+            Effect.flatMap((ceiling) =>
+              ceiling === callerCeiling ? Effect.void : Effect.fail(new Superseded()),
+            ),
+          ),
         )
         .pipe(Effect.result);
       if (launched._tag === "Success") {
@@ -2003,6 +2395,7 @@ const make = Effect.gen(function* () {
           {
             host: state.host,
             tool: "goat_origin_reports_wait",
+            ...connectionFor(state),
             arguments: {
               correlationId: state.correlationId,
               readKey: state.readKey,
@@ -2018,7 +2411,7 @@ const make = Effect.gen(function* () {
             writes: false,
             timeoutMs: waitMs + TRANSPORT_HEADROOM_MS,
           },
-          authorityFor(taskId, state.generation, owner),
+          authorityFor(taskId, state.generation, owner, false, false, state, evidenceOnly),
         ).pipe(Effect.flatMap(decodeWait), Effect.result);
         if (answer._tag === "Success") {
           failures = 0;
@@ -2201,7 +2594,7 @@ const make = Effect.gen(function* () {
               leaseExpiresAt: claimedAt,
             },
           },
-          { owner },
+          { owner, narrate: resolved.target.placementReason !== undefined },
         );
         if (claimed !== undefined) yield* launchAndObserve(taskId, owner);
       }),
@@ -2239,6 +2632,7 @@ const make = Effect.gen(function* () {
         {
           host: state.host,
           tool: "goat_thread_send",
+          ...connectionFor(state),
           arguments: {
             threadId: worker.threadId,
             message:
@@ -2249,7 +2643,7 @@ const make = Effect.gen(function* () {
           writes: true,
           timeoutMs: SEND_TIMEOUT_MS,
         },
-        authorityFor(stored.task.taskId, stored.task.generation, owner),
+        authorityFor(stored.task.taskId, stored.task.generation, owner, false, false, state),
       ).pipe(Effect.flatMap(decodeSent), Effect.result);
       if (sent._tag === "Failure") {
         const code = remoteCode(sent.failure);
@@ -2298,13 +2692,20 @@ const make = Effect.gen(function* () {
           const state = yield* readState(pending.event.taskId);
           const done = ledger.completeForward({ owner, sequence: pending.sequence });
           if (stored === undefined || state === undefined) return yield* done;
-          const authorize = authorityFor(stored.task.taskId, stored.task.generation, owner);
+          const authorize = authorityFor(
+            stored.task.taskId,
+            stored.task.generation,
+            owner,
+            false,
+            true,
+            state,
+          );
           let threadId = state.remoteThreadId ?? stored.task.worker?.threadId;
           if (threadId === undefined) {
             // The launch may have been in flight when the stop was asked, and its binding never
             // committed here. The remote stores the binding before it creates the thread, so
             // ask it; a binding it still does not know after the grace means no launch landed.
-            const seen = yield* probe(state, authorize).pipe(Effect.result);
+            const seen = yield* probe(state, authorize, true).pipe(Effect.result);
             if (seen._tag === "Success") {
               threadId = seen.success.threadId;
             } else {
@@ -2324,6 +2725,7 @@ const make = Effect.gen(function* () {
               {
                 host: state.host,
                 tool: "goat_thread_interrupt",
+                ...connectionFor(state, true),
                 arguments: {
                   threadId,
                   reason: "Stopped from GOAT Bot.",
@@ -2672,6 +3074,7 @@ const make = Effect.gen(function* () {
     );
 
   return ChannelRemoteWorkers.of({
+    placementCandidates,
     knownHosts,
     resolve,
     launch,
