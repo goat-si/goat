@@ -124,13 +124,16 @@ function exercise() {
 }
 
 // Observe without catching: a missing spawn listener must still crash this isolated process.
-process.on("uncaughtExceptionMonitor", (error) => console.error("UNHANDLED", error));
+process.on("uncaughtExceptionMonitor", (error) =>
+  process.stderr.write(`UNHANDLED ${String(error)}\n`),
+);
 // A fresh macrotask exposes nextTick-before-Promise ordering; this is not a timed delay.
 NodeTimers.setImmediate(() => {
   void exercise().then(
-    (result) => console.log("RESULT=" + JSON.stringify({ platform, api, mode, result })),
+    (result) =>
+      process.stdout.write("RESULT=" + JSON.stringify({ platform, api, mode, result }) + "\n"),
     (error) => {
-      console.error(error);
+      process.stderr.write(`${String(error)}\n`);
       process.exitCode = 1;
     },
   );
