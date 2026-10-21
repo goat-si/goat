@@ -18,6 +18,10 @@ The exports that the rest of this map depends on:
 | `@goat/shared/KeyedLock`          | used by `apps/server/src/orchestration-v2/ThreadCommandExecutor.ts` | Per-thread command serialization                                                                                                   |
 
 Path helpers in `packages/shared/src/path.ts` normalize paths. They do not choose a home directory.
+
+`packages/shared/src/opencodexCompat.ts` judges linked OpenCodex pairs from served protocols
+and capability features. Release numbers supply only a fallback floor; drift alone never
+makes a pair incompatible.
 Home selection is [`settings-and-storage.md`](settings-and-storage.md).
 
 Theme palettes (`packages/shared/src/themePalettes.ts`) and the other presentation helpers in this
