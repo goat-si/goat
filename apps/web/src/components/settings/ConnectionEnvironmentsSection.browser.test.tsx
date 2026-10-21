@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
 import * as Cause from "effect/Cause";
+import { isMacPlatform } from "@goat/shared/keybindings";
 import { it as effectIt } from "@effect/vitest";
 import { actEffect, makeSshProvisionGate } from "./sshPreparation.test-support";
 import * as Effect from "effect/Effect";
@@ -43,7 +43,8 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
 }));
 
-vi.mock("../../state/environments", () => ({
+vi.mock("../../state/environments", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/environments")>()),
   useEnvironments: () => ({ environments: useAtomValue(state.environments) }),
   usePrimaryEnvironment: () => ({
     environmentId: "primary",
@@ -74,10 +75,13 @@ vi.mock("../../connection/catalog", async () => {
     },
   };
 });
-vi.mock("../../state/server", async () => {
+vi.mock("../../state/server", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
+  const { DEFAULT_SERVER_SETTINGS } = await import("@goat/contracts");
   const { compileResolvedKeybindingsConfig } = await import("@goat/shared/keybindings");
   return {
+    ...(await importOriginal<typeof import("../../state/server")>()),
+    primaryServerSettingsAtom: Atom.make(DEFAULT_SERVER_SETTINGS),
     primaryServerKeybindingsAtom: Atom.make(
       compileResolvedKeybindingsConfig([
         { key: "mod+1", command: "thread.jump.1" },
@@ -163,7 +167,8 @@ beforeEach(() => {
   state.forgetSshHost.mockReset();
   state.confirm.mockReset();
   state.preflightSshHost.mockResolvedValue({ _tag: "Success", value: readyReport });
-  state.environments = Atom.make<ReadonlyArray<EnvironmentPresentation>>([]);
+  // Fixtures set this before render; keepAlive stops the registry from dropping the unobserved value.
+  state.environments = Atom.make<ReadonlyArray<EnvironmentPresentation>>([]).pipe(Atom.keepAlive);
   state.runtimeReply = {
     kind: "ok",
     status: {
@@ -246,7 +251,7 @@ it("pairs a pasted GOAT server link through Add device and closes the dialog", a
     host: "https://hub.tail.ts.net",
     pairingCode: "PAIR1234",
   });
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
 });
 
 it("keeps the dialog open with the error when pairing fails", async () => {
@@ -296,7 +301,8 @@ it("keeps thread jump chords inside the SSH host suggestions", async () => {
     new KeyboardEvent("keydown", {
       key,
       code: `Digit${key}`,
-      ctrlKey: true,
+      ctrlKey: !isMacPlatform(navigator.platform),
+      metaKey: isMacPlatform(navigator.platform),
       bubbles: true,
       cancelable: true,
     });
@@ -340,7 +346,7 @@ it("keeps Add device pending until the GOAT server pairing command settles", asy
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
   expect(button("Adding…", dialog).disabled).toBe(true);
   await act(async () => finish({ _tag: "Success", value: undefined }));
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
 });
 
 async function openSshDialog() {
@@ -527,7 +533,8 @@ it("shows resolved configured User and Port read-only and sends no overrides on 
       new KeyboardEvent("keydown", {
         key: "1",
         code: "Digit1",
-        ctrlKey: true,
+        ctrlKey: !isMacPlatform(navigator.platform),
+        metaKey: isMacPlatform(navigator.platform),
         bubbles: true,
         cancelable: true,
       }),
@@ -652,7 +659,7 @@ it("keeps a locally saved SSH device and offers Retry after a real hub failure",
   });
   await saveSshDevice();
   expect(state.connectSshEnvironment).toHaveBeenCalledOnce();
-  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
   expect(state.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "success" }));
   const toast = state.toast.mock.calls
     .map(([value]) => value)
@@ -749,7 +756,9 @@ effectIt.effect(
           ),
         ),
       );
-      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull()),
+      );
       yield* actEffect(report(phase));
       expect(document.querySelector('[role="dialog"]')).toBeNull();
     }),

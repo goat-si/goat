@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { EnvironmentId, MemorySpaceId } from "@goat/contracts";
@@ -24,7 +23,15 @@ vi.mock("../../state/projects", async () => {
   const { Atom } = await import("effect/reactivity");
   return { environmentProjects: { projectsAtom: Atom.make([]) } };
 });
-vi.mock("../../state/shell", () => ({ environmentShell: {} }));
+vi.mock("../../state/shell", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentShell: {},
+    allEnvironmentProjectSnapshotsReadyAtom: Atom.make(true),
+    allEnvironmentShellsBootstrappedAtom: Atom.make(true),
+    pendingEnvironmentShellIdsAtom: Atom.make([]),
+  };
+});
 vi.mock("../../state/server", async (importOriginal) => {
   const { Atom } = await import("effect/reactivity");
   return {
@@ -43,8 +50,10 @@ vi.mock("../../state/memory", async () => {
     },
   };
 });
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => execute }));
-const execute = async () => ({ _tag: "Failure" });
+vi.mock("../../state/use-atom-command", () => {
+  const execute = async () => ({ _tag: "Failure" });
+  return { useAtomCommand: () => execute };
+});
 vi.mock("../ui/select", () => ({
   Select: ({
     children,

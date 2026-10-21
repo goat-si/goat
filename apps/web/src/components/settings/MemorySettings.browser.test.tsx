@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
