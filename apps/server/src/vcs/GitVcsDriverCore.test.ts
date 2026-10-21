@@ -30,6 +30,7 @@ import {
   type ReviewDiffPreviewResult,
   type WorktreeSubmodules,
 } from "@goat/contracts";
+import { hostCanStoreFileName } from "@goat/shared/testing/fileNames";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import * as ServerConfig from "../config.ts";
 import {
@@ -1110,7 +1111,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               operation: "GitVcsDriver.test.sshRefusal",
               cwd,
               args: ["fetch", "origin"],
-              env: { LC_ALL: "C", GIT_SSH_COMMAND: fakeSsh },
+              // Git runs this through sh, which would eat the backslashes of a bare Windows path.
+              env: { LC_ALL: "C", GIT_SSH_COMMAND: `'${fakeSsh}'` },
             })
             .pipe(Effect.flip);
 
@@ -1142,7 +1144,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             operation: "GitVcsDriver.test.osPermission",
             cwd,
             args: ["fetch", "origin"],
-            env: { LC_ALL: "C", GIT_SSH_COMMAND: fakeSsh },
+            env: { LC_ALL: "C", GIT_SSH_COMMAND: `'${fakeSsh}'` },
           })
           .pipe(Effect.flip);
 
@@ -1653,36 +1655,39 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("keeps untracked filenames with pathspec magic in the review", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* writeTextFile(cwd, ":(exclude)after.ts", "literal pathspec contents\n");
-        yield* writeTextFile(cwd, "ordinary.ts", "ordinary contents\n");
-        const indexBefore = yield* git(cwd, ["ls-files", "--stage"]);
+    // Windows cannot store `:`, so it keeps the glob name, which would also select ordinary.ts.
+    it.effect.each([":(exclude)after.ts", "[o]rdinary.ts"].filter(hostCanStoreFileName))(
+      "keeps untracked filename %s with pathspec magic in the review",
+      (name) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* writeTextFile(cwd, name, "literal pathspec contents\n");
+          yield* writeTextFile(cwd, "ordinary.ts", "ordinary contents\n");
+          const indexBefore = yield* git(cwd, ["ls-files", "--stage"]);
 
-        const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
-        const diff = preview.sources.find((source) => source.kind === "working-tree")?.diff ?? "";
+          const preview = yield* driver.getReviewDiffPreview({ cwd, ignoreWhitespace: false });
+          const diff = preview.sources.find((source) => source.kind === "working-tree")?.diff ?? "";
 
-        assert.include(diff, "+literal pathspec contents");
-        assert.include(diff, "+ordinary contents");
-        const scoped = yield* driver.getReviewDiffPreview({
-          cwd,
-          file: {
-            path: ":(exclude)after.ts",
-            previousPath: null,
-            sourceKind: "working-tree",
-          },
-        });
-        const scopedSource = scoped.sources.find((source) => source.kind === "working-tree")!;
-        assert.deepStrictEqual(scopedSource.files, [
-          { path: ":(exclude)after.ts", previousPath: null, additions: 1, deletions: 0 },
-        ]);
-        assert.include(scopedSource.diff, "+literal pathspec contents");
-        assert.notInclude(scopedSource.diff, "ordinary.ts");
-        assert.strictEqual(yield* git(cwd, ["ls-files", "--stage"]), indexBefore);
-      }),
+          assert.include(diff, "+literal pathspec contents");
+          assert.include(diff, "+ordinary contents");
+          const scoped = yield* driver.getReviewDiffPreview({
+            cwd,
+            file: {
+              path: name,
+              previousPath: null,
+              sourceKind: "working-tree",
+            },
+          });
+          const scopedSource = scoped.sources.find((source) => source.kind === "working-tree")!;
+          assert.deepStrictEqual(scopedSource.files, [
+            { path: name, previousPath: null, additions: 1, deletions: 0 },
+          ]);
+          assert.include(scopedSource.diff, "+literal pathspec contents");
+          assert.notInclude(scopedSource.diff, "ordinary.ts");
+          assert.strictEqual(yield* git(cwd, ["ls-files", "--stage"]), indexBefore);
+        }),
     );
 
     it.effect("detects an unstaged rename with edits without mutating a split index", () =>
@@ -2607,7 +2612,11 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       Effect.gen(function* () {
         const path = yield* Path.Path;
         // A root basename ending in whitespace catches a root lookup that trims Git's output.
-        const cwd = path.join(yield* makeTmpDir(), "repo ");
+        // Windows drops a trailing space, so it uses a no-break space, which trim() also removes.
+        const cwd = path.join(
+          yield* makeTmpDir(),
+          hostCanStoreFileName("repo ") ? "repo " : "repo\u00a0",
+        );
         yield* (yield* FileSystem.FileSystem).makeDirectory(cwd);
         yield* initRepoWithCommit(cwd);
         yield* writeTextFile(cwd, "nested/tracked.txt", "one\n");
