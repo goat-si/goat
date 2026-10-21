@@ -379,6 +379,10 @@
       "types": "./src/state/fleetHostHealth.ts",
       "default": "./src/state/fleetHostHealth.ts"
     },
+    "./state/hub-fleet": {
+      "types": "./src/state/hubFleet.ts",
+      "default": "./src/state/hubFleet.ts"
+    },
     "./state/host-metrics": {
       "types": "./src/state/host-metrics.ts",
       "default": "./src/state/host-metrics.ts"

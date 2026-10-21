@@ -8,6 +8,7 @@ import {
   ServerSettingsError,
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
@@ -190,6 +191,7 @@ import { refreshPushedPullRequests } from "./git/refreshPushedPullRequests.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
@@ -1584,6 +1586,7 @@ export const layerWsRpc = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const hostResources = yield* HostResources.HostResources;
       const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+      const hubParity = yield* HubParity.HubParity;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2854,6 +2857,20 @@ export const layerWsRpc = (
               }),
             ),
           ),
+        [WS_METHODS.hubDeviceVerify]: (input) =>
+          Effect.gen(function* () {
+            const environmentId = yield* serverEnvironment.getEnvironmentId;
+            const issuedAt = yield* Clock.currentTimeMillis;
+            const parity = yield* hubParity.verify(input.deviceAlias, {
+              environmentId,
+              capabilities: new Set(["orchestration"]),
+              issuedAt,
+              requestNamespace: `client-session:${currentSessionId}`,
+              thread: undefined,
+              client: { sessionId: currentSessionId, label: "GOAT client", access: "read-only" },
+            });
+            return { deviceAlias: input.deviceAlias, parity };
+          }),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -3621,6 +3638,7 @@ export const layer = Layer.unwrap(
     const notes = yield* NotesService.NotesService;
     const noteWork = yield* NoteWorkService.NoteWorkService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+    const hubParityService = yield* HubParity.HubParity;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3722,6 +3740,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(NoteWorkService.NoteWorkService, noteWork)),
               // The goat_host_status tool's instance, so both share last-known samples.
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
+              Layer.provide(Layer.succeed(HubParity.HubParity, hubParityService)),
               Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

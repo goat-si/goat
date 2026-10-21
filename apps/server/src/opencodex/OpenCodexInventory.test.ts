@@ -42,6 +42,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     link?: unknown;
     service?: unknown;
     managed?: boolean;
+    hostname?: string;
   } = {},
 ) {
   const fixture = options.fixture;
@@ -143,6 +144,7 @@ const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
       Layer.provide(Layer.succeed(HostProcess.HomeDirectory, "/fixture")),
       Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/fixture")),
       Layer.provide(Layer.succeed(HostProcess.Platform, options.platform ?? "darwin")),
+      Layer.provide(Layer.succeed(HostProcess.Hostname, options.hostname ?? "fixture-home")),
       Layer.provide(
         Layer.succeed(HostProcess.Environment, {
           PATH: "/shim:/usr/bin",
@@ -203,8 +205,30 @@ it.effect.each(["macmini-ts", "lidge-ts", "mac-studio"] as const)(
         childSettingsApplied: name === "mac-studio",
       });
       expect(result.runtime.version).toBe(name === "mac-studio" ? "2.86.0" : "2.83.0");
-      expect(reads).toEqual(["/fixture/.opencodex/config.json"]);
+      expect(reads).toEqual([
+        "/fixture/.opencodex/config.json",
+        "/fixture/.opencodex/link/home-codex-settings.json",
+      ]);
     }),
+);
+
+it.effect("the Home names itself and a Child names its Home only from its own link's record", () =>
+  Effect.gen(function* () {
+    const home = yield* setup({ fixture: fleet.home, hostname: " jun-mbp\u0007 " });
+    expect((yield* home.inventory.read).link.homeName).toBe("jun-mbp");
+
+    const record = JSON.stringify(parityFixture.settingsRecord);
+    const child = (linkId: string) =>
+      setup({
+        fixture: fleet["mac-studio"],
+        config: { ...fleet["mac-studio"].config, client: { transport: "link", link: { linkId } } },
+        files: { "/fixture/.opencodex/link/home-codex-settings.json": record },
+      }).pipe(Effect.flatMap(({ inventory }) => inventory.read));
+    const own = yield* child(parityFixture.settingsRecord.linkId);
+    expect(own.link.homeName).toBe("fixture-home");
+    expect(yield* decodeSnapshot(own)).toEqual(own);
+    expect((yield* child("lnk_other")).link.homeName).toBeUndefined();
+  }),
 );
 
 it.effect("missing OpenCodex and a missing Windows binary report none", () =>

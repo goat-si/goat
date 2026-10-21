@@ -23,6 +23,7 @@
 - [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)
 - [Outside agents (MCP)](./user/outside-agents.md)
 - [Fleet goals](./user/fleet-goals.md)
+- [Hub](./user/hub.md)
 - [Slack](./user/slack.md)
 - [Running in the background](./user/background-service.md)
 - [Updating GOAT](./user/updating.md)

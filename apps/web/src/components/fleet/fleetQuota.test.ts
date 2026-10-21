@@ -102,16 +102,10 @@ const reference = { homeId: "home", provider: "openai" };
 describe("Fleet OpenCodex quota", () => {
   it.each([
     {
-      scenario: "link Home label",
-      inventory: { link: { homeLabel: "Link hub" }, runtime: { homeName: "Runtime hub" } },
+      scenario: "inventory Home name",
+      inventory: { link: { homeName: "Link hub" } },
       producerName: "Producer hub",
       expected: "Link hub",
-    },
-    {
-      scenario: "status Home name",
-      inventory: { runtime: { homeName: "Runtime hub" } },
-      producerName: "Producer hub",
-      expected: "Runtime hub",
     },
     {
       scenario: "producer display name",
@@ -121,9 +115,9 @@ describe("Fleet OpenCodex quota", () => {
     },
     {
       scenario: "blank inventory name",
-      inventory: { link: { homeLabel: "  " }, runtime: { homeName: "  Runtime hub  " } },
+      inventory: { link: { homeName: "  " } },
       producerName: "Producer hub",
-      expected: "Runtime hub",
+      expected: "Producer hub",
     },
     {
       scenario: "no display metadata",
@@ -133,13 +127,13 @@ describe("Fleet OpenCodex quota", () => {
     },
     {
       scenario: "raw IDs in display fields",
-      inventory: { link: { homeLabel: "opaque-home-id" }, runtime: { homeName: "opaque-home-id" } },
+      inventory: { link: { homeName: "opaque-home-id" } },
       producerName: "opaque-home-id",
       expected: null,
     },
     {
-      scenario: "invalid or blank names",
-      inventory: { link: { homeLabel: 42 }, runtime: null },
+      scenario: "blank names",
+      inventory: { link: { homeName: " " } },
       producerName: " ",
       expected: null,
     },
@@ -168,14 +162,13 @@ describe("Fleet OpenCodex quota", () => {
                 available: true,
                 links: [],
                 childSettingsApplied: null,
-                ...inventory.link,
+                ...("link" in inventory ? inventory.link : {}),
               },
               runtime: {
                 role: "client" as const,
                 port: 10100,
                 healthy: true,
                 ready: true,
-                ...inventory.runtime,
               },
             };
       const namedChild = {

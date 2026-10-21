@@ -141,6 +141,7 @@ export const RPC_REQUIRED_SCOPES = {
   // Reaching SSH hosts also needs orchestration:operate; HostStatusMcpService.readForClient
   // reports only this machine without it.
   [WS_METHODS.serverGetHostStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.hubDeviceVerify]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetProcessResourceHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverGetResourceTelemetryHistory]: AuthDiagnosticsReadScope,
   [WS_METHODS.serverRetryResourceTelemetry]: AuthDiagnosticsReadScope,

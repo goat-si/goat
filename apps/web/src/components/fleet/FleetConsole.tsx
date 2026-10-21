@@ -10,6 +10,7 @@ import {
   presentHostStorage,
 } from "@goat/client-runtime/state/fleet-host-health";
 import { cpuPercent, memoryPercent } from "@goat/client-runtime/state/host-metrics";
+import { hubSnapshot } from "@goat/client-runtime/state/hub-fleet";
 import type { EnvironmentId, ServerEventLoopStall } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
@@ -36,6 +37,7 @@ import { FleetAlertAction } from "./FleetAlertAction";
 import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
 import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
+import { FleetHubSummary } from "./FleetHubSummary";
 import { FleetUncountedHosts } from "./FleetUncountedHosts";
 import { fleetQuota } from "./fleetQuota";
 import {
@@ -485,6 +487,14 @@ function FleetConsoleExpanded(props: {
   );
   const hottest = hottestHost(rows, heat);
   const quota = fleetQuota(rows);
+  const hub = hubSnapshot(rows);
+  // A linked Child names its Home even when no pool reading routes its quota there.
+  const viaHub = (row: FleetHostRow) => {
+    const pooled = quota.viaHub.get(row.key);
+    if (pooled !== undefined) return pooled;
+    const link = row.entry?.metrics?.opencodex?.link;
+    return link?.role === "child" ? (link.homeName ?? null) : undefined;
+  };
   const quotas = quota.quotas.slice(0, 3);
   const hiddenQuotas = quota.quotas.slice(quotas.length);
   const { totals } = snapshot;
@@ -567,7 +577,7 @@ function FleetConsoleExpanded(props: {
                   key={row.key}
                   row={row}
                   boat={row.machineId === null ? null : (boatByMachine.get(row.machineId) ?? null)}
-                  viaHub={quota.viaHub.get(row.key)}
+                  viaHub={viaHub(row)}
                   lastSeen={status.lastSeen}
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
@@ -588,6 +598,7 @@ function FleetConsoleExpanded(props: {
         </section>
 
         <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
+          {hub === null ? null : <FleetHubSummary hub={hub} />}
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               <span className="flex items-baseline justify-between gap-2">

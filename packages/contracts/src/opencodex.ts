@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ForwardCompatibleOptional } from "./baseSchemas.ts";
+import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HubParityEvidence } from "./hubParity.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
@@ -54,6 +54,8 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
       }),
     ),
     childSettingsApplied: Schema.NullOr(Schema.Boolean),
+    /** The Home's name: its host name on the Home, the name it published on a Child. */
+    homeName: ForwardCompatibleOptional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
   }),
   hubClient: Schema.optional(
     Schema.Struct({

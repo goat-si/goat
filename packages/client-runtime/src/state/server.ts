@@ -1241,6 +1241,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:decision:answer",
       tag: WS_METHODS.decisionAnswer,
     }),
+    verifyHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-verify",
+      tag: WS_METHODS.hubDeviceVerify,
+    }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",
       tag: WS_METHODS.scheduledTasksListWebhookDeliveries,

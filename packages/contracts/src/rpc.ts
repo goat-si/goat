@@ -420,6 +420,7 @@ import {
   ServerGetHostStatusInput,
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
+import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -685,6 +686,7 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
+  hubDeviceVerify: "hub.deviceVerify",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1156,6 +1158,13 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
 const WsServerGetHostStatusRpc = Rpc.make(WS_METHODS.serverGetHostStatus, {
   payload: ServerGetHostStatusInput,
   success: GoatHostStatusResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/** Read-only parity checks for one device, the same as goat_hub_device_verify. */
+const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
+  payload: GoatHubDeviceVerifyInput,
+  success: GoatHubDeviceVerifyResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
 
@@ -2507,6 +2516,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetHostStatusRpc,
+  WsHubDeviceVerifyRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

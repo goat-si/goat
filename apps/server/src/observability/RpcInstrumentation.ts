@@ -113,6 +113,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetProcessDiagnostics]: "server",
   [WS_METHODS.serverGetHostResources]: "server",
   [WS_METHODS.serverGetHostStatus]: "server",
+  [WS_METHODS.hubDeviceVerify]: "server",
   [WS_METHODS.serverGetProcessResourceHistory]: "server",
   [WS_METHODS.serverGetResourceTelemetryHistory]: "server",
   [WS_METHODS.serverRetryResourceTelemetry]: "server",

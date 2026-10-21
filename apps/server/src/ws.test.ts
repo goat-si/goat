@@ -8,6 +8,7 @@ import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as CodexRouteService from "./provider/CodexRouteService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
+import * as HubParity from "./hub/HubParity.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -490,6 +491,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(CodexRouteService.CodexRouteService)({}),
   Layer.mock(Handoffs.Handoffs)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
+  Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),

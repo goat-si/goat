@@ -27,6 +27,7 @@ import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/setting
 import { Route as SettingsMemoryRouteImport } from './routes/settings.memory'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
+import { Route as SettingsHubRouteImport } from './routes/settings.hub'
 import { Route as SettingsGoatBotRouteImport } from './routes/settings.goat-bot'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
@@ -134,6 +135,11 @@ const SettingsIntegrationsRoute = SettingsIntegrationsRouteImport.update({
   path: '/integrations',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsHubRoute = SettingsHubRouteImport.update({
+  id: '/hub',
+  path: '/hub',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsGoatBotRoute = SettingsGoatBotRouteImport.update({
   id: '/goat-bot',
   path: '/goat-bot',
@@ -238,6 +244,7 @@ export interface FileRoutesByFullPath {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -272,6 +279,7 @@ export interface FileRoutesByTo {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -309,6 +317,7 @@ export interface FileRoutesById {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/goat-bot': typeof SettingsGoatBotRoute
+  '/settings/hub': typeof SettingsHubRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/memory': typeof SettingsMemoryRoute
@@ -347,6 +356,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -381,6 +391,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -417,6 +428,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/goat-bot'
+    | '/settings/hub'
     | '/settings/integrations'
     | '/settings/keybindings'
     | '/settings/memory'
@@ -571,6 +583,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIntegrationsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/hub': {
+      id: '/settings/hub'
+      path: '/hub'
+      fullPath: '/settings/hub'
+      preLoaderRoute: typeof SettingsHubRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/goat-bot': {
       id: '/settings/goat-bot'
       path: '/goat-bot'
@@ -720,6 +739,7 @@ interface SettingsRouteChildren {
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsGoatBotRoute: typeof SettingsGoatBotRoute
+  SettingsHubRoute: typeof SettingsHubRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsMemoryRoute: typeof SettingsMemoryRoute
@@ -740,6 +760,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsGoatBotRoute: SettingsGoatBotRoute,
+  SettingsHubRoute: SettingsHubRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsMemoryRoute: SettingsMemoryRoute,

@@ -26,6 +26,7 @@ export type SettingsPath =
   | "/settings/integrations"
   | "/settings/goat-bot"
   | "/settings/decision-inbox"
+  | "/settings/hub"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/storage"
@@ -89,6 +90,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
   "/settings/decision-inbox": "Decision inbox",
+  "/settings/hub": "Hub",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
@@ -143,6 +145,26 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Decision inbox",
     to: "/settings/decision-inbox",
     searchTerms: ["decisions approvals questions pending answers"],
+  },
+  {
+    id: "hub-enabled",
+    title: "This machine is the hub",
+    to: "/settings/hub",
+    searchTerms: ["hub goatclaw opencodex home fleet parity remote link"],
+  },
+  {
+    id: "hub-cloud-holder",
+    title: "Cloud runs",
+    to: "/settings/hub",
+    searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
+  },
+  {
+    id: "hub-devices",
+    title: "Hub devices",
+    to: "/settings/hub",
+    searchTerms: [
+      "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
+    ],
   },
   {
     id: "memory-records",
@@ -1211,6 +1233,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
   "/settings/decision-inbox": null,
+  "/settings/hub": "environment",
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };

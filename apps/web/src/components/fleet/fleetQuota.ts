@@ -1,5 +1,4 @@
-import type { HostStatusQuota, QuotaPool, QuotaWindow } from "@goat/contracts";
-import { isObject } from "effect/Predicate";
+import type { HostStatusMetrics, HostStatusQuota, QuotaPool, QuotaWindow } from "@goat/contracts";
 
 import { quotaRows, type FleetHostRow, type FleetQuotaRow } from "./fleetTelemetry";
 
@@ -34,37 +33,19 @@ function matchesProvider(quota: HostStatusQuota, provider: QuotaPool["providers"
   );
 }
 
-function metadataField(value: unknown, key: string): unknown {
-  return isObject(value) ? value[key] : undefined;
-}
-
-function displayName(value: unknown, homeId: string): string | null {
-  const name = typeof value === "string" ? value.trim() : "";
+function displayName(value: string | undefined, homeId: string): string | null {
+  const name = value?.trim() ?? "";
   return name.length > 0 && name !== homeId ? name : null;
 }
 
 // Missing display metadata must never turn an opaque Home identity into a visible name.
-function inventoryHomeName(metrics: unknown, homeId: string) {
-  const inventory = metadataField(metrics, "opencodex");
-  const linkName = displayName(
-    metadataField(metadataField(inventory, "link"), "homeLabel"),
-    homeId,
-  );
-  const runtimeName = displayName(
-    metadataField(metadataField(inventory, "runtime"), "homeName"),
-    homeId,
-  );
-  return linkName !== null
-    ? { name: linkName, priority: 0 }
-    : runtimeName !== null
-      ? { name: runtimeName, priority: 1 }
-      : null;
-}
+const inventoryHomeName = (metrics: HostStatusMetrics | undefined, homeId: string) =>
+  displayName(metrics?.opencodex?.link.homeName, homeId);
 
 /** The newest Home snapshot is authoritative; merging older windows could resurrect unknown data. */
 export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
   const homes = new Map<string, QuotaPool>();
-  const homeLabels = new Map<string, { name: string; priority: number; sampledAt: number }>();
+  const homeLabels = new Map<string, { name: string; sampledAt: number }>();
   for (const row of rows) {
     const metrics = row.entry?.metrics;
     const pool = metrics?.quotaPool;
@@ -77,16 +58,13 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
     );
     if (ids.size === 1) {
       for (const id of ids) {
-        const label = inventoryHomeName(metrics, id);
+        const name = inventoryHomeName(metrics, id);
         const previous = homeLabels.get(id);
         if (
-          label !== null &&
-          (previous === undefined ||
-            label.priority < previous.priority ||
-            (label.priority === previous.priority &&
-              (metrics?.sampledAt ?? 0) > previous.sampledAt))
+          name !== null &&
+          (previous === undefined || (metrics?.sampledAt ?? 0) > previous.sampledAt)
         ) {
-          homeLabels.set(id, { ...label, sampledAt: metrics?.sampledAt ?? 0 });
+          homeLabels.set(id, { name, sampledAt: metrics?.sampledAt ?? 0 });
         }
       }
     }

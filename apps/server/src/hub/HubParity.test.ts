@@ -13,6 +13,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
@@ -44,11 +45,13 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
     remote?: GoatHostStatusResult;
     failure?: OrchestratorMcpFailure;
     scheduler?: boolean;
+    hubEnabled?: boolean;
     providerInstances?: ServerSettings["providerInstances"];
     providers?: ReadonlyArray<ServerProvider>;
   } = {},
 ) {
   const calls = yield* Queue.unbounded<string>();
+  const hubEnabled = yield* Ref.make(options.hubEnabled ?? true);
   const home = options.home ?? fleetSnapshot("home");
   const device = fleetSnapshot("mac-studio");
   const context = yield* Layer.build(
@@ -61,10 +64,13 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
       ),
       Layer.provide(
         Layer.mock(Settings.ServerSettingsService)({
-          getSettings: Effect.succeed({
-            ...DEFAULT_SERVER_SETTINGS,
-            providerInstances: options.providerInstances ?? {},
-          }),
+          getSettings: Ref.get(hubEnabled).pipe(
+            Effect.map((enabled) => ({
+              ...DEFAULT_SERVER_SETTINGS,
+              hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled },
+              providerInstances: options.providerInstances ?? {},
+            })),
+          ),
         }),
       ),
       Layer.provide(Layer.succeed(HostProcess.Environment, {})),
@@ -123,7 +129,7 @@ const setup = Effect.fn("HubParityTest.setup")(function* (
       ),
     ),
   );
-  return { parity: Context.get(context, HubParity.HubParity), calls };
+  return { parity: Context.get(context, HubParity.HubParity), calls, hubEnabled };
 });
 
 it.effect("verify reads the device through host status and caches the Home-relative verdict", () =>
@@ -192,6 +198,25 @@ it.effect("a Child never schedules verifications of its Home-owned fleet", () =>
     const { calls } = yield* setup({ home: fleetSnapshot("mac-studio"), scheduler: true });
     yield* TestClock.adjust("31 minutes");
     expect(yield* Queue.size(calls)).toBe(0);
+  }),
+);
+
+it.effect("the sweep waits for hub.enabled and verifies as soon as it is turned on", () =>
+  Effect.gen(function* () {
+    const home = fleetSnapshot("home");
+    const { calls, hubEnabled } = yield* setup({
+      home: {
+        ...home,
+        link: { ...home.link, links: home.link.links.filter(({ alias }) => alias === "lidge-ts") },
+      },
+      scheduler: true,
+      hubEnabled: false,
+    });
+    yield* TestClock.adjust("31 minutes");
+    expect(yield* Queue.size(calls)).toBe(0);
+    yield* Ref.set(hubEnabled, true);
+    yield* TestClock.adjust("1 minute");
+    expect(yield* Queue.take(calls)).toBe("lidge-ts");
   }),
 );
 

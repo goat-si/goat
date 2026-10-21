@@ -23,6 +23,7 @@ import {
   PlugIcon,
   PaletteIcon,
   SearchIcon,
+  ServerIcon,
   Settings2Icon,
   XIcon,
 } from "~/components/solar";
@@ -78,6 +79,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/integrations": BlocksIcon,
   "/settings/goat-bot": MessageCircleIcon,
   "/settings/decision-inbox": InboxIcon,
+  "/settings/hub": ServerIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,

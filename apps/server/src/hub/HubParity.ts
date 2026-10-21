@@ -199,12 +199,16 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const parity = yield* make;
     const scheduler = yield* Scheduler.Scheduler;
+    const settings = yield* ServerSettings.ServerSettingsService;
     const environment = yield* ServerEnvironment.ServerEnvironment;
     const environmentId = yield* environment.getEnvironmentId;
     const nextAt = yield* Ref.make(0);
     yield* scheduler.register(
       "hub-parity",
       Effect.gen(function* () {
+        // Off by default (design §12); checked first so turning it on verifies right away.
+        const configured = yield* settings.getSettings.pipe(Effect.option);
+        if (configured._tag === "None" || !configured.value.hub.enabled) return;
         const now = yield* Clock.currentTimeMillis;
         if (now < (yield* Ref.get(nextAt))) return;
         yield* Ref.set(nextAt, now + INTERVAL_MS);

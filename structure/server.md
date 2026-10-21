@@ -136,8 +136,8 @@ Child link records remain Home-owned, so a missing Child link directory is norma
 `apps/server/src/hub/HubParity.ts` verifies a device against this machine's Home through
 the host-status SSH read path. Explicit verification gathers fresh, non-billed evidence;
 ordinary host polling returns the last verdict. Missing evidence remains unproven, except
-unavailable apply timing, which is skipped. The shared Scheduler checks Home links every
-30 minutes; verification never repairs a device.
+unavailable apply timing, which is skipped. While `hub.enabled` is on, the shared Scheduler
+checks Home links every 30 minutes; verification never repairs a device.
 
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
