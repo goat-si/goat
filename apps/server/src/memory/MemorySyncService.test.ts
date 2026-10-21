@@ -2181,6 +2181,7 @@ it.effect.each([
               [93, "MemoryRevisionCheckpointSize"],
               [94, "HubNodes"],
               [95, "MemorySummaryWorkThreadIndex"],
+              [96, "ThreadHistoryArchives"],
             ]);
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(

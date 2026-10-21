@@ -62,6 +62,7 @@ it.effect(
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
         [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);
