@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
@@ -24,6 +23,7 @@ import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { ChatComposer } from "./ChatComposer";
 const state = vi.hoisted(() => ({
   noopCommand: vi.fn(async () => ({ _tag: "Success", value: { providers: [] } })),
+  registry: null as import("effect/reactivity").AtomRegistry.AtomRegistry | null,
   launch: vi.fn(),
   navigate: vi.fn(),
   retry: vi.fn(),
@@ -39,14 +39,16 @@ vi.mock("../ui/toast", () => ({
   toastManager: { add: state.toast },
   stackedThreadToast: (v: unknown) => v,
 }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
   useRouter: () => ({ latestLocation: { pathname: "/", state: {} } }),
   useNavigate: () => state.navigate,
   useLocation: ({ select }: { select: (v: unknown) => unknown }) =>
     select({ href: "/", state: {} }),
   useParams: () => ({}),
 }));
-vi.mock("../../hooks/useSettings", () => ({
+vi.mock("../../hooks/useSettings", async (original) => ({
+  ...(await original<typeof import("../../hooks/useSettings")>()),
   useEnvironmentSettings: () => ({
     ...DEFAULT_SERVER_SETTINGS,
     ...DEFAULT_CLIENT_SETTINGS,
@@ -58,7 +60,10 @@ vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentIdentificationMode: () => "none",
 }));
 vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
-vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
+vi.mock("../../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "light" }),
+  useRenderedAppearance: () => "light",
+}));
 vi.mock("../../hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
 vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 vi.mock("../../hooks/useThreadActions", async (original) => ({
@@ -72,7 +77,8 @@ vi.mock("../../state/session", async (original) => ({
   readEnvironmentScope: () => true,
   readPreparedConnection: () => Option.none(),
 }));
-vi.mock("../../state/query", () => ({
+vi.mock("../../state/query", async (original) => ({
+  ...(await original<typeof import("../../state/query")>()),
   useEnvironmentQuery: () => ({
     data: null,
     isPending: false,
@@ -140,7 +146,10 @@ vi.mock("../../hooks/useLoadBalancedEnvironment", () => ({
 vi.mock("../../hooks/useScratchProject", () => ({
   useScratchProject: () => ({ scratchWorkspaceRootFor: () => null, openScratchProject: vi.fn() }),
 }));
-vi.mock("../../remoteOpen", () => ({ useRemoteOpenState: () => ({}) }));
+vi.mock("../../remoteOpen", async (original) => ({
+  ...(await original<typeof import("../../remoteOpen")>()),
+  useRemoteOpenState: () => ({}),
+}));
 vi.mock("./useAutoBalanceUpdateBanner", () => ({ useAutoBalanceUpdateBanner: () => null }));
 vi.mock("../ThreadStatusIndicators", () => ({ useLinkedThreadPullRequest: () => null }));
 vi.mock("./ChatHeader", () => ({ ChatHeader: () => null }));
@@ -149,6 +158,7 @@ vi.mock("./ThreadDetailsPanel", () => ({ ThreadDetailsPanel: () => null }));
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 vi.mock("./DraftHeroHeadline", () => ({ DraftHeroHeadline: () => null }));
 vi.mock("./ExpandedImageDialog", () => ({
+  ExpandedImageDialog: () => null,
   ExpandedImageDialogHost: () => null,
   openExpandedImagePreview: () => {},
 }));
@@ -168,7 +178,21 @@ vi.mock("./ChatComposer", async (original) => {
     },
   };
 });
-import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
+// Browser mocks snapshot exports; forward method reads to the registry under test.
+vi.mock("../../rpc/atomRegistry", async (original) => {
+  const actual = await original<typeof import("../../rpc/atomRegistry")>();
+  state.registry = actual.appAtomRegistry;
+  return {
+    ...actual,
+    appAtomRegistry: new Proxy(actual.appAtomRegistry, {
+      get: (_target, key) => {
+        const value = Reflect.get(state.registry!, key);
+        return typeof value === "function" ? value.bind(state.registry) : value;
+      },
+    }),
+  };
+});
+import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { environmentCatalog } from "../../connection/catalog";
 import { vcsEnvironment } from "../../state/vcs";
 import {
@@ -334,13 +358,14 @@ beforeEach(() => {
   state.normal.mockReset();
   state.uploads.mockReset();
   state.toast.mockReset();
-  const get = appAtomRegistry.get.bind(appAtomRegistry);
-  vi.spyOn(appAtomRegistry, "get").mockImplementation(((atom: Atom.Atom<unknown>) =>
+  const registry = state.registry!;
+  const get = registry.get.bind(registry);
+  vi.spyOn(registry, "get").mockImplementation(((atom: Atom.Atom<unknown>) =>
     atom === environmentCatalog.catalogValueAtom
       ? catalog
       : atom === vcsEnvironment.sshWorkspaceLaunch.permissionAtom(local)
         ? true
-        : get(atom)) as typeof appAtomRegistry.get);
+        : get(atom)) as typeof registry.get);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

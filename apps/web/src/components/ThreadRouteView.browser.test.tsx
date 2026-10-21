@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentShellSync } from "@goat/client-runtime/state/presentation";
 import type { EnvironmentThreadState } from "@goat/client-runtime/state/threads";
@@ -60,7 +58,8 @@ vi.mock("../state/entities", () => ({
   useQuietThreadShell: (ref: { threadId: string } | null) =>
     ref?.threadId === "worker" ? { deletedAt: null, archivedAt: null } : null,
 }));
-vi.mock("../composerDraftStore", () => {
+vi.mock("../composerDraftStore", async () => {
+  const Schema = await import("effect/Schema");
   const store = {
     getDraftSession: () => null,
     getDraftThreadByRef: () => null,
@@ -68,6 +67,7 @@ vi.mock("../composerDraftStore", () => {
     hasDraftThreadsInEnvironment: () => false,
   };
   return {
+    DraftId: Schema.String.pipe(Schema.brand("DraftId")),
     useComposerDraftStore: (select: (value: typeof store) => unknown) => select(store),
     useBackgroundDraftSubmissionPending: () => false,
     finalizePromotedDraftThreadByRef: () => {},

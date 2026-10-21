@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { LegendListRef } from "@legendapp/list/react";

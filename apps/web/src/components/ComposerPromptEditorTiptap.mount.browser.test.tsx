@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import { act, createRef, Suspense, use, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
