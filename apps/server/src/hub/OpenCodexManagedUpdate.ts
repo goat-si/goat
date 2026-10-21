@@ -48,7 +48,7 @@ const PROBATION_MS = 10 * MINUTE;
 const PROBATION_CHECK_MS = MINUTE;
 /** `/healthz` uptime is whole seconds and the read takes time; a real restart moves further. */
 const RESTART_TOLERANCE_MS = 2_000;
-/** Rollback reasons whose runtime already fails its turns, so restoring it cannot wait for idle. */
+/** Rollback reasons naming one member whose runtime already fails its turns. */
 const HEALTH_FAILURES = new Set(["health-failed", "probation-health-failed"]);
 const INSTALL_TIMEOUT_MS = 15 * MINUTE;
 const STATE_FILE = "opencodex-update.json";
@@ -83,6 +83,8 @@ const State = Schema.Struct({
       processIds: Schema.Record(Schema.String, Schema.Int),
       /** Set once a rollback starts; a restore that failed is resumed before anything else. */
       restoring: Schema.optional(Schema.String),
+      /** The member that failed its own health check; only it is restored without waiting. */
+      failedMember: Schema.optional(Schema.String),
     }),
   ),
 });
@@ -192,13 +194,14 @@ const makeHost = Effect.gen(function* () {
     scope: McpInvocationScope,
   ) {
     if (alias === null) {
+      // Admitted requests first: one that commits after the thread read is then still counted.
+      // A delegated child keeps running after its parent's turn ends; restarting OpenCodex
+      // under either interrupts work.
+      const inFlight = yield* admission.inFlight;
       const snapshot = yield* parity.readLocal;
       const shells = yield* threads
         .listProjectThreads({ projectId: undefined, includeSubagents: true })
         .pipe(Effect.option);
-      // A delegated child keeps running after its parent's turn ends, and an admitted request
-      // is not a thread yet; restarting OpenCodex under either interrupts work.
-      const inFlight = yield* admission.inFlight;
       return {
         alias,
         snapshot,
@@ -387,6 +390,7 @@ export const make = Effect.gen(function* () {
     reason: string,
     remember: boolean,
     scope: McpInvocationScope,
+    failedAlias?: string | null,
   ) {
     const opened = (yield* Ref.get(state)).window;
     if (opened === undefined) return true;
@@ -404,20 +408,28 @@ export const make = Effect.gen(function* () {
                 }
               : current.failedTargets,
           },
-          (window) => ({ ...window, restoring: reason }),
+          (window) => ({
+            ...window,
+            restoring: reason,
+            ...(HEALTH_FAILURES.has(reason) && failedAlias !== undefined
+              ? { failedMember: failedTargetKey(failedAlias) }
+              : {}),
+          }),
         ),
       );
     const window = (yield* Ref.get(state)).window!;
     const restore = Effect.gen(function* () {
-      const affected = affectedBy(window.steps, window.children);
-      // A runtime that failed its health check already fails its turns; anything else waits
-      // for idle like the update itself.
-      if (!HEALTH_FAILURES.has(window.restoring!)) {
-        const members = yield* Effect.forEach(affected, (alias) => host.member(alias, scope));
-        if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
-      }
       for (const step of window.steps.toReversed()) {
         if (step.restored === true) continue;
+        // The member that failed its health check already fails its turns. Every other restart
+        // waits for idle like the update itself, which keeps the Home after its Children.
+        if (window.failedMember !== failedTargetKey(step.alias)) {
+          const touched = (step.alias === null ? [null, ...window.children] : [step.alias]).filter(
+            (alias) => failedTargetKey(alias) !== window.failedMember,
+          );
+          const members = yield* Effect.forEach(touched, (alias) => host.member(alias, scope));
+          if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
+        }
         const installed = yield* host.install(step.alias, step.fromVersion);
         const snapshot = installed ? (yield* host.member(step.alias, scope)).snapshot : undefined;
         if (
@@ -589,7 +601,7 @@ export const make = Effect.gen(function* () {
             ? "parity-broken"
             : undefined;
       if (failure !== undefined) {
-        yield* rollBack(failure, true, scope);
+        yield* rollBack(failure, true, scope, step.alias);
         return { outcome: "rolled-back" as const };
       }
       yield* record(step, targetVersion, "probation");
@@ -626,7 +638,7 @@ export const make = Effect.gen(function* () {
       return yield* closedOr(yield* rollBack("interrupted", true, scope));
     for (const step of window.steps) {
       if (!(yield* healthy(step.alias, window.targetVersion, scope)))
-        return yield* closedOr(yield* rollBack("probation-health-failed", true, scope));
+        return yield* closedOr(yield* rollBack("probation-health-failed", true, scope, step.alias));
     }
     if (now < window.probationEndsAt) {
       yield* Ref.set(nextAt, Math.min(window.probationEndsAt, now + PROBATION_CHECK_MS));

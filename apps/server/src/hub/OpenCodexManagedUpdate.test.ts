@@ -7,16 +7,23 @@ import {
   type OpenCodexInventorySnapshot,
   type OpenCodexUpdateStatus,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Settings from "../serverSettings.ts";
+import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubParity from "./HubParity.ts";
 import * as ManagedUpdate from "./OpenCodexManagedUpdate.ts";
 import { fleetSnapshot } from "./parity.testkit.ts";
@@ -450,4 +457,72 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
       }
     }),
   );
+  it.effect("restores a failed Child under work but keeps the busy Home until it is idle", () =>
+    Effect.gen(function* () {
+      const { fleet, update } = yield* setup();
+      yield* update.check;
+      // The Child crashes during probation while the healthy Home is serving a turn.
+      fleet.unhealthyAt.add("mac-studio@2.90.0");
+      fleet.running.set(null, 1);
+      yield* TestClock.adjust(MINUTE);
+      yield* update.check;
+      expect(fleet.installs.slice(2)).toEqual(["mac-studio@2.86.0"]);
+      expect(yield* update.status).toMatchObject({ reason: "rollback-incomplete" });
+
+      fleet.running.set(null, 0);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.installs.slice(3)).toEqual(["home@2.89.0"]);
+      expect(phases(yield* update.status)).toEqual([
+        ["mac-studio", "rolled-back", "probation-health-failed"],
+        [null, "rolled-back", "probation-health-failed"],
+      ]);
+    }),
+  );
 });
+
+it.effect(
+  "counts a request admitted before the hold even if it commits after the thread read",
+  () =>
+    Effect.gen(function* () {
+      let inFlight = 1;
+      const context = yield* Layer.build(
+        ManagedUpdate.layerHost.pipe(
+          Layer.provide(
+            Layer.mock(HubParity.HubParity)({ readLocal: Effect.succeed(fleetSnapshot("home")) }),
+          ),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              // The admitted request commits and finishes right after this read.
+              listProjectThreads: () =>
+                Effect.sync(() => {
+                  inFlight = 0;
+                  return [];
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(RuntimeAdmission.RuntimeAdmission)({
+              inFlight: Effect.sync(() => inFlight),
+            }),
+          ),
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+          Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/")),
+        ),
+      );
+      const host = yield* ManagedUpdate.OpenCodexUpdateHost.pipe(Effect.provideContext(context));
+      const member = yield* host.member(null, {
+        environmentId: EnvironmentId.make("hub-fixture"),
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 0,
+        requestNamespace: "test",
+        thread: undefined,
+        client: { sessionId: "test", label: "Test", access: "read-only" },
+      });
+      expect(member.runningTurns).toBe(1);
+    }),
+);
