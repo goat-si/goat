@@ -90,10 +90,17 @@
   - Probation catches the failure the trial cannot see: a build that starts, commits, then dies.
 - **Tradeoffs.**
   - Hosts that predate this change show `degraded` until they update, instead of a false mismatch.
-  - SSH runtimes launched by a client (`run-t3.sh`) still follow their owning client's idle refresh
-    (ADR-0013). A headless server that auto-updates moves its owned SSH runtimes on its next
-    connection, so a fleet follows without an app. A runtime-side scheduler for client-launched
-    runtimes is deferred.
+  - A client-launched SSH runtime (`run-t3.sh`) owns its own schedule (#491). It runs the same
+    policy (`apps/server/src/cloud/autoUpdatePolicy.ts`) and activates through the ADR-0013
+    drain-replacement supervisor instead of the launcher trial, by running the same owning launch
+    script a client would, detached on the host. Its failed-target memory is the supervisor's
+    `last-replacement.json` in the launch state directory. Clients sharing the runtime get no lock
+    or lease: a new client marks its automatic idle refresh, and the runtime drops such a request
+    unless it is the newest same-channel target strictly newer than itself and not the last failed
+    one. Older clients send no marker and keep their behavior, including moving a runtime to their
+    own release. Windows hosts, servers outside the default home, and releases that speak a
+    protocol the runtime does not serve stay client-driven, so a rollback always restarts a
+    version the new supervisor accepts.
   - A rollback during probation discards what the new version wrote in those minutes, as ADR-0013
     already accepts for the SSH supervisor.
   - A trial from before this change reports no port. The launcher then skips the smoke probe but

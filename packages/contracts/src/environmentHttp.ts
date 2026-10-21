@@ -587,6 +587,12 @@ export const RuntimeDrainRequest = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: RUNTIME_DRAIN_MAX_GRACE_SECONDS })),
   ),
   force: Schema.optionalKey(Schema.Boolean),
+  /**
+   * A client's automatic idle refresh. The runtime arbitrates it against its own update policy
+   * and answers `cancelled` without draining when another target wins. Servers that predate it
+   * ignore the key.
+   */
+  automatic: Schema.optionalKey(Schema.Boolean),
 });
 export type RuntimeDrainRequest = typeof RuntimeDrainRequest.Type;
 

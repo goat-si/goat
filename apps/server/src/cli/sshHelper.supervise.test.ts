@@ -14,6 +14,8 @@ import { vi } from "vite-plus/test";
 import {
   isLinuxZombie,
   readSshRuntimeCompatibility,
+  readSshReplacementRecord,
+  SSH_REPLACEMENT_RECORD_FILE,
   superviseSshRuntimeReplacement,
 } from "./sshHelper.ts";
 
@@ -95,14 +97,23 @@ const superviseFailedReplacement = async (
     result,
     ran: NodeFS.existsSync(`${dbPath}.replacement-ran`),
     database: NodeFS.readFileSync(dbPath, "utf8"),
+    record: readSshReplacementRecord(
+      NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
+    ),
   };
 };
 
 it("restores the backup over a failed replacement's own writes", async () => {
-  const { result, database, ran } = await superviseFailedReplacement("trial");
+  const { result, database, ran, record } = await superviseFailedReplacement("trial");
   assert.isTrue(ran, "the replacement ran");
   assert.equal(result.status, "failed");
   assert.equal(database, "original");
+  // The runtime's scheduler reads this record and never retries the target automatically.
+  assert.deepInclude(record, {
+    status: "failed",
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+  });
 });
 
 it("keeps writes from another server that owned the data since the backup", async () => {
@@ -373,4 +384,37 @@ it("rolls back to a previous version whose protocol does not overlap this build"
       }
     }
   }
+});
+
+it("records a supervisor that throws as a failed replacement", async () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));
+  roots.push(root);
+  const stateDir = NodePath.join(root, "state");
+  NodeFS.mkdirSync(stateDir);
+  // A base directory that is a file makes creating userdata throw.
+  const baseDir = NodePath.join(root, "not-a-directory");
+  NodeFS.writeFileSync(baseDir, "");
+  const result = await superviseSshRuntimeReplacement({
+    oldPid: deadPid(),
+    oldInstanceId: "old",
+    port: 1,
+    baseDir,
+    stateDir,
+    runnerFile: NodePath.join(stateDir, "run-t3.sh"),
+    previousRunnerFile: NodePath.join(stateDir, "run-t3.previous"),
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+    identity: "new",
+    previousIdentity: "old",
+    exitTimeoutMs: 1_000,
+    readyTimeoutMs: 1_000,
+    logFile: NodePath.join(stateDir, "server.log"),
+  });
+  assert.equal(result.status, "failed");
+  assert.deepInclude(
+    readSshReplacementRecord(
+      NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
+    ),
+    { status: "failed", targetVersion: "2.0.0" },
+  );
 });

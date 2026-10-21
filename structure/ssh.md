@@ -259,6 +259,16 @@ A manually published nightly is evidence only for that exact version and platfor
 Older cached archives are not selected automatically when no compatible installation exists:
 archive integrity does not prove protocol support or authorize a userdata downgrade.
 
+A runtime on a stable or nightly build also updates itself when idle, following its own channel
+(see [Server: Updates](server.md#updates)). It runs the owning launch script locally, so it takes
+the same replacement lock, idle check, drain and supervisor as a client. A new client passes
+`GOAT_RUNTIME_DRAIN_AUTOMATIC=1` to `__ssh-helper drain` for an automatic refresh of an older
+runtime, never for a manual or confirmed update or an incompatible runtime. The runtime answers
+such a request `cancelled` without draining when its target is not the newest same-channel,
+strictly newer, never-failed candidate, or while its `automaticServerUpdates` is off; the
+client keeps its attachment. The supervisor
+records every outcome in `last-replacement.json` next to `run-t3.sh`.
+
 Manual updates target the owning manager's version too. An idle update waits for running work;
 a confirmed immediate update allows the drain to finish at its deadline. A newer runtime, a
 runtime whose version cannot be ordered, or a foreign server (see [Shared runtime](#shared-runtime)) blocks replacement

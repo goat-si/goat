@@ -15,6 +15,10 @@
       "types": "./src/sshDestination.ts",
       "import": "./src/sshDestination.ts"
     },
+    "./cuaDriverRelease": {
+      "types": "./src/cuaDriverRelease.ts",
+      "import": "./src/cuaDriverRelease.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"

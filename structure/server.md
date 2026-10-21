@@ -38,6 +38,14 @@ Self-update admission and requester attribution live in `cloud/selfUpdate.ts` an
 and requires idle unless explicitly confirmed; its fsynced journal is outside SQLite
 rollback. SSH setup records requests through that same journal service.
 
+Automatic updates have one policy (`cloud/autoUpdatePolicy.ts`: channel, strictly newer, last
+failed target, staged rollout) and one scheduler (`cloud/autoUpdate.ts`) with two activation
+paths. A `goat service` server uses the launcher trial. A client-launched SSH runtime
+(`cloud/sshRuntimeAutoUpdate.ts`) runs the client's owning launch script on its own host, which
+drains it and hands over to the ADR-0013 supervisor; the supervisor's `last-replacement.json` in
+`~/.goat/ssh-launch/runtime` is its failed-target record. The same service arbitrates drain
+requests that clients mark `automatic`, so shared runtimes only move forward on their channel.
+
 Compatibility between two GOAT builds comes from the protocol ranges each serves, never from their
 release strings. `goat_host_status` reports the ranges every machine serves (`protocol`), and the
 machine that fans out judges each reachable remote with `hostCompatibilityOf` in
@@ -192,6 +200,24 @@ Bitbucket, Forgejo, and GitCafe. The packages are `packages/source-control-githu
 `packages/source-control-gitcafe`, and `packages/source-control-core`. A host with no driver in
 that list is unsupported. `packages/source-control-testing` holds test doubles and is not a host.
 The contracts for linking a thread to a pull request stay in `packages/contracts`.
+
+## Computer use
+
+`apps/server/src/cua/CuaDriver.ts` owns the Cua Driver host lifecycle behind the server setting
+`enableCua`, which is off by default. One acquisition is shared by every caller, a crashed or failed
+host is retired and replaced on the next acquisition, and disabling stops the host. Standalone
+servers start `GOAT_CUA_DRIVER_PATH` when set, otherwise the pinned release that
+`apps/server/src/cua/CuaDriverInstallation.ts` downloads, checks against the size and SHA-256 in
+`packages/shared/src/cuaDriverRelease.ts`, and publishes under `<base>/tools/cua-driver/<version>`.
+Desktop servers send `cuaDriverRequest` on the desktop telemetry control pipe and wait for a
+`cuaDriverReport` (`packages/contracts/src/cua.ts`). The Electron shell ignores the request and
+hosts no driver, so a desktop acquisition fails after the 30-second startup bound.
+
+Every host passes the driver's telemetry and update-check opt-outs through its environment
+allowlist, and every MCP descriptor the service returns carries all of them. Nothing attaches the
+driver to provider sessions yet.
+
+> Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
 
 ## Services
 

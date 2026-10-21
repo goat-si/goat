@@ -145,9 +145,11 @@ import * as CloudHttp from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as RelayTracing from "./cloud/relayTracing.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -348,6 +350,11 @@ const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMoni
 // would open a second reader on the desktop telemetry fd.
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -1171,6 +1178,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(
     RuntimeDrain.layer.pipe(
+      // One instance, shared with the auto-update scheduler, so arbitration sees its target.
+      Layer.provide(SshRuntimeAutoUpdate.layerArbiter),
+      Layer.provideMerge(SshRuntimeAutoUpdate.layer),
       Layer.provide(ProjectionStoreV2.layer),
       Layer.provide(RuntimeDrain.layerShutdown),
       Layer.provideMerge(RuntimeAdmission.layer),
@@ -1178,7 +1188,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
+  // pipe takes at most 20 steps, so the Cua Driver joins this merge.
+  Layer.provideMerge(Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver)),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),

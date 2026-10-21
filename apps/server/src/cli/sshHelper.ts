@@ -649,6 +649,8 @@ export const requestSshRuntimeDrain = (input: {
   readonly graceSeconds: number;
   readonly force: boolean;
   readonly tokenFile: string;
+  /** A client's automatic idle refresh, which the runtime may drop in favour of its own target. */
+  readonly automatic?: boolean;
 }): Promise<"drained" | "cancelled" | "instance-changed" | "unknown"> =>
   new Promise((resolve) => {
     let token: string;
@@ -668,6 +670,7 @@ export const requestSshRuntimeDrain = (input: {
       targetVersion: input.targetVersion,
       graceSeconds,
       ...(input.force ? { force: true } : {}),
+      ...(input.automatic === true ? { automatic: true } : {}),
     });
     let settled = false;
     const finish = (value: "drained" | "cancelled" | "instance-changed" | "unknown") => {
@@ -731,11 +734,34 @@ const drain = Command.make("drain", {
   tokenFile: Flag.String("token-file"),
 }).pipe(
   Command.withHandler((input) =>
-    Effect.promise(async () => {
-      process.stdout.write((await requestSshRuntimeDrain(input)) + "\n");
-    }),
+    Effect.flatMap(HostProcess.Environment, (environment) =>
+      Effect.promise(async () => {
+        // An environment marker, so launch scripts can pass it to helpers that predate it.
+        const automatic = environment[RUNTIME_DRAIN_AUTOMATIC_ENV] === "1";
+        process.stdout.write((await requestSshRuntimeDrain({ ...input, automatic })) + "\n");
+      }),
+    ),
   ),
 );
+
+export const RUNTIME_DRAIN_AUTOMATIC_ENV = "GOAT_RUNTIME_DRAIN_AUTOMATIC";
+
+/**
+ * The supervisor's record of the last replacement it ran, in the launch state directory it
+ * already owns. The runtime reads it to skip a target that failed or rolled back.
+ */
+export const SSH_REPLACEMENT_RECORD_FILE = "last-replacement.json";
+const SshReplacementRecord = Schema.Struct({
+  status: Schema.Literals(["replaced", "rolled-back", "failed"]),
+  targetVersion: Schema.String,
+  previousVersion: Schema.String,
+  at: Schema.String,
+});
+const SshReplacementRecordJson = Schema.fromJsonString(SshReplacementRecord);
+const decodeSshReplacementRecord = Schema.decodeUnknownOption(SshReplacementRecordJson);
+const encodeSshReplacementRecord = Schema.encodeSync(SshReplacementRecordJson);
+export const readSshReplacementRecord = (text: string) =>
+  Option.getOrUndefined(decodeSshReplacementRecord(text.trim()));
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -860,6 +886,39 @@ const spawnWindowsDetached = (
  * backup, so another server's writes are never overwritten by the snapshot.
  */
 export const superviseSshRuntimeReplacement = async (
+  input: SshRuntimeSupervisorInput,
+): Promise<SshRuntimeSupervisorResult> => {
+  let result: SshRuntimeSupervisorResult;
+  try {
+    result = await superviseReplacement(input);
+  } catch (cause) {
+    result = {
+      status: "failed",
+      reason: cause instanceof Error ? cause.message : "Replacement supervisor failed.",
+    };
+  }
+  if (result.status !== "old-alive") {
+    try {
+      writeAtomically(
+        NodePath.join(input.stateDir, SSH_REPLACEMENT_RECORD_FILE),
+        encodeSshReplacementRecord({
+          status: result.status,
+          targetVersion: input.targetVersion,
+          previousVersion: input.previousVersion,
+          at: new Date().toISOString(),
+        }) + "\n",
+      );
+    } catch (cause) {
+      // The replacement result stands; without the record the runtime may retry this target.
+      process.stderr.write(
+        `Could not record the replacement outcome: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+      );
+    }
+  }
+  return result;
+};
+
+const superviseReplacement = async (
   input: SshRuntimeSupervisorInput,
 ): Promise<SshRuntimeSupervisorResult> => {
   if (!(await waitForExit(input.oldPid, input.exitTimeoutMs))) {

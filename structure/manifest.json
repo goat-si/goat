@@ -81,7 +81,8 @@
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/channelGateway.ts",
         "packages/contracts/src/ipc.ts",
-        "packages/contracts/src/hubProxy.ts"
+        "packages/contracts/src/hubProxy.ts",
+        "packages/contracts/src/quotaPool.ts"
       ]
     },
     {
@@ -118,6 +119,7 @@
         "packages/shared/src/opencodexCompat.ts",
         "packages/shared/src/sshFailure.ts",
         "packages/shared/src/cliRelease.ts",
+        "packages/shared/src/cuaDriverRelease.ts",
         "packages/shared/src/path.ts",
         "packages/shared/src/themePalettes.ts",
         "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts"
@@ -191,7 +193,9 @@
         "packages/source-control-testing",
         "packages/contracts",
         "packages/contracts/src/codexRoute.ts",
-        "apps/server/src/hubProxy"
+        "apps/server/src/hubProxy",
+        "apps/server/src/cua/",
+        "packages/contracts/src/cua.ts"
       ]
     },
     {
