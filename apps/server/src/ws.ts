@@ -144,7 +144,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import { latestProviderVersionCacheKeys } from "@goat/provider-core/server/maintenanceResolver";
 import * as RelayClient from "@goat/shared/relayClient";
 import { isTelemetryIdHash } from "@goat/shared/telemetryId";
-import { sameUsageLimitCommandCoverage, withUsageLimitsCommands } from "@goat/shared/usageLimits";
+import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -1906,7 +1906,9 @@ export const layerWsRpc = (
         readonly usageLimitsCommand: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
-        const currentProviders = yield* providerRegistry.getProviders;
+        const currentProviders = yield* providerRegistry.getProviders.pipe(
+          Effect.flatMap(usageLimitSources.projectProviders),
+        );
         const providers = options.usageLimitsCommand
           ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
           : currentProviders;
@@ -2598,7 +2600,7 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            return { providers: yield* usageLimitSources.projectProviders(providers) };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
@@ -3365,14 +3367,11 @@ export const layerWsRpc = (
                   Stream.fromEffect(providerRegistry.getProviders),
                   providerRegistry.streamChanges,
                 ),
-                usageLimitSources.streamChanges.pipe(
-                  Stream.changesWith(
-                    usageLimitsCommand ? sameUsageLimitCommandCoverage : () => true,
-                  ),
-                ),
+                usageLimitSources.streamChanges,
                 (providers, sources) =>
                   usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
               ).pipe(
+                Stream.mapEffect(usageLimitSources.projectProviders),
                 // Both sides replay their current value, so the first pairing normally
                 // repeats the snapshot the client already holds. Compare against that
                 // snapshot rather than dropping blindly: a refresh that landed between

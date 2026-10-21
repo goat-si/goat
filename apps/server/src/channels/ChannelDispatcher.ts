@@ -47,6 +47,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -178,6 +179,7 @@ const make = Effect.gen(function* () {
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+  const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -290,7 +292,9 @@ const make = Effect.gen(function* () {
       const load = yield* localTasksByInstance;
       const candidates = yield* Effect.forEach(siblings, (instance) =>
         Effect.gen(function* () {
-          const snapshot = yield* instance.snapshot.getSnapshot;
+          const raw = yield* instance.snapshot.getSnapshot;
+          const snapshot = (yield* usageSources.projectProviders([raw]))[0]!;
+          const quotaPool = yield* usageSources.quotaPool;
           const isConfigured = instance.instanceId === selection.instanceId;
           const ready =
             snapshot.enabled &&
@@ -311,6 +315,13 @@ const make = Effect.gen(function* () {
             preferred: isConfigured,
             windows: windows.length === 0 ? null : windows,
             activeTasks: load.get(instance.instanceId) ?? 0,
+            model: selection.model,
+            quotaPool:
+              quotaPool?.producer.homeId === snapshot.usageLimits?.quotaPool?.homeId
+                ? quotaPool?.providers.find(
+                    (item) => item.provider === snapshot.usageLimits?.quotaPool?.provider,
+                  )
+                : undefined,
           };
           return [candidate];
         }),

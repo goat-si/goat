@@ -5,6 +5,7 @@ import {
   GoatHostStatusResult,
   ProviderDriverKind,
   ProviderInstanceId,
+  QuotaPool,
   ThreadId,
   type ServerProvider,
   type ServerProviderUsageLimits,
@@ -28,6 +29,8 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
+import payload from "../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 import { HOST_STATUS_REMOTE_TIMEOUT_MS } from "./HostStatusMcpService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
@@ -35,6 +38,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
+const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 const threadId = ThreadId.make("caller-thread");
 const providerInstanceId = ProviderInstanceId.make("codex");
 const now = Date.parse("2026-10-12T16:00:00.000Z");
@@ -128,6 +132,7 @@ const run = <A, E>(
   options: {
     readonly hosts?: ReadonlyArray<string>;
     readonly providers?: ReadonlyArray<ServerProvider>;
+    readonly quotaPool?: QuotaPool;
     readonly refreshFails?: ReadonlySet<string>;
     readonly listFails?: boolean;
     readonly shell?: ReturnType<typeof liveThreadShell>;
@@ -153,6 +158,12 @@ const run = <A, E>(
           runtime: { port: 10100, healthy: false, ready: false },
           link: { role: "none" as const, available: false, links: [], childSettingsApplied: false },
         }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(options.quotaPool),
+        projectProviders: (providers) => Effect.succeed(providers),
       }),
     ),
     Layer.provide(HostThreadsMcpService.layer),
@@ -235,6 +246,17 @@ const run = <A, E>(
     return { value, calls, refreshes, queries, connectedReads: () => connectedReads };
   }).pipe(Effect.provide(layer));
 };
+
+it.effect("includes this machine's OpenCodex pool in its decoded host metrics", () =>
+  Effect.gen(function* () {
+    const { value } = yield* run({ quotaPool: pool }, (service) =>
+      service.read(scope, { local: true }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(decode(value.success).hosts[0]?.metrics?.quotaPool).toEqual(pool);
+  }),
+);
 
 it.effect("fans out to this machine and each connected host, sorted", () =>
   Effect.gen(function* () {

@@ -1196,10 +1196,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
-  ),
-  Layer.provideMerge(ProviderRegistry.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
   (application) =>
     provideMemorySnapshot(
       application,

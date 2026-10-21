@@ -2,10 +2,13 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  QuotaPool,
   type FleetSettings,
   type HostStatusEntry,
   type ModelSelection,
 } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import payload from "../../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 
 import { place, schedulerHostStatus, type PlacementInput } from "./placementRules.ts";
 
@@ -85,8 +88,36 @@ const goal = (overrides: Partial<PlacementInput> = {}): PlacementInput => ({
   ...overrides,
 });
 const none: FleetSettings = {};
+const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 
 describe("place", () => {
+  it("scores routed hosts from their raw pool while preserving direct account quota", () => {
+    const routed = host("routed", { quotas: [{ instanceId: codex, windows: [window(1)] }] });
+    const metrics = routed.metrics!;
+    const pooled: HostStatusEntry = {
+      ...routed,
+      metrics: {
+        ...metrics,
+        quotaPool: pool,
+        quotas: metrics.quotas.map((quota) => ({
+          ...quota,
+          limits: { ...quota.limits, quotaPool: { homeId: "fixture-home", provider: "openai" } },
+        })),
+      },
+    };
+    const result = place(
+      goal(),
+      [pooled, host("direct", { quotas: [{ instanceId: codex, windows: [window(50)] }] })],
+      none,
+      NOW,
+    );
+    assert.strictEqual(result._tag, "Placed");
+    if (result._tag === "Placed") assert.strictEqual(result.host, "direct");
+    assert.strictEqual(
+      schedulerHostStatus(pooled, none, new Set(), 0, NOW).quotas[0]?.busiestPercent,
+      61,
+    );
+  });
   it("skips a window at its limit until it resets and says when", () => {
     const result = place(
       goal(),

@@ -66,6 +66,13 @@ export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 export const ServerProviderUsageLimits = Schema.Struct({
   checkedAt: IsoDateTime,
   windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  // Routed windows belong to this pool, not the instance's local sign-in.
+  quotaPool: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      homeId: TrimmedNonEmptyString,
+    }),
+  ),
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
   externalUsage: Schema.optional(

@@ -1,10 +1,19 @@
 import { assert, describe, it } from "@effect/vitest";
+import { QuotaPool } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import payload from "../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 
-import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
+import {
+  busiestWindow,
+  choosePlacement,
+  isExhausted,
+  type PlacementCandidate,
+} from "./channelPlacement.ts";
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
 const LATER = "2026-10-18T00:00:00.000Z";
 const EARLIER = "2026-10-17T00:00:00.000Z";
+const pool = Schema.decodeUnknownSync(QuotaPool)(payload);
 
 const candidate = (
   value: string,
@@ -24,6 +33,97 @@ const weekly = (usedPercent: number, resetsAt?: string) => [
 ];
 
 describe("choosePlacement", () => {
+  it("uses OpenCodex's pooled windows when it chooses the account", () => {
+    const routed = candidate("routed", { windows: weekly(99), quotaPool: pool.providers[0] });
+    assert.deepStrictEqual(busiestWindow(routed), { label: "5 hours", usedPercent: 61 });
+    assert.strictEqual(
+      choosePlacement([routed, candidate("direct", { windows: weekly(70) })], NOW)?.chosen.value,
+      "routed",
+    );
+  });
+
+  it("uses every window of the selected pool account without deriving pooled math", () => {
+    const routed = candidate("account-a", {
+      accountRef: "sha256:account-a",
+      quotaPool: pool.providers[0],
+    });
+    assert.deepStrictEqual(busiestWindow(routed), { label: "5 hours", usedPercent: 95 });
+    assert.strictEqual(
+      choosePlacement([routed, candidate("direct", { windows: weekly(70) })], NOW)?.chosen.value,
+      "direct",
+    );
+  });
+
+  it("keeps a missing reading unknown, including a missing chosen account", () => {
+    for (const accountRef of ["sha256:account-b", "missing"]) {
+      const unknown = candidate("unknown", { accountRef, quotaPool: pool.providers[0] });
+      assert.isNull(busiestWindow(unknown));
+      assert.isFalse(isExhausted(unknown, NOW));
+      assert.strictEqual(
+        choosePlacement([unknown, candidate("known", { windows: weekly(10) })], NOW)?.chosen.value,
+        "known",
+      );
+    }
+  });
+
+  it("gates only the proved model family on local and remote routes", () => {
+    const scoped = candidate("routed", {
+      quotaPool: pool.providers[1],
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    assert.isFalse(isExhausted(scoped, NOW));
+    assert.deepStrictEqual(busiestWindow(scoped), { label: "5 hours", usedPercent: 20 });
+    assert.isTrue(isExhausted({ ...scoped, model: "claude-opus-4-6" }, NOW));
+    const legacy = {
+      ...scoped,
+      quotaPool: undefined,
+      windows: [{ label: "Opus", usedPercent: 100, scopeModel: "family:opus" }],
+    };
+    assert.isFalse(isExhausted(legacy, NOW));
+    assert.isTrue(isExhausted({ ...legacy, model: "claude-opus-4-6" }, NOW));
+  });
+
+  it("honors refusal evidence without fabricating an unknown percentage", () => {
+    const provider = pool.providers[0]!;
+    const routed = candidate("routed", {
+      quotaPool: {
+        ...provider,
+        pooled: {
+          windows: [
+            {
+              id: "blocked",
+              kind: "custom",
+              label: "Blocked",
+              source: "header",
+              observedAt: pool.generatedAt,
+              exhausted: true,
+            },
+          ],
+        },
+      },
+    });
+    assert.isTrue(isExhausted(routed, NOW));
+    const unknown = {
+      ...routed,
+      quotaPool: {
+        ...provider,
+        pooled: {
+          windows: [
+            {
+              id: "unknown",
+              kind: "credits" as const,
+              label: "Credits",
+              source: "measured" as const,
+              observedAt: pool.generatedAt,
+              used: 12,
+              limit: 50,
+            },
+          ],
+        },
+      },
+    };
+    assert.isNull(busiestWindow(unknown));
+  });
   it("picks the host whose weekly quota has more room", () => {
     const placed = choosePlacement(
       [

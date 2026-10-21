@@ -39,6 +39,7 @@ import {
   ModelSelection as ModelSelectionSchema,
   PositiveInt,
   ProjectId,
+  QuotaPool,
   ProviderInstanceId,
   RemoteOriginReportsWaitResult,
   RemoteReport,
@@ -324,15 +325,20 @@ const decodeHostQuotas = Schema.decodeUnknownEffect(
       Schema.Struct({
         metrics: Schema.optional(
           Schema.Struct({
+            quotaPool: Schema.optional(QuotaPool),
             quotas: Schema.Array(
               Schema.Struct({
                 instanceId: Schema.String,
                 limits: Schema.Struct({
+                  quotaPool: Schema.optional(
+                    Schema.Struct({ provider: Schema.String, homeId: Schema.String }),
+                  ),
                   windows: Schema.Array(
                     Schema.Struct({
                       label: Schema.String,
                       usedPercent: Schema.Number,
                       resetsAt: Schema.optional(Schema.String),
+                      scopeModel: Schema.optional(Schema.String),
                     }),
                   ),
                 }),
@@ -889,12 +895,13 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.flatMap(decodeHostQuotas), Effect.option);
       const quotas = new Map(
         (status._tag === "Some" ? (status.value.hosts[0]?.metrics?.quotas ?? []) : []).map(
-          (quota) => [quota.instanceId, quota.limits.windows] as const,
+          (quota) => [quota.instanceId, quota] as const,
         ),
       );
       const placed = choosePlacement(
         candidates.map((provider) => {
-          const windows = quotas.get(provider.providerInstanceId) ?? [];
+          const quota = quotas.get(provider.providerInstanceId);
+          const windows = quota?.limits.windows ?? [];
           return {
             value:
               provider === configured
@@ -909,6 +916,15 @@ const make = Effect.gen(function* () {
             preferred: provider === configured,
             windows: windows.length === 0 ? null : windows,
             activeTasks: 0,
+            model: selection.model,
+            quotaPool:
+              status._tag === "Some" &&
+              status.value.hosts[0]?.metrics?.quotaPool?.producer.homeId ===
+                quota?.limits.quotaPool?.homeId
+                ? status.value.hosts[0]?.metrics?.quotaPool?.providers.find(
+                    (item) => item.provider === quota?.limits.quotaPool?.provider,
+                  )
+                : undefined,
           };
         }),
         DateTime.toEpochMillis(yield* DateTime.now),

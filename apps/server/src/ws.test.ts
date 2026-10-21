@@ -613,7 +613,10 @@ it.effect(
           getProviders: Effect.succeed([]),
           streamChanges: Stream.never,
         }),
-        Layer.mock(UsageLimitSources.UsageLimitSources)({ streamChanges: Stream.make([]) }),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({
+          streamChanges: Stream.make([]),
+          projectProviders: (providers) => Effect.succeed(providers),
+        }),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
           resolveTargets: () => Effect.succeed([]),
         }),

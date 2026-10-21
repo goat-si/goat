@@ -4,6 +4,8 @@ import { ServerConfigStreamEvent, UsageLimitSourceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -79,6 +81,8 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
         HttpClient.make(() => Effect.die("Unexpected network request")),
       ),
       NodeCrypto.layer,
+      Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+      Path.layer,
     ]),
     Effect.scoped,
   ),
