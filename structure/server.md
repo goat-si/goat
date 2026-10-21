@@ -38,6 +38,14 @@ Self-update admission and requester attribution live in `cloud/selfUpdate.ts` an
 and requires idle unless explicitly confirmed; its fsynced journal is outside SQLite
 rollback. SSH setup records requests through that same journal service.
 
+Automatic updates have one policy (`cloud/autoUpdatePolicy.ts`: channel, strictly newer, last
+failed target, staged rollout) and one scheduler (`cloud/autoUpdate.ts`) with two activation
+paths. A `goat service` server uses the launcher trial. A client-launched SSH runtime
+(`cloud/sshRuntimeAutoUpdate.ts`) runs the client's owning launch script on its own host, which
+drains it and hands over to the ADR-0013 supervisor; the supervisor's `last-replacement.json` in
+`~/.goat/ssh-launch/runtime` is its failed-target record. The same service arbitrates drain
+requests that clients mark `automatic`, so shared runtimes only move forward on their channel.
+
 Compatibility between two GOAT builds comes from the protocol ranges each serves, never from their
 release strings. `goat_host_status` reports the ranges every machine serves (`protocol`), and the
 machine that fans out judges each reachable remote with `hostCompatibilityOf` in

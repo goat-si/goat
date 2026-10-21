@@ -12,7 +12,14 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 
 const input = { expectedInstanceId: "this-start", targetVersion: "next", graceSeconds: 1 };
-const setup = (activity: "idle" | "busy") =>
+const setup = (
+  activity: "idle" | "busy",
+  admitted?: string,
+  arbitrating?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly gate: Deferred.Deferred<void>;
+  },
+) =>
   Effect.gen(function* () {
     const checked = yield* Deferred.make<void>();
     const stopped = yield* Deferred.make<void>();
@@ -31,7 +38,22 @@ const setup = (activity: "idle" | "busy") =>
         getServerActivity: () => Deferred.succeed(checked, undefined).pipe(Effect.as(activity)),
       }),
     );
-    const context = yield* Layer.build(RuntimeDrain.layer.pipe(Layer.provideMerge(dependencies)));
+    const arbiter =
+      admitted === undefined
+        ? Layer.empty
+        : Layer.succeed(RuntimeDrain.RuntimeUpdateArbiter, {
+            admit: (request) =>
+              Effect.gen(function* () {
+                if (request.automatic === true && arbitrating !== undefined) {
+                  yield* Deferred.succeed(arbitrating.started, undefined);
+                  yield* Deferred.await(arbitrating.gate);
+                }
+                return request.automatic !== true || request.targetVersion === admitted;
+              }),
+          });
+    const context = yield* Layer.build(
+      RuntimeDrain.layer.pipe(Layer.provideMerge(Layer.merge(dependencies, arbiter))),
+    );
     return { context, checked, stopped };
   });
 
@@ -182,4 +204,91 @@ it.effect("one cancelled drain cannot reopen admission held by another update", 
     yield* gate.resume;
     yield* gate.admit(Effect.void);
   }).pipe(Effect.provide(RuntimeAdmission.layer)),
+);
+
+it.effect("a dropped automatic refresh is cancelled without closing admission", () =>
+  Effect.gen(function* () {
+    const { context, checked, stopped } = yield* setup("idle", "newest");
+    yield* Effect.gen(function* () {
+      const drain = yield* RuntimeDrain.RuntimeDrain;
+      const lifecycle = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+      // Client B asks for an older build than the target the runtime arbitrated for.
+      assert.deepEqual(
+        yield* drain.request({ ...input, targetVersion: "older", automatic: true }),
+        {
+          status: "cancelled",
+          instanceId: "this-start",
+          forced: false,
+        },
+      );
+      yield* (yield* RuntimeAdmission.RuntimeAdmission).admit(Effect.void);
+      assert.equal(yield* Deferred.isDone(checked), false);
+      assert.equal((yield* lifecycle.snapshot).sequence, 0);
+      // Client A's request for the winning target drains as before.
+      const result = yield* drain
+        .request({ ...input, targetVersion: "newest", automatic: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(checked);
+      assert.equal((yield* Fiber.join(result)).status, "drained");
+      yield* TestClock.adjust(Duration.millis(250));
+      yield* Deferred.await(stopped);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a refresh that would be dropped joins a drain that is already active", () =>
+  Effect.gen(function* () {
+    const { context, checked, stopped } = yield* setup("busy", "newest");
+    yield* Effect.gen(function* () {
+      const drain = yield* RuntimeDrain.RuntimeDrain;
+      // A confirmed drain is under way; it ends drained at its deadline.
+      const first = yield* drain
+        .request({ ...input, targetVersion: "newest", force: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(checked);
+      // A reconciliation retry after a lost response must observe the real drain, never a
+      // made-up cancellation while admission is closed.
+      const retry = yield* drain
+        .request({ ...input, targetVersion: "older", automatic: true })
+        .pipe(
+          Effect.forkScoped,
+          Effect.tap(() => Effect.yieldNow),
+        );
+      yield* TestClock.adjust(Duration.seconds(1));
+      const result = yield* Fiber.join(first);
+      assert.deepEqual(result, { status: "drained", instanceId: "this-start", forced: true });
+      assert.deepEqual(yield* Fiber.join(retry), result);
+      yield* TestClock.adjust(Duration.millis(250));
+      yield* Deferred.await(stopped);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a refresh still being arbitrated joins a drain another request started", () =>
+  Effect.gen(function* () {
+    const arbitrating = {
+      started: yield* Deferred.make<void>(),
+      gate: yield* Deferred.make<void>(),
+    };
+    const { context, checked, stopped } = yield* setup("busy", "newest", arbitrating);
+    yield* Effect.gen(function* () {
+      const drain = yield* RuntimeDrain.RuntimeDrain;
+      const dropped = yield* drain
+        .request({ ...input, targetVersion: "older", automatic: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(arbitrating.started);
+      // While it is arbitrated, a confirmed update starts a drain.
+      const confirmed = yield* drain
+        .request({ ...input, targetVersion: "newest", force: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(checked);
+      yield* Deferred.succeed(arbitrating.gate, undefined);
+      yield* TestClock.adjust(Duration.seconds(1));
+      const result = yield* Fiber.join(confirmed);
+      assert.deepEqual(result, { status: "drained", instanceId: "this-start", forced: true });
+      assert.deepEqual(yield* Fiber.join(dropped), result);
+      yield* TestClock.adjust(Duration.millis(250));
+      yield* Deferred.await(stopped);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
 );

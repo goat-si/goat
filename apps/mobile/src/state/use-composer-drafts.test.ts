@@ -164,6 +164,8 @@ vi.mock("../features/sharing/incoming-share-storage", () => ({
   loadIncomingShareDrafts: incomingShareStorageMocks.load,
 }));
 
+// Resolve the partial mock before undo disposal and explicit cleanup import it concurrently.
+import "../lib/composerImages";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import {
   collectComposerContextReferences,

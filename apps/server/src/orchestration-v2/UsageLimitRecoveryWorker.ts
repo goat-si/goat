@@ -1,4 +1,9 @@
-import { CommandId, MessageId, type OrchestrationV2Command } from "@goat/contracts";
+import {
+  CommandId,
+  DEFAULT_FALLBACK_ON,
+  MessageId,
+  type OrchestrationV2Command,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -84,15 +89,21 @@ const makeSweep = Effect.gen(function* () {
     const preferences = yield* settings.getSettings;
     const now = yield* DateTime.now;
     const ownership = yield* Fallback.GoalThreadOwnership;
-    // A chain for ordinary threads needs the unarmed failures even with auto-resume off;
-    // arming below still follows the user's settings.
+    // Fallback eligibility is independent of the user's wait-for-reset preferences.
     const coversThreads = Option.isSome(fallback) && (yield* fallback.value.coversThreads);
     const candidates = yield* projections.getLimitRecoveryCandidates({
       now,
-      autoResume: preferences.autoResumeLimitedThreads || coversThreads,
+      autoResume: preferences.autoResumeLimitedThreads,
       snooze: preferences.snoozeLimitedThreads,
-      // A limit without a reset time can still move to another model; nothing arms for it.
-      withoutReset: coversThreads,
+      fallbackTriggers: coversThreads
+        ? [
+            ...new Set(
+              Object.values(preferences.fleet.fallbackChains ?? {})
+                .filter((chain) => chain.scope === "goals_and_threads")
+                .flatMap((chain) => chain.on ?? DEFAULT_FALLBACK_ON),
+            ),
+          ]
+        : [],
     });
     const nowMs = DateTime.toEpochMillis(now);
     for (const thread of candidates) {
@@ -102,7 +113,6 @@ const makeSweep = Effect.gen(function* () {
       if (
         coversThreads &&
         Option.isSome(fallback) &&
-        thread.limitRecovery?.runId !== thread.latestRunId &&
         (yield* fallback.value.continueThread(thread.id))
       )
         continue;
