@@ -1,4 +1,5 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import { goatclawRoleBrief, goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import {
   OrchestratorMcpFailure,
   MessageId,
@@ -182,7 +183,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // The checkout is checked and recorded as given, so it must already be native here.
         const platform = yield* HostProcess.Platform;
-        const input =
+        const nativeInput =
           rawInput.workspaceStrategy?.type === "existing_worktree"
             ? {
                 ...rawInput,
@@ -200,6 +201,21 @@ const make = Effect.gen(function* () {
           requestedRuntimeMode,
           rawInput.permissionProfileCeiling,
         );
+        const role = rawInput.goatclawRole;
+        if (role !== undefined && !effective.enabled)
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "goatclaw is off, so role launches are unavailable.",
+          });
+        if (role !== undefined && nativeInput.message === undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "A goatclaw role launch needs message: the task the role works on.",
+          });
+        const input =
+          role === undefined || nativeInput.message === undefined
+            ? nativeInput
+            : { ...nativeInput, message: goatclawRoleBrief(role, nativeInput.message) };
         const runtimeMode = effective.runtimeMode;
         const context = yield* readCaller();
         const { caller } = context;
@@ -445,6 +461,7 @@ const make = Effect.gen(function* () {
                 runtimeMode,
                 worktree: input.workspaceStrategy?.type === "worktree",
                 forwarded: input.permissionProfileCeiling,
+                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
               });
               const launch = ThreadMessageIntake.launchThread({
                 commandId,

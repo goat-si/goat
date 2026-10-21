@@ -1,4 +1,5 @@
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import { goatclawRoleBrief, goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
 import { newCommandId } from "../../threadAccess.ts";
 import { addDevice } from "./addDevice.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -278,6 +279,17 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           runtimeMode: caller.limits.runtimeMode,
         });
         const runtimeMode = yield* resolveRuntimeMode(effective.runtimeMode, input.runtimeMode);
+        const role = input.goatclawRole;
+        if (role !== undefined && !effective.enabled)
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "goatclaw is off, so role launches are unavailable.",
+          });
+        if (role !== undefined && input.message === undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "A goatclaw role launch needs message: the task the role works on.",
+          });
         const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
         // The thread on this machine that launches; an outside client has none to record.
@@ -305,7 +317,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           cwd: input.cwd,
           workspace: sshLaunchWorkspace(input.workspace),
           title: input.title,
-          message: input.message,
+          message:
+            role === undefined || input.message === undefined
+              ? input.message
+              : goatclawRoleBrief(role, input.message),
           projectTitle: input.projectTitle,
           // The remote project usually has no default model, so a thread caller's own
           // model is the sensible default; an outside client must pass one.
@@ -350,6 +365,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                 host: input.host,
                 runtimeMode,
                 worktree: input.workspace?.type === "worktree",
+                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
               });
               const guardedLaunch = {
                 ...launch,

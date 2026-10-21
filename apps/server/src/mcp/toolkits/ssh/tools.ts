@@ -3,7 +3,7 @@ import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
-import { RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
+import { GoatclawRole, RemoteReportDeliveryMode, RemoteDispatchView } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
 import {
   AuthMcpClientAccess,
@@ -217,6 +217,12 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     projectTitle: Schema.optional(TrimmedNonEmptyString),
     modelSelection: Schema.optional(ModelSelection),
     runtimeMode: Schema.optional(RuntimeMode),
+    goatclawRole: Schema.optional(
+      GoatclawRole.annotate({
+        description:
+          "Only while goatclaw is on: launch as a goatclaw role (supervisor, domain-manager, merge-manager, issue-sweeper). The remote enforces that role's permission profile narrowed by yours, and message is preceded by the role's instructions and report protocol. Needs message.",
+      }),
+    ),
     interactionMode: Schema.optional(ProviderInteractionMode),
     attachments: Schema.optional(Schema.Array(McpAttachmentInput).check(Schema.isMaxLength(8))),
     standingInstructions: Schema.optional(

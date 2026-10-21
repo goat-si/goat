@@ -47,6 +47,12 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import {
+  GOATCLAW_SUPERVISOR_ASKS,
+  GOATCLAW_SUPERVISOR_DELEGATION,
+  goatclawRoleTemplate,
+} from "../goatclaw/RoleTemplates.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -141,8 +147,19 @@ export const GOAT_BOT_READ_ONLY_RULE =
 export const GOAT_BOT_DISPATCH_RULE =
   "When more than one machine is connected, spread work instead of doing it all here: check goat_host_status and the host lists, then start each lane on a machine that has what it needs and room to spare, with delegate_task here or goat_ssh_thread_launch on another machine. Put the read-only rule in every brief you send, never start a Boat cloud machine unless the person asked, rely on GOAT's notifications instead of polling, and say in your answer which machine ran what.";
 
+/**
+ * With goatclaw on, GOAT Bot fronts the supervisor (design §8.4): it plans and launches managers,
+ * whose profiles carry the authority, and it stays read-only by the rule above.
+ */
+export const GOAT_BOT_SUPERVISOR_RULE = [
+  "goatclaw is on, so you front the goatclaw supervisor. The read-only rule still holds: plan the work and hand every change to a manager.",
+  GOATCLAW_SUPERVISOR_DELEGATION,
+  GOATCLAW_SUPERVISOR_ASKS,
+  "Fold each manager's report into your answer with its exact heads, check totals, and NOT RUN line.",
+].join(" ");
+
 /** What a GOAT Bot turn is told besides the person's request. */
-const turnInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
+const turnInstruction = (task: ChannelTask, files: ChannelBotFiles, supervisor: boolean) =>
   [
     ...workerHeader(task),
     "You are GOAT Bot handling this message yourself. Your summary is your answer to the person: write it in the language of their request, not your default language, short and outcome first.",
@@ -151,6 +168,7 @@ const turnInstruction = (task: ChannelTask, files: ChannelBotFiles) =>
       "), use GOAT memory, and use the channel_task_* and goat_thread_* tools to check the work GOAT Bot started and its threads. Hand research, long investigations, or anything that needs several steps to subagents with delegate_task, wait for them, and summarize what they found; do not paste their output.",
     GOAT_BOT_READ_ONLY_RULE,
     GOAT_BOT_DISPATCH_RULE,
+    ...(supervisor ? [GOAT_BOT_SUPERVISOR_RULE] : []),
     task.notesChangeRequested === undefined
       ? "Leave the notes file unchanged; this message did not ask to change a note."
       : "The person asked to change or forget a note (" +
@@ -181,6 +199,7 @@ const make = Effect.gen(function* () {
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const permissions = yield* Profiles.PermissionProfiles;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -509,12 +528,12 @@ const make = Effect.gen(function* () {
   const launch = (initial: ChannelLedger.ChannelStoredTask, owner: string) =>
     Effect.gen(function* () {
       if (initial.task.target === undefined) return;
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const supervisor = initial.task.kind === "turn" && settings.goatclaw.enabled;
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
       // channel worker follows the rules every thread in that project follows.
-      const standing = resolveProjectSettings(
-        yield* serverSettings.getSettings.pipe(Effect.orDie),
-        initial.task.target.projectId,
-      ).settings.standingInstructions;
+      const standing = resolveProjectSettings(settings, initial.task.target.projectId).settings
+        .standingInstructions;
       const { stored, brief } = yield* freezeChannelBrief(
         ledger,
         initial,
@@ -522,7 +541,7 @@ const make = Effect.gen(function* () {
         prependStandingInstructions(
           standing,
           initial.task.kind === "turn"
-            ? turnInstruction(initial.task, botFiles)
+            ? turnInstruction(initial.task, botFiles, supervisor)
             : workerInstruction(initial.task, botFiles),
         ).text,
         {
@@ -539,6 +558,20 @@ const make = Effect.gen(function* () {
       const task = stored.task;
       const target = task.target!;
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
+      // Only a requester at full access may act through the supervisor's owner profile; anyone
+      // linked lower keeps the default profile, so the bot never gives them more than they hold.
+      if (supervisor && task.requester.runtimeModeCeiling === "full-access")
+        yield* permissions
+          .bind(
+            ids.threadId,
+            goatclawRoleTemplate("supervisor").profileId,
+            `channel:${task.requester.ownerId}`,
+          )
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("GOAT Bot turn keeps the default profile", { cause: error }),
+            ),
+          );
       const launched = yield* launches
         .launch({
           commandId: ids.commandId,
@@ -1083,4 +1116,4 @@ const make = Effect.gen(function* () {
   return ChannelDispatcher.of({ dispatch, forward });
 });
 
-export const layer = Layer.effect(ChannelDispatcher, make);
+export const layer = Layer.effect(ChannelDispatcher, make).pipe(Layer.provide(Profiles.layer));

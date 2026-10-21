@@ -359,7 +359,8 @@
         "packages/contracts/src/hostPressure.ts",
         "apps/server/src/goatclaw/DecisionInbox.ts",
         "apps/server/src/persistence/Migrations/098_DecisionInbox.ts",
-        "packages/contracts/src/decisions.ts"
+        "packages/contracts/src/decisions.ts",
+        "apps/server/src/goatclaw/RoleTemplates.ts"
       ]
     },
     {

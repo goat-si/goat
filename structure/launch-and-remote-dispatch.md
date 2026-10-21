@@ -144,6 +144,15 @@ a destination that accepts and enforces the inherited ceiling. Bulk creation, re
 sends, and remote cloud-holder forwarding refuse while enabled until they preserve the same
 policy and accounting. Provider-native limits are outside this admission service.
 
+Role templates (`apps/server/src/goatclaw/RoleTemplates.ts`) are launch presets over these
+profiles: `goatclawRole` on `goat_thread_launch` and `goat_ssh_thread_launch` puts the role's
+preamble and shared report protocol in front of the message and has `claim` bind the child under
+the role's stored profile intersected with the caller's, so a role only narrows. The role-to-profile
+map lives in contracts beside the built-ins. Role launches refuse while goatclaw is off, which is how
+turning it off stops new managers while running ones finish. GOAT Bot turns start outside any MCP
+caller, so the dispatcher binds a full-access requester's turn to the supervisor profile with
+`bind` before launch; requesters linked lower keep the default profile.
+
 ## Resource pressure
 
 Each server classifies its own load, CPU, memory, disk and event-loop stalls into `ok`,

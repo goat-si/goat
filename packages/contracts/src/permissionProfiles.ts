@@ -81,3 +81,18 @@ export const PermissionProfileView = Schema.Struct({
   runtimeMode: RuntimeMode,
 });
 export type PermissionProfileView = typeof PermissionProfileView.Type;
+
+/** goatclaw launch presets (design §8.3). Each launches under the stored profile it names. */
+export const GoatclawRole = Schema.Literals([
+  "supervisor",
+  "domain-manager",
+  "merge-manager",
+  "issue-sweeper",
+]);
+export type GoatclawRole = typeof GoatclawRole.Type;
+export const GOATCLAW_ROLE_PROFILES: Readonly<Record<GoatclawRole, string>> = {
+  supervisor: "owner",
+  "domain-manager": "manager",
+  "merge-manager": "merge-manager",
+  "issue-sweeper": "worker",
+};

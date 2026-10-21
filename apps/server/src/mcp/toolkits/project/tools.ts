@@ -1,4 +1,5 @@
 import {
+  GoatclawRole,
   HostPressureAdvice,
   MemoryTaskGrantCeiling,
   PermissionProfile,
@@ -121,6 +122,12 @@ export const ThreadLaunchParameters = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
   permissionProfileCeiling: Schema.optional(PermissionProfile),
+  goatclawRole: Schema.optional(
+    GoatclawRole.annotate({
+      description:
+        "Only while goatclaw is on: launch as a goatclaw role. The thread runs under that role's permission profile, narrowed by yours, and its message is preceded by the role's instructions and report protocol. supervisor reads, plans and asks; domain-manager owns one goal; merge-manager lands green pull requests one at a time; issue-sweeper triages and fixes small issues. Needs message.",
+    }),
+  ),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   workspaceStrategy: Schema.optional(

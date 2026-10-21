@@ -1,5 +1,6 @@
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import { goatclawRoleTemplate } from "../../../goatclaw/RoleTemplates.ts";
 import * as PermissionSettings from "../../../serverSettings.ts";
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";
 import * as HubNodes from "../../../hubNodes/HubNodes.ts";
@@ -101,6 +102,7 @@ type LaunchOptions = {
   readonly notifyTarget?: { readonly name: string };
   /** The launch is interrupted while its watch is being saved, after the remote thread exists. */
   readonly registerInterrupted?: boolean;
+  readonly goatclawRole?: "issue-sweeper";
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -245,6 +247,7 @@ const launchRaw = (options: LaunchOptions = {}) =>
         ...(options.notifyWebhook === undefined ? {} : { notifyWebhook: options.notifyWebhook }),
         ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
         ...(options.notifyTarget === undefined ? {} : { notifyTarget: options.notifyTarget }),
+        ...(options.goatclawRole === undefined ? {} : { goatclawRole: options.goatclawRole }),
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies), Effect.exit);
     return {
@@ -1732,6 +1735,27 @@ it.effect.each(["worker", "manager", "owner"])(
         expect(result.launchInputs[0]?.permissionProfileCeiling?.id).toBe(profile);
       }
     }),
+);
+
+it.effect("SSH role launch forwards the role's narrowed ceiling and brief", () =>
+  Effect.gen(function* () {
+    const result = yield* launchRaw({
+      outsideClient: true,
+      profile: "manager",
+      goatclawRole: "issue-sweeper",
+    });
+    const forwarded = result.launchInputs[0];
+    expect(forwarded?.permissionProfileCeiling).toMatchObject({
+      id: "worker",
+      capabilities: ["threads.launch", "worktree.create", "pr.open"],
+      runtimeModeCeiling: "auto",
+    });
+    expect(forwarded?.runtimeMode).toBe("auto");
+    expect(forwarded?.message?.startsWith(goatclawRoleTemplate("issue-sweeper").preamble)).toBe(
+      true,
+    );
+    expect(forwarded?.message?.endsWith("Review the change")).toBe(true);
+  }),
 );
 
 it.effect.each(["goat_cloud_machine_create", "goat_cloud_machine_resume"] as const)(

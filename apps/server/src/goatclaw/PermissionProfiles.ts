@@ -66,6 +66,8 @@ interface ClaimInput {
   readonly host?: string | undefined;
   readonly worktree?: boolean | undefined;
   readonly forwarded?: PermissionProfile | undefined;
+  /** A stored profile the child runs under, narrowed by the caller's; role launches set it. */
+  readonly profileId?: string | undefined;
 }
 type CheckResult =
   | { readonly ok: true; readonly effective: PermissionProfileView }
@@ -126,6 +128,15 @@ export class PermissionProfiles extends Context.Service<
     readonly release: (
       id: string,
       onlyIfNoLocalThread?: boolean,
+    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    /**
+     * Binds a thread GOAT starts itself, outside any caller's launch, to a stored profile before
+     * it runs. Does nothing while goatclaw is off, and never replaces an existing binding.
+     */
+    readonly bind: (
+      threadId: ThreadId,
+      profileId: string,
+      ownerKey: string,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
   }
 >()("goat/goatclaw/PermissionProfiles") {}
@@ -368,7 +379,21 @@ export const layer = Layer.effect(
       input: ClaimInput,
     ) {
       const effective = yield* resolve(scope, input.runtimeMode, input.forwarded);
-      if (!effective.enabled) return effective;
+      if (!effective.enabled) {
+        if (input.profileId !== undefined)
+          return yield* refusal("goatclaw is off, so role launches are unavailable.");
+        return effective;
+      }
+      let granted = effective;
+      if (input.profileId !== undefined) {
+        const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+        const named = policy.profiles[input.profileId];
+        if (named === undefined)
+          return yield* refusal(`Permission profile ${input.profileId} does not exist.`);
+        // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
+        const profile = intersectProfiles(named, effective.profile);
+        granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
+      }
       const sql = yield* sqlEffect;
       return yield* sql
         .withTransaction(
@@ -407,18 +432,18 @@ export const layer = Layer.effect(
               }>`SELECT profile_id, ceiling_json FROM goatclaw_thread_profiles WHERE thread_id = ${input.childThreadId}`)[0];
               const inherited =
                 previous === undefined
-                  ? effective.profile
+                  ? granted.profile
                   : intersectProfiles(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
                       ),
-                      effective.profile,
+                      granted.profile,
                     );
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
-          VALUES (${input.childThreadId}, ${previous?.profile_id ?? effective.profile.id}, ${encodeProfile(inherited)}, ${owner})
+          VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})
           ON CONFLICT(thread_id) DO UPDATE SET ceiling_json = excluded.ceiling_json`;
             }
-            return effective;
+            return granted;
           }),
         )
         .pipe(
@@ -448,6 +473,21 @@ export const layer = Layer.effect(
         Effect.mapError(storageFailure),
       );
     });
+    const bind = Effect.fn("PermissionProfiles.bind")(function* (
+      threadId: ThreadId,
+      profileId: string,
+      ownerKey: string,
+    ) {
+      const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+      if (!policy.enabled) return;
+      const named = policy.profiles[profileId];
+      if (named === undefined)
+        return yield* refusal(`Permission profile ${profileId} does not exist.`);
+      const sql = yield* sqlEffect;
+      yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
+      VALUES (${threadId}, ${profileId}, ${encodeProfile(named)}, ${ownerKey})
+      ON CONFLICT(thread_id) DO NOTHING`.pipe(Effect.mapError(storageFailure));
+    });
     return PermissionProfiles.of({
       resolve,
       check,
@@ -458,6 +498,7 @@ export const layer = Layer.effect(
       claim,
       complete,
       release,
+      bind,
     });
   }),
 );

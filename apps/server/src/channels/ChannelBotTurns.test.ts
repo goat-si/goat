@@ -3,6 +3,7 @@ import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProjectId, ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -12,7 +13,11 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
-import { GOAT_BOT_DISPATCH_RULE, GOAT_BOT_READ_ONLY_RULE } from "./ChannelDispatcher.ts";
+import {
+  GOAT_BOT_DISPATCH_RULE,
+  GOAT_BOT_READ_ONLY_RULE,
+  GOAT_BOT_SUPERVISOR_RULE,
+} from "./ChannelDispatcher.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
@@ -59,6 +64,7 @@ const turnScript = (input: ChannelReceptionInput) => {
 const harnessWith = (
   goatBotModelSelection: typeof botModel | null,
   defaultRuntimeMode: "full-access" | "approval-required" = "full-access",
+  goatclawEnabled = false,
 ) => {
   const harness = makeHarness({
     botWorkspace: true,
@@ -66,11 +72,23 @@ const harnessWith = (
       textGenerationModelSelection: modelSelection,
       defaultRuntimeMode,
       goatBotModelSelection,
+      goatclaw: { enabled: goatclawEnabled },
     }).pipe(Layer.orDie),
   });
   harness.script.current = turnScript;
   return harness;
 };
+
+const boundProfile = (threadId: string) =>
+  SqlClient.SqlClient.pipe(
+    Effect.flatMap(
+      (sql) =>
+        sql<{
+          profile_id: string;
+        }>`SELECT profile_id FROM goatclaw_thread_profiles WHERE thread_id = ${threadId}`,
+    ),
+    Effect.map((rows) => rows[0]?.profile_id ?? null),
+  );
 
 /** Starts one turn and lets its worker report in, so the turn is running. */
 const runningTurn = Effect.gen(function* () {
@@ -111,6 +129,7 @@ describe("GOAT Bot turns", () => {
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
         assert.include(launch.initialMessage?.text ?? "", "delegate_task");
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
+        assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);
         assert.include(texts, "On it.");
@@ -135,6 +154,48 @@ describe("GOAT Bot turns", () => {
       // The link was made at auto-accept-edits.
       assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
       assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "fronts the supervisor with goatclaw on and binds the owner's turn to its profile",
+    () => {
+      const harness = harnessWith(botModel, "full-access", true);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(goatInput("look: land the green PRs", "g1"), rpcContext);
+        yield* runtime.drain;
+        const launch = harness.world.launches[0]!;
+        const text = launch.initialMessage?.text ?? "";
+        assert.include(text, GOAT_BOT_READ_ONLY_RULE);
+        assert.include(text, GOAT_BOT_SUPERVISOR_RULE);
+        assert.isBelow(
+          text.indexOf(GOAT_BOT_READ_ONLY_RULE),
+          text.indexOf(GOAT_BOT_SUPERVISOR_RULE),
+        );
+        assert.strictEqual(yield* boundProfile(launch.threadId ?? "missing"), "owner");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("keeps a Slack person linked below full access on the default profile", () => {
+    const harness = harnessWith(botModel, "full-access", true);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("look: land the green PRs", "Ev9"), {
+        ...slackContext,
+        runtimeModeCeiling: "full-access",
+      });
+      yield* runtime.drain;
+      const launch = harness.world.launches[0]!;
+      assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
+      assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
     }).pipe(Effect.provide(harness.layer));
   });
 

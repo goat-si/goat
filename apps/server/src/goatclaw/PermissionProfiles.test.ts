@@ -509,3 +509,60 @@ it.effect("leaves cloud launches ungated while goatclaw is off", () =>
     expect(yield* sql`SELECT id FROM audit_events`).toEqual([]);
   }).pipe(Effect.provide(fixture("worker", false))),
 );
+
+it.effect("a role launch binds the child under the role's profile, narrowed by the caller", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* profiles.claim(outside, {
+      id: "sweeper",
+      childThreadId: ThreadId.make("sweeper"),
+      runtimeMode: "full-access",
+      profileId: "worker",
+    });
+    yield* seed("sweeper");
+    expect(yield* profiles.resolve(threadScope("sweeper"))).toMatchObject({
+      profile: { id: "worker", capabilities: BUILTIN_PERMISSION_PROFILES.worker!.capabilities },
+      runtimeMode: "auto",
+    });
+    // A worker caller cannot hand a merge-manager role the merge capability it lacks.
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ goatclaw: { defaultProfile: "worker" } });
+    const granted = yield* profiles.claim(outside, {
+      id: "merger",
+      childThreadId: ThreadId.make("merger"),
+      runtimeMode: "full-access",
+      profileId: "merge-manager",
+    });
+    expect(granted.profile.id).toBe("merge-manager");
+    expect(granted.profile.capabilities).not.toContain("pr.merge");
+    expect(granted.runtimeMode).toBe("auto");
+    expect(
+      (yield* profiles
+        .claim(outside, { id: "ghost", runtimeMode: "auto", profileId: "missing" })
+        .pipe(Effect.flip)).message,
+    ).toContain("missing does not exist");
+  }).pipe(Effect.provide(fixture("manager"))),
+);
+
+it.effect("role launches and bindings stop while goatclaw is off", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const sql = yield* SqlClient.SqlClient;
+    const error = yield* profiles
+      .claim(outside, { id: "role", runtimeMode: "auto", profileId: "worker" })
+      .pipe(Effect.flip);
+    expect(error.code).toBe("capability_denied");
+    yield* profiles.bind(ThreadId.make("bot-turn"), "owner", "channel:owner");
+    expect(yield* sql`SELECT thread_id FROM goatclaw_thread_profiles`).toEqual([]);
+  }).pipe(Effect.provide(fixture("worker", false))),
+);
+
+it.effect("bind sets a thread's profile once and never replaces it", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* profiles.bind(ThreadId.make("bot-turn"), "owner", "channel:owner");
+    yield* profiles.bind(ThreadId.make("bot-turn"), "observer", "channel:owner");
+    yield* seed("bot-turn");
+    expect((yield* profiles.resolve(threadScope("bot-turn"))).profile.id).toBe("owner");
+  }).pipe(Effect.provide(fixture())),
+);

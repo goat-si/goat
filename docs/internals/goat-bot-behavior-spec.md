@@ -324,6 +324,11 @@ Acceptance:
   what it needs and room to spare, by launch or delegation, instead of doing it all on its own
   machine. Lanes it starts keep its read-only rule; it never starts a paid cloud machine unless
   asked. `GOAT_BOT_DISPATCH_RULE` in `ChannelDispatcher.ts` states this.
+- With goatclaw on, the bot fronts the goatclaw supervisor: it plans, launches managers with a
+  `goatclawRole`, and asks through the decision inbox, and it stays read-only by the same rule. The
+  managers' profiles carry the authority. A turn for a person at full access runs under the
+  supervisor's profile; anyone linked lower keeps the default one. `GOAT_BOT_SUPERVISOR_RULE`
+  states this. Turning goatclaw off returns the bot to this front-desk behavior.
 
 Acceptance:
 
