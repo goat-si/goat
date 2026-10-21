@@ -126,7 +126,8 @@ export interface FleetSummary {
   readonly machines: ReadonlyArray<FleetMachineSummary>;
 }
 
-function summarizeFleet(
+/** @public Tested directly; createFleetSummaryAtom is its only runtime caller. */
+export function summarizeFleet(
   shells: ReadonlyArray<FleetShell>,
   environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "label">>,
 ): FleetSummary {
