@@ -37,6 +37,7 @@ import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
 import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
 import { FleetUncountedHosts } from "./FleetUncountedHosts";
+import { fleetQuota } from "./fleetQuota";
 import {
   fleetAlerts,
   fleetThroughput,
@@ -44,7 +45,6 @@ import {
   hottestHost,
   hottestReading,
   signalTier,
-  quotaRows,
   sparklinePath,
   throughputEqual,
   THROUGHPUT_BUCKETS,
@@ -81,6 +81,27 @@ const Label = ({ children, className }: { children: React.ReactNode; className?:
     {children}
   </span>
 );
+
+function QuotaDetails(props: {
+  readonly detail: string | undefined;
+  readonly label?: string;
+  readonly children: React.ReactNode;
+}) {
+  if (props.detail === undefined) return props.children;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={props.label}
+        render={<span className="outline-hidden" tabIndex={0} />}
+      >
+        {props.children}
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        <span className="whitespace-pre-line">{props.detail}</span>
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
 
 /** A reading colored on the graph's heat thresholds and palette; muted when the host sent none. */
 const tone = (key: Parameters<typeof signalTier>[0], value: number | null) =>
@@ -210,6 +231,7 @@ function HostRow({
   reading,
   now,
   answeringLate,
+  viaHub,
 }: {
   readonly row: FleetHostRow;
   readonly boat: BoatMachineIdentity | null;
@@ -224,6 +246,7 @@ function HostRow({
   readonly now: number;
   /** The host is connected but not answering, or froze recently: its alert's tone. */
   readonly answeringLate: FleetAlertTone | null;
+  readonly viaHub: string | undefined;
 }) {
   const metrics = row.entry?.metrics;
   const stale = row.tone === "stale";
@@ -269,11 +292,19 @@ function HostRow({
         ) : null}
         <Tooltip>
           <TooltipTrigger
-            render={<span className="truncate font-medium outline-hidden" tabIndex={0} />}
+            render={<span className="min-w-0 font-medium outline-hidden" tabIndex={0} />}
           >
-            {row.label}
+            <span className="block truncate">{row.label}</span>
+            {viaHub === undefined ? null : (
+              <span className="block truncate font-mono text-3xs text-muted-foreground">
+                via Hub {viaHub}
+              </span>
+            )}
           </TooltipTrigger>
-          <TooltipPopup side="top">{hostDetail(row, lastSeen, observedAt)}</TooltipPopup>
+          <TooltipPopup side="top">
+            {hostDetail(row, lastSeen, observedAt)}
+            {viaHub === undefined ? null : ` · via Hub ${viaHub}`}
+          </TooltipPopup>
         </Tooltip>
       </span>
       {statusText !== null ? (
@@ -453,7 +484,9 @@ function FleetConsoleExpanded(props: {
     ),
   );
   const hottest = hottestHost(rows, heat);
-  const quotas = quotaRows(rows).slice(0, 3);
+  const quota = fleetQuota(rows);
+  const quotas = quota.quotas.slice(0, 3);
+  const hiddenQuotas = quota.quotas.slice(quotas.length);
   const { totals } = snapshot;
   const hostCount = fleetHostCount({ rows, machines: snapshot.machines, connections });
   const boatByMachine = new Map(
@@ -534,6 +567,7 @@ function FleetConsoleExpanded(props: {
                   key={row.key}
                   row={row}
                   boat={row.machineId === null ? null : (boatByMachine.get(row.machineId) ?? null)}
+                  viaHub={quota.viaHub.get(row.key)}
                   lastSeen={status.lastSeen}
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
@@ -556,38 +590,79 @@ function FleetConsoleExpanded(props: {
         <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
           {quotas.length > 0 ? (
             <div className="flex flex-col gap-1.5">
-              <Label>Quota</Label>
+              <span className="flex items-baseline justify-between gap-2">
+                <Label>Quota</Label>
+                {quota.quotas.some((row) => row.detail !== undefined) && hiddenQuotas.length > 0 ? (
+                  <span className="font-mono text-2xs text-muted-foreground">
+                    <QuotaDetails
+                      label={`Show ${hiddenQuotas.length} more quota entries`}
+                      detail={hiddenQuotas
+                        .map(
+                          (row) =>
+                            row.detail ??
+                            `${row.label}${row.host === null ? "" : ` · ${row.host}`}`,
+                        )
+                        .join("\n")}
+                    >
+                      +{hiddenQuotas.length} more
+                    </QuotaDetails>
+                  </span>
+                ) : null}
+              </span>
               {quotas.map((quota) => (
-                <div key={quota.key} className="flex flex-col gap-0.5">
-                  <span className="flex items-baseline gap-2 text-xs">
+                <div key={quota.key} data-fleet-quota className="flex flex-col gap-0.5">
+                  <span
+                    className={cn(
+                      "flex items-baseline gap-2 text-xs",
+                      quota.detail && "flex-wrap gap-y-0",
+                    )}
+                  >
                     <span className="truncate">
-                      {quota.label}
-                      {quota.host === null ? null : (
-                        <span className="text-muted-foreground"> · {quota.host}</span>
-                      )}
+                      <QuotaDetails detail={quota.detail}>
+                        {quota.label}
+                        {quota.host === null ? null : (
+                          <span className="text-muted-foreground"> · {quota.host}</span>
+                        )}
+                      </QuotaDetails>
                     </span>
-                    <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground tabular-nums">
+                    <span
+                      className={cn(
+                        "ml-auto font-mono text-2xs text-muted-foreground tabular-nums",
+                        quota.detail === undefined ? "shrink-0" : "min-w-0 text-right",
+                      )}
+                    >
                       {quota.windows
                         .map((window) => window.label + " " + Math.round(window.usedPercent) + "%")
                         .join(" · ")}
+                      {quota.peak === null ? "Quota unknown" : null}
+                      {quota.hidden > 0 ? (
+                        <QuotaDetails
+                          detail={quota.detail}
+                          label={`Show ${quota.hidden} more quota details`}
+                        >
+                          {` +${quota.hidden}`}
+                        </QuotaDetails>
+                      ) : null}
                     </span>
                   </span>
-                  <span
-                    className="h-1 overflow-hidden rounded-full bg-muted"
-                    role="meter"
-                    aria-label={quota.label + " quota used"}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(quota.peak)}
-                  >
+                  {quota.peak === null ? null : (
                     <span
-                      className={cn(
-                        "block h-full rounded-full",
-                        TONE_BAR[tone("quota", quota.peak)],
-                      )}
-                      style={{ width: Math.max(2, quota.peak) + "%" }}
-                    />
-                  </span>
+                      className="h-1 overflow-hidden rounded-full bg-muted"
+                      role="meter"
+                      aria-label={quota.label + " quota used"}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(quota.peak)}
+                    >
+                      <span
+                        className={cn(
+                          "block h-full rounded-full",
+                          TONE_BAR[tone("quota", quota.peak)],
+                        )}
+                        style={{ width: Math.max(2, quota.peak) + "%" }}
+                      />
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
