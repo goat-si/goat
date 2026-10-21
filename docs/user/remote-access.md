@@ -142,6 +142,14 @@ on that machine. Existing threads stay where they started. If resource checks ar
 unavailable or all eligible machines are full, choose a machine manually to continue.
 Mobile keeps its manual environment selection.
 
+Agents spread their own work too. When more than one machine is connected, an
+agent checks each machine's load, providers, and sign-ins before starting
+parallel or heavy work, starts each piece on a machine with room for it, and
+keeps work that needs your browser or local files on the machine you are using.
+It skips machines that are unreachable, cordoned, or need an update, and never
+starts a Boat cloud machine unless you ask. Its final report says which machine
+ran what.
+
 ### Tailscale HTTPS
 
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale

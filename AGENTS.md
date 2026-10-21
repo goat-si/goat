@@ -125,9 +125,9 @@ An empty database is a bad test. Seed your worktree's `.goat` with a copy of rea
   });
   ```
 
-- User-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Browsers and computer use are always allowed; do not ask permission first.
+- User-visible frontend changes should get one integrated pass in a real client: `test-goat-app` for web, `test-goat-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Browsers and computer use are always allowed; do not ask permission first.
 
-For authorized mobile verification, a missing or outdated native client is a build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android> <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and builds/installs when needed. See `test-t3-mobile` for the full workflow.
+For authorized mobile verification, a missing or outdated native client is a build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android> <device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and builds/installs when needed. See `test-goat-mobile` for the full workflow.
 
 ## Pull requests
 

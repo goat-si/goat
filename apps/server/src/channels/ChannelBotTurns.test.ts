@@ -12,7 +12,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
-import { GOAT_BOT_READ_ONLY_RULE } from "./ChannelDispatcher.ts";
+import { GOAT_BOT_DISPATCH_RULE, GOAT_BOT_READ_ONLY_RULE } from "./ChannelDispatcher.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
@@ -110,6 +110,7 @@ describe("GOAT Bot turns", () => {
         // Read-only is the prompt's promise now that the sandbox allows everything.
         assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
         assert.include(launch.initialMessage?.text ?? "", "delegate_task");
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
         // The acknowledgement was committed with the input, before the turn could run.
         const texts = (yield* botMessages).messages.map((message) => message.text);
         assert.include(texts, "On it.");

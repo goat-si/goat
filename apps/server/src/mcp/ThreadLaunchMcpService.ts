@@ -363,7 +363,7 @@ const make = Effect.gen(function* () {
                       ? `${error.message} No thread was created. ${
                           error.worktreePath === null
                             ? "Pass a branch name that does not exist yet."
-                            : `Launch into that checkout with workspaceStrategy {type:"existing_worktree", worktreePath:"${error.worktreePath}"}, or pass a branch name that does not exist yet.`
+                            : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
                         }`
                       : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
                           strategy.startFromOrigin === true

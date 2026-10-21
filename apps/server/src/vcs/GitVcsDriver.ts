@@ -152,6 +152,15 @@ export interface CreateWorktreeProgress {
     ok: boolean;
     detail: string | null;
   }) => Effect.Effect<void, never>;
+  /**
+   * Fires when `reuseExistingBranch` picked up a branch that already existed. `reused` means
+   * its clean GOAT worktree was bound as is, so the caller must not remove it on failure;
+   * `added` means a new worktree was checked out for the existing branch.
+   */
+  readonly onExistingBranch?: (input: {
+    readonly worktree: "reused" | "added";
+    readonly fastForwarded: boolean;
+  }) => Effect.Effect<void, never>;
 }
 
 export interface CreateWorktreeOptions {
@@ -162,6 +171,12 @@ export interface CreateWorktreeOptions {
    */
   readonly submodules?: WorktreeSubmodules | null;
   readonly worktreesDirectory?: string;
+  /**
+   * When `newRefName` already exists without commits beyond `refName`, fast-forward and use it
+   * (and its clean worktree at the target path) instead of failing. A branch with its own
+   * commits or a dirty or foreign checkout still fails, naming the existing_worktree launch.
+   */
+  readonly reuseExistingBranch?: boolean;
 }
 
 export interface GitCommitProgress {
@@ -181,6 +196,16 @@ export interface GitCommitOptions {
   readonly timeoutMs?: number;
   readonly progress?: GitCommitProgress;
   readonly stage?: { readonly filePaths?: readonly string[] };
+}
+
+export interface ExistingBranchState {
+  readonly tip: string;
+  readonly baseSha: string;
+  /** Commits on the branch that its base lacks; any is work a reuse could lose. */
+  readonly uniqueCommits: number;
+  readonly worktreePath: string | null;
+  /** Uncommitted or untracked changes in that worktree. */
+  readonly dirty: boolean;
 }
 
 export interface GitDeleteLocalBranchInput {
@@ -433,6 +458,12 @@ export class GitVcsDriver extends Context.Service<
      * Absolute path of the worktree that has `branch` checked out, or null when
      * no worktree of the repository at `cwd` has it.
      */
+    /** Null when `branch` does not exist; prunes worktree records whose folders are gone. */
+    readonly inspectExistingBranch: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+      readonly baseRef: string;
+    }) => Effect.Effect<ExistingBranchState | null, GitCommandError>;
     readonly branchWorktreePath: (input: {
       readonly cwd: string;
       readonly branch: string;

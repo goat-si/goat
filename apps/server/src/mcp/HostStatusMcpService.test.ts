@@ -12,7 +12,9 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -479,6 +481,96 @@ it.effect("refuses host and local together, and an unknown named host", () =>
     expect(value.success.ghost._tag === "Failure" && value.success.ghost.failure.code).toBe(
       "invalid_request",
     );
+  }),
+);
+
+it.effect("keeps a fan-out going when one host never finishes connecting", () =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const { value } = yield* run(
+      {
+        hosts: ["box", "stuck"],
+        // Connecting never finishes, so the call's own deadline never starts.
+        hostCall: (call) =>
+          call.host === "stuck"
+            ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.succeed(remoteOk(5)),
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const read = yield* Effect.forkChild(service.read(scope, {}));
+          yield* Deferred.await(reached);
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          return yield* Fiber.join(read);
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.hosts.map((host) => [host.host, host.reachability])).toEqual([
+      [null, "ok"],
+      ["box", "ok"],
+      ["stuck", "unreachable"],
+    ]);
+    expect(value.success.hosts[1]?.metrics?.sampledAt).toBe(5);
+    expect(value.success.hosts[2]?.message).toBe("stuck did not answer within 10s.");
+  }),
+);
+
+it.effect("keeps a slow host's connection going across polls and keeps its late answer", () =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const connected = yield* Deferred.make<void>();
+    let down = false;
+    let slowCalls = 0;
+    const { value, calls } = yield* run(
+      {
+        hosts: ["slow"],
+        hostCall: () => {
+          slowCalls += 1;
+          return down
+            ? Effect.fail(sshError("host_unavailable", "slow is unavailable: refused"))
+            : Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(connected)),
+                Effect.as(remoteOk(7)),
+              );
+        },
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const firstRead = yield* Effect.forkChild(service.read(scope, {}));
+          yield* Deferred.await(reached);
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          const first = yield* Fiber.join(firstRead);
+          const secondRead = yield* Effect.forkChild(service.read(scope, {}));
+          yield* TestClock.adjust(HOST_STATUS_REMOTE_TIMEOUT_MS);
+          const second = yield* Fiber.join(secondRead);
+          const callsWhileConnecting = slowCalls;
+          yield* Deferred.succeed(connected, undefined);
+          down = true;
+          const third = yield* service.read(scope, {});
+          return { first, second, third, callsWhileConnecting };
+        }),
+    );
+    expect(value._tag).toBe("Success");
+    if (value._tag !== "Success") return;
+    expect(value.success.first.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+    });
+    expect(value.success.second.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+    });
+    // The second poll waited on the connection already under way instead of starting another.
+    expect(value.success.callsWhileConnecting).toBe(1);
+    // The answer that arrived after both deadlines stands in once the host stops answering.
+    expect(value.success.third.hosts[1]).toMatchObject({
+      host: "slow",
+      reachability: "unreachable",
+      lastKnown: true,
+      metrics: { sampledAt: 7 },
+    });
+    expect(calls).toHaveLength(2);
   }),
 );
 

@@ -37,6 +37,22 @@ export interface KeepRule {
   readonly scope?: (path: string) => boolean;
 }
 
+/**
+ * An upstream path GOAT does not keep. `--apply` removes it, so applying the
+ * rules to an upstream checkout before a merge turns upstream edits to it into
+ * no-ops instead of modify/delete conflicts.
+ */
+export interface DropRule {
+  readonly id: string;
+  readonly category: string;
+  /** Matched against the repo-relative path; must not be global. */
+  readonly find: RegExp;
+  readonly reason: string;
+}
+
+export const isDropped = (path: string, rules: readonly DropRule[]): boolean =>
+  rules.some((rule) => rule.find.test(path));
+
 export const LEGACY_LINE_MARKER = "goat-rename: legacy";
 const LEGACY_BEGIN = "goat-rename: legacy-begin";
 const LEGACY_END = "goat-rename: legacy-end";
