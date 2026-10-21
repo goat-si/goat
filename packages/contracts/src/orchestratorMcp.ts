@@ -41,6 +41,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
@@ -770,6 +771,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   thread: OrchestratorMcpThreadDetail,
@@ -872,6 +874,8 @@ export const OrchestratorMcpThreadPhase = Schema.Literals([
 export type OrchestratorMcpThreadPhase = typeof OrchestratorMcpThreadPhase.Type;
 
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  remoteUnavailable: Schema.optional(Schema.Boolean),
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
@@ -937,6 +941,7 @@ export type OrchestratorMcpThreadStatusResult = typeof OrchestratorMcpThreadStat
  * once when its host stays unreachable.
  */
 export const OrchestratorMcpThreadWatch = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
   host: OrchestratorMcpResultHost,
   threadId: ThreadId,
   title: Schema.NullOr(Schema.String),
@@ -953,6 +958,7 @@ export type OrchestratorMcpThreadWatch = typeof OrchestratorMcpThreadWatch.Type;
 export const OrchestratorMcpThreadWatchInput = Schema.Struct({
   threadId: ThreadId,
   host: Schema.optional(OrchestratorMcpHost),
+  checkpointReplication: Schema.optional(Schema.Literals(["on", "off"])),
 });
 export type OrchestratorMcpThreadWatchInput = typeof OrchestratorMcpThreadWatchInput.Type;
 

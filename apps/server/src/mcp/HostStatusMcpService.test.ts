@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -260,7 +261,11 @@ const run = <A, E>(
     ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-    Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
   );
   return Effect.gen(function* () {
     yield* TestClock.setTime(now);

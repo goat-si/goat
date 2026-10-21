@@ -59,6 +59,7 @@ import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import type * as Result from "effect/Result";
@@ -66,6 +67,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { REPORTING_NOTE } from "../remoteReports/reportFrame.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -587,6 +589,7 @@ export class ChannelTaskMoveError extends Data.TaggedError("ChannelTaskMoveError
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const botFiles = channelBotFilesFor(path, (yield* ServerConfig.ServerConfig).stateDir);
@@ -658,8 +661,12 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* fileSystem.makeDirectory(replicaDir, { recursive: true });
       const temporary = file + ".tmp-" + NodeCrypto.randomBytes(6).toString("hex");
-      yield* fileSystem.writeFile(temporary, new Uint8Array(Buffer.from(bundleBase64, "base64")));
-      yield* fileSystem.rename(temporary, file);
+      yield* fileSystem
+        .writeFile(temporary, new Uint8Array(Buffer.from(bundleBase64, "base64")))
+        .pipe(
+          Effect.andThen(fileSystem.rename(temporary, file)),
+          Effect.ensuring(fileSystem.remove(temporary).pipe(Effect.ignore)),
+        );
     });
 
   /** Drops this task's older copies, keeping `keep` (the newest, and any copy a move still needs). */
@@ -687,6 +694,8 @@ const make = Effect.gen(function* () {
       const state = yield* readState(taskId);
       const stored = yield* ledger.getTask(taskId);
       if (state === undefined || state.generation !== generation) return;
+      const permit = yield* settings.checkpointReplicationPermit(state.host);
+      if (permit.choice === "off") return;
       if (state.replica?.key === key || state.replicaSkipped?.key === key) return;
       const target = stored?.task.target;
       const remote = target?.remote;
@@ -714,6 +723,8 @@ const make = Effect.gen(function* () {
         return;
       }
       const parsed = parseReplicaOutput(ran.success.stdout);
+      if ((yield* settings.getSettings).fleet.hosts?.[state.host]?.checkpointReplication === "off")
+        return;
       const capturedAt = yield* nowIso;
       if (parsed.type !== "ok") {
         yield* Effect.logInfo("channel remote replica not kept", {
@@ -728,26 +739,34 @@ const make = Effect.gen(function* () {
         return;
       }
       const file = replicaFileFor(taskId, generation, parsed.commitOid);
-      yield* writeReplicaFile(file, parsed.bundleBase64);
-      const saved = yield* writeState(
-        owner,
-        taskId,
-        generation,
-        ({ replicaSkipped: _s, ...current }) => ({
-          ...current,
-          replica: {
-            key,
-            file,
-            commitOid: parsed.commitOid,
-            bytes: parsed.bytes,
-            capturedAt,
-          },
-        }),
-      );
-      if (saved === undefined) return;
-      yield* pruneReplicaFiles(
-        taskId,
-        [file, saved.resumeFrom?.file].filter((name): name is string => name !== undefined),
+      yield* Effect.gen(function* () {
+        yield* writeReplicaFile(file, parsed.bundleBase64);
+        const published = yield* permit.publish(
+          writeState(owner, taskId, generation, ({ replicaSkipped: _s, ...current }) => ({
+            ...current,
+            replica: {
+              key,
+              file,
+              commitOid: parsed.commitOid,
+              bytes: parsed.bytes,
+              capturedAt,
+            },
+          })),
+        );
+        const saved = Option.getOrUndefined(published);
+        if (saved === undefined) return;
+        yield* pruneReplicaFiles(
+          taskId,
+          [file, saved.resumeFrom?.file].filter((name): name is string => name !== undefined),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            const current = yield* readState(taskId);
+            if (current?.replica?.file !== file && current?.resumeFrom?.file !== file)
+              yield* fileSystem.remove(file).pipe(Effect.ignore);
+          }).pipe(Effect.ignore),
+        ),
       );
     }).pipe(
       Effect.catchCause((cause) =>

@@ -1,3 +1,4 @@
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
 import * as PendingQuestionsMcpService from "./mcp/PendingQuestionsMcpService.ts";
@@ -37,6 +38,7 @@ import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
 import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
 import * as McpToolAccess from "./mcp/McpToolAccess.ts";
 import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
@@ -358,7 +360,18 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
 
 // Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
-const layerFleetPressure = FleetPressure.layer.pipe(Layer.provide(layerFleetHealth));
+const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
+  Layer.provide(HostPressureMonitor.layer),
+);
+const layerFleetPressure = FleetPressure.layer.pipe(
+  Layer.provide(layerFleetHealth),
+  Layer.provideMerge(layerPressureAdmission),
+);
+const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
+const layerLaunchWatches = LaunchWatchService.layer.pipe(
+  Layer.provideMerge(layerThreadReplicas),
+  Layer.provide(layerPressureAdmission),
+);
 
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
@@ -1208,7 +1221,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
         ),
       ),
       Layer.provide(RemoteDispatchCoordinator.layer),
-      Layer.provide(LaunchWatchService.layer),
+      Layer.provide(layerLaunchWatches),
       Layer.provide(SshRemoteDispatch.layer),
       Layer.provideMerge(layerOrchestrationApplication),
     ),
@@ -1448,7 +1461,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
-  Layer.provide(LaunchWatchService.layer),
+  Layer.provide(layerLaunchWatches),
   Layer.provide(SshRemoteDispatch.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),

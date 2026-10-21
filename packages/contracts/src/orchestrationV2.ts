@@ -1413,6 +1413,13 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ordinalWithinScope: NonNegativeInt,
   appRunOrdinal: Schema.NullOr(PositiveInt),
   ref: CheckpointRef,
+  /** Producer-returned evidence; absence keeps legacy local checkpoints usable, but not replicable. */
+  replicationEvidence: Schema.optional(
+    Schema.Struct({
+      commitOid: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u)),
+      complete: Schema.Boolean,
+    }),
+  ),
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   capturedAt: Schema.DateTimeUtc,

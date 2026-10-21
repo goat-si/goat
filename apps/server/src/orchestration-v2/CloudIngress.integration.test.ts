@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "../mcp/ThreadReplicaService.ts";
 import { assert, it } from "@effect/vitest";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -2003,7 +2004,9 @@ it.effect.each([
         Layer.provide(Layer.mock(RemoteDispatch.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }),
+          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+            Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+          ),
         ),
         Layer.provide(
           ThreadResults.layer.pipe(
@@ -2910,7 +2913,9 @@ it.effect.each([
         Layer.provide(Layer.mock(RemoteDispatch.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }),
+          Layer.mock(LaunchWatches.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+            Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+          ),
         ),
         Layer.provide(
           ThreadResults.layer.pipe(
