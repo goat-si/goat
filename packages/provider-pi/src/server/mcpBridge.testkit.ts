@@ -55,6 +55,8 @@ export async function loadMcpBridge(
     }>;
     /** A stdio MCP server the bridge starts as the managed Cua Driver. */
     readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
+    /** The per-turn computer use gate file the adapter writes. */
+    readonly cuaGate?: string;
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -116,6 +118,7 @@ export async function loadMcpBridge(
           ...(options.cua === undefined
             ? {}
             : { GOAT_CUA_MCP: JSON.stringify({ ...options.cua, env: {} }) }),
+          ...(options.cuaGate === undefined ? {} : { GOAT_CUA_GATE: options.cuaGate }),
         },
       },
       AbortSignal,

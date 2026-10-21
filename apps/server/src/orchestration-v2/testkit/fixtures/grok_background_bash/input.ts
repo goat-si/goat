@@ -14,6 +14,11 @@ export function grokBackgroundBashInput(): OrchestratorFixtureInput {
       { type: "message", text: GROK_BACKGROUND_BASH_PROMPT },
       { type: "finish_held_run", targetRunIndex: 1, status: "completed" },
       { type: "release_replay_gate", label: GROK_BACKGROUND_BASH_WAKE_LABEL },
+      // A debounce can arm on the first wake chunk, before the remaining reply arrives.
+      {
+        type: "await_replay_turn_complete",
+        nativeTurnId: "task-completed-00000000-0000-4000-8000-000000000002",
+      },
       { type: "finish_held_run", targetRunIndex: 2, status: "completed" },
     ],
   };

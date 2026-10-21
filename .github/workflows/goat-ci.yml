@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
-      # test-mobile-memory, test-shared, test-memory-growth, build, and test-server in
+      # test-mobile, test-shared, test-memory-growth, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. Each entry carries its job title.
       matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
@@ -213,20 +213,9 @@ jobs:
         if: matrix.task == 'test-shared'
         run: vp run --filter @goat/shared test
 
-      - name: Test mobile memory
-        if: matrix.task == 'test-mobile-memory'
-        run: >-
-          vp test run --root apps/mobile --config vite.config.ts
-          apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx
-          apps/mobile/src/persistence/memory-import-recovery.test.ts
-          apps/mobile/src/features/settings/MemorySyncDiagnostics.test.tsx
-          apps/mobile/src/features/settings/SettingsMemoryRouteScreen.logic.test.ts
-          apps/mobile/src/features/settings/scheduledTaskPresentation.test.ts
-          apps/mobile/src/features/goat-bot/GoatBotScreen.memory.test.tsx
-          apps/mobile/src/features/threads/ThreadHeader.memory.test.tsx
-          apps/mobile/src/features/threads/SubagentRow.memory.test.tsx
-          apps/mobile/src/features/threads/useThreadHeaderOptions.test.tsx
-          apps/mobile/src/features/keyboard/commandPaletteItems.test.ts
+      - name: Test mobile
+        if: matrix.task == 'test-mobile'
+        run: vp test run --root apps/mobile --config vite.config.ts
 
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related

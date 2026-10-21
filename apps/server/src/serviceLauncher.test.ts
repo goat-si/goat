@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
+import { SERVER_EXIT_CODE_DATABASE_AHEAD, SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -197,6 +197,37 @@ const writeFakeRuntime = (
     return entryPath;
   });
 
+const refusalCases = [
+  {
+    code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
+    reason: "state-dir-owned",
+    message: "Another GOAT server owns this GOAT home. Stop it, then restart this service.",
+  },
+  {
+    code: SERVER_EXIT_CODE_DATABASE_AHEAD,
+    reason: "database-ahead",
+    message:
+      "This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.",
+  },
+];
+
+const observeRefusal = (message: string) =>
+  Effect.gen(function* () {
+    const refused = Promise.withResolvers<"idle">();
+    const lines: Array<string> = [];
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+          lines.push(String(chunk));
+          if (String(chunk).includes(message)) refused.resolve("idle");
+          return true;
+        }),
+      ),
+      (spy) => Effect.sync(() => spy.mockRestore()),
+    );
+    return { refused: refused.promise, lines };
+  });
+
 it.layer(NodeServices.layer)("service state persistence", (it) => {
   it.effect(
     "loads optional service.env literally without changing inherited or managed variables",
@@ -284,44 +315,123 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
     }),
   );
 
-  it.effect("stays idle instead of exiting when another server owns the T3 home", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      yield* writeFakeRuntime(
-        fs,
-        path,
-        path.join(root, "runtime", "goat", "versions", "1.0.0"),
-        `process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});\n`,
-      );
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-        }),
-      );
-      const refused = Promise.withResolvers<void>();
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-            if (String(chunk).includes("owns this GOAT home")) refused.resolve();
-            return true;
+  it.effect.each(refusalCases)(
+    "stays idle when the active server refuses with $code",
+    ({ code, message }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-" });
+        const statePath = path.join(root, "runtime", "service-state.json");
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.0.0"),
+          `process.exit(${code});\n`,
+        );
+        yield* Effect.promise(() =>
+          writeServiceState(statePath, {
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.0.0",
           }),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
-      );
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
-      let completed = false;
-      const running = launcher.run().finally(() => {
-        completed = true;
-      });
-      yield* Effect.promise(() => refused.promise);
-      assert.isFalse(completed);
-      yield* Effect.promise(() => launcher.stop("SIGTERM"));
-      yield* Effect.promise(() => running);
-    }),
+        );
+        const { refused, lines } = yield* observeRefusal(message);
+        const launcher = new Launcher(
+          root,
+          yield* Effect.promise(() => readServiceState(statePath)),
+        );
+        yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+        const spawnCount = spawnedChildren.length;
+        let completed = false;
+        const running = launcher
+          .run()
+          .catch((error: unknown) => error)
+          .finally(() => {
+            completed = true;
+          });
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        assert.isFalse(completed);
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        yield* Effect.promise(() => running);
+      }),
+  );
+
+  it.effect.each(refusalCases)(
+    "fails a pending update without restoring data when the active server refuses with $code",
+    ({ code, reason, message }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-refused-update-" });
+        const statePath = path.join(root, "runtime", "service-state.json");
+        const dbPath = path.join(root, "userdata", "statev2.sqlite");
+        yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+        yield* fs.writeFileString(dbPath, "newer database");
+        yield* fs.writeFileString(dbPath + "-wal", "newer wal");
+        yield* fs.writeFileString(dbPath + "-shm", "newer shm");
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.0.0"),
+          `
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
+const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
+if (context.update !== undefined) process.exit(0);
+process.on("message", message => {
+  if (message.type !== "update-accepted") return;
+  const backup = join(${JSON.stringify(root)}, "runtime", "db-backup", message.updateId);
+  mkdirSync(backup, { recursive: true });
+  writeFileSync(join(backup, "database"), "older snapshot");
+  const lock = tryAcquireServerOwnerLock(${JSON.stringify(path.dirname(dbPath))}, "service-launcher:" + message.updateId);
+  writeFileSync(join(backup, "owner-generation"), String(lock.generation));
+  lock.release();
+  process.exit(${code});
+});
+process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(dbPath)} });
+`,
+        );
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.1.0"),
+          "process.exit(17);",
+        );
+        yield* Effect.promise(() =>
+          writeServiceState(statePath, {
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.0.0",
+          }),
+        );
+        // Hold the handoff timer so the accepted update's active exit drives the transition.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        const { refused, lines } = yield* observeRefusal(message);
+        const launcher = new Launcher(
+          root,
+          yield* Effect.promise(() => readServiceState(statePath)),
+        );
+        yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+        const spawnCount = spawnedChildren.length;
+        const running = launcher.run().catch((error: unknown) => error);
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        const state = yield* Effect.promise(() => readServiceState(statePath));
+        assert.equal(state.activeVersion, "1.0.0");
+        assert.equal(state.update?.status, "failed");
+        assert.equal(state.update?.status === "failed" ? state.update.reason : undefined, reason);
+        assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
+        assert.equal(yield* fs.readFileString(dbPath), "newer database");
+        assert.equal(yield* fs.readFileString(dbPath + "-wal"), "newer wal");
+        assert.equal(yield* fs.readFileString(dbPath + "-shm"), "newer shm");
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        assert.isUndefined(yield* Effect.promise(() => running));
+      }),
   );
 
   it.effect("commits only after the trial reports prepared", () =>
@@ -946,7 +1056,7 @@ const healthFixture = (
   input: {
     readonly descriptor?: unknown;
     readonly status?: number;
-    readonly failStart?: boolean;
+    readonly failStart?: number;
     readonly hang?: boolean;
     readonly legacy?: boolean;
     readonly listenHost?: string;
@@ -999,9 +1109,9 @@ process.on("message", message => {
 });
 if (context.update.status === "committed") {
   process.send({ type: "test-restarted" });
-} else if (${input.failStart ?? false}) {
+} else if (${input.failStart !== undefined}) {
   writeFileSync(dbPath, "failed migration");
-  process.exit(17);
+  process.exit(${input.failStart ?? 17});
 } else {
   const server = createServer((request, response) => {
     if (request.url !== "/.well-known/goat/environment") process.exit(19);
@@ -1087,7 +1197,12 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
   );
 
   it.effect.each([
-    { name: "failed start", input: { failStart: true }, reason: "candidate-exited:17" },
+    { name: "failed start", input: { failStart: 17 }, reason: "candidate-exited:17" },
+    {
+      name: "database-ahead trial",
+      input: { failStart: SERVER_EXIT_CODE_DATABASE_AHEAD },
+      reason: "candidate-exited:79",
+    },
     {
       name: "wrong version",
       input: { descriptor: { ...validSmokeDescriptor, serverVersion: "9.0.0" } },
@@ -1146,6 +1261,35 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         "smoke-failed:timeout",
       );
     }),
+  );
+
+  it.effect.each(refusalCases)(
+    "does not roll back a committed probation when the server refuses with $code",
+    ({ code, message }) =>
+      Effect.gen(function* () {
+        const f = yield* healthFixture();
+        const { refused, lines } = yield* observeRefusal(message);
+        const spawnCount = spawnedChildren.length;
+        const { launcher, running } = yield* f.start({ now: () => 1000 });
+        const child = yield* f.wait("test-committed");
+        const committed = yield* Effect.promise(() => readServiceState(f.statePath));
+        child.send({ type: "test-exit", code });
+        assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
+        assert.deepEqual(yield* Effect.promise(() => readServiceState(f.statePath)), committed);
+        assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
+        assert.equal(yield* f.fs.readFileString(f.dbPath + "-wal"), "committed wal");
+        assert.equal(yield* f.fs.readFileString(f.dbPath + "-shm"), "committed shm");
+        assert.equal(
+          yield* f.fs.readFileString(
+            f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database"),
+          ),
+          "original database",
+        );
+        assert.equal(spawnedChildren.length - spawnCount, 1);
+        assert.deepEqual(lines, [`[service-launcher] ${message}\n`]);
+        yield* Effect.promise(() => launcher.stop("SIGTERM"));
+        assert.isUndefined(yield* Effect.promise(() => running));
+      }),
   );
 
   it.effect.each([false, true])(

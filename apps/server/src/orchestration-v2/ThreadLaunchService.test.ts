@@ -172,6 +172,10 @@ function makeHarness(options: HarnessOptions = {}) {
     (_input: Parameters<GitWorkflow.GitWorkflowService["Service"]["removeWorktree"]>[0]) =>
       Effect.void,
   );
+  const deleteLocalBranch = vi.fn(
+    (_input: Parameters<GitWorkflow.GitWorkflowService["Service"]["deleteLocalBranch"]>[0]) =>
+      Effect.void,
+  );
   const runSetup = vi.fn(
     options.runSetup ?? (() => Effect.succeed({ status: "no-script" as const })),
   );
@@ -213,9 +217,11 @@ function makeHarness(options: HarnessOptions = {}) {
         (() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" })),
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(false)),
+      inspectExistingBranch: () => Effect.succeed(null),
       remoteExists: options.remoteExists ?? (() => Effect.succeed(true)),
       remoteBranchExists: () => Effect.succeed(true),
       removeWorktree,
+      deleteLocalBranch,
       resolveRemoteTrackingCommit: () =>
         Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
       ...options.git,
@@ -318,6 +324,7 @@ function makeHarness(options: HarnessOptions = {}) {
     ),
     createWorktree,
     removeWorktree,
+    deleteLocalBranch,
     renameBranch,
     generateBranchName,
     generateThreadTitle,
@@ -2088,8 +2095,127 @@ it.effect("cancels tracked setup before provider work is released", () =>
       assert.isNull(projection.thread.worktreePath);
       assert.isNull(projection.thread.branch);
       assert.isEmpty(yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)));
+      const created = harness.createWorktree.mock.calls[0]?.[0]?.newRefName;
+      assert.deepStrictEqual(
+        harness.deleteLocalBranch.mock.calls.map(([call]) => call.refName),
+        [created],
+      );
     }).pipe(Effect.provide(harness.layer));
   }),
+);
+
+it.effect("keeps a reused worktree and its branch when setup is cancelled", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      createWorktree: (input, options) =>
+        (
+          options?.progress?.onExistingBranch?.({ worktree: "reused", fastForwarded: true }) ??
+          Effect.void
+        ).pipe(
+          Effect.as({
+            worktree: { path: "/repo-worktrees/leftover", refName: input.newRefName! },
+          }),
+        ),
+      runSetup: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "launch:reuse-cancel",
+          thread: "thread:reuse-cancel",
+          message: "Start",
+          workspace: { type: "worktree", baseRef: "main", branch: "fix/leftover" },
+        }),
+      );
+      yield* Deferred.await(entered);
+      const checkout = (yield* tracker.get(launched.threadId))?.stages.find(
+        (stage) => stage.id === "checkout",
+      );
+      assert.equal(
+        checkout?.detail,
+        "Reused the clean worktree already on branch fix/leftover, which had no commits of its own; fast-forwarded it to the base",
+      );
+      assert.isTrue(harness.createWorktree.mock.calls[0]?.[1]?.reuseExistingBranch);
+      assert.isTrue(yield* tracker.cancel(launched.threadId));
+      assert.equal(harness.removeWorktree.mock.calls.length, 0);
+      assert.equal(harness.deleteLocalBranch.mock.calls.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("retries a launch into the worktree a failed attempt left on its branch", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const git = yield* GitVcsDriver.GitVcsDriver;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "launch-leftover-" });
+    const cwd = `${directory}/repo`;
+    const worktreesDirectory = `${directory}/worktrees`;
+    yield* fs.makeDirectory(cwd);
+    yield* fs.makeDirectory(worktreesDirectory);
+    const command = (at: string, args: string[]) =>
+      git.execute({ operation: "launch-test", cwd: at, args });
+    yield* command(cwd, ["init", "-b", "main"]);
+    yield* command(cwd, ["config", "user.name", "Test"]);
+    yield* command(cwd, ["config", "user.email", "test@example.test"]);
+    yield* command(cwd, ["commit", "--allow-empty", "-m", "initial"]);
+    const branch = "fix/issues-557-588-windows-fixtures";
+    const leftover = yield* git.createWorktree(
+      { cwd, path: null, refName: "main", newRefName: branch },
+      { worktreesDirectory },
+    );
+
+    const setupStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      hasCommit: ({ refName }) =>
+        command(cwd, ["rev-parse", "--verify", `${refName}^{commit}`]).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        ),
+      git: {
+        resolveWorktreeBaseRemote: () => Effect.succeed(null),
+        inspectExistingBranch: (input) => git.inspectExistingBranch({ ...input, cwd }),
+      },
+      createWorktree: (input, options) =>
+        git.createWorktree({ ...input, cwd }, { ...options, worktreesDirectory }),
+      runSetup: () =>
+        Deferred.succeed(setupStarted, undefined).pipe(Effect.as({ status: "no-script" as const })),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const workspace = { type: "worktree" as const, baseRef: "main", branch };
+      yield* launches.checkWorktreeBase({ projectId, workspaceStrategy: workspace });
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:leftover",
+          thread: "thread:launch:leftover",
+          workspace,
+        }),
+      );
+      const failed = tracker.stream(launched.threadId).pipe(
+        Stream.filter((snapshot) => snapshot?.phase === "failed"),
+        Stream.runHead,
+        Effect.flatMap((snapshot) =>
+          Effect.die(new Error(String(snapshot.pipe(Option.getOrNull)?.error))),
+        ),
+      );
+      yield* Effect.raceFirst(Deferred.await(setupStarted), failed);
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(projection.thread.worktreePath, leftover.worktree.path);
+      assert.equal(projection.thread.branch, branch);
+    }).pipe(Effect.provide(harness.layer));
+  }).pipe(
+    Effect.provide(
+      GitVcsDriver.layer.pipe(
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "launch-leftover-git-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
 );
 
 it.effect("stops an in-flight branch rename when tracked setup is cancelled", () =>
@@ -2247,25 +2373,49 @@ it.effect.each([
   }),
 );
 
+const existingBranch = (
+  state: Partial<GitVcsDriver.ExistingBranchState>,
+): GitVcsDriver.ExistingBranchState => ({
+  tip: "tip",
+  baseSha: "base",
+  uniqueCommits: 0,
+  worktreePath: null,
+  dirty: false,
+  ...state,
+});
+
 it.effect.each([
   {
-    name: "is checked out in another worktree",
-    worktreePath: "/worktrees/lane",
-    message: 'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project".',
+    name: "has commits its base lacks in another worktree",
+    state: { uniqueCommits: 2, worktreePath: "/worktrees/lane" },
+    message:
+      'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project" and has 2 commits that origin/lane/fix does not, so a new worktree cannot reuse it.',
   },
   {
-    name: "already exists",
-    worktreePath: null,
+    name: "has a commit its base lacks and no worktree",
+    state: { uniqueCommits: 1 },
     message:
-      'Branch "lane/fix" already exists in project "Project" (/repo), and a new worktree needs a new branch.',
+      'Branch "lane/fix" already exists in project "Project" (/repo) and has 1 commit that origin/lane/fix does not, so a new worktree cannot reuse it.',
+  },
+  {
+    name: "has uncommitted changes in its worktree",
+    state: { worktreePath: "/worktrees/lane", dirty: true },
+    message:
+      'Branch "lane/fix" is already checked out at /worktrees/lane in project "Project" and has uncommitted changes there, so a new worktree cannot reuse it.',
+  },
+  {
+    name: "is the project's main checkout",
+    state: { worktreePath: "/repo" },
+    message:
+      'Branch "lane/fix" is already checked out at /repo in project "Project" and is the project\'s main checkout, so a new worktree cannot reuse it.',
   },
 ])("refuses a new worktree whose branch $name", (testCase) =>
   Effect.gen(function* () {
     const harness = makeHarness({
       hasCommit: () => Effect.succeed(true),
       git: {
-        branchWorktreePath: ({ branch }) =>
-          Effect.succeed(branch === "lane/fix" ? testCase.worktreePath : null),
+        inspectExistingBranch: ({ branch }) =>
+          Effect.succeed(branch === "lane/fix" ? existingBranch(testCase.state) : null),
       },
     });
     yield* Effect.gen(function* () {
@@ -2285,9 +2435,28 @@ it.effect.each([
         _tag: "ThreadLaunchBranchError",
         projectId,
         branch: "lane/fix",
-        worktreePath: testCase.worktreePath,
+        worktreePath: testCase.state.worktreePath ?? null,
       });
       assert.equal(error.message, testCase.message);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect.each([
+  { name: "a clean worktree", state: { worktreePath: "/worktrees/lane" } },
+  { name: "no worktree", state: {} },
+])("lets a launch reuse an existing branch with no commits of its own and $name", (testCase) =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      hasCommit: () => Effect.succeed(true),
+      git: { inspectExistingBranch: () => Effect.succeed(existingBranch(testCase.state)) },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.checkWorktreeBase({
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "main", branch: "lane/fix" },
+      });
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -2296,7 +2465,7 @@ it.effect("leaves a new branch name to the launch", () =>
   Effect.gen(function* () {
     const harness = makeHarness({
       hasCommit: ({ refName }) => Effect.succeed(!refName.startsWith("refs/heads/")),
-      git: { branchWorktreePath: () => Effect.die("a missing branch has no worktree") },
+      git: { inspectExistingBranch: () => Effect.succeed(null) },
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;

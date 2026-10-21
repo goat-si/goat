@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-const UPSTREAM_REF = "687a119f0fcaace47e1f1abcc77cec6c813fd6da";
+const UPSTREAM_REF = "57dedf20a502c8d1d13b89f0a9c0cbf4f5f71320";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
   "https://api.github.com/repos/openai/codex/contents/codex-rs/app-server-protocol";
@@ -140,9 +140,13 @@ const ManualSchemas: Record<string, Schema.Json> = {
   },
 };
 
-// GOAT only uses the plan for labels, so an unknown slug must not fail the whole
-// `account/read` decode and take the provider down with it.
+// Codex adds values to these enums in minor releases, and a value the bindings
+// do not list fails the whole message, which drops a notification outright.
+// GOAT only labels plans and hooks, and treats any non-commentary phase as
+// answer text, so plain strings keep newer servers working.
 const DefinitionOverrides: Record<string, Schema.Json> = {
+  HookEventName: { type: "string" },
+  MessagePhase: { type: "string" },
   PlanType: { type: "string" },
 };
 

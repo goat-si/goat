@@ -45,8 +45,10 @@ export const fleetConsoleTelemetryAtom = Atom.make((get): FleetConsoleTelemetry 
   let loading = false;
   for (const { environmentId, atom } of sources) {
     const result = get(atom);
-    if (AsyncResult.isFailure(result)) failed.push(environmentId);
-    else if (AsyncResult.isInitial(result)) loading = true;
+    // The primary has two reads, its own and the fan-out; it is one unreadable environment.
+    if (AsyncResult.isFailure(result)) {
+      if (!failed.includes(environmentId)) failed.push(environmentId);
+    } else if (AsyncResult.isInitial(result)) loading = true;
   }
   const reads: FleetHostRead[] = [...reports].map(([environmentId, hosts]) => ({
     environmentId,

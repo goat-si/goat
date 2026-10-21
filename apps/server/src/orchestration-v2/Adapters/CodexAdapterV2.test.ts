@@ -1222,6 +1222,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ...scenario,
       terminalStatus: "completed" as const,
       savedPathMode: "path" as const,
+      codex: "0.159" as const,
     })),
     ...(["interrupted", "failed"] as const).flatMap((terminalStatus) =>
       ["Done", null].map((finalText) => ({
@@ -1231,16 +1232,29 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         appended: true,
         terminalStatus,
         savedPathMode: "path" as const,
+        codex: "0.159" as const,
       })),
     ),
-    ...(["omitted", "null"] as const).map((savedPathMode) => ({
-      name: `result-only image with ${savedPathMode} savedPath`,
+    ...(["0.159", "0.164", "0.164-file"] as const).flatMap((codex) =>
+      (["omitted", "null"] as const).map((savedPathMode) => ({
+        name: `${codex} ${codex === "0.164-file" ? "attachment" : "result"}-only image with ${savedPathMode} savedPath`,
+        finalText: "Done",
+        fileExists: false,
+        appended: false,
+        terminalStatus: "completed" as const,
+        savedPathMode,
+        codex,
+      })),
+    ),
+    {
+      name: "0.164 attachment image with a saved file",
       finalText: "Done",
-      fileExists: false,
-      appended: false,
+      fileExists: true,
+      appended: true,
       terminalStatus: "completed" as const,
-      savedPathMode,
-    })),
+      savedPathMode: "path" as const,
+      codex: "0.164-file" as const,
+    },
   ])("keeps a generated image visible after $name", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1268,6 +1282,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             : (answerVariants[scenario.finalText] ?? scenario.finalText);
         const imageBytes =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jr1sAAAAASUVORK5CYII=";
+        const inputImages = [{ path: "/workspace/reference.png", sha256: "ab".repeat(32) }];
         const nativeThreadId = `native-image-${scenario.name}`;
         const nativeTurnId = `turn-image-${scenario.name}`;
         const transcript = makeCodexReplayTranscript({
@@ -1285,7 +1300,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     id: "image-generation-1",
                     status: "completed",
                     revisedPrompt: "Draw an image",
-                    result: imageBytes,
+                    ...(scenario.codex === "0.164-file"
+                      ? { fileId: "file_generated" }
+                      : { result: imageBytes }),
+                    ...(scenario.codex === "0.159" ? {} : { inputImages }),
                     ...(scenario.savedPathMode === "path"
                       ? { savedPath }
                       : scenario.savedPathMode === "null"
@@ -1363,9 +1381,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.lengthOf(imageItems, 1);
           const imageItem = imageItems[0]!;
           assert.equal(imageItem.status, "completed");
-          assert.deepEqual(toolOutputImages(imageItem.output), [
-            { mimeType: "image/png", data: imageBytes },
-          ]);
+          assert.deepEqual(
+            toolOutputImages(imageItem.output),
+            scenario.codex === "0.164-file" ? [] : [{ mimeType: "image/png", data: imageBytes }],
+          );
+          assert.deepEqual(imageItem.input, {
+            prompt: "Draw an image",
+            ...(scenario.codex === "0.159"
+              ? {}
+              : { inputImages: inputImages.map((image) => image.path) }),
+          });
         } else if (scenario.appended) {
           assert.include(decodeURI(text), savedPath);
         } else {

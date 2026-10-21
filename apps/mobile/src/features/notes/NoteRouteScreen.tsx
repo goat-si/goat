@@ -170,10 +170,9 @@ function NoteContent(props: NoteParams) {
     } catch (error) {
       setDirty(true);
       setError(notesError(error));
-    } finally {
-      pendingSaves.current--;
-      if (pendingSaves.current === 0) setSaving(false);
     }
+    pendingSaves.current--;
+    if (pendingSaves.current === 0) setSaving(false);
   };
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
   return (
