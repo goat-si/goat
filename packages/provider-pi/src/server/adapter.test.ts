@@ -21,6 +21,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -1430,6 +1431,60 @@ describe("PiAdapterV2", () => {
       assert.equal(spawn.env.GOAT_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.GOAT_MCP_BEARER_TOKEN, "secret-pi-token");
       assert.equal(spawn.env.GOAT_PI_RUNTIME_MODE, "full-access");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("shuts the launched driver's gate for a turn whose attachment drops it", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const attachment = {
+        environmentId: EnvironmentId.make("environment-pi-cua"),
+        threadId: THREAD_ID,
+        providerSessionId: "mcp-session-pi-cua",
+        providerInstanceId: PI_INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret-pi-token",
+        browserToolsAvailable: false,
+      };
+      const cuaDriver = { command: "/resources/cua-driver", args: ["mcp"], environment: [] };
+      yield* sessions.set({ ...attachment, cuaDriver });
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const gatePath = fake.lastSpawn().env.GOAT_CUA_GATE;
+      assert.isString(gatePath);
+      const fileSystem = yield* FileSystem.FileSystem;
+      const gate = () => fileSystem.readFileString(gatePath!);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const finish = Effect.gen(function* () {
+        yield* fake.emit({ type: "agent_start" });
+        yield* fake.emit({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "ok" }],
+            stopReason: "stop",
+          },
+        });
+        fake.queueState({ isStreaming: false });
+        yield* fake.emit({ type: "agent_settled" });
+        yield* takeEvent((event) => event.type === "turn.terminal");
+      });
+
+      // Prepare drops the driver for a Plan or read-only turn; the process still holds it.
+      yield* sessions.set(attachment);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      assert.equal(yield* gate(), "off");
+      yield* finish;
+
+      yield* sessions.set({ ...attachment, cuaDriver });
+      yield* startTurn(runtime, providerThread, "default", [], "Again", undefined, 2);
+      yield* fake.takeRequest("prompt");
+      assert.equal(yield* gate(), "on");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
