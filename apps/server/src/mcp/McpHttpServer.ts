@@ -44,6 +44,7 @@ import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
+import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -57,6 +58,11 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as RepositoryInventory from "../project/RepositoryInventory.ts";
+import * as RepositoryReferences from "../project/RepositoryReferences.ts";
+import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
+import { validateRepositoryReferenceArguments } from "./repositoryReferenceArguments.ts";
+import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -908,6 +914,7 @@ const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(funct
 });
 
 const encodeOrchestratorMcpFailure = Schema.encodeSync(OrchestratorMcpFailure);
+const encodeReferenceRefusal = Schema.encodeSync(Schema.fromJsonString(OrchestratorMcpFailure));
 
 const undeclaredArgumentsResult = (
   tool: string,
@@ -989,7 +996,29 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                   (key) => !Object.hasOwn(properties, key),
                 );
                 return undeclared.length === 0
-                  ? registration.handle(payload)
+                  ? validateRepositoryReferenceArguments(registration.tool.name, payload).pipe(
+                      Effect.matchEffect({
+                        onSuccess: () => registration.handle(payload),
+                        onFailure: () =>
+                          Effect.succeed(
+                            new McpSchema.CallToolResult({
+                              isError: true,
+                              content: [
+                                {
+                                  type: "text",
+                                  text: encodeReferenceRefusal(
+                                    new OrchestratorMcpFailure({
+                                      code: "invalid_request",
+                                      message:
+                                        "Invalid repository reference scope. Unknown fields, writes and runtime filesystem grants are refused.",
+                                    }),
+                                  ),
+                                },
+                              ],
+                            }),
+                          ),
+                      }),
+                    )
                   : Effect.succeed(
                       undeclaredArgumentsResult(
                         registration.tool.name,
@@ -1320,6 +1349,8 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),
+  Layer.provide(RepositoryInventory.layer),
+  Layer.provideMerge(OpenCodexManagedUpdate.layer),
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
@@ -1346,7 +1377,15 @@ const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
  */
 export const layerProviderToolkit = catalogRegistrations.provider;
 
+const layerRepositoryReferences = RepositoryReferenceMcpService.layer.pipe(
+  Layer.provide(RepositoryReferences.layer),
+  Layer.provide(RepositoryInventory.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
+
 const layerProjectRegistration = catalogRegistrations.project.pipe(
+  Layer.provide(layerRepositoryReferences),
   Layer.provide(ThreadLaunchMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
@@ -1356,7 +1395,11 @@ export const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 
-const layerSshToolkitRegistration = catalogRegistrations.ssh.pipe(Layer.provide(Profiles.layer));
+const layerSshToolkitRegistration = catalogRegistrations.ssh.pipe(
+  Layer.provide(Profiles.layer),
+  Layer.provide(layerRepositoryReferences),
+  Layer.provide(RepositoryLaunchMcpService.layer),
+);
 
 export const layerAttachmentToolkit = catalogRegistrations.attachment;
 

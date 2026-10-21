@@ -33,15 +33,15 @@ Wire schemas and the libraries web, desktop, and mobile share.
 
 The process that commits orchestration, runs providers, and reaches other machines.
 
-| Doc                                                              | Scope                                                                                                                                                                 |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control.                                                 |
-| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                                                                        |
-| [`channels.md`](channels.md)                                     | The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.                                                            |
-| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                                                                           |
-| [`notes.md`](notes.md)                                           | Markdown notes on disk, revision conflicts, git commits, start-work and automatic done, and the clients that edit them.                                               |
-| [`ssh.md`](ssh.md)                                               | SSH host trust, preparation/runtime ownership, updates and deferred refresh, provider diagnosis routing, agent dispatch, Boat managed aliases, and the hub node list. |
-| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                                                                             |
+| Doc                                                              | Scope                                                                                                                                                                              |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`server.md`](server.md)                                         | Process entry, command commit, local/cloud orchestration, human handoffs, checkpoints, providers, and source control.                                                              |
+| [`mcp-toolkits.md`](mcp-toolkits.md)                             | The GOAT MCP server, agent surface registry, toolkit layout, and access-derived tool metadata.                                                                                     |
+| [`channels.md`](channels.md)                                     | The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.                                                                         |
+| [`scheduled-tasks.md`](scheduled-tasks.md)                       | Clock and webhook tasks that launch or send through orchestration services.                                                                                                        |
+| [`notes.md`](notes.md)                                           | Markdown notes on disk, revision conflicts, git commits, start-work and automatic done, and the clients that edit them.                                                            |
+| [`ssh.md`](ssh.md)                                               | SSH host trust, preparation/runtime ownership, updates and deferred refresh, provider diagnosis routing, repo inventory and dispatch, Boat managed aliases, and the hub node list. |
+| [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md) | Wakes for a launched thread, and durable SSH dispatches that report back.                                                                                                          |
 
 ### Tier 4 — Clients
 
@@ -110,6 +110,8 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/channels/ChannelDispatcher.ts`                         | [`channels.md`](channels.md)                                                                                                                           |
 | `apps/server/src/channels/ChannelGateway.ts`                            | [`channels.md`](channels.md)                                                                                                                           |
 | `apps/server/src/channels/ChannelReceptionService.ts`                   | [`channels.md`](channels.md)                                                                                                                           |
+| `apps/server/src/channels/ChannelRemoteWorkers.ts`                      | [`channels.md`](channels.md)                                                                                                                           |
+| `apps/server/src/channels/channelDispatchAuthority.ts`                  | [`channels.md`](channels.md)                                                                                                                           |
 | `apps/server/src/channels/imessage/ImessageChannelRuntime.ts`           | [`channels.md`](channels.md)                                                                                                                           |
 | `apps/server/src/channels/imessage/ImessageChannelSettings.ts`          | [`channels.md`](channels.md)                                                                                                                           |
 | `apps/server/src/channels/imessage/imessageChatDb.ts`                   | [`channels.md`](channels.md)                                                                                                                           |
@@ -140,6 +142,8 @@ the repository is organised by package. Changing an area requires review of ever
 | `apps/server/src/hub/HubMembership.ts`                                  | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/hub/HubParity.ts`                                      | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/hub/HubOcx.ts`                                         | [`server.md`](server.md)                                                                                                                               |
+| `apps/server/src/hub/OpenCodexManagedUpdate.ts`                         | [`server.md`](server.md)                                                                                                                               |
+| `apps/server/src/hub/opencodexUpdatePlan.ts`                            | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/hub/parity.ts`                                         | [`server.md`](server.md)                                                                                                                               |
 | `apps/server/src/hubNodes/HubNodeRepository.ts`                         | [`ssh.md`](ssh.md)                                                                                                                                     |
 | `apps/server/src/hubNodes/HubNodes.ts`                                  | [`ssh.md`](ssh.md)                                                                                                                                     |

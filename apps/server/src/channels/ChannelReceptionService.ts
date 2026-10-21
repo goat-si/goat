@@ -1736,6 +1736,13 @@ const make = Effect.gen(function* () {
 
   const narrationFor = (task: ChannelTask, event: ChannelLedger.ChannelPendingEvent["event"]) => {
     switch (event.type) {
+      case "task.dispatch.claimed":
+        return event.payload.target.placementReason === undefined
+          ? undefined
+          : {
+              kind: "receipt" as const,
+              text: task.title + " → " + event.payload.target.placementReason,
+            };
       case "task.completed":
         // A turn's summary is GOAT Bot's own answer, written for the person on the bot's model.
         if (task.kind === "turn") {

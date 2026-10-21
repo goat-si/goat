@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
 import type {
+  OrchestrationV2Checkpoint,
   VcsDriverCapabilities,
   VcsError,
   VcsInitInput,
@@ -52,7 +53,12 @@ export interface VcsDeleteCheckpointRefsInput {
 }
 
 export interface VcsCheckpointOps {
-  readonly captureCheckpoint: (input: VcsCaptureCheckpointInput) => Effect.Effect<void, VcsError>;
+  readonly captureCheckpoint: (
+    input: VcsCaptureCheckpointInput,
+  ) => Effect.Effect<
+    NonNullable<OrchestrationV2Checkpoint["replicationEvidence"]> | void,
+    VcsError
+  >;
   readonly hasCheckpointRef: (
     input: Omit<VcsRestoreCheckpointInput, "fallbackToHead">,
   ) => Effect.Effect<boolean, VcsError>;

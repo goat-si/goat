@@ -51,6 +51,7 @@ export type GoatMcpToolSummaryAction =
   | "worktree-cleanup"
   | "project-list"
   | "project-read"
+  | "repository-snapshot"
   | "project-create"
   | "project-update"
   | "project-delete"
@@ -184,6 +185,26 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_thread_status: tool(
     ["Check", "Checking", "Checked", "a GOAT thread's status"],
     "thread-read",
+  ),
+  goat_thread_replication_set: tool(
+    ["Set", "Setting", "Set", "checkpoint replication"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_capture: tool(
+    ["Copy", "Copying", "Copied", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_reconcile: tool(
+    ["Check", "Checking", "Checked", "a checkpoint recovery"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_restore: tool(
+    ["Restore", "Restoring", "Restored", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_handoff_host: tool(
+    ["Recover", "Recovering", "Recovered", "a watched thread"],
+    "thread-watch",
   ),
   goat_thread_watch: tool(["Watch", "Watching", "Watched", "a GOAT thread"], "thread-watch"),
   goat_thread_unwatch: tool(
@@ -556,6 +577,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   goat_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
+  goat_repository_snapshot: tool(
+    ["Read", "Reading", "Read", "a repository snapshot"],
+    "repository-snapshot",
+  ),
   goat_project_create: tool(
     ["Register", "Registering", "Registered", "a project"],
     "project-create",

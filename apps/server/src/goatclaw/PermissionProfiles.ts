@@ -434,8 +434,27 @@ export const layer = Layer.effect(
             OR (l.host IS NOT NULL AND (l.pending = 1 OR EXISTS (SELECT 1 FROM remote_dispatches d
               WHERE (d.correlation_id = l.correlation_id OR d.task_id = l.id)
               AND d.state IN ('launching','running','lost')))))`;
+              // Native subagents share the caller's session and never reserve, so count the live
+              // ones it and its native descendants started. Nested Codex v2 records sit on the
+              // spawning child thread; UNION keeps the walk finite.
+              const natives =
+                scope.thread === undefined
+                  ? []
+                  : yield* sql<{
+                      count: number;
+                    }>`WITH RECURSIVE native(subagent_id, child_thread_id, status, run_id) AS (
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
+            WHERE s.thread_id = ${scope.thread.threadId} AND s.origin = 'provider_native'
+            UNION
+            SELECT s.subagent_id, s.child_thread_id, s.status, s.run_id FROM orchestration_v2_projection_subagents s
+            JOIN native n ON s.thread_id = n.child_thread_id WHERE s.origin = 'provider_native')
+          SELECT COUNT(DISTINCT n.subagent_id) AS count FROM native n
+          WHERE n.status IN ('pending','running','waiting') AND NOT EXISTS (
+            SELECT 1 FROM orchestration_v2_projection_runs r WHERE r.run_id = n.run_id AND r.status = 'rolled_back')`;
               yield* admit(
-                checkProfile(effective, "threads.launch", { lanesRunning: counts[0]?.count ?? 0 }),
+                checkProfile(effective, "threads.launch", {
+                  lanesRunning: (counts[0]?.count ?? 0) + (natives[0]?.count ?? 0),
+                }),
               );
               yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, host) VALUES (${input.id}, ${owner}, ${input.childThreadId ?? null}, ${input.host ?? null})`;
             }

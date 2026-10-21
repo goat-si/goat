@@ -649,6 +649,151 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("checkpoint publication invalidates old permits across off and reenable", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const old = yield* settings.checkpointReplicationPermit("source");
+      yield* settings.updateSettings({
+        fleet: { hosts: { source: { checkpointReplication: "off" } } },
+      });
+      yield* settings.updateSettings({
+        fleet: { hosts: { source: { checkpointReplication: "on" } } },
+      });
+      let published = false;
+      assert.isTrue(
+        Option.isNone(
+          yield* old.publish(
+            Effect.sync(() => {
+              published = true;
+            }),
+          ),
+        ),
+      );
+      assert.isFalse(published);
+      const fresh = yield* settings.checkpointReplicationPermit("source");
+      assert.isTrue(Option.isSome(yield* fresh.publish(Effect.void)));
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect.each([false, true])(
+    "host publication never holds global settings lock; cancelled=%s",
+    (cancelled) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const attempted = yield* Deferred.make<void>();
+        const permit = yield* settings.checkpointReplicationPermit("a");
+        const publication = yield* permit
+          .publish(
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const update = yield* settings
+          .updateSettingsWith((current) =>
+            Deferred.succeed(attempted, undefined).pipe(
+              Effect.as({
+                fleet: {
+                  hosts: {
+                    ...current.fleet.hosts,
+                    a: { checkpointReplication: "off" as const },
+                    b: { checkpointReplication: "off" as const },
+                  },
+                },
+              }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(attempted);
+        yield* settings.updateSettings({ responseStreamingMode: "turn" });
+        yield* settings.updateSettings({
+          fleet: { hosts: { c: { checkpointReplication: "off" } } },
+        });
+        assert.isUndefined((yield* settings.getSettings).fleet.hosts?.b?.checkpointReplication);
+        if (cancelled) {
+          yield* Fiber.interrupt(update);
+          const other = yield* settings.checkpointReplicationPermit("b");
+          assert.isTrue(Option.isSome(yield* other.publish(Effect.void)));
+        }
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(publication);
+        if (!cancelled) {
+          yield* Fiber.join(update);
+          const current = yield* settings.getSettings;
+          assert.equal(current.fleet.hosts?.a?.checkpointReplication, "off");
+          assert.equal(current.fleet.hosts?.b?.checkpointReplication, "off");
+          assert.equal(current.fleet.hosts?.c?.checkpointReplication, "off");
+        }
+      }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect(
+    "concurrent multi-host replication changes commit whole policies in consistent lock order",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const firstAttempt = yield* Deferred.make<void>();
+        const secondAttempt = yield* Deferred.make<void>();
+        const permit = yield* settings.checkpointReplicationPermit("a");
+        const publication = yield* permit
+          .publish(
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const first = yield* settings
+          .updateSettingsWith((current) =>
+            Deferred.succeed(firstAttempt, undefined).pipe(
+              Effect.as({
+                fleet: {
+                  hosts: {
+                    ...current.fleet.hosts,
+                    a: { checkpointReplication: "off" as const },
+                    b: { checkpointReplication: "off" as const },
+                  },
+                },
+              }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(firstAttempt);
+        const second = yield* settings
+          .updateSettingsWith((current) =>
+            Deferred.succeed(secondAttempt, undefined).pipe(
+              Effect.as({
+                fleet: {
+                  hosts: {
+                    ...current.fleet.hosts,
+                    b: { checkpointReplication: "on" as const },
+                    a: { checkpointReplication: "on" as const },
+                  },
+                },
+              }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(secondAttempt);
+        assert.isUndefined((yield* settings.getSettings).fleet.hosts?.b?.checkpointReplication);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(publication);
+        const off = yield* Fiber.join(first);
+        const on = yield* Fiber.join(second);
+        assert.equal(off.fleet.hosts?.a?.checkpointReplication, "off");
+        assert.equal(off.fleet.hosts?.b?.checkpointReplication, "off");
+        assert.equal(on.fleet.hosts?.a?.checkpointReplication, "on");
+        assert.equal(on.fleet.hosts?.b?.checkpointReplication, "on");
+        const current = yield* settings.getSettings;
+        assert.equal(
+          current.fleet.hosts?.a?.checkpointReplication,
+          current.fleet.hosts?.b?.checkpointReplication,
+        );
+        assert.isTrue(Option.isNone(yield* permit.publish(Effect.void)));
+      }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("read-modify-write checks authorization before computing the patch", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

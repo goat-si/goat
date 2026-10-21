@@ -918,7 +918,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly cwd: string;
     readonly ref: string;
     readonly strict: boolean;
-  }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
+  }): Effect.fn.Return<
+    GitWorkspaceSnapshotResult & { readonly complete: boolean },
+    VcsError | GitWorkspaceSnapshotError
+  > {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
       const paths = yield* execute({
@@ -1178,54 +1181,71 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
-      if (input.strict) {
+      let omittedContents = capturedHead === null;
+      if (input.strict || capturedHead !== null) {
         // Newly staged paths belong to the snapshot even when ignore rules match them.
         // Read the real index, then stage disk content only into the private index.
-        const additions = yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: [
-            "diff",
-            "--cached",
-            "--no-renames",
-            "--name-only",
-            "--diff-filter=A",
-            "-z",
-            capturedHead!,
-            "--",
-          ],
-          maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-        });
-        const deletions = yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: ["ls-files", "--deleted", "-z"],
-          maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
-        });
-        if (additions.stdoutTruncated || deletions.stdoutTruncated)
-          return yield* new GitWorkspaceSnapshotError({ code: "unsupported_snapshot" });
-        // Git's deletion scan retains dangling symlinks, unlike a filesystem stat.
-        const deletedPaths = new Set(splitNullSeparatedGitStdoutPaths(deletions));
-        const presentPaths = splitNullSeparatedGitStdoutPaths(additions).filter(
-          (name) => !deletedPaths.has(name),
-        );
-        if (presentPaths.length > 0) {
-          yield* execute({
+        const staged = yield* Effect.gen(function* () {
+          const additions = yield* execute({
             operation,
             cwd: input.cwd,
             args: [
-              "--literal-pathspecs",
-              ...indexConfig,
-              ...durableWrite,
-              "add",
-              ...(sparseCheckout ? ["--sparse"] : []),
-              "-f",
-              "--pathspec-from-file=-",
-              "--pathspec-file-nul",
+              "diff",
+              "--cached",
+              "--no-renames",
+              "--name-only",
+              ...(input.strict ? [] : ["--relative"]),
+              "--diff-filter=A",
+              "-z",
+              capturedHead!,
+              "--",
+              ...(input.strict ? [] : ["."]),
             ],
-            stdin: presentPaths.join("\0") + "\0",
-            env: commitEnv,
+            maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
           });
+          const deletions = yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["ls-files", "--deleted", "-z"],
+            maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+          });
+          return { additions, deletions };
+        }).pipe(Effect.result);
+        if (
+          staged._tag === "Failure" ||
+          staged.success.additions.stdoutTruncated ||
+          staged.success.deletions.stdoutTruncated
+        ) {
+          if (input.strict) {
+            if (staged._tag === "Failure") return yield* staged.failure;
+            return yield* new GitWorkspaceSnapshotError({ code: "unsupported_snapshot" });
+          }
+          omittedContents = true;
+        } else {
+          const { additions, deletions } = staged.success;
+          // Git's deletion scan retains dangling symlinks, unlike a filesystem stat.
+          const deletedPaths = new Set(splitNullSeparatedGitStdoutPaths(deletions));
+          const presentPaths = splitNullSeparatedGitStdoutPaths(additions).filter(
+            (name) => !deletedPaths.has(name),
+          );
+          if (presentPaths.length > 0) {
+            yield* execute({
+              operation,
+              cwd: input.cwd,
+              args: [
+                "--literal-pathspecs",
+                ...indexConfig,
+                ...durableWrite,
+                "add",
+                ...(sparseCheckout ? ["--sparse"] : []),
+                "-f",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+              ],
+              stdin: presentPaths.join("\0") + "\0",
+              env: commitEnv,
+            });
+          }
         }
       }
 
@@ -1298,6 +1318,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                     }
                   }
                   if (exclusions.length === 0) return yield* error;
+                  omittedContents = true;
                   return yield* stageFiles(exclusions);
                 }).pipe(
                   // One budget covers discovery, queued Git admission, probes, and the staging retry.
@@ -1326,6 +1347,19 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         });
       }
 
+      // A gitlink preserves only the nested HEAD, never its dirty contents or objects.
+      // Seal completeness at production time; an exporter cannot reconstruct omitted paths
+      // by inspecting the immutable tree, nor safely substitute the later live workspace.
+      const treeEntries = yield* execute({
+        operation,
+        cwd: input.cwd,
+        args: ["ls-tree", "-r", "-z", treeOid],
+        maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+      });
+      const complete =
+        !omittedContents &&
+        !treeEntries.stdoutTruncated &&
+        !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
         ? `t3 snapshot ref=${input.ref}`
         : `t3 checkpoint ref=${input.ref}`;
@@ -1404,7 +1438,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           args: [...durableWrite, "update-ref", input.ref, commitOid],
         });
       }
-      return { snapshotRef: input.ref, commitOid, addedUntrackedPaths };
+      return { snapshotRef: input.ref, commitOid, addedUntrackedPaths, complete };
     }).pipe(Effect.ensuring(cleanupTempIndex));
   });
 
@@ -1415,7 +1449,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ref: input.checkpointRef,
         strict: false,
       }).pipe(
-        Effect.asVoid,
+        Effect.map(({ commitOid, complete }) => ({ commitOid, complete })),
         Effect.mapError((error) =>
           error._tag === "GitWorkspaceSnapshotError"
             ? new VcsProcessExitError({
@@ -1666,7 +1700,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         ref: input.snapshotRef,
         strict: true,
-      }),
+      }).pipe(Effect.map(({ complete: _complete, ...snapshot }) => snapshot)),
     checkpoints,
     detectRepository,
     isInsideWorkTree,

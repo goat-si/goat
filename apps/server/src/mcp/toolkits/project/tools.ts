@@ -18,6 +18,9 @@ import {
   RemoteReportBindingInput,
   RunId,
   RuntimeMode,
+  RepositoryReferenceRequest,
+  RepositoryReferenceSnapshot,
+  RepositoryReferences,
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   ThreadId,
@@ -34,6 +37,7 @@ import * as SourceControlRepositoryService from "../../../sourceControl/SourceCo
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import { NotifyTargetInput } from "../../completionWebhook.ts";
 import { McpAttachmentInput } from "../attachment/input.ts";
@@ -111,6 +115,7 @@ const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.clone"]));
 export const ThreadLaunchParameters = Schema.Struct({
+  references: Schema.optional(RepositoryReferences),
   projectId: Schema.optional(ProjectId),
   scratch: Schema.optional(
     Schema.Boolean.annotate({
@@ -206,11 +211,26 @@ const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadLaunchMcpService.ThreadLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
     ThreadManagementService.ThreadManagementService,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.launch"]));
 
+const RepositorySnapshotTool = Tool.make(agentSurfaceRegistry["repository.snapshot"].name, {
+  description: agentSurfaceRegistry["repository.snapshot"].description,
+  parameters: RepositoryReferenceRequest,
+  success: RepositoryReferenceSnapshot,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["repository.snapshot"]));
+
 export const ProjectToolkit = Toolkit.make(
+  RepositorySnapshotTool,
   ThreadLaunchTool,
   ProjectListTool,
   ProjectReadTool,

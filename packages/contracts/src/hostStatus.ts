@@ -16,7 +16,8 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
-import { OpenCodexInventorySnapshot } from "./opencodex.ts";
+import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
+import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
 
 /**
@@ -62,6 +63,11 @@ export const HostThreadCounts = Schema.Struct({
   queued: NonNegativeInt.annotate({
     description: "Threads with a queued turn that has not started.",
   }),
+  subagentsRunning: Schema.optional(
+    NonNegativeInt.annotate({
+      description: "Subagent threads running a turn. Older hosts omit it.",
+    }),
+  ),
 });
 export type HostThreadCounts = typeof HostThreadCounts.Type;
 
@@ -205,6 +211,7 @@ export type HostCompatibility = typeof HostCompatibility.Type;
  * `lastKnown: true` repeats the last successful metrics.
  */
 export const HostStatusEntry = Schema.Struct({
+  repositories: Schema.optional(RepositoryInventorySnapshot),
   host: Schema.NullOr(TrimmedNonEmptyString),
   reachability: HostStatusReachability,
   lastKnown: Schema.optional(Schema.Literal(true)),
@@ -227,6 +234,8 @@ export const HostStatusEntry = Schema.Struct({
   /** Self-healing conditions this machine derived for the host. Older servers omit it. */
   conditions: Schema.optional(Schema.Array(HostCondition)),
   parity: ForwardCompatibleOptional(HubParityResult),
+  /** Managed OpenCodex updates this machine coordinates. Only the answering machine sets it. */
+  opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
 });
@@ -246,6 +255,10 @@ const HostAlias = TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate(
 });
 
 export const GoatHostStatusInput = Schema.Struct({
+  repositories: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Include a bounded inventory of registered projects and their Git worktrees. Local tracking refs only; no fetch or install. Cached for up to 15 seconds.",
+  }),
   parityEvidence: Schema.optional(Schema.Boolean).annotate({
     description:
       "With local:true, collect fresh read-only hub parity evidence, including one GET /v1/models.",

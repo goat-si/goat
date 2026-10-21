@@ -11,6 +11,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import { newCommandId, readCaller, unavailable } from "../../threadAccess.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import { ProjectToolkit } from "./tools.ts";
 
 function projectFailure(error: Project.ProjectServiceError) {
@@ -54,6 +55,15 @@ const readOnHost = <A extends object, E>(
   });
 
 export const layer = McpToolAccess.toLayer(ProjectToolkit, {
+  goat_repository_snapshot: McpToolAccess.readsOrReachesHost(
+    (input) => input.host != null,
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const references = yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService;
+        return yield* references.read(scope, input);
+      }),
+  ),
   goat_thread_launch: McpToolAccess.destructive(
     McpToolAccess.startsThreads(
       (input) => input,
@@ -62,7 +72,17 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const launches = yield* ThreadLaunchMcpService.ThreadLaunchMcpService;
           const pressure = yield* admitLaunch(null);
-          return withPressure(yield* launches.launch(scope, input, modes), pressure);
+          if (input.references === undefined || input.references.length === 0)
+            return withPressure(yield* launches.launch(scope, input, modes), pressure);
+          const references = yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService;
+          const message = yield* references.prepareBrief(scope, {
+            message: input.message,
+            references: input.references,
+          });
+          return withPressure(
+            yield* launches.launch(scope, { ...input, message }, modes),
+            pressure,
+          );
         }),
     ),
   ),

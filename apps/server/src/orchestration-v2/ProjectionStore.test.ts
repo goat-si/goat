@@ -668,6 +668,7 @@ it.effect.each([
       const assertOwners = Effect.fnUntraced(function* (
         targetThreadId: ThreadId,
         expected: ReadonlyArray<unknown>,
+        natives: ReadonlyArray<unknown>,
       ) {
         const listed = (yield* store.getShellSnapshot()).threads.find(
           (thread) => thread.id === targetThreadId,
@@ -679,13 +680,21 @@ it.effect.each([
             shell?.pendingBackgroundTasks?.filter((task) => task.kind === "subagent"),
             expected,
           );
+          assert.deepEqual(shell?.nativeSubagents, natives);
         }
       });
       const owned = [
         { taskId: nativeTaskId, description: item.title, kind: "subagent", providerInstanceId },
       ];
-      yield* assertOwners(threadId, owned);
-      yield* assertOwners(otherThreadId, owned);
+      const nativeOf = (subagentId: NodeId) => [
+        { id: subagentId, childThreadId: null, title: "Review", status: "running" },
+      ];
+      yield* assertOwners(threadId, owned, nativeOf(item.subagentId));
+      yield* assertOwners(
+        otherThreadId,
+        owned,
+        nativeOf(NodeId.make("node:duplicate-provider-thread-owner:other")),
+      );
       yield* store.apply({
         id: EventId.make("event:duplicate-provider-thread-owner:stopped"),
         type: "turn-item.updated",
@@ -693,7 +702,7 @@ it.effect.each([
         occurredAt: at,
         payload: { ...item, status: "cancelled", completedAt: at },
       });
-      yield* assertOwners(threadId, []);
+      yield* assertOwners(threadId, [], []);
       const ownerSnapshot = (yield* store.getThreadProjection(threadId)).providerThreads[0]!;
       // Rollback writes its provider snapshot before the rolled-back run events.
       yield* store.apply({
@@ -720,6 +729,7 @@ it.effect.each([
         ProjectionStore.threadShellFromProjection(rolledBack).pendingBackgroundTasks,
         [],
       );
+      assert.deepEqual(ProjectionStore.threadShellFromProjection(rolledBack).nativeSubagents, []);
     }).pipe(Effect.provide(layer)),
 );
 

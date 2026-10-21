@@ -22,6 +22,17 @@ export interface HostThreadCountSource {
 
 const RUNNING = new Set(["preparing", "starting", "running"]);
 
+/** Subagent threads running a turn, which `countHostThreads` leaves out of its display counts. */
+export function runningSubagents(threads: ReadonlyArray<HostThreadCountSource>): number {
+  return threads.filter(
+    (thread) =>
+      thread.deletedAt == null &&
+      thread.archivedAt == null &&
+      thread.lineage.relationshipToParent === "subagent" &&
+      (RUNNING.has(thread.activityRunStatus ?? "") || RUNNING.has(thread.status)),
+  ).length;
+}
+
 export function countHostThreads(threads: ReadonlyArray<HostThreadCountSource>): HostThreadCounts {
   const counts = { running: 0, waiting: 0, queued: 0 };
   for (const thread of threads) {

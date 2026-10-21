@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -180,7 +181,7 @@ const runService = <A, E>(
       Layer.mock(LaunchWatchService.LaunchWatchService)({
         rearm: (input) => Effect.sync(() => void rearms.push(input)),
         find: () => Effect.succeed(options.watch ?? null),
-      }),
+      }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
     ),
     Layer.provide(
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
@@ -492,6 +493,54 @@ describe("HostThreadsMcpService", () => {
         expect(result._tag === "Success" ? result.success.cloudTask : null).toEqual(
           cloud ? remoteCloudTask : undefined,
         );
+      }),
+  );
+
+  it.effect(
+    "returns local replica status when the source is unreachable without exposing contents",
+    () =>
+      Effect.gen(function* () {
+        const watch = {
+          pendingRuns: [],
+          reportedRuns: [],
+          notifyWebhook: false,
+          webhookTarget: null,
+          title: "Offline work",
+          updatedAt: 1000,
+          checkpointReplication: "on",
+          replica: {
+            runId: "copy-run",
+            capturedAt: "2026-10-13T01:00:00.000Z",
+            bytes: 100,
+            sha256: "a".repeat(64),
+            contextSha256: "b".repeat(64),
+            repositoryKey: "github.com/example/repo",
+          },
+        } as unknown as LaunchWatch;
+        const { result } = yield* runService(
+          {
+            interactionMode: "default",
+            watch,
+            hostCall: () =>
+              Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "host_unavailable",
+                  message: "offline",
+                }),
+              ),
+          },
+          (service) =>
+            service.threadStatus(scope, { host: "box", threadId: ThreadId.make("remote") }),
+        );
+        expect(result._tag).toBe("Success");
+        if (result._tag !== "Success") return;
+        expect(result.success.remoteUnavailable).toBe(true);
+        expect(result.success.terminal).toBe(false);
+        expect(result.success.run).toBeNull();
+        expect(result.success.replicaStatus?.replica?.runId).toBe("copy-run");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("bundleBase64");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("context");
+        expect(result.success.replicaStatus?.replica).not.toHaveProperty("file");
       }),
   );
 

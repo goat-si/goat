@@ -19,6 +19,8 @@ import {
   OrchestratorMcpFailure,
   ProviderInteractionMode,
   RuntimeMode,
+  RepositoryLaunchSelection,
+  RepositoryReferences,
   TrimmedNonEmptyString,
   SshLaunchWorkspace,
   SshWorkspaceCode,
@@ -38,6 +40,8 @@ import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 import { McpAttachmentInput } from "../attachment/input.ts";
@@ -202,8 +206,18 @@ const SshBrowseTool = Tool.make(agentSurfaceRegistry["ssh.browse"].name, {
 
 const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].name, {
   ...shared,
+  dependencies: [
+    ...shared.dependencies,
+    RepositoryLaunchMcpService.RepositoryLaunchMcpService,
+    RepositoryReferenceMcpService.RepositoryReferenceMcpService,
+  ],
   description: agentSurfaceRegistry["ssh.thread_launch"].description,
   parameters: Schema.Struct({
+    repository: Schema.optional(RepositoryLaunchSelection).annotate({
+      description:
+        "Verify this normalized origin key at the selected absolute cwd (or existing_worktree path) before launch. Refuses missing, mismatched or unsupported inventory; suggests matching local/explicit candidateHosts checkouts. Does not fetch, install, or choose a host.",
+    }),
+    references: Schema.optional(RepositoryReferences),
     host: TrimmedNonEmptyString.annotate({
       description:
         "An SSH host alias from goat_ssh_host_list, or a linked host name from goat_host_link_list.",

@@ -7,6 +7,7 @@ import {
 import { fleetMachineHeat, type FleetMachineHeat } from "@goat/client-runtime/state/fleet-heat";
 import {
   EnvironmentId,
+  NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -156,6 +157,23 @@ function demoMachines(): ReadonlyArray<{
   ];
 }
 
+/** Native subagents on one demo thread, so its row shows the "+N" they collapse into. */
+const DEMO_NATIVE_SUBAGENTS: NonNullable<FleetShell["nativeSubagents"]> = [
+  {
+    id: NodeId.make("demo-native-1"),
+    childThreadId: null,
+    title: "/root/reader",
+    status: "running",
+  },
+  {
+    id: NodeId.make("demo-native-2"),
+    childThreadId: null,
+    title: "/root/tester",
+    status: "running",
+  },
+  { id: NodeId.make("demo-native-3"), childThreadId: null, title: "Explore", status: "waiting" },
+];
+
 function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
   const at = "2026-10-20T00:00:00.000Z";
   return {
@@ -175,6 +193,7 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
     hasPendingUserInput: false,
     pendingSubagentRequest: null,
     pendingBackgroundTasks: [],
+    nativeSubagents: id === "macmini-0" ? DEMO_NATIVE_SUBAGENTS : [],
     archivedAt: null,
     deletedAt: null,
     sideChatOf: null,

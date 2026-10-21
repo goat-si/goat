@@ -721,3 +721,34 @@ describe("automatic server updates", () => {
     expect(() => decodeServerSettingsPatch({ automaticServerUpdates })).toThrow();
   });
 });
+
+describe("channel automatic placement settings", () => {
+  it("requires an explicit opt-in and uses normal settings write permission", () => {
+    expect(decodeServerSettings({}).channelAutoPlacement).toBe(false);
+    const patch = decodeServerSettingsPatch({ channelAutoPlacement: true });
+    expect(patch.channelAutoPlacement).toBe(true);
+    expect(requiredScopesForServerSettingsPatch(patch)).toContain("settings:write");
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings(patch))).channelAutoPlacement,
+    ).toBe(true);
+    expect(decodeServerSettingsPatch({ channelAutoPlacement: false }).channelAutoPlacement).toBe(
+      false,
+    );
+  });
+});
+
+describe("host checkpoint replication settings", () => {
+  it("keeps omission distinct from on and off and preserves host placement fields", () => {
+    expect(decodeServerSettings({}).fleet.hosts).toBeUndefined();
+    const fleet = {
+      hosts: { box: { maxThreads: 4, allowGoals: false, checkpointReplication: "off" } },
+    };
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings({ fleet }))).fleet,
+    ).toEqual(fleet);
+    expect(decodeServerSettingsPatch({ fleet })).toEqual({ fleet });
+    expect(() =>
+      decodeServerSettings({ fleet: { hosts: { box: { checkpointReplication: "automatic" } } } }),
+    ).toThrow();
+  });
+});

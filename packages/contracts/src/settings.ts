@@ -1378,6 +1378,8 @@ export const ServerSettings = Schema.Struct({
   goatBotModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** Allow channel work to use already-connected machines with the same repository. */
+  channelAutoPlacement: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   memoryHubVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   memoryHub: MemoryHubSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({ mode: "disabled" as const })),
@@ -1834,6 +1836,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
   memoryModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   goatBotModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  channelAutoPlacement: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),

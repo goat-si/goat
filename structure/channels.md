@@ -48,6 +48,15 @@ writes a task. A later pass has `ChannelDispatcher` in `apps/server/src/channels
 launch a worker thread through `ThreadLaunchService.launch`, with the task text as the initial
 message. The worker is an ordinary thread. Its completion is delivered back on the channel outbox.
 
+Automatic placement is off unless the home environment opts in. The dispatcher probes connected
+SSH candidates outside its claim lock, then ranks with fresh ledger load inside that lock.
+`apps/server/src/channels/ChannelRemoteWorkers.ts` admits only an exact canonical repository and
+keeps the requested model; automatic targets retain their source project for a retry.
+`apps/server/src/channels/channelDispatchAuthority.ts` rechecks external grants before dispatch,
+and discovery uses existing SSH sessions without preparing hosts or issuing grants. Claimed work
+can renew a connection only within its recorded grant; it never prepares a runtime or registers
+a project. Project provider permissions come through the existing provider diagnosis path.
+
 A reception may first choose `read`: `ChannelReceptionService` runs the lookups (bot notes from
 `channelBotNotes.ts`, a journal built from ledger tasks, GOAT memory through `MemoryService.search`,
 ledger tasks,

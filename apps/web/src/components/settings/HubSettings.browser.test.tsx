@@ -17,7 +17,7 @@ import { render } from "../../../test/render";
 import "../../index.css";
 
 const state = vi.hoisted(() => ({
-  settings: undefined as unknown,
+  settings: new Map<string, unknown>(),
   hosts: undefined as unknown,
   permission: vi.fn(),
   update: vi.fn(),
@@ -37,8 +37,8 @@ vi.mock("../../state/server", () => ({
 vi.mock("~/hooks/useSettings", async () => {
   const { useAtomValue } = await import("@effect/atom-react");
   return {
-    useEnvironmentSettings: (_id: string, select: (settings: ServerSettings) => unknown) =>
-      select(useAtomValue(state.settings as Atom.Atom<ServerSettings>)),
+    useEnvironmentSettings: (id: string, select: (settings: ServerSettings) => unknown) =>
+      select(useAtomValue(state.settings.get(id) as Atom.Atom<ServerSettings>)),
   };
 });
 vi.mock("~/state/hostStatus", () => ({
@@ -46,6 +46,15 @@ vi.mock("~/state/hostStatus", () => ({
   hostStatusAtom: () => state.hosts,
   refreshHostStatus: () => undefined,
 }));
+// macmini-ts has its own GOAT connection; lidge-ts does not.
+vi.mock("~/state/fleet", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    fleetEnvironmentsAtom: Atom.make([
+      { environmentId: "macmini-environment", label: "Mac mini", sshAliases: ["macmini-ts"] },
+    ]),
+  };
+});
 vi.mock("~/hooks/useLiveRefresh", () => ({ useLiveRefresh: () => undefined }));
 vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("./SettingsScopeContext", () => ({ useSettingsScope: state.scope }));
@@ -76,6 +85,7 @@ vi.mock("./settingsLayout", () => ({
 import { HubSettings } from "./HubSettings";
 
 const environmentId = EnvironmentId.make("hub-environment");
+const macminiEnvironment = EnvironmentId.make("macmini-environment");
 
 function opencodex(role: "home" | "child"): OpenCodexInventorySnapshot {
   return {
@@ -120,7 +130,11 @@ function host(name: string | null, parity?: HubParityResult): HostStatusEntry {
       disk: null,
       threads: { running: 0, waiting: 0, queued: 0 },
       quotas: [],
-      opencodex: opencodex(name === null ? "home" : "child"),
+      opencodex: {
+        ...opencodex(name === null ? "home" : "child"),
+        // The Home allows this Child to use its own providers (OCX-11).
+        ...(name === "macmini-ts" ? { fallback: { source: "home", localFallback: true } } : {}),
+      },
     },
     ...(parity ? { parity } : {}),
   };
@@ -138,7 +152,12 @@ const degraded: HubParityResult = {
 
 function setup() {
   const registry = AtomRegistry.make();
-  const settings = Atom.make<ServerSettings>(DEFAULT_SERVER_SETTINGS);
+  const settings = new Map(
+    [environmentId, macminiEnvironment].map((id) => [
+      id,
+      Atom.make<ServerSettings>(DEFAULT_SERVER_SETTINGS),
+    ]),
+  );
   const source = Atom.make(
     AsyncResult.success<GoatHostStatusResult>({
       hosts: [host(null), host("macmini-ts", degraded), host("lidge-ts")],
@@ -158,18 +177,20 @@ function setup() {
       entry: { target: { _tag: "PrimaryConnectionTarget" } },
     },
   });
-  state.update
-    .mockReset()
-    .mockImplementation(
-      async (
-        _registry: unknown,
-        { input }: { input: { patch: { hub: Partial<ServerSettings["hub"]> } } },
-      ) => {
-        const next = registry.get(settings);
-        registry.set(settings, { ...next, hub: { ...next.hub, ...input.patch.hub } });
-        return { _tag: "Success", value: undefined };
+  state.update.mockReset().mockImplementation(
+    async (
+      _registry: unknown,
+      target: {
+        environmentId: EnvironmentId;
+        input: { patch: { hub: Partial<ServerSettings["hub"]> } };
       },
-    );
+    ) => {
+      const atom = settings.get(target.environmentId)!;
+      const next = registry.get(atom);
+      registry.set(atom, { ...next, hub: { ...next.hub, ...target.input.patch.hub } });
+      return { _tag: "Success", value: undefined };
+    },
+  );
   state.verify.mockReset().mockImplementation(async () => {
     const parity: HubParityResult = {
       verdict: "ok",
@@ -214,10 +235,16 @@ it("shows each device's verdict and failing checks, and Verify replaces a missin
     environmentId,
     input: { deviceAlias: "lidge-ts" },
   });
-  await expect.element(lidge.getByText("OpenCodex fallback: unknown")).toBeVisible();
+  await expect.element(macmini.getByText("OpenCodex allows it: yes")).toBeVisible();
+  await expect
+    .element(lidge.getByText("Connect to lidge-ts in GOAT to change this", { exact: false }))
+    .toBeVisible();
+  await expect
+    .element(lidge.getByRole("switch", { name: /own sign-in when the hub is down/ }))
+    .toBeDisabled();
 });
 
-it("turns the hub and a device's own sign-in on and back off", async () => {
+it("turns the hub on and off here, and a device's own sign-in on and off on that device", async () => {
   using fixture = setup();
   await using screen = await render(
     <RegistryContext value={fixture.registry}>
@@ -241,10 +268,13 @@ it("turns the hub and a device's own sign-in on and back off", async () => {
   await expect.element(fallback).toBeChecked();
   await userEvent.click(fallback);
   await expect.element(fallback).not.toBeChecked();
-  expect(state.update.mock.calls.map((call) => call[1].input.patch)).toEqual([
-    { hub: { enabled: true } },
-    { hub: { enabled: false } },
-    { hub: { devices: { "macmini-ts": { localFallback: true } } } },
-    { hub: { devices: { "macmini-ts": { localFallback: false } } } },
+  // The hub-down policy reads the device's own "local" entry, so the switch writes there.
+  expect(
+    state.update.mock.calls.map((call) => [call[1].environmentId, call[1].input.patch]),
+  ).toEqual([
+    [environmentId, { hub: { enabled: true } }],
+    [environmentId, { hub: { enabled: false } }],
+    [macminiEnvironment, { hub: { devices: { local: { localFallback: true } } } }],
+    [macminiEnvironment, { hub: { devices: { local: { localFallback: false } } } }],
   ]);
 });

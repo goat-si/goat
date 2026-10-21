@@ -154,6 +154,17 @@ describe("presentTaskChip", () => {
         chip({ originKind: "slack", worker, placementReason: "Codex · 46% weekly used" }),
       ).sourceLabel,
     ).toBe("Slack · Jun · on mac-studio · Codex · 46% weekly used");
+    expect(
+      presentTaskChip(chip({ worker, placementReason: "mac-studio · Codex · 20% weekly used" }))
+        .sourceLabel,
+    ).toBe("Jun · on mac-studio · Codex · 20% weekly used");
+    expect(
+      presentTaskChip({
+        ...noWorker,
+        status: "dispatching",
+        placementReason: "mac-studio · Codex · 20% weekly used",
+      }).sourceLabel,
+    ).toBe("Jun · mac-studio · Codex · 20% weekly used");
   });
 
   it("counts open questions and drops an empty summary", () => {

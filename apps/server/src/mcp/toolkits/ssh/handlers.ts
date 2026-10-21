@@ -22,6 +22,8 @@ import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
+import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
@@ -312,15 +314,27 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           .validateLaunchAttachments(input.attachments ?? [])
           .pipe(Effect.mapError(toMcpFailure));
         const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+        const referenceMessage =
+          input.references === undefined || input.references.length === 0
+            ? input.message
+            : yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService.pipe(
+                Effect.flatMap((references) =>
+                  references.prepareBrief(caller.scope, {
+                    message: input.message,
+                    references: input.references!,
+                    defaultHost: input.host,
+                  }),
+                ),
+              );
         const launch: SshRemoteDispatch.SshLaunchInput = {
           host: input.host,
           cwd: input.cwd,
           workspace: sshLaunchWorkspace(input.workspace),
           title: input.title,
           message:
-            role === undefined || input.message === undefined
-              ? input.message
-              : goatclawRoleBrief(role, input.message),
+            role === undefined || referenceMessage === undefined
+              ? referenceMessage
+              : goatclawRoleBrief(role, referenceMessage),
           projectTitle: input.projectTitle,
           // The remote project usually has no default model, so a thread caller's own
           // model is the sensible default; an outside client must pass one.
@@ -336,6 +350,22 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
         };
         // A webhook choice is checked, and an inline secret kept, before anything runs remotely.
         const launchWatches = yield* LaunchWatchService.LaunchWatchService;
+        const repository = input.repository;
+        const repositoryNotes =
+          repository === undefined
+            ? []
+            : yield* RepositoryLaunchMcpService.RepositoryLaunchMcpService.pipe(
+                Effect.flatMap((service) =>
+                  service.check(scope, {
+                    host: input.host,
+                    path:
+                      input.workspace?.type === "existing_worktree"
+                        ? input.workspace.worktreePath
+                        : input.cwd,
+                    repository,
+                  }),
+                ),
+              );
         // Set in the same uninterruptible step that saves the watch, which then holds the route.
         // Until then any exit, interruption included, frees the secret the route kept.
         let routeKept = false;
@@ -485,6 +515,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                 ...(pressure === undefined ? {} : { pressure }),
                 notes: [
                   ...result.notes,
+                  ...repositoryNotes,
                   ...(watching && launcher === undefined
                     ? [
                         `This machine follows the thread on ${result.host} and posts to its completion webhook when the run ends, waits on a question, or if ${result.host} stays unreachable.`,

@@ -1,6 +1,7 @@
 import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Queue from "effect/Queue";
+import * as Context from "effect/Context";
 import * as Stream from "effect/Stream";
 import {
   NodeId,
@@ -611,7 +612,13 @@ describe("SshRemoteDispatch.callHostTool", () => {
                 wsBaseUrl: "ws://127.0.0.1:41000/",
                 pairingToken: null,
               }),
-        readyEnvironment: () => Effect.die("Unexpected ready environment"),
+        readyEnvironment: () =>
+          Effect.succeed({
+            target,
+            httpBaseUrl: "http://127.0.0.1:41000/",
+            wsBaseUrl: "ws://127.0.0.1:41000/",
+            pairingToken: null,
+          }),
         beginSetupOperation: () => Effect.die("Unexpected setup operation"),
         publishSetupOutcome: () => Effect.succeed(true),
         publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
@@ -1112,6 +1119,127 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect.each(
+    [
+      "goat_thread_checkpoint_capture",
+      "goat_thread_checkpoint_restore",
+      "goat_thread_checkpoint_reconcile",
+      "goat_thread_interrupt",
+    ].flatMap((tool) =>
+      ["missing", "expired", "revoked", "plan", "ceiling"].map((condition) => ({
+        tool,
+        condition,
+      })),
+    ),
+  )(
+    "305 strict $tool refuses $condition without session creation or renewal",
+    ({ tool, condition }) =>
+      Effect.gen(function* () {
+        let strict = false;
+        let plan = false;
+        const { result, record } = yield* withRemote(
+          {
+            ceilingApplied: condition !== "ceiling",
+            answer: (request) => {
+              if (strict && condition === "revoked") return { status: 401 };
+              if (strict && condition === "plan" && request.method === "initialize") plan = true;
+              return initialize(request) ?? { result: { structuredContent: {} } };
+            },
+          },
+          Effect.gen(function* () {
+            if (condition !== "missing") yield* readCall();
+            if (condition === "expired") yield* TestClock.adjust("13 hours");
+            strict = true;
+            const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+            const call = {
+              host,
+              tool,
+              arguments: { threadId: "owned-source", runId: "captured-run" },
+              timeoutMs: 5_000,
+              writes: true,
+              requireReady: true as const,
+              existingSessionOnly: true as const,
+            };
+            const authorize = Effect.suspend(() =>
+              plan
+                ? Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code: "capability_denied",
+                      message: "Caller is now in plan mode.",
+                    }),
+                  )
+                : Effect.succeed("full-access" as const),
+            );
+            const refused = yield* dispatch.callHostTool(call, authorize).pipe(Effect.result);
+            expect(refused._tag).toBe("Failure");
+            if (condition === "revoked") {
+              const replay = yield* dispatch.callHostTool(call, authorize).pipe(Effect.result);
+              expect(replay).toMatchObject({
+                _tag: "Failure",
+                failure: { reason: "host_unavailable" },
+              });
+            }
+          }),
+        );
+        expect(result._tag).toBe("Success");
+        expect(record.sessionsIssued).toBe(condition === "missing" ? 0 : 1);
+        expect(record.toolCalls.filter((called) => called === tool)).toEqual([]);
+      }),
+  );
+
+  it.effect("strict tools refuse HTTP 401 without retrying or minting a session", () =>
+    Effect.gen(function* () {
+      let reject = false;
+      let rejections = 0;
+      const { result, record } = yield* withRemote(
+        {
+          answer: (request) => {
+            if (reject) {
+              rejections += 1;
+              return { status: 401 };
+            }
+            return initialize(request) ?? { result: { structuredContent: {} } };
+          },
+        },
+        Effect.gen(function* () {
+          yield* readCall();
+          reject = true;
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const call = {
+            host,
+            tool: "goat_thread_read",
+            arguments: { threadId: "thread-1" },
+            timeoutMs: 5_000,
+            writes: false,
+            existingSessionOnly: true as const,
+          };
+          const refused = yield* dispatch
+            .callHostTool(call, Effect.succeed("full-access"))
+            .pipe(Effect.result);
+          expect(refused).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              reason: "remote_refused",
+              message: expect.stringContaining("reconnect explicitly"),
+            },
+          });
+          // A caller-level retry also remains strict after invalidation.
+          const retried = yield* dispatch
+            .callHostTool(call, Effect.succeed("full-access"))
+            .pipe(Effect.result);
+          expect(retried).toMatchObject({
+            _tag: "Failure",
+            failure: { reason: "host_unavailable" },
+          });
+        }),
+      );
+      expect(result._tag).toBe("Success");
+      expect(rejections).toBe(1);
+      expect(record.sessionsIssued).toBe(1);
+      expect(record.toolCalls).toEqual(["goat_thread_read"]);
+    }),
+  );
+
   it.effect("sends nothing when the caller's runtime mode drops during the handshake", () =>
     Effect.gen(function* () {
       let checks = 0;
@@ -1254,6 +1382,9 @@ const launchInput: SshRemoteDispatch.SshLaunchInput = {
 const withLaunchRemote = <A, E>(
   options: {
     existing?: boolean;
+    discoverSavedHost?: boolean;
+    beforeReady?: Effect.Effect<void>;
+    rejectSession?: () => boolean;
     ceilingApplied?: boolean;
     identity?: unknown;
     capabilities?: unknown;
@@ -1272,6 +1403,13 @@ const withLaunchRemote = <A, E>(
   body: (record: {
     tools: { name: string; args: Record<string, unknown>; authorization: string | null }[];
     targets: DesktopSshEnvironmentTarget[];
+    ensures: number;
+    readies: number;
+    sessionRequests: Array<{
+      ceiling: RuntimeMode;
+      memoryScopes: ReadonlyArray<string>;
+      requireReady: boolean;
+    }>;
     sessions: { target: DesktopSshEnvironmentTarget; ceiling: RuntimeMode }[];
   }) => Effect.Effect<A, E, SshRemoteDispatch.SshRemoteDispatch>,
 ) =>
@@ -1279,12 +1417,20 @@ const withLaunchRemote = <A, E>(
     const record = {
       tools: [] as { name: string; args: Record<string, unknown>; authorization: string | null }[],
       targets: [] as DesktopSshEnvironmentTarget[],
+      ensures: 0,
+      readies: 0,
+      sessionRequests: [] as Array<{
+        ceiling: RuntimeMode;
+        memoryScopes: ReadonlyArray<string>;
+        requireReady: boolean;
+      }>,
       sessions: [] as { target: DesktopSshEnvironmentTarget; ceiling: RuntimeMode }[],
     };
     const manager = SshTunnel.SshEnvironmentManager.of({
       status: () => Effect.die("Unexpected runtime status"),
       ensureEnvironment: (target) =>
         Effect.sync(() => {
+          record.ensures += 1;
           record.targets.push(target);
           return {
             target,
@@ -1293,7 +1439,17 @@ const withLaunchRemote = <A, E>(
             pairingToken: null,
           };
         }),
-      readyEnvironment: () => Effect.die("Unexpected ready environment"),
+      readyEnvironment: (target) =>
+        Effect.gen(function* () {
+          yield* options.beforeReady ?? Effect.void;
+          record.readies += 1;
+          return {
+            target,
+            httpBaseUrl: "http://fixture.invalid/",
+            wsBaseUrl: "ws://fixture.invalid/",
+            pairingToken: null,
+          };
+        }),
       beginSetupOperation: () => Effect.die("Unexpected setup operation"),
       publishSetupOutcome: () => Effect.succeed(true),
       publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
@@ -1305,6 +1461,11 @@ const withLaunchRemote = <A, E>(
         Effect.gen(function* () {
           yield* options.beforeSessionIssue?.(opts.memoryScopes ?? []) ?? Effect.void;
           record.sessions.push({ target, ceiling: opts.runtimeModeCeiling as RuntimeMode });
+          record.sessionRequests.push({
+            ceiling: opts.runtimeModeCeiling as RuntimeMode,
+            memoryScopes: opts.memoryScopes ?? [],
+            requireReady: opts.requireReady === true,
+          });
           return {
             token: `token-${record.sessions.length}`,
             expiresAt: null,
@@ -1323,7 +1484,13 @@ const withLaunchRemote = <A, E>(
           };
         }),
     });
-    const discover = vi.spyOn(SshConfig, "discoverSshHosts").mockReturnValue(Effect.succeed([]));
+    const discover = vi
+      .spyOn(SshConfig, "discoverSshHosts")
+      .mockReturnValue(
+        Effect.succeed(
+          options.discoverSavedHost ? [{ ...savedTarget, source: "ssh-config" as const }] : [],
+        ),
+      );
     const managerLayer = vi
       .spyOn(SshTunnel.SshEnvironmentManager, "layer")
       .mockReturnValue(Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
@@ -1350,6 +1517,7 @@ const withLaunchRemote = <A, E>(
         method: string;
         params?: { name?: string; arguments?: Record<string, unknown> };
       };
+      if (options.rejectSession?.()) return new Response(null, { status: 401 });
       if (req.method === "notifications/initialized") return new Response(null, { status: 202 });
       let result: unknown;
       if (req.method === "initialize")
@@ -1413,7 +1581,16 @@ const withLaunchRemote = <A, E>(
                   ? (options.identity ?? { environmentId: "remote" })
                   : name === "orchestrator_capabilities"
                     ? (options.capabilities ?? capabilityFixture)
-                    : (options.launchReply ?? { threadId: "rt", runId: "run" });
+                    : name === "goat_origin_reports_wait"
+                      ? {
+                          threadId: "rt",
+                          latestRunId: "run",
+                          reports: [],
+                          observedRun: { runId: "run", status: "running", summary: null },
+                          hasMore: false,
+                          timedOut: false,
+                        }
+                      : (options.launchReply ?? { threadId: "rt", runId: "run" });
           result = {
             content: [{ type: "text", text: JSON.stringify(value) }],
             structuredContent: value,
@@ -4094,3 +4271,224 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
     );
   }),
 );
+
+it.effect(
+  "automatic placement refuses a new grant without bootstrapping or registering a project",
+  () =>
+    withLaunchRemote({ existing: true }, (record) =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const refused = yield* dispatch
+          .launchThread({ ...launchInput, existingSessionOnly: true }, Effect.void)
+          .pipe(Effect.flip);
+        expect(refused.reason).toBe("host_unavailable");
+        expect(record.ensures).toBe(0);
+        expect(record.sessions).toHaveLength(0);
+        expect(record.tools).toHaveLength(0);
+      }),
+    ),
+);
+
+it.effect(
+  "automatic placement reuses an existing exact grant and never creates a missing project",
+  () =>
+    withLaunchRemote({ existing: true }, (record) =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        yield* dispatch.launchThread(launchInput, Effect.void);
+        const firstSessions = record.sessions.length;
+        const firstEnsures = record.ensures;
+        yield* dispatch.launchThread({ ...launchInput, existingSessionOnly: true }, Effect.void);
+        expect(record.sessions).toHaveLength(firstSessions);
+        expect(record.ensures).toBe(firstEnsures);
+        expect(record.readies).toBe(2);
+        expect(record.tools.filter((tool) => tool.name === "goat_project_create")).toHaveLength(0);
+        const refused = yield* dispatch
+          .launchThread(
+            { ...launchInput, existingSessionOnly: true, memoryGrantCeiling: "read" },
+            Effect.void,
+          )
+          .pipe(Effect.flip);
+        expect(refused.reason).toBe("host_unavailable");
+        expect(record.sessions).toHaveLength(firstSessions);
+      }),
+    ),
+);
+
+it.effect("strict launch refuses a rejected cached credential across caller retries", () => {
+  let reject = false;
+  return withLaunchRemote({ existing: true, rejectSession: () => reject }, (record) =>
+    Effect.gen(function* () {
+      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+      yield* dispatch.launchThread(launchInput, Effect.void);
+      reject = true;
+      const refused = yield* dispatch
+        .launchThread({ ...launchInput, existingSessionOnly: true }, Effect.void)
+        .pipe(Effect.result);
+      expect(refused).toMatchObject({ _tag: "Failure", failure: { reason: "remote_refused" } });
+      const retried = yield* dispatch
+        .launchThread({ ...launchInput, existingSessionOnly: true }, Effect.void)
+        .pipe(Effect.result);
+      expect(retried).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+      expect(record.sessions).toHaveLength(1);
+      expect(record.ensures).toBe(1);
+      expect(record.tools.filter((tool) => tool.name === "goat_thread_launch")).toHaveLength(1);
+    }),
+  );
+});
+
+it.effect("strict cached transport checks the current caller before sending an RPC", () => {
+  let permitted = true;
+  const revoked = new Error("caller revoked");
+  return withLaunchRemote({ existing: true, discoverSavedHost: true }, (record) =>
+    Effect.gen(function* () {
+      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+      yield* dispatch.launchThread(launchInput, Effect.void);
+      const toolsBefore = record.tools.length;
+      const authorize = Effect.suspend(() =>
+        permitted ? Effect.succeed(launchInput.callerRuntimeMode) : Effect.fail(revoked),
+      );
+      permitted = false;
+      const result = yield* dispatch
+        .callHostTool(
+          {
+            host: savedTarget.alias,
+            tool: "goat_thread_read",
+            arguments: { threadId: "rt" },
+            timeoutMs: 1000,
+            writes: false,
+            existingSessionOnly: true,
+          },
+          authorize,
+        )
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure).toBe(revoked);
+      const launch = yield* dispatch
+        .launchThread({ ...launchInput, existingSessionOnly: true }, authorize.pipe(Effect.asVoid))
+        .pipe(Effect.result);
+      expect(launch._tag).toBe("Failure");
+      if (launch._tag === "Failure") expect(launch.failure).toBe(revoked);
+      expect(record.tools).toHaveLength(toolsBefore);
+      expect(record.sessions).toHaveLength(1);
+      expect(record.ensures).toBe(1);
+    }),
+  );
+});
+
+it.effect(
+  "a fresh real SSH transport renews only the accepted grant to observe the same worker",
+  () =>
+    withLaunchRemote(
+      { existing: true, discoverSavedHost: true, declaresMemoryCeiling: true },
+      (record) =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const accepted = {
+            ...launchInput,
+            callerRuntimeMode: "auto-accept-edits" as const,
+            memoryGrantCeiling: "read" as const,
+          };
+          yield* dispatch.launchThread(accepted, Effect.void);
+          const fresh = yield* Layer.build(
+            Layer.fresh(
+              SshRemoteDispatch.layer.pipe(
+                Layer.provide(ServerSettings.layerTest()),
+                Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "placement-restart-" })),
+                Layer.provide(FetchHttpClient.layer),
+                Layer.provide(NodeServices.layer),
+              ),
+            ),
+          );
+          const recovered = Context.get(fresh, SshRemoteDispatch.SshRemoteDispatch);
+          const read = {
+            host: savedTarget.alias,
+            tool: "goat_origin_reports_wait",
+            arguments: {
+              correlationId: "fixture-binding",
+              readKey: "fixture-read-key",
+              afterSequence: 0,
+              timeoutMs: 0,
+              knownRun: null,
+              watchRunId: null,
+            },
+            writes: false,
+            timeoutMs: 1000,
+            requireReady: true as const,
+            memoryGrantCeiling: "read" as const,
+          };
+          const unavailable = yield* recovered
+            .callHostTool(
+              { ...read, existingSessionOnly: true },
+              Effect.succeed("auto-accept-edits" as const),
+            )
+            .pipe(Effect.result);
+          expect(unavailable._tag).toBe("Failure");
+          if (unavailable._tag === "Failure")
+            expect(unavailable.failure.reason).toBe("host_unavailable");
+          expect(record.sessions).toHaveLength(1);
+          const result = yield* recovered.callHostTool(
+            read,
+            Effect.succeed("auto-accept-edits" as const),
+          );
+          expect(result).toMatchObject({
+            threadId: "rt",
+            latestRunId: "run",
+            observedRun: { status: "running" },
+          });
+          expect(record.sessionRequests).toEqual([
+            { ceiling: "auto-accept-edits", memoryScopes: ["memory:read"], requireReady: false },
+            { ceiling: "auto-accept-edits", memoryScopes: ["memory:read"], requireReady: true },
+          ]);
+          expect(record.ensures).toBe(1);
+          expect(record.tools.filter((tool) => tool.name === "goat_thread_launch")).toHaveLength(1);
+          expect(record.tools.filter((tool) => tool.name === "goat_project_create")).toHaveLength(
+            0,
+          );
+        }).pipe(Effect.scoped),
+    ),
+);
+
+it.effect("a revoked caller cannot renew a ready SSH transport session", () => {
+  let permitted = true;
+  let checks = 0;
+  const revoked = new Error("caller grant revoked");
+  return withLaunchRemote(
+    {
+      existing: true,
+      discoverSavedHost: true,
+      beforeReady: Effect.sync(() => {
+        permitted = false;
+      }),
+    },
+    (record) =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const authorize = Effect.suspend(() => {
+          checks += 1;
+          return permitted ? Effect.succeed("auto-accept-edits" as const) : Effect.fail(revoked);
+        });
+        const result = yield* dispatch
+          .callHostTool(
+            {
+              host: savedTarget.alias,
+              tool: "goat_origin_reports_wait",
+              arguments: {},
+              writes: false,
+              timeoutMs: 1000,
+              requireReady: true,
+              memoryGrantCeiling: "read",
+            },
+            authorize,
+          )
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure).toBe(revoked);
+        expect(checks).toBe(2);
+        expect(record.readies).toBe(1);
+        expect(record.sessionRequests).toHaveLength(0);
+        expect(record.ensures).toBe(0);
+        expect(record.tools).toHaveLength(0);
+      }),
+  );
+});

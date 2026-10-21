@@ -161,6 +161,23 @@ const serverModel = { instanceId: ProviderInstanceId.make("codex"), model: "serv
 /** What the fake providers list; anything else counts as not offered. */
 const offeredModels = ["gpt-6.1-sol", "gpt-other", "server-default"];
 
+/** The one signed-in Codex account on this machine, listing only the offered models. */
+const codexInstance = (offered: ReadonlyArray<string>) =>
+  ({
+    instanceId: ProviderInstanceId.make("codex"),
+    driverKind: "codex",
+    enabled: true,
+    snapshot: {
+      getSnapshot: Effect.succeed({
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        models: offered.map((slug) => ({ slug })),
+      }),
+    },
+  }) as never;
+
 /**
  * The server's channel graph with the live Slack layers; only the SDK is fake. Providers resolve
  * except the missing instance.
@@ -188,19 +205,9 @@ const liveChannels = (
         }),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           getInstance: (id) =>
-            Effect.succeed(
-              id === missingInstance
-                ? undefined
-                : ({
-                    snapshot: {
-                      getSnapshot: Effect.succeed({
-                        models: offered.map((slug) => ({ slug })),
-                      }),
-                    },
-                  } as never),
-            ),
-          // No other accounts, so placement keeps the configured one.
-          listInstances: Effect.succeed([]),
+            Effect.succeed(id === missingInstance ? undefined : codexInstance(offered)),
+          // Only the configured account, so placement keeps it.
+          listInstances: Effect.succeed([codexInstance(offered)]),
         }),
       ),
     ),
@@ -616,7 +623,10 @@ describe("Slack default work target", () => {
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "retired" },
       });
       assert.strictEqual(task.status, "waiting_input");
-      assert.include(task.openQuestions[0]?.text ?? "", "is not available");
+      assert.include(
+        task.openQuestions[0]?.text ?? "",
+        "No ready account offers the requested model",
+      );
       assert.strictEqual(harness.world.launches.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });

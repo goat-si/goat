@@ -79,6 +79,7 @@ import {
   isOrchestrationV2SupersededInterrupt,
 } from "@goat/shared/orchestrationV2Timeline";
 import {
+  activeNativeSubagents,
   deriveBlockedOnThreadWait,
   derivePendingBackgroundWork,
 } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -1732,6 +1733,10 @@ export function threadShellFromProjection(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
     pendingBackgroundTasks: [...pendingBackgroundTasks],
+    nativeSubagents: activeNativeSubagents({
+      turnItems: projection.turnItems,
+      runs: projection.runs,
+    }),
     providerInstanceHistory: providerInstanceHistoryForShell({
       threadId: projection.thread.id,
       providerThreads: projection.providerThreads,
@@ -1823,6 +1828,7 @@ type ShellThreadState = {
   readonly latestUserAuthoredMessageAt: DateTime.Utc | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
+  readonly nativeSubagents: OrchestrationV2ThreadShell["nativeSubagents"];
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly goal: OrchestrationV2ThreadShell["goal"];
   readonly itemCount: number;
@@ -1989,6 +1995,7 @@ function shellFromState(input: {
     latestUserAuthoredMessageAt: input.state.latestUserAuthoredMessageAt,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
+    nativeSubagents: input.state.nativeSubagents,
     providerInstanceHistory: input.state.providerInstanceHistory,
     goal: input.state.goal,
     itemCount: input.state.itemCount,
@@ -6600,6 +6607,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : DateTime.makeUnsafe(row.latest_user_authored_message_at),
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
           pendingBackgroundTasks,
+          // The pending-item read already drops rolled-back runs.
+          nativeSubagents: activeNativeSubagents({
+            turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
+          }),
           providerInstanceHistory: providerInstanceHistoryForShell({
             threadId: thread.id,
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],

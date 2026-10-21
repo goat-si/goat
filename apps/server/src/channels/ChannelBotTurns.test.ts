@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import type { ChannelReceptionInput } from "@goat/contracts";
 import { ProjectId, ProviderInstanceId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -198,6 +199,38 @@ describe("GOAT Bot turns", () => {
       assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "does not bind owner after a Slack grant is lowered between intake and dispatch",
+    () => {
+      const harness = harnessWith(botModel, "full-access", true);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'full-access' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* ledger.claimOwnership({ token: "supervisor-downgrade", now, staleBefore: now });
+        const input = yield* gateway.ingest(
+          slackInput("look: check the build", "lower-before-dispatch"),
+          { ...slackContext, runtimeModeCeiling: "full-access" },
+        );
+        yield* reception.receive(input.inputId, "supervisor-downgrade");
+        const task = yield* onlyTask;
+        assert.strictEqual(task.requester.runtimeModeCeiling, "full-access");
+        yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'auto-accept-edits' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        yield* dispatcher.dispatch(task.taskId, "supervisor-downgrade");
+        assert.lengthOf(harness.world.launches, 1);
+        const launch = harness.world.launches[0]!;
+        assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+        assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("follows the new-thread default when no bot model is chosen", () => {
     const harness = harnessWith(null);

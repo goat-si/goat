@@ -42,6 +42,57 @@ describe("choosePlacement", () => {
     );
   });
 
+  it("applies freshness and reset filtering to pooled quota windows", () => {
+    const pooled = (usedPercent: number, resetsAt: string) => ({
+      ...pool.providers[0]!,
+      pooled: {
+        windows: [
+          {
+            id: "weekly",
+            kind: "weekly" as const,
+            label: "Weekly",
+            source: "measured" as const,
+            observedAt: EARLIER,
+            usedPercent,
+            resetsAt,
+          },
+        ],
+      },
+    });
+    for (const accountRef of [undefined, "selected"]) {
+      const candidatePool = pooled(1, LATER);
+      const old = candidate("old", {
+        checkedAt: EARLIER,
+        accountRef,
+        quotaPool: {
+          ...candidatePool,
+          accounts: [
+            {
+              provider: candidatePool.provider,
+              accountRef: "selected",
+              state: "available",
+              windows: candidatePool.pooled.windows,
+            },
+          ],
+        },
+      });
+      assert.strictEqual(
+        choosePlacement([old, candidate("fresh", { windows: weekly(20) })], NOW)?.chosen.value,
+        "fresh",
+      );
+    }
+    const expired = candidate("expired", { preferred: true, quotaPool: pooled(100, EARLIER) });
+    assert.strictEqual(
+      choosePlacement([expired, candidate("busy", { windows: weekly(40) })], NOW)?.chosen.value,
+      "expired",
+    );
+    const exhausted = candidate("exhausted", { checkedAt: EARLIER, quotaPool: pooled(100, LATER) });
+    assert.strictEqual(
+      choosePlacement([exhausted, candidate("ready", { windows: weekly(90) })], NOW)?.chosen.value,
+      "ready",
+    );
+  });
+
   it("uses every window of the selected pool account without deriving pooled math", () => {
     const routed = candidate("account-a", {
       accountRef: "sha256:account-a",
@@ -189,9 +240,32 @@ describe("choosePlacement", () => {
       ],
       NOW,
     );
-    // Not skipped, but its last report still scores it as full.
-    assert.strictEqual(placed?.chosen.value, "other");
+    // An expired window no longer describes current use; unknown scores 35, below 40.
+    assert.strictEqual(placed?.chosen.value, "stale");
     assert.notInclude(placed?.reason ?? "", "usage limit");
+  });
+
+  it("treats stale quota as unknown and explains a lone remote choice", () => {
+    const placed = choosePlacement(
+      [
+        candidate("old", { windows: weekly(1), checkedAt: EARLIER }),
+        candidate("current", { windows: weekly(20), checkedAt: "2026-10-17T11:59:00.000Z" }),
+      ],
+      NOW,
+    );
+    assert.strictEqual(placed?.chosen.value, "current");
+    const exhausted = choosePlacement(
+      [
+        candidate("full", { preferred: true, windows: weekly(100, LATER), checkedAt: EARLIER }),
+        candidate("ready", { windows: weekly(90), checkedAt: "2026-10-17T11:59:00.000Z" }),
+      ],
+      NOW,
+    );
+    assert.strictEqual(exhausted?.chosen.value, "ready");
+    assert.strictEqual(
+      choosePlacement([candidate("remote", { host: "studio" })], NOW)?.reason,
+      "studio · Codex · usage not reported",
+    );
   });
 
   it("keeps the configured candidate on a tie and stays quiet when nothing is reported", () => {

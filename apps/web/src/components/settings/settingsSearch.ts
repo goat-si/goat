@@ -857,6 +857,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["goat bot home computer environment cluster"],
   },
   {
+    id: "channel-auto-placement",
+    title: "Automatically choose a worker computer",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["channel placement quota ssh host worker automatic"],
+  },
+  {
     id: "goat-bot-model",
     title: "GOAT Bot model",
     to: "/settings/goat-bot",

@@ -412,6 +412,20 @@ SSH toolkit asks `RemoteDispatchCoordinator` to persist the dispatch first. That
 Workspace sync for a remote checkout is `apps/server/src/sshRemote/SshWorkspaceSync.ts`. Remote
 repo paths it prints sit under `$HOME/.goat/repos/`.
 
+[`RepositoryInventory`](../apps/server/src/project/RepositoryInventory.ts) reads only registered
+projects and their Git worktrees, with bounded snapshots exposed by host status on request.
+[`RepositoryLaunchMcpService`](../apps/server/src/mcp/RepositoryLaunchMcpService.ts) checks an
+explicit origin-key selection before SSH dispatch, preserving the caller's host-read ceiling.
+These are local-ref diagnostics, not proof that work is pushed or a placement policy.
+
+[`RepositoryReferences`](../apps/server/src/project/RepositoryReferences.ts) reads exact requested
+regular blobs from a pinned commit without a fetch or working-tree mount. The MCP reference
+service rechecks caller authority and remote content bounds, then copies snapshots into the
+worker brief; no source credential or write capability travels with them. Ambient provider
+filesystem permissions are unchanged. Runtime root grants must remain unsupported unless a
+provider can enforce them. Raw nested reference arguments are validated before MCP's lenient
+codec can discard unsupported authority fields.
+
 ## Linked hosts
 
 A linked host is another GOAT server this environment reaches over HTTPS instead of SSH, such as

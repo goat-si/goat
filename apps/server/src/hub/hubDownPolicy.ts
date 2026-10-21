@@ -30,20 +30,6 @@ export function homeUnreachable(snapshot: OpenCodexInventorySnapshot): boolean {
   return evidence.modelsStatus === undefined || HOME_DOWN_STATUSES.has(evidence.modelsStatus);
 }
 
-/**
- * OpenCodex's permission for this device as the Home states it, or undefined when this read
- * does not say: an OpenCodex before OCX-11, or a policy read from this machine's own config.
- * Read while the Home answers and kept for its outage, which is when it is needed.
- */
-export function homeLocalFallback(snapshot: OpenCodexInventorySnapshot): boolean | undefined {
-  const fallback = snapshot.fallback;
-  if (fallback === undefined) return undefined;
-  // The Home lists every link, so a Child with no row has no permission.
-  if (fallback.source === "home") return fallback.localFallback === true;
-  if (fallback.source === "live" && snapshot.hubClient !== undefined) return fallback.localFallback;
-  return undefined;
-}
-
 export function decideHubWork(input: {
   readonly unreachable: boolean;
   readonly selection: ModelSelection;

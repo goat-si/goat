@@ -1,5 +1,5 @@
 import { deriveGoatBotModelSettings } from "@goat/client-runtime/goatBot";
-import { AuthSettingsWriteScope, type EnvironmentId, type ModelSelection } from "@goat/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 import { Text } from "react-native";
 
@@ -10,6 +10,7 @@ import { readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
+import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -117,25 +118,34 @@ function GoatBotModelSection({
   });
   const allowed = canWrite && !saving;
 
-  function save(goatBotModelSelection: ModelSelection | null) {
+  function save(patch: Parameters<typeof updateSettings>[0]["input"]["patch"]) {
     if (saving || !readEnvironmentScope(environmentId, AuthSettingsWriteScope)) return;
     setSaving(true);
     setError(null);
     void updateSettings({
       environmentId,
-      input: { patch: { goatBotModelSelection } },
+      input: { patch },
     })
       .then((result) => {
-        setError(result._tag === "Success" ? null : "Could not update GOAT Bot's model.");
+        setError(result._tag === "Success" ? null : "Could not update GOAT Bot settings.");
       })
       .catch(() => {
-        setError("Could not update GOAT Bot's model.");
+        setError("Could not update GOAT Bot settings.");
       })
       .finally(() => setSaving(false));
   }
 
   return (
     <>
+      <SettingsSection title="Workers">
+        <SettingsSwitchRow
+          label="Automatically choose a worker computer"
+          subtitle="Use connected SSH computers with the same repository and model, based on quota and active work. Instructions, notes and named skills go to the selected computer."
+          value={config.settings.channelAutoPlacement}
+          disabled={!allowed}
+          onValueChange={(value) => save({ channelAutoPlacement: value })}
+        />
+      </SettingsSection>
       <SettingsSection title="Model">
         <SettingsRow
           icon="sparkles"
@@ -154,7 +164,7 @@ function GoatBotModelSection({
               disabled={!allowed}
               onPress={() => {
                 setPickerOpen(false);
-                if (modelState.separate) save(null);
+                if (modelState.separate) save({ goatBotModelSelection: null });
               }}
             />
             {modelState.choices.map((choice) => (
@@ -176,7 +186,7 @@ function GoatBotModelSection({
                     modelState.selection.instanceId !== choice.instanceId ||
                     modelState.selection.model !== choice.model
                   ) {
-                    save(choice.selection);
+                    save({ goatBotModelSelection: choice.selection });
                   }
                 }}
               />
