@@ -78,6 +78,7 @@ const fixture = Effect.fn(function* (
     hold?: "start" | "stop" | "monitor";
     tools?: Record<string, ToolResult>;
     blankCapture?: boolean;
+    refuseStart?: boolean;
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -92,6 +93,14 @@ const fixture = Effect.fn(function* (
     environment: ReadonlyArray<{ name: string; value: string }>;
   }> = [];
   const exits: Array<() => void> = [];
+  const launches: Array<{
+    scope: string;
+    hostBundleIds: ReadonlyArray<string>;
+    manifestPath: string | undefined;
+    permissionMode: number | undefined;
+    approved: boolean;
+  }> = [];
+  const prepared = new Map<string, { scope: string; hostBundleIds: ReadonlyArray<string> }>();
   const holdMonitor = options.hold === "monitor";
   let allowed = !options.denyPermissions;
   let starts = 0;
@@ -116,6 +125,11 @@ const fixture = Effect.fn(function* (
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     imageHasContent: async () => !options.blankCapture,
+    prepareManifest: async (input) => {
+      const path = `${input.directory}/${input.scope}.yaml`;
+      prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
+      return path;
+    },
     processId: HOST_PID,
     loadElectron: async () => ({
       requestMacOSPermissions: () => ({ accessibility: allowed, screenRecording: allowed }),
@@ -128,11 +142,22 @@ const fixture = Effect.fn(function* (
           binaryPath: string;
           hostBundleId: string;
           environment: ReadonlyArray<{ name: string; value: string }>;
+          capabilityManifestPath?: string;
+          permissionMode?: number;
+          approveCapabilityManifest: boolean;
         }) {
           constructors.push({
             path: options.binaryPath,
             bundleId: options.hostBundleId,
             environment: options.environment,
+          });
+          const manifest = prepared.get(options.capabilityManifestPath ?? "");
+          launches.push({
+            scope: manifest?.scope ?? "none",
+            hostBundleIds: manifest?.hostBundleIds ?? [],
+            manifestPath: options.capabilityManifestPath,
+            permissionMode: options.permissionMode,
+            approved: options.approveCapabilityManifest,
           });
           return new this();
         }
@@ -143,6 +168,8 @@ const fixture = Effect.fn(function* (
           Deferred.doneUnsafe(starting, Exit.void);
           if (this.first && options.hold === "start") await gate.promise;
           if (this.first && options.failFirstStart) throw new Error("private native failure");
+          if (options.refuseStart)
+            throw new Error("embedded cua-driver exited before readiness (code=Some(64))");
           return {
             socketPath: descriptor.socketPath,
             pid: 123,
@@ -232,6 +259,7 @@ const fixture = Effect.fn(function* (
     }),
     crash: Effect.sync(() => exits.at(-1)!()),
     constructors,
+    launches,
     counts: () => ({ starts, stops, destroys }),
   };
 });
@@ -428,6 +456,48 @@ const VERIFICATION_IDS = [
 ] as const;
 
 describe("DesktopCuaDriver verification", () => {
+  it.effect("gives agents the general manifest and the grant check one that admits only GOAT", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin" });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        assert.isTrue((yield* test.verify).verified);
+        assert.deepEqual(test.launches, [
+          {
+            scope: "agents",
+            hostBundleIds: ["codes.t3.host-test"],
+            manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/agents.yaml",
+            permissionMode: 0,
+            approved: true,
+          },
+          {
+            scope: "verify",
+            hostBundleIds: ["codes.t3.host-test"],
+            manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/verify.yaml",
+            permissionMode: 0,
+            approved: true,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("names a refused manifest instead of a generic failure", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ refuseStart: true });
+        yield* test.request("refused");
+        const report = yield* test.next;
+        assert.equal(report.status, "unavailable");
+        assert.match(
+          report.status === "unavailable" ? (report.message ?? "") : "",
+          /refused GOAT's capability manifest/,
+        );
+      }),
+    ),
+  );
+
   it.effect("verifies only after a restarted driver reads and captures a GOAT window", () =>
     Effect.gen(function* () {
       const test = yield* Effect.scoped(

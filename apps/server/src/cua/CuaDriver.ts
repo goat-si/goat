@@ -4,8 +4,13 @@ import { CuaDriverMcpConfiguration, type CuaHostStatus } from "@goat/contracts";
 import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import {
   cuaDriverHostOptions,
+  cuaDriverListingEnvironment,
   withCuaDriverPrivacyEnvironment,
 } from "@goat/shared/cuaDriverRelease";
+import {
+  isCuaDriverStartupRefusal,
+  prepareCuaDriverCapabilityManifest,
+} from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -40,16 +45,30 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
   "CuaDriverHostError",
   {
     // "restart" is the desktop retiring its driver on purpose, such as after new grants.
-    operation: Schema.Literals(["busy", "start", "stop", "exit", "desktop", "timeout", "restart"]),
+    // "refused" is the driver rejecting GOAT's capability manifest or launch options at startup.
+    operation: Schema.Literals([
+      "busy",
+      "start",
+      "stop",
+      "exit",
+      "desktop",
+      "timeout",
+      "restart",
+      "refused",
+    ]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
     // The desktop's own explanation, such as a missing macOS grant, is written for users.
     if (this.operation === "desktop" && typeof this.cause === "string") return this.cause;
+    if (this.operation === "refused") return CUA_DRIVER_REFUSED_MESSAGE;
     return `Cua Driver host failed during ${this.operation}.`;
   }
 }
+
+export const CUA_DRIVER_REFUSED_MESSAGE =
+  "Cua Driver refused GOAT's capability manifest or launch options. The server log has the driver's reason.";
 
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
@@ -246,7 +265,12 @@ const STANDALONE_HOST_BUNDLE_ID = "si.goat.server";
 const requireForCuaDriver = NodeModule.createRequire(import.meta.url);
 
 export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHostFactory")(
-  function* <E, M>(executable: Effect.Effect<string, E>, module?: Effect.Effect<NativeModule, M>) {
+  function* <E, M, P>(
+    executable: Effect.Effect<string, E>,
+    /** Writes the capability manifest for this binary and returns its path. */
+    prepareManifest: (binaryPath: string) => Effect.Effect<string, P>,
+    module?: Effect.Effect<NativeModule, M>,
+  ) {
     const environment = yield* HostProcess.Environment;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -284,10 +308,14 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
         : module.pipe(Effect.mapError((cause) => new CuaDriverStartError({ binaryPath, cause })));
       // Acquisition can suspend during installation/loading, so check ownership again.
       if (owned) return yield* new CuaDriverHostError({ operation: "busy" });
+      const manifestPath = yield* prepareManifest(binaryPath).pipe(
+        Effect.mapError((cause) => new CuaDriverStartError({ binaryPath, cause })),
+      );
+      if (owned) return yield* new CuaDriverHostError({ operation: "busy" });
       const native = yield* Effect.try({
         try: () =>
           sdk.EmbeddedCuaDriverHost.withOptions(
-            cuaDriverHostOptions(binaryPath, STANDALONE_HOST_BUNDLE_ID),
+            cuaDriverHostOptions(binaryPath, STANDALONE_HOST_BUNDLE_ID, manifestPath),
           ),
         catch: (cause) => new CuaDriverStartError({ binaryPath, cause }),
       });
@@ -302,7 +330,10 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
           starting ??= native.start();
           return starting;
         },
-        catch: (cause) => new CuaDriverStartError({ binaryPath, cause }),
+        catch: (cause) =>
+          isCuaDriverStartupRefusal(cause)
+            ? new CuaDriverHostError({ operation: "refused", cause })
+            : new CuaDriverStartError({ binaryPath, cause }),
       }).pipe(
         Effect.flatMap((connection) =>
           decodeMcp({
@@ -311,7 +342,9 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
           }),
         ),
         Effect.mapError((cause) =>
-          isStartError(cause) ? cause : new CuaDriverStartError({ binaryPath, cause }),
+          isStartError(cause) || isHostError(cause)
+            ? cause
+            : new CuaDriverStartError({ binaryPath, cause }),
         ),
       );
 
@@ -435,7 +468,20 @@ export const layer = Layer.effect(
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
             });
-            return yield* makeStandaloneHostFactory(installation.executable);
+            const platform = yield* HostProcess.Platform;
+            const environment = yield* HostProcess.Environment;
+            const path = yield* Path.Path;
+            return yield* makeStandaloneHostFactory(installation.executable, (binaryPath) =>
+              Effect.tryPromise(() =>
+                prepareCuaDriverCapabilityManifest({
+                  binaryPath,
+                  platform,
+                  environment: cuaDriverListingEnvironment(environment),
+                  hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
+                  path: path.join(config.stateDir, "cua-driver", "capability-manifest.yaml"),
+                }),
+              ),
+            );
           });
     return yield* make(factory);
   }),

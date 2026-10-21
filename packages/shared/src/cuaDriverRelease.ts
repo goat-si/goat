@@ -84,12 +84,24 @@ export const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
   { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
 ] as const;
 
-/** Options for `EmbeddedCuaDriverHost.withOptions`; the rest match its two-argument constructor. */
-export function cuaDriverHostOptions(binaryPath: string, hostBundleId: string) {
+/**
+ * Options for `EmbeddedCuaDriverHost.withOptions`. The daemon runs in standard mode under GOAT's
+ * capability manifest (cuaDriverManifest.ts); approving it here is GOAT acting as the trusted
+ * launcher that reviewed the file it just wrote.
+ */
+export function cuaDriverHostOptions(
+  binaryPath: string,
+  hostBundleId: string,
+  capabilityManifestPath: string,
+) {
   return {
     binaryPath,
     hostBundleId,
-    approveCapabilityManifest: false,
+    // EmbeddedPermissionMode.Standard. Bounded mode ties authority to manifest lifetimes that
+    // would end the shared daemon under interactive threads too (ADR-0020).
+    permissionMode: 0,
+    capabilityManifestPath,
+    approveCapabilityManifest: true,
     approveSessionPolicy: false,
     dangerouslyBypassApprovals: false,
     environment: CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
@@ -119,4 +131,40 @@ export function withCuaDriverPrivacyEnvironment<
       ...MCP_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
     ],
   };
+}
+
+// The short-lived listing process gets the session basics the driver needs to find apps and the
+// display, plus every opt-out; nothing else from GOAT's environment.
+const LISTING_ENVIRONMENT_NAMES = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "LANG",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_TYPE",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "SYSTEMROOT",
+  "WINDIR",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "USERPROFILE",
+] as const;
+
+export function cuaDriverListingEnvironment(
+  base: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const name of LISTING_ENVIRONMENT_NAMES) {
+    const value = base[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  for (const variable of MCP_PRIVACY_ENVIRONMENT) environment[variable.name] = variable.value;
+  return environment;
 }

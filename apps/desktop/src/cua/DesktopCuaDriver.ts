@@ -5,7 +5,14 @@ import {
   type DesktopCuaDriverRequest,
   type DesktopCuaVerification,
 } from "@goat/contracts";
-import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
+import {
+  CUA_DRIVER_VERIFY_TOOLS,
+  cuaDriverCapabilityManifest,
+  isCuaDriverStartupRefusal,
+  prepareCuaDriverCapabilityManifest,
+  writeCuaDriverCapabilityManifest,
+} from "@goat/shared/cuaDriverManifest";
+import { cuaDriverHostOptions, cuaDriverListingEnvironment } from "@goat/shared/cuaDriverRelease";
 import type { CuaDriverLike, ToolResult } from "@trycua/cua-driver";
 import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import * as Context from "effect/Context";
@@ -24,6 +31,12 @@ type NativeHost = Pick<EmbeddedCuaDriverHost, "start" | "stop" | "waitForExit" |
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
 
+/**
+ * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
+ * one daemon no agent ever holds, so its manifest admits only GOAT, the window it reads.
+ */
+export type CuaManifestScope = "agents" | "verify";
+
 export interface DesktopCuaDriverDependencies {
   readonly loadEmbedded: () => Promise<{
     readonly EmbeddedCuaDriverHost: {
@@ -41,6 +54,14 @@ export interface DesktopCuaDriverDependencies {
   /** Electron's view of the grants, read without prompting. */
   readonly checkGrants: () => Promise<{ accessibility: boolean; screenRecording: boolean }>;
   readonly imageHasContent: (image: DriverImage) => Promise<boolean>;
+  /** Writes the capability manifest for one daemon start and returns its path. */
+  readonly prepareManifest: (input: {
+    readonly binaryPath: string;
+    readonly scope: CuaManifestScope;
+    readonly hostBundleIds: ReadonlyArray<string>;
+    readonly directory: string;
+    readonly platform: NodeJS.Platform;
+  }) => Promise<string>;
   readonly processId: number;
 }
 
@@ -83,6 +104,24 @@ const dependencies: DesktopCuaDriverDependencies = {
     const { nativeImage } = await import("electron");
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
+  },
+  prepareManifest: async (input) => {
+    const { join } = await import("node:path");
+    return input.scope === "verify"
+      ? writeCuaDriverCapabilityManifest(
+          join(input.directory, "verify-manifest.yaml"),
+          cuaDriverCapabilityManifest({
+            applications: input.hostBundleIds,
+            tools: CUA_DRIVER_VERIFY_TOOLS,
+          }),
+        )
+      : prepareCuaDriverCapabilityManifest({
+          binaryPath: input.binaryPath,
+          platform: input.platform,
+          environment: cuaDriverListingEnvironment(process.env),
+          hostBundleIds: input.hostBundleIds,
+          path: join(input.directory, "capability-manifest.yaml"),
+        });
   },
   processId: process.pid,
 };
@@ -254,12 +293,30 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           )
       : process.env.GOAT_CUA_DRIVER_PATH?.trim();
 
-  const spawn = Effect.fn("desktop.cua.spawn")(function* (path: string) {
+  // An unpackaged Electron on macOS runs under Electron's own bundle id.
+  const hostBundleIds = [
+    environment.appUserModelId,
+    ...(environment.isPackaged ? [] : ["com.github.Electron"]),
+  ];
+
+  const spawn = Effect.fn("desktop.cua.spawn")(function* (path: string, scope: CuaManifestScope) {
     const sdk = yield* Effect.tryPromise(() => native.loadEmbedded());
     // Scope closure may have happened while the lazy module was loading.
     if (closed) return undefined;
+    const manifestPath = yield* Effect.tryPromise(() =>
+      native.prepareManifest({
+        binaryPath: path,
+        scope,
+        hostBundleIds,
+        directory: environment.path.join(environment.stateDir, "cua-driver"),
+        platform: environment.platform,
+      }),
+    );
+    if (closed) return undefined;
     const host = yield* Effect.try(() =>
-      sdk.EmbeddedCuaDriverHost.withOptions(cuaDriverHostOptions(path, environment.appUserModelId)),
+      sdk.EmbeddedCuaDriverHost.withOptions(
+        cuaDriverHostOptions(path, environment.appUserModelId, manifestPath),
+      ),
     );
     const entry: OwnedHost = {
       host,
@@ -325,7 +382,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
     const connection: Option.Option<EmbeddedDriverConnection> =
       path && stopped
-        ? yield* spawn(path).pipe(
+        ? yield* spawn(path, "verify").pipe(
             Effect.flatMap((entry) =>
               Effect.tryPromise(() => entry?.started ?? Promise.reject(new Error("closed"))),
             ),
@@ -464,7 +521,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             return;
           }
         }
-        if (!(yield* spawn(path))) return;
+        if (!(yield* spawn(path, "agents"))) return;
       }
       const entry = owned!;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
@@ -479,7 +536,21 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           status: "ready",
           mcp,
         });
-    }).pipe(Effect.catch(() => stop.pipe(Effect.andThen(unavailable(request.requestId)))));
+    }).pipe(
+      Effect.catch((error) =>
+        stop.pipe(
+          Effect.andThen(
+            isCuaDriverStartupRefusal(error)
+              ? report(
+                  request.requestId,
+                  "unavailable",
+                  "Cua Driver refused GOAT's capability manifest or launch options. The desktop log has the driver's reason.",
+                )
+              : unavailable(request.requestId),
+          ),
+        ),
+      ),
+    );
   }, mutex.withPermits(1));
 
   yield* Effect.addFinalizer(() =>

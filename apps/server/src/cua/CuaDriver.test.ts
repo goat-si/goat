@@ -246,6 +246,7 @@ const nativeFixture = Effect.fnUntraced(function* () {
   let creates = 0;
   const factory = yield* CuaDriver.makeStandaloneHostFactory(
     Effect.succeed("/driver"),
+    () => Effect.succeed("/state/cua-driver/capability-manifest.yaml"),
     Effect.succeed({
       EmbeddedCuaDriverHost: class {
         static withOptions() {
@@ -311,6 +312,21 @@ it.layer(ServerSettings.layerTest())("CuaDriver native ownership", (it) => {
       yield* Deferred.await(f.destroyed);
       expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
       expect(f.destroys()).toBe(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("names a manifest the driver refused at startup in host status", () =>
+    Effect.gen(function* () {
+      const f = yield* nativeFixture();
+      const { service } = yield* makeService(f.factory);
+      const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.await(f.started);
+      // What the 0.37.0 SDK reports when the daemon rejects its manifest and exits with 64.
+      f.start.reject(new Error("embedded cua-driver exited before readiness (code=Some(64))"));
+      yield* Deferred.await(f.stopping);
+      f.stop.resolve();
+      expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
+      expect((yield* service.status).failure).toBe(CuaDriver.CUA_DRIVER_REFUSED_MESSAGE);
     }).pipe(Effect.scoped),
   );
 
@@ -508,11 +524,26 @@ it.effect("preserves the desktop driver through degraded telemetry until the rec
   }).pipe(Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]), Effect.scoped),
 );
 
-it.effect("starts an explicit driver path with telemetry and update checks off", () =>
+it.effect("starts an explicit driver path in standard mode under GOAT's manifest, privately", () =>
   Effect.gen(function* () {
-    let options: { readonly binaryPath: string; readonly environment: unknown } | undefined;
+    let options:
+      | {
+          readonly binaryPath: string;
+          readonly environment: unknown;
+          readonly permissionMode?: number;
+          readonly capabilityManifestPath?: string;
+          readonly approveCapabilityManifest: boolean;
+          readonly dangerouslyBypassApprovals: boolean;
+        }
+      | undefined;
+    const prepared: Array<string> = [];
     const factory = yield* CuaDriver.makeStandaloneHostFactory(
       Effect.die("installer must not run"),
+      (binaryPath) =>
+        Effect.sync(() => {
+          prepared.push(binaryPath);
+          return "/state/cua-driver/capability-manifest.yaml";
+        }),
       Effect.succeed({
         EmbeddedCuaDriverHost: {
           withOptions: (received) => {
@@ -534,6 +565,14 @@ it.effect("starts an explicit driver path with telemetry and update checks off",
     );
     const host = yield* factory;
     expect(options?.binaryPath).toBe("/explicit/driver");
+    // The manifest is written for the binary that loads it, before the daemon starts.
+    expect(prepared).toEqual(["/explicit/driver"]);
+    expect(options).toMatchObject({
+      permissionMode: 0,
+      capabilityManifestPath: "/state/cua-driver/capability-manifest.yaml",
+      approveCapabilityManifest: true,
+      dangerouslyBypassApprovals: false,
+    });
     // The driver reads these after DO_NOT_TRACK, which its embedded allowlist cannot forward.
     expect(options?.environment).toEqual([
       { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
