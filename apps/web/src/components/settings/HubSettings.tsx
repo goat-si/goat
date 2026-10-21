@@ -11,6 +11,7 @@ import {
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
+  FLEET_LOCAL_HOST_KEY,
   type EnvironmentId,
   type HostStatusEntry,
   HubCloudHolder,
@@ -23,6 +24,7 @@ import { isElectron } from "~/env";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { HOST_STATUS_REFRESH_MS, hostStatusAtom, refreshHostStatus } from "~/state/hostStatus";
+import { fleetEnvironmentsAtom } from "~/state/fleet";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -233,7 +235,6 @@ function HubControls({
           reading={result._tag === "Initial"}
           failed={result._tag === "Failure"}
           reachesHosts={reachesHosts}
-          hub={hub}
           onVerified={() => registry.refresh(atom)}
         />
       </SettingsSection>
@@ -247,7 +248,6 @@ function HubDevices(props: {
   readonly reading: boolean;
   readonly failed: boolean;
   readonly reachesHosts: boolean;
-  readonly hub: ReturnType<typeof useHubSettings>;
   readonly onVerified: () => void;
 }) {
   const message = props.reading
@@ -266,7 +266,6 @@ function HubDevices(props: {
               key={device.alias}
               environmentId={props.environmentId}
               device={device}
-              hub={props.hub}
               onVerified={props.onVerified}
             />
           ))}
@@ -286,19 +285,16 @@ function HubDevices(props: {
 function HubDeviceRow({
   environmentId,
   device,
-  hub,
   onVerified,
 }: {
   readonly environmentId: EnvironmentId;
   readonly device: HubDevice;
-  readonly hub: ReturnType<typeof useHubSettings>;
   readonly onVerified: () => void;
 }) {
   const canVerify = useAtomValue(serverEnvironment.verifyHubDevice.permissionAtom(environmentId));
   const verify = useAtomCommand(serverEnvironment.verifyHubDevice, { reportFailure: false });
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const localFallback = hub.settings.devices[device.alias]?.localFallback ?? false;
   const parity = device.parity;
   const failing = parity?.checks.filter((check) => check.status === "failed") ?? [];
   const runVerify = async () => {
@@ -313,7 +309,6 @@ function HubDeviceRow({
     }
     onVerified();
   };
-  const fallbackId = `hub-fallback-${device.alias}`;
   return (
     <li data-hub-device={device.alias} className="space-y-2 px-3 py-3 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -361,22 +356,92 @@ function HubDeviceRow({
           {error}
         </p>
       ) : null}
-      <div className="flex items-center justify-between gap-3">
-        <label htmlFor={fallbackId} className="min-w-0 text-xs">
-          Use this device's own sign-in when the hub is down
-          <span className="block text-muted-foreground">OpenCodex fallback: {device.fallback}</span>
-        </label>
-        <Switch
-          id={fallbackId}
-          checked={localFallback}
-          disabled={hub.saving || !hub.canConfigure}
-          onCheckedChange={(checked) =>
-            void hub.save({
-              devices: { ...hub.settings.devices, [device.alias]: { localFallback: checked } },
-            })
-          }
-        />
-      </div>
+      <DeviceFallback alias={device.alias} fallback={device.fallback} />
     </li>
+  );
+}
+
+/**
+ * The hub-down policy runs on the device and reads that device's own `hub.devices.local`,
+ * because the hub may be the machine that is down. So the switch writes through the device's
+ * GOAT connection, matched by its SSH alias or name.
+ */
+function DeviceFallback({
+  alias,
+  fallback,
+}: {
+  readonly alias: string;
+  readonly fallback: HubDevice["fallback"];
+}) {
+  const environments = useAtomValue(fleetEnvironmentsAtom);
+  const device = environments.find(
+    (environment) => environment.sshAliases.includes(alias) || environment.label === alias,
+  );
+  const id = `hub-fallback-${alias}`;
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <label htmlFor={id} className="min-w-0 text-xs">
+        Use this device's own sign-in when the hub is down
+        <span className="block text-muted-foreground">
+          {device === undefined
+            ? `Connect to ${alias} in GOAT to change this; the setting lives on that device.`
+            : `OpenCodex allows it: ${FALLBACK_LABEL[fallback]}`}
+        </span>
+      </label>
+      {device === undefined ? (
+        <Switch id={id} checked={false} disabled />
+      ) : (
+        <DeviceFallbackSwitch id={id} environmentId={device.environmentId} />
+      )}
+    </div>
+  );
+}
+
+const FALLBACK_LABEL: Record<HubDevice["fallback"], string> = {
+  on: "yes",
+  off: "no",
+  unknown: "unknown",
+};
+
+function DeviceFallbackSwitch({
+  id,
+  environmentId,
+}: {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+}) {
+  const registry = useContext(RegistryContext);
+  const devices = useEnvironmentSettings(environmentId, (value) => value.hub.devices);
+  const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
+  const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
+  const save = async (localFallback: boolean) => {
+    if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId))) return;
+    setSaving(true);
+    setError(false);
+    const result = await update({
+      environmentId,
+      input: {
+        patch: { hub: { devices: { ...devices, [FLEET_LOCAL_HOST_KEY]: { localFallback } } } },
+      },
+    });
+    setSaving(false);
+    setError(result._tag === "Failure");
+  };
+  return (
+    <span className="flex items-center gap-2">
+      {error ? (
+        <span role="alert" className="text-xs text-destructive">
+          Could not save
+        </span>
+      ) : null}
+      <Switch
+        id={id}
+        checked={devices[FLEET_LOCAL_HOST_KEY]?.localFallback ?? false}
+        disabled={saving || !canConfigure}
+        onCheckedChange={(checked) => void save(checked)}
+      />
+    </span>
   );
 }

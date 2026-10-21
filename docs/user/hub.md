@@ -29,9 +29,10 @@ when traffic works but something on the device still describes the device,
 cannot say which Home served it. **Verify** checks one device now.
 
 **Use this device's own sign-in when the hub is down** is off by default. With it
-off, goal work on that device pauses while it cannot reach the hub. OpenCodex can
-also forbid local fallback; until your OpenCodex reports that, its state reads
-**unknown**.
+off, goal work on that device pauses while it cannot reach the hub. The setting is
+stored on the device, so it works while the hub is down; to change it, GOAT needs
+a connection to that device. OpenCodex must allow it too: the row says whether it
+does, or **unknown** when your OpenCodex does not report it yet.
 
 Fleet shows the same devices in its **Hub** entry. Select its count to see each
 one.

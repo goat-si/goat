@@ -1,4 +1,4 @@
-import type { OpenCodexProtocolEvidence } from "@goat/contracts";
+import type { OpenCodexInventorySnapshot, OpenCodexProtocolEvidence } from "@goat/contracts";
 
 /** Remote Link first shipped in 2.66. Protocol evidence takes precedence over this fallback. */
 export const OPENCODEX_CAPABILITIES = {
@@ -41,6 +41,21 @@ const protocolRange = (peer: Peer) => {
 const relayAuth = (peer: Peer) =>
   peer.relayAuthVersion ??
   peer.features?.find((feature) => /^relay-auth\/\d+$/.test(feature))?.split("/")[1];
+
+/**
+ * OpenCodex's permission for this device as the Home states it, or undefined when this read
+ * does not say: an OpenCodex before OCX-11, or a policy read from this machine's own config.
+ * The hub-down policy reads it while the Home answers and keeps it for the outage; Fleet and
+ * Settings show the same reading.
+ */
+export function homeLocalFallback(snapshot: OpenCodexInventorySnapshot): boolean | undefined {
+  const fallback = snapshot.fallback;
+  if (fallback === undefined) return undefined;
+  // The Home lists every link, so a Child with no row has no permission.
+  if (fallback.source === "home") return fallback.localFallback === true;
+  if (fallback.source === "live" && snapshot.hubClient !== undefined) return fallback.localFallback;
+  return undefined;
+}
 
 /** Unknown negotiation metadata is degraded; release drift alone never rejects a pair. */
 export function openCodexPairVerdict(

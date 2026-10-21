@@ -17,6 +17,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { homeLocalFallback } from "@goat/shared/opencodexCompat";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,13 +31,7 @@ import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import {
-  decideHubWork,
-  homeLocalFallback,
-  homeUnreachable,
-  type HubWork,
-  UNAFFECTED,
-} from "./hubDownPolicy.ts";
+import { decideHubWork, homeUnreachable, type HubWork, UNAFFECTED } from "./hubDownPolicy.ts";
 import { localOpenCodexRoutes } from "./localRoutes.ts";
 
 /** A relayed request per minute at most; a Child waits up to 15 s for its tunnel per request. */

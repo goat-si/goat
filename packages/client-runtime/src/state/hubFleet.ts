@@ -4,7 +4,7 @@ import type {
   HubParityResult,
   OpenCodexInventorySnapshot,
 } from "@goat/contracts";
-import { openCodexPairVerdict } from "@goat/shared/opencodexCompat";
+import { homeLocalFallback, openCodexPairVerdict } from "@goat/shared/opencodexCompat";
 
 /**
  * The goatclaw hub as Fleet and Settings → Hub show it: the OpenCodex Home among the hosts a
@@ -27,7 +27,7 @@ export interface HubDevice {
   readonly version: string | null;
   /** Null while the device's OpenCodex has not been read. */
   readonly versionVerdict: HubVersionVerdict | null;
-  /** OpenCodex fallback state (OCX-11). No OpenCodex release reports it yet. */
+  /** Whether OpenCodex lets this device use its own providers (OCX-11); unknown before OCX-11. */
   readonly fallback: "on" | "off" | "unknown";
   readonly pressure: HostPressureLevel | null;
 }
@@ -77,6 +77,7 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
         : remote?.hubClient?.state === "connected"
           ? "hub-client"
           : "standalone";
+    const permission = remote === undefined ? undefined : homeLocalFallback(remote);
     return {
       alias,
       transport,
@@ -90,7 +91,7 @@ export function hubSnapshot(sources: ReadonlyArray<HubSource>): HubSnapshot | nu
           : openCodexPairVerdict(inventory.runtime, remote.runtime, [
               transport === "remote-link" ? "remoteLink" : "hubClient",
             ]),
-      fallback: "unknown",
+      fallback: permission === undefined ? "unknown" : permission ? "on" : "off",
       pressure: source?.entry?.pressure?.level ?? null,
     } satisfies HubDevice;
   };

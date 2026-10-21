@@ -75,7 +75,10 @@ describe("hubSnapshot", () => {
         label: "mini",
         entry: entry(
           "mini",
-          inventory("none", { hubClient: { state: "connected", apiKeyId: "key_1" } }),
+          inventory("none", {
+            hubClient: { state: "connected", apiKeyId: "key_1" },
+            fallback: { source: "live", localFallback: true },
+          }),
         ),
       },
       // Fleet rows name another environment by its label, with host null.
@@ -86,12 +89,13 @@ describe("hubSnapshot", () => {
     expect(hub?.homeName).toBe("jun-mbp");
     expect(hub?.homeKey).toBe("home");
     expect(
-      hub?.devices.map(({ alias, transport, reachability, tunnel, versionVerdict }) => ({
+      hub?.devices.map(({ alias, transport, reachability, tunnel, versionVerdict, fallback }) => ({
         alias,
         transport,
         reachability,
         tunnel,
         versionVerdict,
+        fallback,
       })),
     ).toEqual([
       {
@@ -100,6 +104,7 @@ describe("hubSnapshot", () => {
         reachability: "ok",
         tunnel: "connected",
         versionVerdict: "compatible",
+        fallback: "unknown",
       },
       // Linked but not read: it still shows, with what the Home knows.
       {
@@ -108,6 +113,7 @@ describe("hubSnapshot", () => {
         reachability: "not-connected",
         tunnel: "reconnecting",
         versionVerdict: null,
+        fallback: "unknown",
       },
       {
         alias: "mini",
@@ -115,6 +121,7 @@ describe("hubSnapshot", () => {
         reachability: "ok",
         tunnel: null,
         versionVerdict: "compatible",
+        fallback: "on",
       },
       // A machine without OpenCodex is standalone and has no version verdict.
       {
@@ -123,6 +130,7 @@ describe("hubSnapshot", () => {
         reachability: "ok",
         tunnel: null,
         versionVerdict: null,
+        fallback: "unknown",
       },
     ]);
     expect(hubDeviceSeverity(hub!.devices[0]!)).toBe(null);
@@ -147,6 +155,8 @@ describe("hubSnapshot", () => {
           ...entry("macmini-ts", {
             ...child,
             runtime: { ...child.runtime, relayAuthVersion: "1" },
+            // The Home lists every link; no permission in its row means no local fallback.
+            fallback: { source: "home" },
           }),
           parity: {
             verdict: "degraded",
@@ -171,7 +181,7 @@ describe("hubSnapshot", () => {
       "parity degraded (P6)",
       "tunnel connected",
       "OpenCodex 2.83.0, incompatible",
-      "OpenCodex fallback unknown",
+      "OpenCodex fallback off",
       "pressure elevated",
     ]);
   });
