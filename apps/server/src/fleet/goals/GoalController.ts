@@ -5,13 +5,20 @@
  * that never confirmed is looked up by its title marker and never resent under the same attempt.
  * Placement, health, rescheduling and fallback come from the fleet service tags.
  */
-import { type FleetGoal, type FleetGoalEvent, FleetOwnerKey } from "@goat/contracts";
+import {
+  type FleetGoal,
+  type FleetGoalEvent,
+  FleetOwnerKey,
+  type ModelSelection,
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { HubDown, type PausedGoalWork } from "../../hub/HubDown.ts";
+import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
 import * as Scheduler from "../../scheduling/Scheduler.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { Health } from "../health/Health.ts";
@@ -107,6 +114,9 @@ const make = Effect.gen(function* () {
   const rescheduler = yield* Rescheduler;
   const fallback = yield* Fallback;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const hubDown = yield* HubDown;
+  // Goal work the hub-down policy paused since the last tick settled it.
+  let pausedSinceSettle: Array<PausedGoalWork> = [];
 
   const observe = (record: GoalRecord, launches: ReadonlyArray<LaunchClaim>, now: number) =>
     Effect.gen(function* () {
@@ -300,6 +310,32 @@ const make = Effect.gen(function* () {
           return null;
         });
 
+      /**
+       * Whether provider work for this worker may start while the hub is down. Asked before the
+       * claim, so a paused action stays unclaimed and is taken once the hub answers. Only this
+       * machine's work is judged: its own OpenCodex is the evidence.
+       */
+      const hubGate = (host: string | null, selection: ModelSelection) =>
+        (host !== null ? Effect.succeed<HubWork>(UNAFFECTED) : hubDown.forWork(selection)).pipe(
+          Effect.tap((work) =>
+            Effect.sync(() => {
+              if (work._tag !== "Paused") return;
+              issues.push({
+                condition: "Blocked",
+                reason: "HubUnreachable",
+                message: work.message,
+              });
+              pausedSinceSettle.push({
+                goalId: goal.id,
+                title: goal.title,
+                ownerThreadId: goal.owner.threadId,
+                instanceId: selection.instanceId,
+                message: work.message,
+              });
+            }),
+          ),
+        );
+
       const perform = (action: GoalAction) =>
         Effect.gen(function* () {
           if (action.type === "delete_row") {
@@ -406,6 +442,8 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
+              const work = yield* hubGate(placed.host, placed.modelSelection);
+              if (work._tag === "Paused") return;
               if ((yield* claim(action.actionId, "launch", worker, placed.host)) !== null) return;
               // The owner's authority as it is now, after placement and the claim, is what the
               // launch runs with.
@@ -422,7 +460,7 @@ const make = Effect.gen(function* () {
                   title: workerTitle(goal.title, worker.slot, worker.attempt),
                   message: renderPrompt(goal, worker, branch),
                   branch,
-                  modelSelection: placed.modelSelection,
+                  modelSelection: work._tag === "Hop" ? work.selection : placed.modelSelection,
                 })
                 .pipe(Effect.result);
               if (launched._tag === "Success") {
@@ -432,15 +470,21 @@ const make = Effect.gen(function* () {
                   host: launched.success.host,
                   threadId: launched.success.threadId,
                 });
+                if (work._tag === "Hop")
+                  yield* hubDown.notice(launched.success.threadId, action.actionId, work.notice);
                 workers.set(worker.slot, {
                   ...worker,
                   host: launched.success.host,
                   threadId: launched.success.threadId,
                   lastRunId: launched.success.runId,
                   branch,
+                  // The goal's own selection: the next attempt goes back to the hub once it answers.
                   modelSelection: placed.modelSelection,
                   state: "running",
-                  note: placed.reason ?? null,
+                  note:
+                    work._tag === "Hop"
+                      ? "Runs on this device's own sign-in while the hub is unreachable."
+                      : (placed.reason ?? null),
                 });
                 note(
                   "Normal",
@@ -513,11 +557,20 @@ const make = Effect.gen(function* () {
               return;
             }
             case "followup": {
+              const work = yield* hubGate(worker.host, worker.modelSelection);
+              if (work._tag === "Paused") return;
               if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
               const current = yield* authorityAfterClaim(action.actionId);
               if (current === null) return;
               const sent = yield* runtime
-                .followUp(current, goal, worker, action.message, action.actionId)
+                .followUp(
+                  current,
+                  goal,
+                  worker,
+                  action.message,
+                  action.actionId,
+                  work._tag === "Hop" ? work.selection : undefined,
+                )
                 .pipe(Effect.result);
               yield* store.settle(
                 action.actionId,
@@ -535,6 +588,8 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
+              if (work._tag === "Hop")
+                yield* hubDown.notice(worker.threadId!, action.actionId, work.notice);
               workers.set(worker.slot, {
                 ...worker,
                 followUps: worker.followUps + 1,
@@ -551,6 +606,8 @@ const make = Effect.gen(function* () {
               return;
             }
             case "resume": {
+              const work = yield* hubGate(worker.host, worker.modelSelection);
+              if (work._tag === "Paused") return;
               if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
               const current = yield* authorityAfterClaim(action.actionId);
               if (current === null) return;
@@ -561,6 +618,7 @@ const make = Effect.gen(function* () {
                   worker,
                   "Your usage limit has reset. Continue where you left off.",
                   action.actionId,
+                  work._tag === "Hop" ? work.selection : undefined,
                 )
                 .pipe(Effect.result);
               yield* store.settle(
@@ -579,6 +637,8 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
+              if (work._tag === "Hop")
+                yield* hubDown.notice(worker.threadId!, action.actionId, work.notice);
               workers.set(worker.slot, { ...worker, resumedRunId: action.runId });
               note(
                 "Normal",
@@ -594,6 +654,50 @@ const make = Effect.gen(function* () {
                 ...worker,
                 followedUpRunId: action.runId ?? worker.followedUpRunId,
               };
+              // A run that failed while the hub was down spends no fallback hop or attempt.
+              const work = yield* hubGate(worker.host, worker.modelSelection);
+              if (work._tag === "Paused") return;
+              if (work._tag === "Hop") {
+                if (action.runId === null || worker.threadId === null) return;
+                const id =
+                  "goal:" +
+                  goal.id +
+                  ":s" +
+                  worker.slot +
+                  ":a" +
+                  worker.attempt +
+                  ":" +
+                  action.runId +
+                  ":hub-hop";
+                if ((yield* claim(id, "fallback", worker, worker.host)) !== null) return;
+                const current = yield* authorityAfterClaim(id);
+                if (current === null) return;
+                const sent = yield* runtime
+                  .followUp(
+                    current,
+                    goal,
+                    worker,
+                    "Continue where you left off.",
+                    id,
+                    work.selection,
+                  )
+                  .pipe(Effect.result);
+                yield* store.settle(id, sent._tag === "Success" ? "switched" : "failed", nowIso);
+                if (sent._tag === "Failure") {
+                  failed = true;
+                  return;
+                }
+                yield* hubDown.notice(worker.threadId, id, work.notice);
+                workers.set(worker.slot, handled);
+                note(
+                  "Normal",
+                  "HubFallback",
+                  "Slot " + worker.slot + " continued on this device's own sign-in.",
+                  worker,
+                  id,
+                );
+                return;
+              }
               const step = yield* fallback.next({
                 chain: goal.spec.workers.fallbackChain,
                 selection: worker.modelSelection,
@@ -823,6 +927,9 @@ const make = Effect.gen(function* () {
       if (budget <= 0) break;
       budget -= yield* reconcile(record, budget);
     }
+    const paused = pausedSinceSettle;
+    pausedSinceSettle = [];
+    yield* hubDown.settle(paused);
   }).pipe(Effect.catch((error) => Effect.logWarning("fleet goals: tick failed", { error })));
 
   return GoalController.of({ runDue, reconcile });

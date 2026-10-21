@@ -3,7 +3,6 @@ import {
   type HubParityResult,
   type OpenCodexInventorySnapshot,
   OrchestratorMcpFailure,
-  providerInstanceConfigEnabledFlag,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -20,40 +19,11 @@ import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { localOpenCodexRoutes } from "./localRoutes.ts";
 import { parityVerdict } from "./parity.ts";
 
 const INTERVAL_MS = 30 * 60 * 1000;
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
-const OpenCodeConfig = Schema.Struct({
-  model: Schema.optional(Schema.String),
-  provider: Schema.optional(
-    Schema.Record(
-      Schema.String,
-      Schema.Struct({
-        options: Schema.optional(Schema.Struct({ baseURL: Schema.optional(Schema.String) })),
-      }),
-    ),
-  ),
-});
-const decodeOpenCode = Schema.decodeUnknownOption(Schema.fromJsonString(OpenCodeConfig));
-const usesLocalPort = (value: string | undefined, port: number, pathname: "" | "/v1") => {
-  if (value === undefined) return false;
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) &&
-      Number(url.port || 80) === port &&
-      url.pathname.replace(/\/+$/, "") === pathname &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash
-    );
-  } catch {
-    return false;
-  }
-};
 
 export class HubParity extends Context.Service<
   HubParity,
@@ -79,64 +49,12 @@ const make = Effect.gen(function* () {
     if (!snapshot.parityEvidence) return snapshot;
     const configured = yield* settings.getSettings.pipe(Effect.option);
     if (configured._tag === "None") return snapshot;
-    const snapshots = yield* providers.getProviders;
-    const wiring: NonNullable<
-      NonNullable<OpenCodexInventorySnapshot["parityEvidence"]>["wiring"]
-    >[number][] = [];
-    for (const [id, entry] of Object.entries(configured.value.providerInstances)) {
-      const provider = snapshots.find((candidate) => candidate.instanceId === id);
-      if (
-        entry.enabled === false ||
-        provider?.enabled === false ||
-        providerInstanceConfigEnabledFlag(entry.config) === false
-      )
-        continue;
-      if (entry.driver === "codex") {
-        // This URL comes from Codex's config/read, after verifyEffectiveCodexRoute for a
-        // managed Home route. An inspect-only "connected" label is insufficient evidence.
-        const effective =
-          provider?.status === "ready" ? provider.codexRoute?.effectiveBaseUrl : undefined;
-        wiring.push({
-          status:
-            effective === undefined
-              ? "unproven"
-              : usesLocalPort(effective, snapshot.runtime.port, "/v1")
-                ? "ok"
-                : "failed",
-          reason: "Codex effective endpoint must use the device's OpenCodex port.",
-        });
-      } else if (entry.driver === "claudeAgent") {
-        const value =
-          entry.environment?.find(({ name }) => name === "ANTHROPIC_BASE_URL")?.value ??
-          environment.ANTHROPIC_BASE_URL;
-        wiring.push({
-          status: usesLocalPort(value, snapshot.runtime.port, "") ? "ok" : "failed",
-          reason: "Claude Code ANTHROPIC_BASE_URL must use local OpenCodex.",
-        });
-      } else if (entry.driver === "opencode") {
-        // OpenCodex's OpenCode launcher puts its provider in this inline layer, which
-        // outranks workspace/user config. A global file alone cannot prove the route.
-        const inline =
-          entry.environment?.find(({ name }) => name === "OPENCODE_CONFIG_CONTENT")?.value ??
-          environment.OPENCODE_CONFIG_CONTENT;
-        const config = inline === undefined ? undefined : decodeOpenCode(inline);
-        const document = config?._tag === "Some" ? config.value : undefined;
-        const providerId = document?.model?.split("/")[0];
-        const endpoint = providerId
-          ? document?.provider?.[providerId]?.options?.baseURL
-          : undefined;
-        wiring.push({
-          status:
-            endpoint === undefined
-              ? "unproven"
-              : usesLocalPort(endpoint, snapshot.runtime.port, "/v1")
-                ? "ok"
-                : "failed",
-          reason:
-            "OpenCode's selected provider in the inline runtime config must use local OpenCodex.",
-        });
-      }
-    }
+    const wiring = localOpenCodexRoutes({
+      instances: configured.value.providerInstances,
+      providers: yield* providers.getProviders,
+      environment,
+      port: snapshot.runtime.port,
+    }).map(({ status, reason }) => ({ status, reason }));
     return { ...snapshot, parityEvidence: { ...snapshot.parityEvidence, wiring } };
   }).pipe(Effect.withSpan("HubParity.readLocal"));
 

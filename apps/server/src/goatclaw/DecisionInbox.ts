@@ -71,6 +71,17 @@ export class DecisionInbox extends Context.Service<
       caller: DecisionCaller,
       id: string,
     ) => Effect.Effect<DecisionItem, OrchestratorMcpFailure>;
+    /**
+     * A server-raised item, opened only when no open item's id starts with `idPrefix`, so a
+     * condition that holds across passes and restarts asks once. Undefined when one is open.
+     */
+    readonly raiseOnce: (input: {
+      readonly idPrefix: string;
+      readonly fromThreadId: ThreadId | null;
+      readonly request: DecisionRequestInput;
+    }) => Effect.Effect<DecisionItem | undefined, OrchestratorMcpFailure>;
+    /** Withdraws the open server-raised items under `idPrefix` once their condition cleared. */
+    readonly withdrawOpen: (idPrefix: string) => Effect.Effect<number, OrchestratorMcpFailure>;
     readonly runDueWork: Effect.Effect<void, OrchestratorMcpFailure>;
   }
 >()("goat/goatclaw/DecisionInbox") {}
@@ -493,9 +504,54 @@ const make = Effect.gen(function* () {
     );
   }, Effect.mapError(storageFailure));
   const runDueWork = expire().pipe(Effect.andThen(reconcileAudits()), Effect.andThen(deliver()));
+  const openUnder = (idPrefix: string) =>
+    sql<{
+      id: string;
+    }>`SELECT id FROM decision_items WHERE status = 'open' AND substr(id, 1, ${idPrefix.length}) = ${idPrefix}`;
+  const raiseOnce: DecisionInbox["Service"]["raiseOnce"] = Effect.fn("DecisionInbox.raiseOnce")(
+    function* ({ idPrefix, fromThreadId, request }) {
+      const input = yield* decodeRequest(request).pipe(
+        Effect.mapError(() => invalid("Invalid decision request.")),
+      );
+      yield* expire();
+      const time = yield* now;
+      const id = idPrefix + (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+      const raised = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            if ((yield* openUnder(idPrefix)).length > 0) return false;
+            yield* sql`INSERT INTO decision_items (id, from_thread_id, title, context, options_json, recommended, required_profile, expires_at, status, created_at, updated_at)
+              VALUES (${id}, ${fromThreadId}, ${input.title}, ${input.context}, ${encodeOptions(input.options)}, ${input.recommended ?? null}, ${input.requiredProfile}, NULL, 'open', ${time}, ${time})`;
+            yield* audit(time, "server", "system", "decision.request", id, "open");
+            return true;
+          }),
+        )
+        .pipe(Effect.mapError(storageFailure));
+      return raised ? yield* durable(id) : undefined;
+    },
+  );
+  const withdrawOpen: DecisionInbox["Service"]["withdrawOpen"] = Effect.fn(
+    "DecisionInbox.withdrawOpen",
+  )(function* (idPrefix) {
+    const time = yield* now;
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const open = yield* openUnder(idPrefix);
+          for (const { id } of open) {
+            yield* sql`UPDATE decision_items SET status = 'withdrawn', updated_at = ${time} WHERE id = ${id} AND status = 'open'`;
+            yield* audit(time, "server", "system", "decision.withdraw", id, "withdrawn");
+          }
+          return open.length;
+        }),
+      )
+      .pipe(Effect.mapError(storageFailure));
+  });
   return DecisionInbox.of({
     get,
     runDueWork,
+    raiseOnce,
+    withdrawOpen,
     list: Effect.fn("DecisionInbox.list")(function* (caller, input) {
       yield* expire();
       const limit = input.limit ?? 100;

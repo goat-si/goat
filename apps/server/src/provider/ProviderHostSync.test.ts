@@ -179,7 +179,7 @@ const harness = (options: {
         Layer.mock(ServerSettings.ServerSettingsService)({
           getSettings: Effect.succeed({
             ...DEFAULT_SERVER_SETTINGS,
-            hub: { enabled: options.hub === true, cloudHolder: "hub" },
+            hub: { enabled: options.hub === true, cloudHolder: "hub", devices: {} },
           }),
         }),
         Layer.mock(Handoffs.Handoffs)({

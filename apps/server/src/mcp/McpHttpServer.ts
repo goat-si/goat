@@ -1316,7 +1316,8 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provideMerge(HubParity.layer),
-  Layer.provide(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
+  // Shared with the hub-down policy, so both read one inventory cache.
+  Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),

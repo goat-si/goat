@@ -570,3 +570,50 @@ it.effect.each(["configured", "active", "inactive"])(
       );
     }),
 );
+
+it.effect("a Child reads its own row of the Home's OCX-11 fallback view by link id", () =>
+  Effect.gen(function* () {
+    // The shape of OpenCodex buildFallbackState for a passive read through the link: no aliases.
+    const view = (localFallback: boolean) => ({
+      schema: "ocx.fallback/1",
+      source: "home",
+      global: { model: true, provider: true },
+      providers: {},
+      routes: {},
+      devices: [
+        {
+          id: "lnk_51d15fa48b90b40e",
+          kind: "link",
+          localFallback: !localFallback,
+          model: null,
+          provider: null,
+        },
+        { id: "lnk_781ccea3cdb84745", kind: "link", localFallback, model: null, provider: false },
+      ],
+      last: null,
+      recent: [],
+    });
+    const studio = (fallback: unknown) =>
+      ({
+        ...fleet["mac-studio"],
+        status: {
+          ...fleet["mac-studio"].status,
+          remoteHub: { link: { linkId: "lnk_781ccea3cdb84745" } },
+          ...(fallback === undefined ? {} : { fallback }),
+        },
+      }) as unknown as typeof fleet.home;
+    const granted = yield* setup({ fixture: studio(view(true)) });
+    expect((yield* granted.inventory.read).fallback).toEqual({
+      source: "home",
+      localFallback: true,
+    });
+    const denied = yield* setup({ fixture: studio(view(false)) });
+    expect((yield* denied.inventory.read).fallback).toEqual({
+      source: "home",
+      localFallback: false,
+    });
+    // OpenCodex before OCX-11 says nothing, which GOAT treats as not allowed.
+    const older = yield* setup({ fixture: studio(undefined) });
+    expect((yield* older.inventory.read).fallback).toBeUndefined();
+  }),
+);

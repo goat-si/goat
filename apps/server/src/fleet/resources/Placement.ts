@@ -26,6 +26,7 @@ import * as Fallback from "./Fallback.ts";
 import { stepKey, toSelection } from "./fallbackPolicy.ts";
 import {
   fleetThreads,
+  hubTakesNoGoals,
   place,
   schedulerHostStatus,
   type HostSelector,
@@ -74,7 +75,9 @@ const make = Effect.gen(function* () {
   const log = yield* Ref.make<ReadonlyArray<PlacementDecision>>([]);
 
   const fleetSettings = settingsService.getSettings.pipe(
-    Effect.map((settings) => settings.fleet),
+    Effect.map((settings) =>
+      settings.hub.enabled ? hubTakesNoGoals(settings.fleet) : settings.fleet,
+    ),
     Effect.orElseSucceed((): FleetSettings => ({})),
   );
   // The controller places with this machine's SSH keys, as goal launches do.

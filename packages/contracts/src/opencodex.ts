@@ -15,6 +15,18 @@ export const OpenCodexProtocolEvidence = Schema.Struct({
 });
 export type OpenCodexProtocolEvidence = typeof OpenCodexProtocolEvidence.Type;
 
+/**
+ * This device's row of OpenCodex's `ocx.fallback/1` view (OCX-11). `source` says where OpenCodex
+ * read it: "home" is the Home's policy over the link, "live" this proxy's own, and "local" this
+ * machine's config, which says nothing about the Home's permission. Older OpenCodex omits it.
+ */
+export const OpenCodexDeviceFallback = Schema.Struct({
+  source: Schema.Literals(["live", "home", "local"]),
+  /** The Home lets GOAT move this device's work to its own providers. Absent: no row for it. */
+  localFallback: Schema.optional(Schema.Boolean),
+});
+export type OpenCodexDeviceFallback = typeof OpenCodexDeviceFallback.Type;
+
 export const OpenCodexInventorySnapshot = Schema.Struct({
   installed: Schema.Boolean,
   binaries: Schema.Array(Schema.Struct({ path: Schema.String, version: Schema.String })),
@@ -63,5 +75,6 @@ export const OpenCodexInventorySnapshot = Schema.Struct({
     }),
   ),
   parityEvidence: ForwardCompatibleOptional(HubParityEvidence),
+  fallback: ForwardCompatibleOptional(OpenCodexDeviceFallback),
 });
 export type OpenCodexInventorySnapshot = typeof OpenCodexInventorySnapshot.Type;

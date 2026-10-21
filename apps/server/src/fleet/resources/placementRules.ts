@@ -58,6 +58,15 @@ export type PlacementResult =
   | { readonly _tag: "Refused"; readonly reasons: ReadonlyArray<PlacementHostRefusal> };
 
 const hostKey = (host: string | null) => host ?? FLEET_LOCAL_HOST_KEY;
+
+/** On the hub: it only routes, orchestrates and holds cloud launches, so goal work goes elsewhere. */
+export const hubTakesNoGoals = (settings: FleetSettings): FleetSettings => ({
+  ...settings,
+  hosts: {
+    ...settings.hosts,
+    [FLEET_LOCAL_HOST_KEY]: { ...settings.hosts?.[FLEET_LOCAL_HOST_KEY], allowGoals: false },
+  },
+});
 const isGoal = (owner: string) => owner.startsWith("goal:");
 const refusal = (code: PlacementRefusal["code"], message: string): PlacementRefusal => ({
   code,

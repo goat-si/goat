@@ -139,6 +139,15 @@ ordinary host polling returns the last verdict. Missing evidence remains unprove
 unavailable apply timing, which is skipped. The shared Scheduler checks Home links every
 30 minutes; verification never repairs a device.
 
+`apps/server/src/hub/HubDown.ts` is the hub-down policy for goal work on this machine. When this
+device's OpenCodex is linked to a Home that does not answer the relayed models request, the goal
+controller pauses actions that would start provider work (goal condition `Blocked`, reason
+`HubUnreachable`) and leaves running turns alone. It hops to the device's own sign-in only when
+`hub.devices.local.localFallback` is on and the Home granted the device `localFallback` (OCX-11)
+before the outage; an OpenCodex that never stated it counts as not granted. One decision item asks
+to wait or move the work, and is withdrawn when the Home answers. GOAT never switches the hub or
+changes OpenCodex settings, and a machine with `hub.enabled` takes no goal placements.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.

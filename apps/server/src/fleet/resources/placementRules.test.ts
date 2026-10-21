@@ -10,7 +10,12 @@ import {
 import * as Schema from "effect/Schema";
 import payload from "../../usage/fixtures/opencodex-quota-pool.json" with { type: "json" };
 
-import { place, schedulerHostStatus, type PlacementInput } from "./placementRules.ts";
+import {
+  hubTakesNoGoals,
+  place,
+  schedulerHostStatus,
+  type PlacementInput,
+} from "./placementRules.ts";
 
 const NOW = Date.parse("2026-10-20T00:00:00.000Z");
 const LATER = "2026-10-20T05:00:00.000Z";
@@ -192,6 +197,21 @@ describe("place", () => {
         ["mini", "not_ready"],
       ],
     );
+  });
+
+  it("keeps goal work off the hub but still places a person's own launch there", () => {
+    const settings = hubTakesNoGoals({ hosts: { local: { maxThreads: 4 } } });
+    const hosts = [host(null), host("mac-studio")];
+    const goalWork = place(goal(), hosts, settings, NOW);
+    assert.strictEqual(goalWork._tag === "Placed" && goalWork.host, "mac-studio");
+    const own = place(
+      goal({ owner: "thread:t1", hostSelector: { hosts: [null] } }),
+      hosts,
+      settings,
+      NOW,
+    );
+    assert.strictEqual(own._tag === "Placed" && own.host, null);
+    assert.deepStrictEqual(settings.hosts?.local, { maxThreads: 4, allowGoals: false });
   });
 
   it("refuses every host once the fleet holds its global limit of running plus queued threads", () => {

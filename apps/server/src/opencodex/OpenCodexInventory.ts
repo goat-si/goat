@@ -1,5 +1,6 @@
 import {
   ForwardCompatibleOptional,
+  OpenCodexDeviceFallback,
   OpenCodexInventorySnapshot,
   OpenCodexProtocolEvidence,
 } from "@goat/contracts";
@@ -84,6 +85,15 @@ const Status = Schema.Struct({
   appliedCodexSettingsDigest: ForwardCompatibleOptional(Schema.String),
   remoteHub: Schema.optional(
     Schema.Struct({ link: Schema.optional(Schema.Struct({ linkId: Schema.String })) }),
+  ),
+  // OCX-11 `ocx.fallback/1`. Rows are keyed by link id or Hub-client key id; a Child's read
+  // through the link omits aliases, so this device finds its row by its own id.
+  fallback: ForwardCompatibleOptional(
+    Schema.Struct({
+      schema: Schema.Literal("ocx.fallback/1"),
+      source: OpenCodexDeviceFallback.fields.source,
+      devices: Schema.Array(Schema.Struct({ id: Schema.String, localFallback: Schema.Boolean })),
+    }),
   ),
 });
 const Link = Schema.Struct({
@@ -339,6 +349,13 @@ const make = Effect.gen(function* () {
     const childSettingsApplied = yield* fs
       .exists(path.join(ocxHome, "link", "home-codex-settings.json"))
       .pipe(Effect.orElseSucceed(() => null));
+    const childLinkId = config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId;
+    const hubClient = connect && linkRole !== "child" && connect.apiKeyId ? connect : undefined;
+    const ownDeviceId = linkRole === "child" ? childLinkId : hubClient?.apiKeyId;
+    const fallbackRow =
+      ownDeviceId === undefined
+        ? undefined
+        : status?.fallback?.devices.find(({ id }) => id === ownDeviceId);
     const installed = binaries.length > 0 || health !== undefined || ready !== undefined;
     let parityEvidence: OpenCodexInventorySnapshot["parityEvidence"];
     if (parity) {
@@ -398,9 +415,7 @@ const make = Effect.gen(function* () {
         ...(health?.uptime !== undefined && healthResponse
           ? { startedAt: healthResponse.observedAt - health.uptime * 1000 }
           : {}),
-        ...((config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId)
-          ? { childLinkId: config?.client?.link?.linkId ?? status?.remoteHub?.link?.linkId }
-          : {}),
+        ...(childLinkId ? { childLinkId } : {}),
         ...(record ? { settingsLinkId: record.linkId } : {}),
         ...(settings ? { settingsDigest: yield* digest(settings) } : {}),
         ...(status?.appliedCodexSettingsDigest
@@ -444,8 +459,16 @@ const make = Effect.gen(function* () {
         links: linkRole === "home" ? (link?.links ?? []) : [],
         childSettingsApplied,
       },
-      ...(connect && linkRole !== "child" && connect.apiKeyId ? { hubClient: connect } : {}),
+      ...(hubClient ? { hubClient } : {}),
       ...(parityEvidence ? { parityEvidence } : {}),
+      ...(status?.fallback
+        ? {
+            fallback: {
+              source: status.fallback.source,
+              ...(fallbackRow ? { localFallback: fallbackRow.localFallback } : {}),
+            },
+          }
+        : {}),
     } satisfies OpenCodexInventorySnapshot;
   });
 

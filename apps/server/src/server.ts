@@ -31,6 +31,7 @@ import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
 import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
@@ -1369,7 +1370,9 @@ const layerMakeRoutes = Layer.mergeAll(
     HandoffExpiry.layer,
     // Fleet goals act through the same launch, watch and dispatch services as these tools.
     McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(GoalLayers.layer.pipe(Layer.provideMerge(layerFleetHealth))),
+      Layer.provide(
+        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+      ),
     ),
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
