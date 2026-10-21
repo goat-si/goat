@@ -1,5 +1,4 @@
 import { act } from "react";
-// @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
   createNativeMemoryHarness,

@@ -10,6 +10,7 @@ import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapter
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
 import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
@@ -5145,6 +5146,7 @@ it.effect.each(turnStartMemoryCases)(
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
+              Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(ChannelLedger.ChannelLedger)({

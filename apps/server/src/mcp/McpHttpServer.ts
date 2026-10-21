@@ -37,6 +37,7 @@ import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as HubParity from "../hub/HubParity.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -1307,6 +1308,7 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  Layer.provideMerge(HubParity.layer),
   Layer.provide(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),

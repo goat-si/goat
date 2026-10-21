@@ -1,3 +1,4 @@
+import * as CodexErrors from "effect-codex-app-server/errors";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -200,5 +201,27 @@ it.effect.each(["missing", "changed"])(
       const account = yield* fs.readFileString(`${fixture.input.execution.home}/account-observed`);
       assert.include(account, fixture.catalog);
       assert.include(account, fixture.input.settings.opencodexBaseUrl);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "a failed Codex config probe never publishes the inspect-only endpoint as effective",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* routeFixture({ role: "home" });
+      const snapshot = yield* checkCodexProviderStatus(
+        fixture.input.settings,
+        () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "fixture-codex",
+              cause: new Error("fixture probe failure"),
+            }),
+          ),
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      assert.equal(snapshot.codexRoute?.state, "home");
+      assert.isUndefined(snapshot.codexRoute?.effectiveBaseUrl);
+      assert.equal(snapshot.status, "error");
     }).pipe(Effect.provide(NodeServices.layer)),
 );

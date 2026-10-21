@@ -1,3 +1,4 @@
+import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { applyThreadPullRequestLinkUpdate } from "@goat/shared/threadPullRequests";
@@ -10,6 +11,7 @@ import type {
   OrchestrationV2ThreadHistoryPage,
 } from "@goat/contracts";
 import {
+  latestExecutedRun,
   latestRootProviderFailure,
   latestUnheldRun,
   threadErrorSummary,
@@ -17,6 +19,7 @@ import {
 } from "@goat/shared/orchestrationV2ThreadError";
 import { threadPullRequestsOf } from "@goat/shared/threadPullRequests";
 import type {
+  FallbackTrigger,
   EnvironmentId,
   OrchestrationV2AppThread,
   OrchestrationV2Checkpoint,
@@ -476,6 +479,8 @@ export interface ProjectionStoreV2Shape {
      * asks for them; `limitRecoveryCommand` arms nothing for such a failure.
      */
     readonly withoutReset?: boolean;
+    /** Reevaluate these configured ordinary-thread triggers, including armed waits. */
+    readonly fallbackTriggers?: ReadonlyArray<FallbackTrigger>;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
@@ -1678,6 +1683,9 @@ export function threadShellFromProjection(
     ...(projection.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: projection.thread.externalLauncher }),
+    ...(projection.thread.historyArchive === undefined
+      ? {}
+      : { historyArchive: projection.thread.historyArchive }),
     ...(projection.thread.sideChatOf == null ? {} : { sideChatOf: projection.thread.sideChatOf }),
     ...(projection.thread.linkedPullRequest === undefined
       ? {}
@@ -1943,6 +1951,9 @@ function shellFromState(input: {
     ...(input.state.thread.externalLauncher === undefined
       ? {}
       : { externalLauncher: input.state.thread.externalLauncher }),
+    ...(input.state.thread.historyArchive === undefined
+      ? {}
+      : { historyArchive: input.state.thread.historyArchive }),
     ...(input.state.thread.sideChatOf == null ? {} : { sideChatOf: input.state.thread.sideChatOf }),
     ...(input.state.thread.linkedPullRequest === undefined
       ? {}
@@ -2005,6 +2016,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   ProjectionStoreV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const archiveGate = yield* ThreadArchiveGate;
 
     // For run upserts: a snapshot without `path` keeps the value another event recorded there.
     const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
@@ -3930,6 +3942,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
       function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
+        const fallbackTriggers = options.fallbackTriggers ?? [];
+        const failureClasses = [...new Set(["usage_limit", ...fallbackTriggers])];
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly run_id: string;
@@ -3975,41 +3989,62 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           WHERE t.deleted_at IS NULL
             -- The sweep runs every scheduler tick. Without this list the latest-run
             -- lookup above sorts every run of every thread, tens of milliseconds
-            -- for one long thread; only threads with a usage-limit failure qualify.
+            -- for one long thread; only threads with a relevant failure qualify.
             AND t.thread_id IN (
               SELECT failure.thread_id FROM orchestration_v2_projection_turn_items failure
               WHERE failure.type = 'error' AND failure.status = 'failed'
-                AND json_extract(failure.payload_json, '$.failure.class') = 'usage_limit'
+                AND json_extract(failure.payload_json, '$.failure.class') IN ${sql.in(failureClasses)}
             )
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
-            AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
-            AND (
-              ${booleanInt(options.withoutReset === true)}
-              OR (
-                json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
-              )
-            )
             AND (
               (
-                json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
-                AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
-                AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
-                AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                json_extract(item.payload_json, '$.failure.class') IN ${sql.in(fallbackTriggers)}
                 AND (
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
                 )
+                AND NOT (
+                  json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
+                  AND json_extract(t.payload_json, '$.limitRecovery.autoResume') IS NOT 1
+                  AND json_extract(t.payload_json, '$.limitRecovery.snooze') IS NOT 1
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_turn_items stopped
+                  WHERE stopped.thread_id = t.thread_id AND stopped.run_id = r.run_id
+                    AND stopped.type = 'run_interrupt_request'
+                )
               )
               OR (
-                (
-                  json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
-                  OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
+                json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
+                AND (
+                  ${booleanInt(options.withoutReset === true)}
+                  OR (
+                    json_extract(item.payload_json, '$.failure.resetAt') IS NOT NULL
+                    AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(COALESCE(r.completed_at, json_extract(t.payload_json, '$.updatedAt')))
+                  )
                 )
                 AND (
-                  ${booleanInt(options.autoResume)}
-                  OR (${booleanInt(options.snooze)} AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${DateTime.formatIso(options.now)}))
+                  (
+                    json_extract(t.payload_json, '$.limitRecovery.runId') IS r.run_id
+                    AND json_extract(t.payload_json, '$.limitRecovery.resetAt') IS json_extract(item.payload_json, '$.failure.resetAt')
+                    AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
+                    AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
+                    AND (
+                      json_extract(t.payload_json, '$.snoozedUntil') IS NULL
+                      OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
+                    )
+                  )
+                  OR (
+                    (
+                      json_extract(t.payload_json, '$.limitRecovery.runId') IS NOT r.run_id
+                      OR json_extract(t.payload_json, '$.limitRecovery.resetAt') IS NOT json_extract(item.payload_json, '$.failure.resetAt')
+                    )
+                    AND (
+                      ${booleanInt(options.autoResume)}
+                      OR (${booleanInt(options.snooze)} AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${DateTime.formatIso(options.now)}))
+                    )
+                  )
                 )
               )
             )
@@ -4027,7 +4062,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             item.type === "error" ? item.failure : null,
             row.last_error,
           );
-          if (summary.lastErrorClass !== "usage_limit") continue;
+          if (summary.lastErrorClass === null || !failureClasses.includes(summary.lastErrorClass))
+            continue;
           candidates.push({
             id: thread.id,
             status: "failed",
@@ -6805,7 +6841,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ cause })));
 
-    return {
+    return gateThreadReads(archiveGate, {
       apply,
       getReviewLedgerEntries,
       getShellSnapshot,
@@ -6900,7 +6936,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       searchThread,
       searchThreadStream,
       getThreadAttachmentIds,
-    } satisfies ProjectionStoreV2Shape;
+    } satisfies ProjectionStoreV2Shape);
   }),
 );
 
@@ -7174,17 +7210,33 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   thread.archivedAt === null &&
                   thread.settledOverride !== "settled",
               )
-              .map(threadShellFromProjection)
+              .map((projection) => {
+                const run = latestExecutedRun(projection.runs);
+                // Recovery follows executed work; the UI may instead show a cancelled queue entry.
+                return threadShellFromProjection({
+                  ...projection,
+                  runs: run === null ? [] : [run],
+                });
+              })
               .filter(
-                (thread) =>
-                  thread.status === "failed" &&
-                  thread.lastErrorClass === "usage_limit" &&
-                  (options.withoutReset === true || thread.usageLimitResetAt != null) &&
-                  thread.pendingRuntimeRequest === null,
+                (thread) => thread.status === "failed" && thread.pendingRuntimeRequest === null,
               )
               .filter((thread) => {
                 const resetMs = Date.parse(thread.usageLimitResetAt ?? "");
                 const nowMs = DateTime.toEpochMillis(options.now);
+                if (
+                  options.fallbackTriggers?.some((trigger) => trigger === thread.lastErrorClass) &&
+                  !thread.latestRunStopRequested &&
+                  (thread.snoozedUntil == null ||
+                    DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs) &&
+                  !(
+                    thread.limitRecovery?.runId === thread.latestRunId &&
+                    !thread.limitRecovery?.autoResume &&
+                    !thread.limitRecovery?.snooze
+                  )
+                )
+                  return true;
+                if (thread.lastErrorClass !== "usage_limit") return false;
                 if (
                   !Number.isFinite(resetMs) ||
                   resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)

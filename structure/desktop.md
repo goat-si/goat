@@ -65,6 +65,23 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 - **Writes.** `set` and `clear` read the file on disk first. One this app cannot open is copied
   before it is replaced, and the change is refused when no copy can be made.
 
+## Computer use host
+
+When the server asks for a Cua Driver host on the private control pipe, the Electron main process
+owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`), so macOS attributes Accessibility and Screen
+Recording to GOAT rather than to the server child. On macOS it checks both permissions before
+starting and reports `unavailable` until they are granted. Packaged builds start the driver from
+`resources/cua-driver`; development builds need `GOAT_CUA_DRIVER_PATH`. The host reuses a running
+driver, retires a crashed one, and passes the same telemetry and update-check opt-outs as the
+standalone host ([server.md](server.md#computer-use)).
+
+`stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
+checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the
+driver, cursor theme tool and Wayland helper on Linux, and the driver, UIA worker and cursor theme
+tool on Windows. The SDK's native libraries come from `@trycua/cua-driver` and are unpacked beside
+`app.asar`; `patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. The license
+notices are vendored in `apps/desktop/src/cua/notices/`.
+
 ## Shell
 
 The bundled server entry is `backendEntryPath` in `apps/desktop/src/app/DesktopEnvironment.ts`:

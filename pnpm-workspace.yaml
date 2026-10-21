@@ -329,6 +329,7 @@ patchedDependencies:
   mdast-util-math@3.0.0: patches/mdast-util-math@3.0.0.patch
   micromark-extension-llm-math@3.1.0: patches/micromark-extension-llm-math@3.1.0.patch
   micromark-extension-gfm-table@2.1.1: patches/micromark-extension-gfm-table@2.1.1.patch
+  "@ubjs/node@0.31.0-3": patches/@ubjs__node@0.31.0-3.patch
   alchemy@2.0.0-beta.80: patches/alchemy@2.0.0-beta.80.patch
   expo-audio@58.0.9: patches/expo-audio@58.0.9.patch
   expo-network@58.0.3: patches/expo-network@58.0.3.patch

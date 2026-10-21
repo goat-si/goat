@@ -58,7 +58,9 @@ it.effect(
         [92, "RemoteDispatchObservation"],
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
-        [95, "PermissionProfiles"],
+        [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
+        [97, "PermissionProfiles"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },

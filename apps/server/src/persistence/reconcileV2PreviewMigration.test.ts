@@ -107,7 +107,9 @@ describe("V2 preview upgrade", () => {
         [92, "RemoteDispatchObservation"],
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
-        [95, "PermissionProfiles"],
+        [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
+        [97, "PermissionProfiles"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -225,7 +227,9 @@ describe("V2 preview upgrade", () => {
         [92, "RemoteDispatchObservation"],
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
-        [95, "PermissionProfiles"],
+        [95, "MemorySummaryWorkThreadIndex"],
+        [96, "ThreadHistoryArchives"],
+        [97, "PermissionProfiles"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

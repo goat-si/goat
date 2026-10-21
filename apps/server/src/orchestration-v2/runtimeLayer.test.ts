@@ -9,6 +9,8 @@ import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
+import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
+import * as Fallback from "../fleet/resources/Fallback.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -749,6 +751,436 @@ const seedFoundationQuestion = Effect.fn("runtimeTest.seedFoundationQuestion")(f
   return { threadId, requestId, nodeId, itemId, now };
 });
 
+it.effect.each([
+  "provider_error",
+  "transport_error",
+  "provider-cancelled-queue",
+  "transport-cancelled-queue",
+  "provider-live-queue",
+  "worker-snooze",
+  "default-trigger",
+  "other-chain-trigger",
+  "goal-only",
+  "unknown",
+  "permission_error",
+  "cooldown",
+  "chain-added",
+  "snooze",
+  "stop",
+  "stop-provider",
+  "stop-before-provider",
+  "stop-at-continuation",
+  "stop-at-continuation-before-provider",
+  "model-at-continuation",
+  "model-at-selection",
+  "stop-at-selection",
+  "selected-before-restart",
+  "timer-wins",
+  "resetless",
+  "manual-model",
+  "goal-owned",
+] as const)("ordinary fallback sweep reaches configured failures: %s", (scenario) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const events = yield* EventSink.EventSinkV2;
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    let continuationToReplay: Parameters<typeof threads.dispatch>[0] | undefined;
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make(`fallback-sweep:${scenario}`);
+    const projectId = ProjectId.make(`fallback-sweep:project:${scenario}`);
+    const target = { ...modelSelection, model: "gpt-5.4-mini" };
+    yield* seedProject({
+      projectId,
+      title: "Fallback",
+      workspaceRoot: process.cwd(),
+      defaultModelSelection: modelSelection,
+      createdAt: DateTime.formatIso(now),
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`fallback-create:${scenario}`),
+      threadId,
+      projectId,
+      title: "Fallback",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make(`fallback-message:${scenario}`),
+      threadId,
+      messageId: MessageId.make(`fallback-message:${scenario}`),
+      text: "Work",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+    const failure =
+      scenario === "default-trigger" ||
+      scenario === "other-chain-trigger" ||
+      scenario === "goal-only" ||
+      scenario === "stop-provider" ||
+      scenario === "stop-before-provider" ||
+      scenario === "stop-at-continuation" ||
+      scenario === "stop-at-continuation-before-provider" ||
+      scenario === "provider-cancelled-queue" ||
+      scenario === "provider-live-queue" ||
+      scenario === "model-at-continuation" ||
+      scenario === "model-at-selection" ||
+      scenario === "stop-at-selection"
+        ? "provider_error"
+        : scenario === "transport-cancelled-queue"
+          ? "transport_error"
+          : scenario === "provider_error" ||
+              scenario === "transport_error" ||
+              scenario === "unknown" ||
+              scenario === "permission_error"
+            ? scenario
+            : "usage_limit";
+    const resetAt = DateTime.formatIso(DateTime.add(now, { hours: 1 }));
+    yield* events.write({
+      events: [
+        {
+          id: EventId.make(`fallback-run:${scenario}`),
+          type: "run.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            ...run,
+            providerThreadId:
+              scenario === "stop-before-provider" ||
+              scenario === "stop-at-continuation-before-provider"
+                ? null
+                : ProviderThreadId.make(`fallback-native:${scenario}`),
+            status: "failed",
+            completedAt: now,
+          },
+        },
+        {
+          id: EventId.make(`fallback-error:${scenario}`),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`fallback-error:${scenario}`),
+            type: "error",
+            threadId,
+            runId: run.id,
+            nodeId: run.rootNodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 2,
+            status: "failed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            failure: {
+              class: failure,
+              message: "Failed",
+              code: null,
+              retryable: null,
+              ...(failure === "usage_limit" && scenario !== "resetless" ? { resetAt } : {}),
+            },
+          },
+        },
+      ],
+    });
+    const cancelledQueue =
+      scenario === "provider-cancelled-queue" || scenario === "transport-cancelled-queue";
+    if (cancelledQueue || scenario === "provider-live-queue") {
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`fallback-cancelled:${scenario}`),
+            type: "run.created",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...run,
+              id: RunId.make(`fallback-cancelled:${scenario}`),
+              ordinal: run.ordinal + 1,
+              status: scenario === "provider-live-queue" ? "queued" : "cancelled",
+              startedAt: null,
+              completedAt: now,
+            },
+          },
+        ],
+      });
+      assert.equal(
+        (yield* store.getThreadShell(threadId))!.status,
+        cancelledQueue ? "cancelled" : "queued",
+      );
+    }
+    const arm = limitRecoveryCommand(
+      (yield* store.getThreadShell(threadId))!,
+      true,
+      DateTime.toEpochMillis(now),
+      scenario === "snooze",
+    );
+    if (arm !== null && scenario !== "worker-snooze") yield* orchestrator.dispatch(arm);
+    const armed = (yield* store.getThreadShell(threadId))!;
+    const timedResume = limitRecoveryCommand(armed, true, Date.parse(resetAt));
+    if (scenario === "stop" || scenario === "stop-provider" || scenario === "stop-before-provider")
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make(`fallback-stop:${scenario}`),
+        threadId,
+      });
+    if (scenario === "manual-model")
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make("fallback-manual"),
+        threadId,
+        modelSelection: target,
+      });
+    if (scenario === "selected-before-restart")
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make(
+          `fleet-fallback:${threadId}:${run.id}:${target.instanceId}/${target.model}`,
+        ),
+        threadId,
+        modelSelection: target,
+      });
+    const install = Effect.fn("installFallbackSweep")(
+      function* (_chainAvailable = true) {
+        const fallback = yield* Fallback.make.pipe(
+          Effect.provideService(ThreadManagementService.ThreadManagementService, {
+            ...threads,
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                if (
+                  command.type === "thread.model-selection.set" &&
+                  scenario === "model-at-selection"
+                ) {
+                  yield* orchestrator.dispatch({
+                    type: "thread.model-selection.set",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-selection:${scenario}`),
+                    modelSelection: { ...modelSelection, model: "user-selected" },
+                  });
+                }
+                if (
+                  command.type === "thread.model-selection.set" &&
+                  scenario === "stop-at-selection"
+                ) {
+                  yield* orchestrator.dispatch({
+                    type: "thread.stop",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-selection:${scenario}`),
+                  });
+                }
+                if (command.type === "message.dispatch") continuationToReplay = command;
+                if (
+                  (scenario === "stop-at-continuation" ||
+                    scenario === "stop-at-continuation-before-provider") &&
+                  command.type === "message.dispatch"
+                ) {
+                  yield* orchestrator.dispatch({
+                    type: "thread.stop",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-stop:${scenario}`),
+                  });
+                }
+                if (scenario === "model-at-continuation" && command.type === "message.dispatch") {
+                  yield* orchestrator.dispatch({
+                    type: "thread.model-selection.set",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-model:${scenario}`),
+                    modelSelection: { ...modelSelection, model: "user-selected" },
+                  });
+                }
+                return yield* threads.dispatch(command);
+              }),
+          }),
+        );
+        let sweep: Effect.Effect<void> | undefined;
+        const context = yield* Effect.context<
+          | Orchestrator.OrchestratorV2
+          | ThreadManagementService.ThreadManagementService
+          | ProjectionStore.ProjectionStoreV2
+          | ServerSettings.ServerSettingsService
+        >();
+        yield* Layer.build(
+          UsageLimitRecoveryWorker.layer.pipe(
+            Layer.provide(Layer.succeed(Fallback.Fallback, fallback)),
+            Layer.provide(
+              Layer.mock(Scheduler.Scheduler)({
+                register: <E, R>(_name: string, work: Effect.Effect<void, E, R>) =>
+                  Effect.gen(function* () {
+                    const services = yield* Effect.context<R>();
+                    sweep = work.pipe(Effect.provideContext(services), Effect.orDie);
+                  }),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(Fallback.GoalThreadOwnership, {
+                isGoalThread: () => Effect.succeed(scenario === "goal-owned"),
+              }),
+            ),
+            Layer.provide(Layer.succeedContext(context)),
+          ),
+        );
+        return { fallback, sweep: sweep! };
+      },
+      (effect, chainAvailable = true) =>
+        Effect.provide(
+          effect,
+          ServerSettings.layerTest({
+            autoResumeLimitedThreads: failure === "usage_limit",
+            snoozeLimitedThreads: scenario === "worker-snooze",
+            fleet: {
+              fallbackChains: chainAvailable
+                ? {
+                    test: {
+                      steps: [modelSelection, target],
+                      scope: scenario === "goal-only" ? "goals" : "goals_and_threads",
+                      ...(scenario === "default-trigger" || scenario === "other-chain-trigger"
+                        ? {}
+                        : { on: ["usage_limit", "provider_error", "transport_error"] }),
+                      cooldownMs: 60_000,
+                    },
+                    ...(scenario === "other-chain-trigger"
+                      ? {
+                          unrelated: {
+                            steps: [{ ...modelSelection, model: "unrelated" }, target],
+                            scope: "goals_and_threads" as const,
+                            on: ["provider_error"] as const,
+                          },
+                        }
+                      : {}),
+                  }
+                : {},
+            },
+          }),
+        ),
+    );
+    if (scenario === "chain-added") {
+      const unavailable = yield* install(false);
+      yield* unavailable.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 1);
+      assert.deepEqual((yield* store.getThreadShell(threadId))!.limitRecovery, armed.limitRecovery);
+    }
+    const first = yield* install();
+    if (scenario === "worker-snooze") {
+      yield* first.fallback.reportFailure(target, "usage_limit");
+      yield* first.sweep;
+      const sleeping = (yield* store.getThreadShell(threadId))!;
+      assert.deepEqual(sleeping.limitRecovery, {
+        runId: run.id,
+        resetAt,
+        autoResume: true,
+        snooze: true,
+        requestId: CommandId.make(`limit-arm:${threadId}:${run.id}:${Date.parse(resetAt)}`),
+      });
+      assert.equal(DateTime.formatIso(sleeping.snoozedUntil!), resetAt);
+      assert.equal(sleeping.usageLimitResetAt, resetAt);
+      const staleResume = limitRecoveryCommand(sleeping, true, Date.parse(resetAt));
+      assert.isNotNull(staleResume);
+      yield* TestClock.adjust("1 minute");
+      yield* first.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 1);
+      yield* TestClock.adjust("59 minutes");
+      yield* first.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 2);
+      assert.deepEqual((yield* store.getThreadShell(threadId))!.modelSelection, target);
+      assert.equal((yield* store.getThreadShell(threadId))!.limitRecovery?.resetAt, resetAt);
+      yield* orchestrator.dispatch(staleResume!);
+      yield* (yield* install()).sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 2);
+      return;
+    }
+    if (scenario === "timer-wins") {
+      yield* TestClock.adjust("1 hour");
+      yield* first.fallback.reportFailure(target, "usage_limit");
+      yield* first.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 2);
+      assert.deepEqual((yield* store.getThreadShell(threadId))!.modelSelection, modelSelection);
+      assert.isNotNull(timedResume);
+      assert.equal(yield* threads.receiptStatus(timedResume!.commandId), "accepted");
+      yield* first.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 2);
+      return;
+    }
+    if (scenario === "cooldown") {
+      yield* first.fallback.reportFailure(target, "usage_limit");
+      yield* first.sweep;
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 1);
+      yield* TestClock.adjust("1 minute");
+    }
+    yield* first.sweep;
+    const shouldSwitch = [
+      "provider_error",
+      "transport_error",
+      "provider-cancelled-queue",
+      "transport-cancelled-queue",
+      "cooldown",
+      "chain-added",
+      "selected-before-restart",
+      "resetless",
+    ].includes(scenario);
+    const after = yield* store.getThreadProjection(threadId);
+    assert.lengthOf(
+      after.runs,
+      (shouldSwitch ? 2 : 1) + (cancelledQueue || scenario === "provider-live-queue" ? 1 : 0),
+    );
+    assert.deepEqual(
+      after.thread.modelSelection,
+      scenario === "model-at-continuation" || scenario === "model-at-selection"
+        ? { ...modelSelection, model: "user-selected" }
+        : shouldSwitch ||
+            scenario === "manual-model" ||
+            scenario === "stop-at-continuation" ||
+            scenario === "stop-at-continuation-before-provider"
+          ? target
+          : modelSelection,
+    );
+    if (
+      scenario === "stop-at-continuation" ||
+      scenario === "stop-at-continuation-before-provider" ||
+      scenario === "model-at-continuation"
+    ) {
+      assert.isDefined(continuationToReplay);
+      assert.equal(yield* threads.receiptStatus(continuationToReplay!.commandId), "accepted");
+      yield* (yield* install()).sweep;
+      yield* threads.dispatch(continuationToReplay!);
+      assert.lengthOf((yield* store.getThreadProjection(threadId)).runs, 1);
+    }
+    if (scenario === "snooze") {
+      yield* TestClock.adjust("1 hour");
+      yield* first.sweep;
+      assert.lengthOf(
+        (yield* store.getThreadProjection(threadId)).runs,
+        2 + (cancelledQueue ? 1 : 0),
+      );
+    }
+    if (shouldSwitch || scenario === "snooze") {
+      const continuation = CommandId.make(`fleet-fallback:${threadId}:${run.id}:continue`);
+      assert.equal(yield* threads.receiptStatus(continuation), "accepted");
+      const restarted = yield* install();
+      yield* restarted.sweep;
+      yield* TestClock.adjust("1 hour");
+      if (timedResume !== null) yield* orchestrator.dispatch(timedResume);
+      yield* restarted.sweep;
+      assert.lengthOf(
+        (yield* store.getThreadProjection(threadId)).runs,
+        2 + (cancelledQueue ? 1 : 0),
+      );
+      assert.equal(yield* threads.receiptStatus(continuation), "accepted");
+    }
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
 it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {

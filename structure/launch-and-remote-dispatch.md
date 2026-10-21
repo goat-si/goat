@@ -136,7 +136,7 @@ intersect the inherited launch snapshot and the caller's runtime ceiling; changi
 does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
 existing paths.
 
-`apps/server/src/persistence/Migrations/095_PermissionProfiles.ts` stores bindings and lane
+`apps/server/src/persistence/Migrations/097_PermissionProfiles.ts` stores bindings and lane
 reservations outside the orchestration event log. Admission commits before launch; pending and
 uncertain reservations retain capacity across restart. Local run projections and durable remote
 dispatches determine completion, so removing a launch watch grants no capacity. SSH requires

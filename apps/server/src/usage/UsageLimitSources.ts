@@ -7,6 +7,8 @@ import {
   type UsageLimitSourceConfig,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
+  type QuotaPool,
+  type ServerProvider,
 } from "@goat/contracts";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import * as Context from "effect/Context";
@@ -23,6 +25,7 @@ import * as Stream from "effect/Stream";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
+import { makeOpenCodexQuotaPool, quotaPoolSource } from "./opencodexQuotaPool.ts";
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -30,6 +33,10 @@ export class UsageLimitSources extends Context.Service<
     readonly current: Effect.Effect<ReadonlyArray<UsageLimitSourceSnapshot>>;
     readonly streamChanges: Stream.Stream<ReadonlyArray<UsageLimitSourceSnapshot>>;
     readonly refresh: Effect.Effect<void>;
+    readonly quotaPool: Effect.Effect<QuotaPool | undefined>;
+    readonly projectProviders: (
+      providers: ReadonlyArray<ServerProvider>,
+    ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
     readonly consumeResetCredit: (
       input: UsageLimitSourceConsumeResetCreditInput,
     ) => Effect.Effect<ProviderConsumeResetCreditResult, UsageLimitSourceError>;
@@ -49,6 +56,8 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
+  const opencodex = yield* makeOpenCodexQuotaPool;
+  const poolRef = yield* Ref.make<Effect.Success<ReturnType<typeof opencodex.read>>>(undefined);
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
@@ -76,9 +85,10 @@ export const make = Effect.gen(function* () {
 
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
     next: ReadonlyArray<UsageLimitSourceSnapshot>,
+    poolChanged = false,
   ) {
     const changed = yield* Ref.modify(stateRef, (previous) =>
-      Equal.equals(previous, next) ? [false, previous] : [true, next],
+      !poolChanged && Equal.equals(previous, next) ? [false, previous] : [true, next],
     );
     if (changed) yield* PubSub.publish(changes, next);
   });
@@ -99,7 +109,12 @@ export const make = Effect.gen(function* () {
       ([id, config]) => readSource(id as UsageLimitSourceId, config),
       { concurrency: 4 },
     );
-    yield* publish(snapshots);
+    const pool = yield* opencodex.read();
+    const previous = yield* Ref.getAndSet(poolRef, pool);
+    yield* publish(
+      pool === undefined ? snapshots : [...snapshots, quotaPoolSource(pool.pool)],
+      !Equal.equals(previous, pool),
+    );
   }).pipe(refreshLock.withPermits(1), Effect.ignoreCause({ log: true }));
 
   // Shares the refresh lock so a stale in-flight read cannot overwrite a redemption.
@@ -123,7 +138,7 @@ export const make = Effect.gen(function* () {
   }, refreshLock.withPermits(1));
 
   yield* settingsService.streamChanges.pipe(
-    Stream.map((settings) => settings.usageLimitSources),
+    Stream.map((settings) => [settings.usageLimitSources, settings.providerInstances]),
     Stream.changes,
     Stream.runForEach(() => refresh),
     Effect.forkScoped,
@@ -153,6 +168,15 @@ export const make = Effect.gen(function* () {
 
   return {
     current: Ref.get(stateRef),
+    quotaPool: Ref.get(poolRef).pipe(Effect.map((snapshot) => snapshot?.pool)),
+    projectProviders: Effect.fn("UsageLimitSources.projectProviders")(function* (providers) {
+      const settings = yield* settingsService.getSettings.pipe(Effect.orElseSucceed(() => null));
+      return yield* opencodex.project(
+        providers,
+        settings?.providerInstances ?? {},
+        yield* Ref.get(poolRef),
+      );
+    }),
     consumeResetCredit,
     refresh,
     get streamChanges() {
@@ -160,9 +184,8 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const subscription = yield* PubSub.subscribe(changes);
           const snapshot = yield* Ref.get(stateRef);
-          return Stream.concat(Stream.make(snapshot), Stream.fromSubscription(subscription)).pipe(
-            Stream.changes,
-          );
+          // The raw pool can change without changing its legacy account projection.
+          return Stream.concat(Stream.make(snapshot), Stream.fromSubscription(subscription));
         }),
       );
     },

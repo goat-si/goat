@@ -12,6 +12,7 @@ import {
   type RemoteKnownRun,
   type RemoteObservedRun,
   RuntimeRequestId,
+  RunId,
   ProjectId,
   EnvironmentId,
   ProviderInstanceId,
@@ -1741,6 +1742,109 @@ describe("reported outcomes from another machine", () => {
           assert.strictEqual((yield* onlyTask).resultSummary, "The coding thread was stopped.");
         }
         assert.isUndefined((yield* onlyTask).completionReport);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect.each(["failed-check", "not-run"] as const)(
+    "keeps late remote %s beside reported success without importing late reports",
+    (disposition) => {
+      const { machine, harness } = remoteHarness();
+      return Effect.gen(function* () {
+        const writes = yield* channelWriteMilestones;
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(
+          goatInput("do@mac-studio: verify the check", "late-check"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const running = yield* writes.waitFor((task) => task.status === "running");
+        const correlation = correlationOf(machine);
+        const runId = RunId.make(running.worker!.runId!);
+        const tests = { ok: true, command: "vp test run", passed: 12, failed: 0 };
+        const settling = yield* Deferred.make<void>();
+        machine.onWait = (input) =>
+          input.timeoutMs === REMOTE_SETTLE_WAIT_MS
+            ? Deferred.succeed(settling, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: { runId, tests, observedCheckPending: true },
+        });
+        machine.finishRun(correlation, "completed", "Done.", {
+          outcome: "succeeded",
+          summary: "Done and verified.",
+        });
+        yield* Deferred.await(settling);
+        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
+        const completed = yield* writes.waitFor((task) => task.status === "completed");
+        assert.isUndefined(completed.observed?.result?.observedCheck);
+        const check = {
+          status: "running" as const,
+          command: "vp test run",
+          exitCode: null,
+          durationMs: null,
+          at: "2026-10-12T00:00:00.000Z",
+        };
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: { runId, tests, observedCheck: check, observedCheckPending: true },
+        });
+        yield* writes.waitFor((task) => task.observed?.result?.observedCheck?.status === "running");
+        // A terminal task ignores late agent claims, including requests to reopen it.
+        machine.report(correlation, "needs_input", "Run it again?");
+        const finalCheck = {
+          ...check,
+          status: "completed" as const,
+          exitCode: 3,
+          durationMs: 1250,
+          outputTail: "one test failed",
+        };
+        machine.observeRun(correlation, {
+          pullRequests: [],
+          needsYou: [],
+          result: {
+            runId,
+            tests,
+            ...(disposition === "failed-check" ? { observedCheck: finalCheck } : {}),
+            observedCheckPending: false,
+          },
+        });
+        const final = yield* writes.waitFor(
+          (task) => task.observed?.result?.observedCheckPending === false,
+        );
+        assert.strictEqual(final.status, "completed");
+        assert.strictEqual(final.completedAt, completed.completedAt);
+        assert.strictEqual(final.resultSummary, completed.resultSummary);
+        assert.strictEqual(final.completionReport, "present");
+        assert.deepStrictEqual(final.openQuestions, []);
+        assert.deepStrictEqual(final.observed?.result, {
+          runId,
+          tests,
+          ...(disposition === "failed-check" ? { observedCheck: finalCheck } : {}),
+          observedCheckPending: false,
+        });
+        yield* runtime.drain;
+        machine.timeoutWait();
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).version, final.version);
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          count: number;
+        }>`SELECT COUNT(*) AS count FROM channel_task_events WHERE type = 'task.completed'`;
+        assert.strictEqual(rows[0]?.count, 1);
+        assert.isTrue(
+          machine.calls.some(
+            (call) =>
+              call.tool === "goat_origin_reports_wait" && call.arguments.watchRunId === runId,
+          ),
+        );
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
       );

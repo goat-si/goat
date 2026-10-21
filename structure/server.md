@@ -133,6 +133,12 @@ installs to adopted ownership and caches discovery for host-status polling. Its 
 `metrics.opencodex` travels through the existing host-status fan-out; older hosts omit it.
 Child link records remain Home-owned, so a missing Child link directory is normal.
 
+`apps/server/src/hub/HubParity.ts` verifies a device against this machine's Home through
+the host-status SSH read path. Explicit verification gathers fresh, non-billed evidence;
+ordinary host polling returns the last verdict. Missing evidence remains unproven, except
+unavailable apply timing, which is skipped. The shared Scheduler checks Home links every
+30 minutes; verification never repairs a device.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.
@@ -210,8 +216,8 @@ servers start `GOAT_CUA_DRIVER_PATH` when set, otherwise the pinned release that
 `apps/server/src/cua/CuaDriverInstallation.ts` downloads, checks against the size and SHA-256 in
 `packages/shared/src/cuaDriverRelease.ts`, and publishes under `<base>/tools/cua-driver/<version>`.
 Desktop servers send `cuaDriverRequest` on the desktop telemetry control pipe and wait for a
-`cuaDriverReport` (`packages/contracts/src/cua.ts`). The Electron shell ignores the request and
-hosts no driver, so a desktop acquisition fails after the 30-second startup bound.
+`cuaDriverReport` (`packages/contracts/src/cua.ts`); the Electron main process hosts the driver
+([desktop.md](desktop.md#computer-use-host)).
 
 Every host passes the driver's telemetry and update-check opt-outs through its environment
 allowlist, and every MCP descriptor the service returns carries all of them. Nothing attaches the

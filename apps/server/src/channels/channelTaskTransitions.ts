@@ -14,9 +14,15 @@ const reject = (reason: string): ChannelTaskTransition => ({ ok: false, reason }
 
 /** A finished task keeps the pull requests it produced; nothing is waiting on anyone anymore. */
 const settledObservation = (task: ChannelTask): Partial<Pick<ChannelTask, "observed">> =>
-  task.observed === undefined || task.observed.pullRequests.length === 0
+  task.observed === undefined
     ? {}
-    : { observed: { pullRequests: task.observed.pullRequests, needsYou: [] } };
+    : {
+        observed: {
+          pullRequests: task.observed.pullRequests,
+          needsYou: [],
+          ...(task.observed.result === undefined ? {} : { result: task.observed.result }),
+        },
+      };
 
 const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskStatus>> = {
   "task.created": [],
@@ -33,7 +39,7 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.failed": ["received", "dispatching", "running", "waiting_input"],
   "task.cancelled": ["received", "dispatching", "running", "waiting_input"],
   "task.retry.requested": ["completed", "failed", "cancelled"],
-  "task.worker.observed": ["running", "waiting_input"],
+  "task.worker.observed": ["running", "waiting_input", "completed", "failed", "cancelled"],
   "task.moved": ["dispatching", "running", "waiting_input"],
 };
 
@@ -108,6 +114,15 @@ export function applyChannelTaskEvent(
           ...base,
           status: task.status === "waiting_input" ? "waiting_input" : "running",
           worker: event.payload.worker,
+          ...(task.observed?.result !== undefined &&
+          task.observed.result.runId !== event.payload.worker.runId
+            ? {
+                observed: {
+                  pullRequests: task.observed.pullRequests,
+                  needsYou: task.observed.needsYou,
+                },
+              }
+            : {}),
         },
       };
     case "task.progress":
@@ -210,8 +225,51 @@ export function applyChannelTaskEvent(
         },
       };
     }
-    case "task.worker.observed":
-      return { ok: true, task: { ...base, observed: event.payload.observed } };
+    case "task.worker.observed": {
+      let observed = event.payload.observed;
+      if (observed.result !== undefined && observed.result.runId !== task.worker?.runId) {
+        return reject("The evidence names a run the task is not bound to.");
+      }
+      const previous = task.observed?.result;
+      if (previous !== undefined && previous.runId === observed.result?.runId) {
+        const finalCheck =
+          previous.observedCheck !== undefined && previous.observedCheck.status !== "running";
+        observed = {
+          ...observed,
+          result: {
+            ...previous,
+            ...observed.result,
+            ...(finalCheck
+              ? { observedCheck: previous.observedCheck, observedCheckPending: false }
+              : {}),
+          },
+        };
+        if (
+          previous.observedCheck?.status === "running" &&
+          event.payload.observed.result?.observedCheck === undefined &&
+          event.payload.observed.result?.observedCheckPending === false
+        ) {
+          const { observedCheck: _check, ...resolved } = observed.result!;
+          observed = { ...observed, result: resolved };
+        }
+      }
+      if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") {
+        if (observed.result === undefined)
+          return reject("A finished task only accepts run evidence.");
+        return {
+          ok: true,
+          task: {
+            ...base,
+            observed: {
+              pullRequests: task.observed?.pullRequests ?? [],
+              needsYou: [],
+              result: observed.result,
+            },
+          },
+        };
+      }
+      return { ok: true, task: { ...base, observed } };
+    }
     case "task.moved": {
       // The new machine resolves its own project and starts a new worker from the copied work,
       // under a brief of its own, like a retry.

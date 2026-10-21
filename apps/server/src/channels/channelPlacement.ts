@@ -11,6 +11,8 @@
  * @module channelPlacement
  */
 
+import type { QuotaPool } from "@goat/contracts";
+
 /** Assumed use of an account that reports no quota windows. */
 const UNKNOWN_QUOTA_PERCENT = 35;
 /** Added per task already running on the candidate. */
@@ -22,6 +24,7 @@ export interface PlacementWindow {
   readonly label: string;
   readonly usedPercent: number;
   readonly resetsAt?: string | undefined;
+  readonly scopeModel?: string | undefined;
 }
 
 export interface PlacementCandidate<A> {
@@ -36,6 +39,9 @@ export interface PlacementCandidate<A> {
   readonly windows: ReadonlyArray<PlacementWindow> | null;
   /** Tasks already running where this candidate would run. */
   readonly activeTasks: number;
+  readonly model?: string | undefined;
+  readonly quotaPool?: QuotaPool["providers"][number] | undefined;
+  readonly accountRef?: string | undefined;
 }
 
 export interface Placement<A> {
@@ -52,12 +58,40 @@ const exhaustedWindow = (window: PlacementWindow, now: number) => {
   return Number.isNaN(resets) || resets > now;
 };
 
+export function placementWindows(
+  candidate: PlacementCandidate<unknown>,
+): ReadonlyArray<PlacementWindow> {
+  const pool = candidate.quotaPool;
+  const windows =
+    pool === undefined
+      ? (candidate.windows ?? [])
+      : (candidate.accountRef === undefined
+          ? pool.pooled.windows
+          : (pool.accounts.find((account) => account.accountRef === candidate.accountRef)
+              ?.windows ?? [])
+        ).flatMap((window) => {
+          const usedPercent = window.exhausted === true ? 100 : window.usedPercent;
+          return usedPercent === undefined ? [] : [{ ...window, usedPercent }];
+        });
+  return windows.filter((window) => {
+    if (window.scopeModel === undefined) return true;
+    const model = candidate.model?.split("/").at(-1);
+    if (window.scopeModel === model || window.scopeModel === candidate.model) return true;
+    // OpenCodex also proves Claude family scopes; versioned models in that family share the limit.
+    if (window.scopeModel.startsWith("family:")) {
+      const family = window.scopeModel.slice("family:".length);
+      return model === family || model?.startsWith(`claude-${family}-`) === true;
+    }
+    return false;
+  });
+}
+
 export const isExhausted = (candidate: PlacementCandidate<unknown>, now: number) =>
-  candidate.windows?.some((window) => exhaustedWindow(window, now)) ?? false;
+  placementWindows(candidate).some((window) => exhaustedWindow(window, now));
 
 /** The busiest window, rounded, or null when none is reported. */
 export const busiestWindow = (candidate: PlacementCandidate<unknown>) => {
-  const windows = candidate.windows ?? [];
+  const windows = placementWindows(candidate);
   if (windows.length === 0) return null;
   const top = windows.reduce((left, right) =>
     right.usedPercent > left.usedPercent ? right : left,
@@ -115,7 +149,10 @@ export function choosePlacement<A>(
   }
   const skipped = candidates.filter((candidate) => isExhausted(candidate, now));
   // Nothing reported and nothing moved: the requester has nothing to read.
-  if (chosen.preferred && candidates.every((candidate) => candidate.windows === null)) {
+  if (
+    chosen.preferred &&
+    candidates.every((candidate) => placementWindows(candidate).length === 0)
+  ) {
     return { chosen, reason: undefined };
   }
   if (candidates.length === 1 && used === null) return { chosen, reason: undefined };

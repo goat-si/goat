@@ -4,6 +4,7 @@ import type {
   ChannelTaskChip,
   ChannelTaskStatus,
 } from "@goat/contracts";
+import { channelEvidenceLabels } from "@goat/shared/channelEvidence";
 
 import type {
   GoatBotBotTone,
@@ -112,6 +113,7 @@ export function presentTaskChip(chip: ChannelTaskChip): GoatBotTaskCard {
       chip.movedFrom === undefined ? null : `Continued from ${chip.movedFrom.host}`,
     summary: summary.length > 0 ? summary : null,
     attentionLabel: attentionLabel(chip),
+    evidenceLabels: channelEvidenceLabels(chip.observed?.result),
     pullRequests: pullRequestLinks(chip),
     target:
       chip.worker === undefined

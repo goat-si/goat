@@ -70,6 +70,9 @@ import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQ
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
+import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
 import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
@@ -1112,10 +1115,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
     Layer.provide(
       Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
     ),
   ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
   layerThreadPullRequestWorker,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
@@ -1196,10 +1201,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerVcs),
   Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
   Layer.provideMerge(layerPersistence),
-  Layer.provideMerge(
-    Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
-  ),
-  Layer.provideMerge(ProviderRegistry.layer),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
   (application) =>
     provideMemorySnapshot(
       application,
@@ -1440,6 +1443,12 @@ const layerMakeServer = Layer.unwrap(
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);
     const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One slot for the whole server: every projection store reads through it, and the archive
+    // service fills it once it has loaded which threads are archived.
+    const layerArchiveGate = Layer.succeed(
+      ThreadArchiveGate.ThreadArchiveGate,
+      ThreadArchiveGate.makeThreadArchiveGateSlot(),
+    );
     const runtimeStateParked = yield* Deferred.make<void>();
     const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
@@ -1594,6 +1603,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
       Layer.provide(layerActivation),
+      Layer.provide(layerArchiveGate),
       Layer.provideMerge(RelayTracing.layerServerRelayBroker),
       Layer.provideMerge(layerHttpServer),
       Layer.provide(

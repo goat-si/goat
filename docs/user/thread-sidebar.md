@@ -166,6 +166,9 @@ leaves once it finishes and stays while it needs an approval or answer; open fin
 from the sidebar. Only top-level threads count: subagents are part of their parent's work, and
 archived threads do not count. Work an environment started on an SSH host you are not connected
 to appears as last reported by that environment.
+The machine count includes only GOAT servers that answer. Machines the page shows without
+counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
+reported, are listed behind the **+N** beside the count.
 
 A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
 limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU

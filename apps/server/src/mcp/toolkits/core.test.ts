@@ -208,6 +208,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_host_link_remove",
     "goat_host_status",
     "goat_host_uncordon",
+    "goat_hub_device_verify",
     "goat_origin_report",
     "goat_origin_reports_wait",
     "goat_pending_request_list",

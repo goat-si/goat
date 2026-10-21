@@ -38,6 +38,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ServerConfig from "../../config.ts";
+import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as MemoryService from "../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../memory/MemorySyncService.ts";
@@ -675,6 +676,12 @@ export function makeHarness(
   );
 
   const layerChannels = (options.channelsLayer ?? ChannelLayers.layerServices).pipe(
+    Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(undefined),
+        projectProviders: (providers) => Effect.succeed(providers),
+      }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         layerThreads,

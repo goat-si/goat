@@ -47,6 +47,7 @@ export interface GoatBotTaskCard {
   readonly summary: string | null;
   /** Something waiting on a person, such as "2 questions · 1 approval". */
   readonly attentionLabel: string | null;
+  readonly evidenceLabels?: ReadonlyArray<string>;
   /** Pull requests the worker opened or linked, newest state first known. */
   readonly pullRequests: ReadonlyArray<GoatBotPullRequestLink>;
   readonly target: GoatBotCardTarget;

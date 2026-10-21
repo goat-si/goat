@@ -15,6 +15,7 @@ const firstRun = RunId.make("run-1");
 const secondRun = RunId.make("run-2");
 
 const thread = {
+  id: threadId,
   branch: "feat/result",
   linkedPullRequest: null,
   pullRequests: [

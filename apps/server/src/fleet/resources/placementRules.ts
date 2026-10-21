@@ -16,12 +16,14 @@ import {
   type PlacementHostRefusal,
   type PlacementRefusal,
   type SchedulerHostStatus,
+  type QuotaPool,
 } from "@goat/contracts";
 
 import {
   busiestWindow,
   choosePlacement,
   isExhausted,
+  placementWindows,
   type PlacementCandidate,
 } from "../../channels/channelPlacement.ts";
 
@@ -118,24 +120,32 @@ const quotaCandidate = <A>(
   host: string | null,
   activeTasks: number,
   preferred: boolean,
+  model?: string,
+  pool?: QuotaPool,
 ): PlacementCandidate<A> => ({
   value,
   host,
   providerLabel: quota.displayName ?? quota.instanceId,
   preferred,
+  model,
+  quotaPool:
+    pool?.producer.homeId === quota.limits?.quotaPool?.homeId
+      ? pool?.providers.find((provider) => provider.provider === quota.limits?.quotaPool?.provider)
+      : undefined,
   windows:
     quota.limits === undefined || quota.limits.windows.length === 0
       ? null
       : quota.limits.windows.map((window) => ({
           label: window.label,
           usedPercent: window.usedPercent,
+          ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
           ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
         })),
   activeTasks,
 });
 
-const nextReset = (quota: HostStatusQuota, now: number) =>
-  quota.limits.windows
+const nextReset = (candidate: PlacementCandidate<unknown>, now: number) =>
+  placementWindows(candidate)
     .filter((window) => window.usedPercent >= 100 && window.resetsAt !== undefined)
     .map((window) => window.resetsAt!)
     .filter((resetsAt) => Date.parse(resetsAt) > now)
@@ -185,9 +195,11 @@ export function place(
         entry.host,
         hostThreads(entry) ?? 0,
         index === 0,
+        modelSelection.model,
+        metrics.quotaPool,
       );
-      if (quota !== undefined && isExhausted(candidate, now)) {
-        const resetsAt = nextReset(quota, now);
+      if (isExhausted(candidate, now)) {
+        const resetsAt = nextReset(candidate, now);
         first ??= refusal(
           "quota_exhausted",
           modelSelection.instanceId +
@@ -235,8 +247,16 @@ export function schedulerHostStatus(
     maxThreads: limits?.maxThreads ?? null,
     allowGoals: limits?.allowGoals !== false,
     quotas: (metrics?.quotas ?? []).map((quota) => {
-      const candidate = quotaCandidate(null, quota, entry.host, 0, false);
-      const resetsAt = nextReset(quota, now);
+      const candidate = quotaCandidate(
+        null,
+        quota,
+        entry.host,
+        0,
+        false,
+        undefined,
+        metrics?.quotaPool,
+      );
+      const resetsAt = nextReset(candidate, now);
       return {
         instanceId: quota.instanceId,
         busiestPercent: busiestWindow(candidate)?.usedPercent ?? null,

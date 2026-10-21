@@ -75,6 +75,10 @@ copy, and the guard does not allow `schedule`. The daily full run is therefore a
 GitHub. Moving it into the workflow means promoting `goat-ci.yml` to `main` and allowing `schedule`
 in the guard.
 
+Pull requests merge when `goat-ci-result` is green on their exact head, without first catching up
+with `dev`, so batch merging also runs `lane=all` on `dev` after about every five merges
+([merging](../docs/operations/merging.md)).
+
 ## PR screenshot gate
 
 The `goat-screenshot-gate` task runs `.github/scripts/pr-screenshot-gate.cjs`. A PR that is not a

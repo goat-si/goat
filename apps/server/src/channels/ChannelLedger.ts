@@ -245,6 +245,15 @@ export class ChannelLedger extends Context.Service<
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
+    /** Finished local tasks whose bound run's check has advanced since its last observation. */
+    readonly listLocalCheckUpdates: () => Effect.Effect<
+      ReadonlyArray<ChannelStoredTask>,
+      ChannelLedgerError
+    >;
+    readonly listRemoteCheckUpdates: () => Effect.Effect<
+      ReadonlyArray<ChannelStoredTask>,
+      ChannelLedgerError
+    >;
     /**
      * Tasks from any channel that wait on a person: an open question, or a running worker whose
      * thread needs an answer, approval, sign-in or resume (`observed.needsYou`). Each counts once.
@@ -1278,6 +1287,35 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) => rows.map(storedTask)),
         Effect.mapError(toLedgerError("listTasksByStatus")),
+      ),
+
+    listLocalCheckUpdates: () =>
+      sql<TaskRow>`
+        SELECT t.owner_id, t.task_json, t.pending_answer_message_id, t.completion_hold
+        FROM channel_tasks t JOIN thread_run_observed_checks c
+          ON c.thread_id = json_extract(t.task_json, '$.worker.threadId')
+          AND c.run_id = json_extract(t.task_json, '$.worker.runId')
+        WHERE t.status IN ('completed', 'failed', 'cancelled')
+          AND json_extract(t.task_json, '$.worker.host') IS NULL
+          AND ((c.status != 'not_run' AND c.status IS NOT json_extract(t.task_json, '$.observed.result.observedCheck.status'))
+            OR (c.status = 'not_run' AND json_extract(t.task_json, '$.observed.result.observedCheckPending') IS NOT 0))
+        ORDER BY t.updated_at LIMIT 20
+      `.pipe(
+        Effect.map((rows) => rows.map(storedTask)),
+        Effect.mapError(toLedgerError("listLocalCheckUpdates")),
+      ),
+
+    listRemoteCheckUpdates: () =>
+      sql<TaskRow>`
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        WHERE status IN ('completed', 'failed', 'cancelled')
+          AND json_extract(task_json, '$.worker.host') IS NOT NULL
+          AND (json_extract(task_json, '$.observed.result.observedCheckPending') = 1
+            OR json_extract(task_json, '$.observed.result.observedCheck.status') = 'running')
+        ORDER BY updated_at
+      `.pipe(
+        Effect.map((rows) => rows.map(storedTask)),
+        Effect.mapError(toLedgerError("listRemoteCheckUpdates")),
       ),
 
     countWaitingTasks: (ownerId, readThrough) =>

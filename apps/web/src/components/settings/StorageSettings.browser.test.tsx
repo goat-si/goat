@@ -90,6 +90,7 @@ function setup() {
   state.settings = {
     ...DEFAULT_SERVER_SETTINGS,
     storageCleanup: {
+      ...DEFAULT_SERVER_SETTINGS.storageCleanup,
       worktreeKeepWhen: "uncommitted-changes",
       worktreeAfterDays: null,
       worktreeSettledAfterDays: null,

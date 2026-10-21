@@ -1,3 +1,4 @@
+import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
@@ -2136,6 +2137,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       via {thread.source.externalLauncher}
     </span>
   ) : null;
+  const historyArchiveHint = (
+    <ThreadHistoryArchiveHint
+      state={thread.source.historyArchive}
+      variant="icon"
+      className="inline-flex shrink-0 items-center text-muted-foreground/65"
+    />
+  );
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -2259,6 +2267,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {draftIndicator}
             {title}
             {externalLauncherBadge}
+            {historyArchiveHint}
             {pinIndicator}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
@@ -2426,6 +2435,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {draftIndicator}
               {title}
               {externalLauncherBadge}
+              {historyArchiveHint}
               {pinIndicator}
               {thread.worktreePath ? <ThreadWorktreeIndicator thread={thread} /> : null}
               {isRegeneratingTitle ? (
@@ -2622,6 +2632,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   via {thread.source.externalLauncher}
                 </span>
               ) : null}
+              <ThreadHistoryArchiveHint
+                state={thread.source.historyArchive}
+                variant="text"
+                className="max-w-[40%] shrink-0 truncate"
+              />
               <span className="ml-auto inline-flex min-w-0 max-w-[48%] shrink-0 items-center gap-1.5">
                 {prBadge}
                 <span className="inline-flex min-w-0 items-center gap-1">

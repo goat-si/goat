@@ -211,6 +211,12 @@ export interface FleetMachine {
   readonly sshHost: { readonly via: EnvironmentId; readonly alias: string } | null;
   /** Set when the host is a Boat machine, from a server's record or else its reserved alias. */
   readonly boat: BoatMachineIdentity | null;
+  /**
+   * A GOAT server this client is connected to. Only these count as Fleet machines, as on the
+   * rail: a saved server that does not answer, or an SSH or cloud host a dispatcher reported,
+   * is drawn and listed but not counted.
+   */
+  readonly answering: boolean;
   readonly running: number;
   readonly attention: number;
   readonly reported: number;
@@ -240,6 +246,7 @@ export interface FleetSnapshot {
     readonly running: number;
     readonly attention: number;
     readonly reported: number;
+    /** Answering GOAT servers, the same number the rail counts. */
     readonly machines: number;
   };
 }
@@ -300,6 +307,7 @@ export function buildFleet(input: {
       environmentId: environment.environmentId,
       sshHost: null,
       boat: null,
+      answering: environment.connected !== false,
       running: 0,
       attention: 0,
       reported: 0,
@@ -390,6 +398,7 @@ export function buildFleet(input: {
         environmentId: null,
         sshHost: { via: dispatcher, alias },
         boat: null,
+        answering: false,
         running: 0,
         attention: 0,
         reported: 0,
@@ -472,7 +481,7 @@ export function buildFleet(input: {
       running: list.reduce((sum, machine) => sum + machine.running, 0),
       attention: list.reduce((sum, machine) => sum + machine.attention, 0),
       reported: list.reduce((sum, machine) => sum + machine.reported, 0),
-      machines: list.length,
+      machines: list.filter((machine) => machine.answering).length,
     },
   };
 }

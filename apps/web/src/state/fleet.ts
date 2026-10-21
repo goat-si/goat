@@ -190,6 +190,7 @@ function snapshotKey(
       machine.label,
       machine.subtitle,
       machine.boat,
+      machine.answering,
       machine.os,
       machine.machineKind,
       machine.running,

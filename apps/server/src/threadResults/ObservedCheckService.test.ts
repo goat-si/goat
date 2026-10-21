@@ -182,6 +182,24 @@ describe("ObservedCheckService", () => {
     });
   });
 
+  it.effect("durably resolves an unconfigured check without exposing a fabricated result", () => {
+    const harness = makeLayer({ worktreePath, scripts: [] });
+    return Effect.gen(function* () {
+      assert.deepStrictEqual(yield* ObservedCheckService.readObservedCheckState(threadId, runId), {
+        check: null,
+        pending: true,
+      });
+      const service = yield* ObservedCheckService.ObservedCheckService;
+      yield* service.observeRun(threadId, runId);
+      yield* service.observeRun(threadId, runId);
+      assert.deepStrictEqual(yield* ObservedCheckService.readObservedCheckState(threadId, runId), {
+        check: null,
+        pending: false,
+      });
+      assert.lengthOf(harness.runs, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("stops a check that outlives the timeout and records it as timed out", () => {
     const harness = makeLayer({ worktreePath, scripts: [checkScript()] });
     return Effect.gen(function* () {
@@ -231,6 +249,34 @@ describe("ObservedCheckService", () => {
       assert.deepStrictEqual(harness.closed, ["check-test-1"]);
     }).pipe(Effect.provide(harness.layer));
   });
+
+  it.effect(
+    "resolves completion committed before a crash without rerunning an unclaimed check",
+    () => {
+      const harness = makeLayer({ worktreePath, scripts: [checkScript()] });
+      return Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, completed_at, payload_json)
+        VALUES (${runId}, ${threadId}, 1, 'codex', 'completed', '2026-10-20T00:00:00.000Z', '2026-10-20T00:01:00.000Z', '{}')`;
+        assert.deepStrictEqual(
+          yield* ObservedCheckService.readObservedCheckState(threadId, runId),
+          { check: null, pending: true },
+        );
+        const service = yield* ObservedCheckService.ObservedCheckService;
+        yield* Effect.scoped(service.start());
+        yield* Effect.scoped(service.start());
+        yield* service.observeRun(threadId, runId);
+        assert.deepStrictEqual(
+          yield* ObservedCheckService.readObservedCheckState(threadId, runId),
+          { check: null, pending: false },
+        );
+        assert.lengthOf(harness.runs, 0);
+        const rows =
+          yield* sql`SELECT run_id FROM thread_run_observed_checks WHERE thread_id = ${threadId}`;
+        assert.lengthOf(rows, 1);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect("marks a check cut off by a restart as interrupted", () => {
     const harness = makeLayer({ worktreePath, scripts: [checkScript()] });

@@ -15,7 +15,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { resolveHostCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as Settings from "../serverSettings.ts";
 
 /** Pages returned per reclaim pass; one minute of churn, not a backlog. */
 const RECLAIM_PAGES_PER_PASS = 1024;
@@ -40,6 +42,8 @@ export class DatabaseStorage extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+  const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+  const settings = yield* Settings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -64,11 +68,14 @@ const make = Effect.gen(function* () {
     const size = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
     const mode = yield* sql<{ readonly auto_vacuum: number }>`PRAGMA auto_vacuum`;
     const pageSize = size[0]?.page_size ?? 0;
+    const archived = yield* archive.stats;
     const next: DatabaseStorageStatus = {
       databaseBytes: (pages[0]?.page_count ?? 0) * pageSize,
       reclaimableBytes: (free[0]?.freelist_count ?? 0) * pageSize,
       incrementalVacuumEnabled: mode[0]?.auto_vacuum === 2,
       compactCommand,
+      archivedThreads: archived.threads,
+      archiveBytes: archived.fileBytes,
     };
     // Every set reaches each open Storage page; most passes change nothing.
     if (!Equal.equals(yield* SubscriptionRef.get(statusRef), next)) {
@@ -99,10 +106,30 @@ const make = Effect.gen(function* () {
   const compactedAtPath = path.join(path.dirname(config.dbPath), "compacted-at");
   const compact = Effect.gen(function* () {
     const result = yield* maintenance.compactEventStore;
+    const { storageCleanup } = yield* settings.getSettings;
+    // Archiving whole idle threads first leaves trimming only what is still over budget.
+    const archived = yield* archive.runPass({
+      archiveAfterDays: storageCleanup.historyArchiveAfterDays,
+      deleteAfterDays: storageCleanup.historyArchiveDeleteAfterDays,
+      now: yield* Clock.currentTimeMillis,
+    });
+    if (archived.archivedThreads > 0 || archived.deletedArchives > 0) {
+      yield* Effect.logInfo("Archived idle thread history", archived);
+    }
+    const history = yield* maintenance.boundHistory({
+      budgetBytes: storageCleanup.historyBudgetBytes,
+      now: yield* Clock.currentTimeMillis,
+    });
     const completedAt = yield* Clock.currentTimeMillis;
     yield* fs.writeFileString(compactedAtPath, String(completedAt)).pipe(Effect.ignore);
     if (result.deletedEventCount > 0 || result.deletedReceiptCount > 0) {
       yield* Effect.logInfo("Compacted orchestration history", result);
+    }
+    if (history.trimmedRows > 0) {
+      yield* Effect.logInfo("Bounded orchestration history", {
+        ...history,
+        budgetBytes: storageCleanup.historyBudgetBytes,
+      });
     }
   }).pipe(
     Effect.catch((cause) =>

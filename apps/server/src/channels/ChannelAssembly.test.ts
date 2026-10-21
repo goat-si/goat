@@ -32,6 +32,7 @@ import * as ServerConfig from "../config.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
@@ -170,6 +171,12 @@ const liveChannels = (
   imessageLayer = makeLayerLive(),
 ) =>
   ChannelLayers.makeLayerServicesWithSlack(imessageLayer).pipe(
+    Layer.provide(
+      Layer.mock(UsageLimitSources.UsageLimitSources)({
+        quotaPool: Effect.succeed(undefined),
+        projectProviders: (providers) => Effect.succeed(providers),
+      }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         sdk.layer,

@@ -158,6 +158,9 @@
         "apps/server/src/vcs/GitVcsDriver.ts",
         "apps/server/src/provider/OpenCodexRoute.ts",
         "apps/server/src/opencodex/OpenCodexInventory.ts",
+        "apps/server/src/hub/HubParity.ts",
+        "apps/server/src/hub/parity.ts",
+        "packages/contracts/src/hubParity.ts",
         "apps/server/src/provider/builtInDrivers.ts",
         "apps/server/src/provider/Drivers/CodexDriver.ts",
         "apps/server/src/provider/Drivers/ClaudeDriver.ts",
@@ -224,7 +227,7 @@
       "path": "channels.md",
       "tier": 3,
       "title": "Channels and GOAT Bot",
-      "scope": "The channel ledger, Slack, MCP, and iMessage ingress, and the GOAT Bot thread clients render.",
+      "scope": "The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.",
       "documents": [
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/settings.ts",
@@ -348,7 +351,7 @@
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
         "packages/contracts/src/remoteReports.ts",
         "apps/server/src/goatclaw/PermissionProfiles.ts",
-        "apps/server/src/persistence/Migrations/095_PermissionProfiles.ts",
+        "apps/server/src/persistence/Migrations/097_PermissionProfiles.ts",
         "packages/contracts/src/permissionProfiles.ts"
       ]
     },
@@ -396,7 +399,10 @@
         "apps/desktop/src/preload.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "packages/ssh",
-        "apps/desktop/src/app/DesktopClerk.ts"
+        "apps/desktop/src/app/DesktopClerk.ts",
+        "apps/desktop/src/cua/",
+        "scripts/build-desktop-artifact.ts",
+        "patches/@ubjs__node@0.31.0-3.patch"
       ]
     },
     {

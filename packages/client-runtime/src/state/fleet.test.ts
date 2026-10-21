@@ -13,6 +13,7 @@ import {
   buildFleet,
   classifyFleetThread,
   createFleetSummaryAtom,
+  summarizeFleet,
   type FleetEnvironment,
   type FleetShell,
 } from "./fleet.ts";
@@ -224,6 +225,41 @@ describe("buildFleet", () => {
     expect(fleet.threads.map((thread) => thread.title)).toEqual(["a"]);
   });
 
+  it("counts the GOAT servers that answer, as the rail does, whatever else it draws", () => {
+    const unreachable = EnvironmentId.make("unreachable");
+    const environments: FleetEnvironment[] = [
+      env(local, "Mac", ["mac", "mac.tailnet"]),
+      env(remote, "Box", ["box"]),
+      { ...env(unreachable, "Away", ["away"]), connected: false },
+    ];
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: local,
+      shells: [shell(local, "a"), shell(remote, "b")],
+      remote: [
+        {
+          dispatcherEnvironmentId: local,
+          // Two routes to one server, a plain SSH host, and a stopped Boat machine.
+          launches: [launch({ host: "mac.tailnet" }), launch({ host: "devbox" })],
+          cloudMachines: [cloud({ state: "archived", label: "Nightly" })],
+        },
+      ],
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.answering])).toEqual([
+      ["Mac", true],
+      ["Box", true],
+      ["Away", false],
+      ["Nightly", false],
+      ["devbox", false],
+    ]);
+    expect(fleet.totals.machines).toBe(2);
+    const summary = summarizeFleet(
+      [shell(local, "a"), shell(remote, "b")],
+      environments.filter((environment) => environment.connected !== false),
+    );
+    expect(summary.machines).toHaveLength(fleet.totals.machines);
+  });
+
   it("lists only top-level threads, with a subagent's request on its parent", () => {
     const fleet = buildFleet({
       environments: [env(local, "Mac")],
@@ -279,8 +315,14 @@ describe("buildFleet", () => {
         },
       ],
     });
-    expect(fleet.totals).toEqual({ running: 0, attention: 0, reported: 1, machines: 2 });
-    expect(fleet.machines[1]).toMatchObject({ kind: "ssh", label: "devbox", subtitle: "via Mac" });
+    // The SSH host is drawn with its reported work, but only the GOAT server counts as a machine.
+    expect(fleet.totals).toEqual({ running: 0, attention: 0, reported: 1, machines: 1 });
+    expect(fleet.machines[1]).toMatchObject({
+      kind: "ssh",
+      label: "devbox",
+      subtitle: "via Mac",
+      answering: false,
+    });
     expect(fleet.threads).toMatchObject([{ title: "Fix tests", ref: null, reportedBy: "Mac" }]);
   });
 
