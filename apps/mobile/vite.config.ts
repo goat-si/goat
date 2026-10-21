@@ -2,6 +2,27 @@ import { defineConfig } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/components/MediaVideoPlayer.test.tsx",
+  "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
+  "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/decisions/useDecisionInbox.test.tsx",
+  "src/features/goat-bot/GoatBotBubble.test.tsx",
+  "src/features/goat-bot/GoatBotDayStamp.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
+  "src/features/goat-bot/GoatBotTimelineRow.test.tsx",
+  "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
+  "src/features/goat-bot/useReplying.test.tsx",
+  "src/features/settings/MemorySyncDiagnostics.test.tsx",
+  "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
+  "src/features/threads/HumanHandoffCard.test.tsx",
+  "src/features/threads/SubagentRow.memory.test.tsx",
+  "src/features/threads/ThreadHeader.memory.test.tsx",
+  "src/features/threads/ThreadMarkdownImage.test.tsx",
+  "src/lib/visible-animations.test.tsx",
+
   "src/components/ui/Dialog.android.test.tsx",
   "src/features/settings/SettingsHubNodesRouteScreen.test.tsx",
   "src/features/notes/NoteConflictRouteScreen.test.tsx",

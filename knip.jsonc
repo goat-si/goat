@@ -81,8 +81,6 @@
       "ignoreDependencies": ["playwright-core", "electron-builder"],
     },
     "apps/web": {
-      // Vitest loads this through the per-file @vitest-environment directive.
-      "ignoreDependencies": ["jsdom"],
       // Worktree setup (scripts/setup-worktree.ts) runs warm-dep-cache directly; maintainers run
       // generate-solar-icons after adding an icon.
       "entry": [

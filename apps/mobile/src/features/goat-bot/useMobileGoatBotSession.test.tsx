@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { AsyncResult, Atom } from "effect/reactivity";

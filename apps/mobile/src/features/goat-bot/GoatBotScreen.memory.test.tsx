@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";

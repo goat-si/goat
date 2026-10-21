@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { ThreadId, ProviderInstanceId, ProviderDriverKind } from "@goat/contracts";
