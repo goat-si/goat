@@ -699,7 +699,7 @@ const storedTask = (row: TaskRow): ChannelStoredTask => ({
  * When a waiting task last asked for a person: its newest open question or worker need. Marking
  * the bot read covers everything asked before then; a later question counts again.
  */
-export const channelTaskWaitingSince = (task: ChannelTask): string => {
+const channelTaskWaitingSince = (task: ChannelTask): string => {
   const times = [
     ...task.openQuestions.map((question) => question.askedAt),
     ...(task.observed?.needsYou ?? []).map((need) => need.since),

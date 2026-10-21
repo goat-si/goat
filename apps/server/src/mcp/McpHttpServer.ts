@@ -1295,7 +1295,7 @@ const layerWorktreeToolkitRegistration = catalogRegistrations.worktree.pipe(
 
 const layerPreviewControlsRegistration = catalogRegistrations.previewControls;
 
-export const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
+const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
   Layer.provide(ThreadCommandExecutor.layer),
 );
 
@@ -1314,12 +1314,12 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
 );
 
 /** Reads HostStatusMcpService from the server's context; see `layerHostStatusService`. */
-export const layerHostStatusToolkit = catalogRegistrations.hostStatus;
+const layerHostStatusToolkit = catalogRegistrations.hostStatus;
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
 export const layerFleetToolkit = catalogRegistrations.fleet;
 /** Reads Placement and FallbackChains from the server's context, like host status. */
-export const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
+const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
 
 /**
  * goat_provider_diagnose. Composed beside `layer` by the server, which provides

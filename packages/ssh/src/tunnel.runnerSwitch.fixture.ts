@@ -8,7 +8,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
-import { exitWithTestParent } from "./testParentLifetime.fixture.ts";
+import {
+  exitWithTestOwner,
+  exitWithTestParent,
+  TEST_OWNER_FILE,
+} from "./testParentLifetime.fixture.ts";
 import {
   remoteShell,
   ARCHIVE,
@@ -149,6 +153,7 @@ request.on("error", () => process.exit(1));
   else console.log(JSON.stringify({ token: "fixture-session", expiresAt: null }));
 } else if (args[0] === "serve") {
   ${exitWithTestParent('args.includes("--test-seed")')}
+  ${exitWithTestOwner("fixture")}
   const requested = args.indexOf("--port");
   const port = requested < 0 ? 0 : Number(args[requested + 1]);
   const fields = {serverVersion:version,sshRuntimeProtocolVersion:version === ${JSON.stringify(nextVersion)} || config.compatible ? ${SSH_RUNTIME_PROTOCOL_VERSION} : 99,orchestrationProtocolVersion:${ORCHESTRATION_PROTOCOL_VERSION}};
@@ -218,6 +223,7 @@ export const fixture = Effect.fn("test.runnerSwitch.fixture")(function* (
   const test = `${home}/.test`;
   yield* fs.makeDirectory(state, { recursive: true });
   yield* fs.makeDirectory(test, { recursive: true });
+  yield* fs.writeFileString(`${test}/${TEST_OWNER_FILE}`, String(process.pid));
   yield* fs.writeFileString(`${test}/events`, "");
   yield* fs.writeFileString(`${test}/pids`, "");
   const upstream = `${home}/.t3/runtime/versions/${previous}`;

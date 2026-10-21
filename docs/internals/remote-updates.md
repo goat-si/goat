@@ -199,9 +199,11 @@ needs a person's confirmation bound to that environment and target.
   then a recorded newer install beats it.
 - **Cleanup** follows Zed after a successful SSH launch/attach under the replacement
   lock, outside installs, drains and rollback windows: delete only proven older,
-  unused versions, preserving live, retained, requested and the newest older rollback
-  build. Unknown ordering or incomplete process inspection preserves the directory;
-  unsupported hosts keep everything. Victims are renamed into sibling trash directories
+  unused versions, preserving live, retained, requested and one rollback build, the
+  proven-older build installed last. Keeping every build whose order against the others
+  was unknown let dev hosts collect dozens of versions, so only order against the live
+  build is required. Unknown ordering against the live build or incomplete process
+  inspection preserves the directory. Victims are renamed into sibling trash directories
   before deletion; cleanup errors only log and never fail the connection.
 
 ### Where hosts get the runtime

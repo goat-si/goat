@@ -83,7 +83,7 @@ interface WorktreeRecord {
 }
 
 /** Parses `git worktree list --porcelain -z`: one record per worktree, each ended by an empty field. */
-export function parseWorktreeRecords(stdout: string): ReadonlyArray<WorktreeRecord> {
+function parseWorktreeRecords(stdout: string): ReadonlyArray<WorktreeRecord> {
   return stdout.split("\0\0").flatMap((record) => {
     const fields = record.split("\0");
     const worktree = fields.find((field) => field.startsWith("worktree "));
@@ -102,7 +102,7 @@ export function parseWorktreeRecords(stdout: string): ReadonlyArray<WorktreeReco
 }
 
 /** Counts `git status --porcelain=v1 -z` entries; a rename or copy carries its source as an extra field. */
-export function countStatusEntries(stdout: string): number {
+function countStatusEntries(stdout: string): number {
   const records = stdout.split("\0").filter(Boolean);
   let count = 0;
   for (let index = 0; index < records.length; index++) {

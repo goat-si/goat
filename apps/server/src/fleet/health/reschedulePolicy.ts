@@ -20,9 +20,9 @@ export type HealingStep =
   | { readonly _tag: "blocked"; readonly reason: string }
   | { readonly _tag: "reschedule"; readonly reason: RescheduleReason };
 
-export const STEER_MESSAGE = "Continue; report status.";
+const STEER_MESSAGE = "Continue; report status.";
 export const MAX_ATTEMPTS_PER_WORKER = 3;
-export const BACKOFF_BASE_MS = 30_000;
+const BACKOFF_BASE_MS = 30_000;
 export const BACKOFF_MAX_MS = 15 * 60_000;
 
 export function nextHealingStep(

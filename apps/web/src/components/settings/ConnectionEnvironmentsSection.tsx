@@ -70,6 +70,7 @@ import { SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
+import { WorktreeCheckoutHealthNotice } from "./WorktreeCheckoutHealthNotice";
 import {
   ConnectionDiagnosisPanel,
   ConnectionDiagnosisSummary,
@@ -550,6 +551,12 @@ function SavedBackendListRow({
               diagnosis={diagnosis}
               onRetry={() => void retryNow(environmentId)}
               onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
+            />
+          ) : null}
+          {enabled ? (
+            <WorktreeCheckoutHealthNotice
+              health={environment.serverConfig?.worktreeCheckoutHealth}
+              hostLabel={environment.label}
             />
           ) : null}
           {routesOpen && (

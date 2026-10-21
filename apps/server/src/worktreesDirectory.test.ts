@@ -43,9 +43,9 @@ it.layer(NodeServices.layer)("worktreesDirectory", (it) => {
 
     it.effect("keeps /d/… an ordinary folder on POSIX", () =>
       Effect.gen(function* () {
-        const path = yield* Path.Path;
+        const posix = yield* Path.Path.pipe(Effect.provide(NodePath.layerPosix));
         assert.equal(
-          resolveWorktreesDirectory("/d/goat-worktrees", "/default", path, "/home/u", "linux"),
+          resolveWorktreesDirectory("/d/goat-worktrees", "/default", posix, "/home/u", "linux"),
           "/d/goat-worktrees",
         );
       }),
@@ -83,7 +83,10 @@ it.layer(NodeServices.layer)("worktreesDirectory", (it) => {
 
     it.effect("treats a missing path under a mount container as an unmounted drive", () =>
       Effect.gen(function* () {
-        const { fileSystem, check } = yield* setup;
+        const { fileSystem } = yield* setup;
+        // Mount containers are POSIX paths, so a Windows host checks them with POSIX rules.
+        const posix = yield* Path.Path.pipe(Effect.provide(NodePath.layerPosix));
+        const check = (directory: string) => checkWorktreesDirectory(directory, fileSystem, posix);
         const drive = `/Volumes/goat-test-unmounted-${process.pid}`;
         assert.equal(yield* check(`${drive}/goat-worktrees`), "unmounted");
         assert.equal(yield* check(drive), "unmounted");
