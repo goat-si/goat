@@ -421,15 +421,14 @@ export const make = Effect.gen(function* () {
     const restore = Effect.gen(function* () {
       for (const step of window.steps.toReversed()) {
         if (step.restored === true) continue;
-        // The member that failed its health check already fails its turns. Every other restart
-        // waits for idle like the update itself, which keeps the Home after its Children.
-        if (window.failedMember !== failedTargetKey(step.alias)) {
-          const touched = (step.alias === null ? [null, ...window.children] : [step.alias]).filter(
-            (alias) => failedTargetKey(alias) !== window.failedMember,
-          );
-          const members = yield* Effect.forEach(touched, (alias) => host.member(alias, scope));
-          if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
-        }
+        // Only the member being restored, when it is the one that failed its health check, may
+        // restart under work: it already fails its turns. Everyone else this restart touches,
+        // including a Child restored earlier, waits for idle like the update itself.
+        const touched = (step.alias === null ? [null, ...window.children] : [step.alias]).filter(
+          (alias) => !(alias === step.alias && failedTargetKey(alias) === window.failedMember),
+        );
+        const members = yield* Effect.forEach(touched, (alias) => host.member(alias, scope));
+        if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
         const installed = yield* host.install(step.alias, step.fromVersion);
         const snapshot = installed ? (yield* host.member(step.alias, scope)).snapshot : undefined;
         if (

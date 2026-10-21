@@ -469,7 +469,14 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
       expect(fleet.installs.slice(2)).toEqual(["mac-studio@2.86.0"]);
       expect(yield* update.status).toMatchObject({ reason: "rollback-incomplete" });
 
+      // The restored Child picks up work while the Home goes idle: the Home still waits.
       fleet.running.set(null, 0);
+      fleet.running.set("mac-studio", 1);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.installs).toHaveLength(3);
+
+      fleet.running.set("mac-studio", 0);
       yield* TestClock.adjust(10 * MINUTE);
       yield* update.check;
       expect(fleet.installs.slice(3)).toEqual(["home@2.89.0"]);
@@ -477,6 +484,29 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
         ["mac-studio", "rolled-back", "probation-health-failed"],
         [null, "rolled-back", "probation-health-failed"],
       ]);
+    }),
+  );
+
+  it.effect("restores a failed Home only when its Children are idle", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      // The Child is already on the target, so the window moves only the Home.
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.installs).toEqual(["home@2.90.0"]);
+
+      fleet.unhealthyAt.add("home@2.90.0");
+      fleet.running.set("mac-studio", 1);
+      yield* TestClock.adjust(MINUTE);
+      yield* update.check;
+      expect(fleet.installs).toHaveLength(1);
+      expect(yield* update.status).toMatchObject({ reason: "rollback-incomplete" });
+
+      fleet.running.set("mac-studio", 0);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.installs.slice(1)).toEqual(["home@2.89.0"]);
     }),
   );
 });
