@@ -376,6 +376,17 @@ export interface OrchestratorV2DispatchResult {
   readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
 }
 
+/** Server-only precondition checked under the command lock before fallback changes a selection. */
+export const FallbackSelectionSource = Context.Reference<
+  | {
+      readonly runId: RunId;
+      readonly modelSelection: ModelSelection;
+    }
+  | undefined
+>("goat/orchestration-v2/Orchestrator/FallbackSelectionSource", {
+  defaultValue: () => undefined,
+});
+
 export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   readonly recoverDelegatedTasks: Effect.Effect<void>;
@@ -2962,6 +2973,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause: `Thread ${command.threadId} is deleted.`,
       });
+    }
+    if (command.type === "thread.model-selection.set" || command.type === "provider.switch") {
+      const source = yield* FallbackSelectionSource;
+      if (source !== undefined) {
+        const { runs, runtimeRequests } = yield* projectionStore
+          .getThreadRecords(command.threadId, ["runs", "runtimeRequests"])
+          .pipe(mapDispatchError(command));
+        const latest = latestExecutedRun(runs);
+        const now = yield* DateTime.now;
+        if (
+          latest?.id !== source.runId ||
+          latest.status !== "failed" ||
+          !modelSelectionsEqual(thread.modelSelection, source.modelSelection) ||
+          (yield* stopReachedRun(command, command.threadId, source.runId)) ||
+          runs.some((run) => run.status === "queued") ||
+          runtimeRequests.some((request) => request.status === "pending") ||
+          thread.archivedAt !== null ||
+          thread.settledOverride === "settled" ||
+          (thread.snoozedUntil != null &&
+            DateTime.toEpochMillis(thread.snoozedUntil) > DateTime.toEpochMillis(now))
+        )
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The fallback source changed before model selection.",
+          });
+      }
     }
     if (
       command.type === "thread.pull-request.watch" &&
@@ -10413,7 +10451,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly now: DateTime.Utc;
   }) {
     const { command, events, thread, run, now } = input;
-    if (run.rootNodeId === null || run.providerThreadId === null) return;
+    // Startup failures can be recoverable before a provider thread has attached.
+    if (run.rootNodeId === null) return;
     const pendingItems = (yield* Ref.get(events)).flatMap((event) =>
       event.type === "turn-item.updated" ? [event.payload] : [],
     );

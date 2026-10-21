@@ -21,7 +21,7 @@ import {
   type ModelSelection,
   type ThreadId,
 } from "@goat/contracts";
-import { modelSelectionCommandType } from "@goat/shared/model";
+import { modelSelectionCommandType, modelSelectionsEqual } from "@goat/shared/model";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 
 import { isExhausted } from "../../channels/channelPlacement.ts";
 import * as ProviderSwitch from "../../orchestration-v2/ProviderSwitchService.ts";
+import * as Orchestrator from "../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -344,7 +345,7 @@ const make = Effect.gen(function* () {
             latest.settledOverride === "settled" ||
             latest.pendingRuntimeRequest != null ||
             (yield* snoozed(latest)) ||
-            stepKey(latest.modelSelection) !== stepKey(target)
+            !modelSelectionsEqual(latest.modelSelection, target)
           )
             return;
           yield* Effect.logInfo("fleet.fallback.hop", {
@@ -403,10 +404,11 @@ const make = Effect.gen(function* () {
       // A restart after our selection landed: finish that hop instead of choosing again, even
       // if its account has since run out. Only our accepted receipt counts; a model the user
       // picked by hand goes to the recovery sweep as it would without a chain.
-      if (stepKey(shell.modelSelection) !== stepKey(current)) {
+      if (!modelSelectionsEqual(shell.modelSelection, current)) {
         const ours =
-          resolved.chain.steps.some((step) => stepKey(step) === stepKey(shell.modelSelection)) &&
-          (yield* attempts(shell.modelSelection))._tag === "Accepted";
+          resolved.chain.steps.some((step) =>
+            modelSelectionsEqual(toSelection(step), shell.modelSelection),
+          ) && (yield* attempts(shell.modelSelection))._tag === "Accepted";
         if (!ours) return false;
         yield* announce(shell.modelSelection, new Set(tried.map(stepKey)).size);
         return true;
@@ -453,6 +455,10 @@ const make = Effect.gen(function* () {
               modelSelection: target,
             })
             .pipe(
+              Effect.provideService(Orchestrator.FallbackSelectionSource, {
+                runId,
+                modelSelection: current,
+              }),
               Effect.as(true),
               Effect.catchCause((cause) =>
                 Effect.logWarning("fleet.fallback.select-refused", { threadId, cause }).pipe(

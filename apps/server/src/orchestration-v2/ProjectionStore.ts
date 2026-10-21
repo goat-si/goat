@@ -4001,6 +4001,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND json_extract(t.payload_json, '$.limitRecovery.autoResume') IS NOT 1
                   AND json_extract(t.payload_json, '$.limitRecovery.snooze') IS NOT 1
                 )
+                AND NOT EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_turn_items stopped
+                  WHERE stopped.thread_id = t.thread_id AND stopped.run_id = r.run_id
+                    AND stopped.type = 'run_interrupt_request'
+                )
               )
               OR (
                 json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
@@ -4034,11 +4039,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   )
                 )
               )
-            )
-            AND NOT EXISTS (
-              SELECT 1 FROM orchestration_v2_projection_turn_items stopped
-              WHERE stopped.thread_id = t.thread_id AND stopped.run_id = r.run_id
-                AND stopped.type = 'run_interrupt_request'
             )
             AND NOT EXISTS (
               SELECT 1 FROM orchestration_v2_projection_runtime_requests request
@@ -7202,12 +7202,6 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   thread.archivedAt === null &&
                   thread.settledOverride !== "settled",
               )
-              .filter((projection) => {
-                const run = latestExecutedRun(projection.runs);
-                return !projection.turnItems.some(
-                  (item) => item.runId === run?.id && item.type === "run_interrupt_request",
-                );
-              })
               .map((projection) => {
                 const run = latestExecutedRun(projection.runs);
                 // Recovery follows executed work; the UI may instead show a cancelled queue entry.
@@ -7224,6 +7218,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 const nowMs = DateTime.toEpochMillis(options.now);
                 if (
                   options.fallbackTriggers?.some((trigger) => trigger === thread.lastErrorClass) &&
+                  !thread.latestRunStopRequested &&
                   (thread.snoozedUntil == null ||
                     DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs) &&
                   !(

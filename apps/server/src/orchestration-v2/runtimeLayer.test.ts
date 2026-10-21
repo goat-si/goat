@@ -768,8 +768,12 @@ it.effect.each([
   "snooze",
   "stop",
   "stop-provider",
+  "stop-before-provider",
   "stop-at-continuation",
+  "stop-at-continuation-before-provider",
   "model-at-continuation",
+  "model-at-selection",
+  "stop-at-selection",
   "selected-before-restart",
   "timer-wins",
   "resetless",
@@ -824,10 +828,14 @@ it.effect.each([
       scenario === "other-chain-trigger" ||
       scenario === "goal-only" ||
       scenario === "stop-provider" ||
+      scenario === "stop-before-provider" ||
       scenario === "stop-at-continuation" ||
+      scenario === "stop-at-continuation-before-provider" ||
       scenario === "provider-cancelled-queue" ||
       scenario === "provider-live-queue" ||
-      scenario === "model-at-continuation"
+      scenario === "model-at-continuation" ||
+      scenario === "model-at-selection" ||
+      scenario === "stop-at-selection"
         ? "provider_error"
         : scenario === "transport-cancelled-queue"
           ? "transport_error"
@@ -847,7 +855,11 @@ it.effect.each([
           occurredAt: now,
           payload: {
             ...run,
-            providerThreadId: ProviderThreadId.make(`fallback-native:${scenario}`),
+            providerThreadId:
+              scenario === "stop-before-provider" ||
+              scenario === "stop-at-continuation-before-provider"
+                ? null
+                : ProviderThreadId.make(`fallback-native:${scenario}`),
             status: "failed",
             completedAt: now,
           },
@@ -919,7 +931,7 @@ it.effect.each([
     if (arm !== null && scenario !== "worker-snooze") yield* orchestrator.dispatch(arm);
     const armed = (yield* store.getThreadShell(threadId))!;
     const timedResume = limitRecoveryCommand(armed, true, Date.parse(resetAt));
-    if (scenario === "stop" || scenario === "stop-provider")
+    if (scenario === "stop" || scenario === "stop-provider" || scenario === "stop-before-provider")
       yield* orchestrator.dispatch({
         type: "thread.stop",
         commandId: CommandId.make(`fallback-stop:${scenario}`),
@@ -948,8 +960,33 @@ it.effect.each([
             ...threads,
             dispatch: (command) =>
               Effect.gen(function* () {
+                if (
+                  command.type === "thread.model-selection.set" &&
+                  scenario === "model-at-selection"
+                ) {
+                  yield* orchestrator.dispatch({
+                    type: "thread.model-selection.set",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-selection:${scenario}`),
+                    modelSelection: { ...modelSelection, model: "user-selected" },
+                  });
+                }
+                if (
+                  command.type === "thread.model-selection.set" &&
+                  scenario === "stop-at-selection"
+                ) {
+                  yield* orchestrator.dispatch({
+                    type: "thread.stop",
+                    threadId,
+                    commandId: CommandId.make(`fallback-racing-selection:${scenario}`),
+                  });
+                }
                 if (command.type === "message.dispatch") continuationToReplay = command;
-                if (scenario === "stop-at-continuation" && command.type === "message.dispatch") {
+                if (
+                  (scenario === "stop-at-continuation" ||
+                    scenario === "stop-at-continuation-before-provider") &&
+                  command.type === "message.dispatch"
+                ) {
                   yield* orchestrator.dispatch({
                     type: "thread.stop",
                     threadId,
@@ -1100,13 +1137,20 @@ it.effect.each([
     );
     assert.deepEqual(
       after.thread.modelSelection,
-      scenario === "model-at-continuation"
+      scenario === "model-at-continuation" || scenario === "model-at-selection"
         ? { ...modelSelection, model: "user-selected" }
-        : shouldSwitch || scenario === "manual-model" || scenario === "stop-at-continuation"
+        : shouldSwitch ||
+            scenario === "manual-model" ||
+            scenario === "stop-at-continuation" ||
+            scenario === "stop-at-continuation-before-provider"
           ? target
           : modelSelection,
     );
-    if (scenario === "stop-at-continuation" || scenario === "model-at-continuation") {
+    if (
+      scenario === "stop-at-continuation" ||
+      scenario === "stop-at-continuation-before-provider" ||
+      scenario === "model-at-continuation"
+    ) {
       assert.isDefined(continuationToReplay);
       assert.equal(yield* threads.receiptStatus(continuationToReplay!.commandId), "accepted");
       yield* (yield* install()).sweep;

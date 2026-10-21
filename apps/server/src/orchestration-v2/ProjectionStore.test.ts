@@ -529,6 +529,12 @@ it.effect.each([
       },
     });
     assert.notInclude(yield* selected(fallbackOptions), threadId);
+    yield* update({ limitRecovery: recovery });
+    assert.include(yield* selected({ ...options, now: DateTime.makeUnsafe(resetAt) }), threadId);
+    assert.include(
+      yield* selected({ ...fallbackOptions, now: DateTime.makeUnsafe(resetAt) }),
+      threadId,
+    );
   }).pipe(Effect.provide(layer)),
 );
 
