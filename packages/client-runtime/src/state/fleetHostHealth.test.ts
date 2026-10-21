@@ -60,6 +60,7 @@ describe("presentHostStorage", () => {
     expect(view.summary).toBe("History 900 MB of 2 GB · memory 12 MB of 100 MB");
     const approaching = presentHostStorage(storage({ historyBytes: 1.6 * GB }), NOW);
     expect(approaching).toMatchObject({ level: "approaching", tone: "muted", alert: null });
+    expect(approaching.archive).toBeNull();
     // Memory approaches at the memory store's own target, half its budget.
     expect(presentHostStorage(storage({ memoryBytes: 60 * MB }), NOW)).toMatchObject({
       level: "approaching",
@@ -212,5 +213,24 @@ describe("plainHostFailure", () => {
     const sentence =
       "mac-studio cannot be reached on the network. Check that it is awake and online.";
     expect(plainHostFailure("mac-studio", sentence)).toBe(sentence);
+  });
+});
+
+describe("presentHostStorage against the host's own budget and archive", () => {
+  it("uses the configured history budget and says what was archived", () => {
+    const view = presentHostStorage(
+      storage({
+        historyBytes: 1.5 * GB,
+        historyBudgetBytes: 1 * GB,
+        archivedThreads: 84,
+        archiveBytes: 310 * MB,
+      }),
+      NOW,
+    );
+    expect(view.alert).toBe("Thread history is 1.5 GB, over its 1 GB budget");
+    expect(view.archive).toBe("84 threads archived, 310 MB, restore on open");
+    expect(
+      presentHostStorage(storage({ archivedThreads: 1, archiveBytes: 2 * MB }), NOW).archive,
+    ).toBe("1 thread archived, 2 MB, restore on open");
   });
 });

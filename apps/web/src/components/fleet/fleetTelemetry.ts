@@ -466,7 +466,9 @@ export function fleetAlerts(
               : "warning",
         label: row.label,
         detail: [storage.alert, progress].filter((part) => part !== null).join(" · "),
-        lines: [storage.summary, ...(storage.lastResult === null ? [] : [storage.lastResult])],
+        lines: [storage.summary, storage.archive, storage.lastResult].filter(
+          (line) => line !== null,
+        ),
         ...(storage.action === null || progress !== null ? {} : act(storage.action)),
       });
     }

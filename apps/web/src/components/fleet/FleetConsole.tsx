@@ -191,7 +191,10 @@ function hostDetail(row: FleetHostRow, lastSeen: HostLastSeen, now: number): str
   if (metrics !== undefined)
     parts.push(metrics.cpuCount + (metrics.cpuCount === 1 ? " core" : " cores"));
   parts.push(lastKnownLabel(row, lastSeen, now));
-  if (metrics?.storage !== undefined) parts.push(presentHostStorage(metrics.storage, now).summary);
+  if (metrics?.storage !== undefined) {
+    const storage = presentHostStorage(metrics.storage, now);
+    parts.push(storage.summary, storage.archive);
+  }
   if (row.tone === "none") parts.push("no host status describes this machine");
   return parts.filter((part) => part !== null).join(" · ");
 }

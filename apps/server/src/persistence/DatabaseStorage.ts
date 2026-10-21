@@ -96,10 +96,20 @@ const make = Effect.gen(function* () {
     const sampled = (yield* Metric.value(memoryStoreTotal)).value;
     const memoryBytes = sampled > 0 ? sampled : null;
     const { since, last } = yield* Ref.get(compaction);
+    // Either failing leaves its fields out; the file accounting still stands.
+    const budget = yield* settings.getSettings.pipe(
+      Effect.map((current) => current.storageCleanup.historyBudgetBytes),
+      Effect.orElseSucceed(() => null),
+    );
+    const archived = yield* archive.stats.pipe(Effect.orElseSucceed(() => null));
     const health: HostStorageHealth = {
       databaseBytes,
       memoryBytes,
       historyBytes: Math.max(0, databaseBytes - reclaimableBytes - (memoryBytes ?? 0)),
+      ...(budget === null ? {} : { historyBudgetBytes: budget }),
+      ...(archived === null
+        ? {}
+        : { archivedThreads: archived.threads, archiveBytes: archived.fileBytes }),
       reclaimableBytes,
       measuredAt: yield* nowIso,
       ...(since === null ? {} : { compactingSince: since }),

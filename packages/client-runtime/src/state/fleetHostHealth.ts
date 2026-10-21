@@ -95,6 +95,8 @@ export interface HostStoragePresentation {
   readonly history: HostStorageMeter;
   /** "History 6.7 GB of 2 GB · memory 12 MB of 100 MB". */
   readonly summary: string;
+  /** "84 threads archived, 310 MB, restore on open"; null when none are, or the host predates it. */
+  readonly archive: string | null;
   /** The alert sentence when storage needs action; null while within budget. */
   readonly alert: string | null;
   /** What fixes it: history compacts in place; memory is managed in its settings. */
@@ -139,7 +141,10 @@ export function presentHostStorage(
   nowMs: number,
 ): HostStoragePresentation {
   const memory = meter(storage.memoryBytes, MEMORY_STORE_BUDGET_BYTES);
-  const history = meter(storage.historyBytes, HOST_HISTORY_BUDGET_BYTES);
+  const history = meter(
+    storage.historyBytes,
+    storage.historyBudgetBytes ?? HOST_HISTORY_BUDGET_BYTES,
+  );
   const memoryLevel = levelOf(memory.ratio, MEMORY_STORE_TARGET_BYTES / MEMORY_STORE_BUDGET_BYTES);
   const historyLevel = levelOf(history.ratio, STORAGE_APPROACHING_RATIO);
   const level = LEVEL_ORDER[historyLevel] >= LEVEL_ORDER[memoryLevel] ? historyLevel : memoryLevel;
@@ -182,6 +187,14 @@ export function presentHostStorage(
     memory,
     history,
     summary: sizeOf("History", history) + " · " + sizeOf("memory", memory),
+    archive:
+      storage.archivedThreads === undefined || storage.archivedThreads === 0
+        ? null
+        : storage.archivedThreads +
+          (storage.archivedThreads === 1 ? " thread" : " threads") +
+          " archived, " +
+          formatStorageBytes(storage.archiveBytes ?? 0) +
+          ", restore on open",
     alert,
     action: alert === null ? null : worse === "history" ? "compact" : "memory_settings",
     compactingMs,

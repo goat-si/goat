@@ -184,10 +184,12 @@ collapsed until you open it again.
 
 Alerts say how long a problem has lasted and offer one next step. A connection that takes more
 than 30 seconds offers **Retry**. A connected machine that stops answering for 10 seconds says
-so, with the likely cause: CPU load, or a state database whose thread history is over its 2 GB
-budget. History over budget offers **Compact**, which runs that machine's history cleanup now; on
-databases created before online space reclamation, the file shrinks after `goat doctor` runs
-there. A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
+so, with the likely cause: CPU load, or a state database whose thread history is over that
+machine's history budget. History over budget offers **Compact**, which runs that machine's
+history cleanup now; on databases created before online space reclamation, the file shrinks
+after `goat doctor` runs there. Hover a machine to see its history and memory against their
+budgets and how many idle threads are archived; an archived thread comes back when you open it.
+A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
 behind by test runs, whose launcher exited and whose home is deleted or temporary, appear as one
 item with **Clean up**; it stops only those processes, never a server with a real home. When
 there are more than three alerts, **+N more** opens the rest with their actions.

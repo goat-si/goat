@@ -9,6 +9,7 @@ import {
 } from "./baseSchemas.ts";
 import { RuntimeProtocolRanges } from "./environment.ts";
 import { HostCondition } from "./fleetHealth.ts";
+import { ORCHESTRATION_HISTORY_BUDGET_BYTES } from "./memory.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
@@ -63,11 +64,10 @@ export const HostThreadCounts = Schema.Struct({
 export type HostThreadCounts = typeof HostThreadCounts.Type;
 
 /**
- * Orchestration history's share of one server's state database: everything that is neither the
- * memory store (budgeted by MEMORY_STORE_BUDGET_BYTES) nor free pages. Provisional until history
- * gets its own budget and retirement; replace this with that constant when it lands.
+ * Orchestration history's default budget, for hosts that do not report their configured one:
+ * everything in the state database that is neither the memory store nor free pages.
  */
-export const HOST_HISTORY_BUDGET_BYTES = 2 * 1024 ** 3;
+export const HOST_HISTORY_BUDGET_BYTES = ORCHESTRATION_HISTORY_BUDGET_BYTES;
 
 /** The last on-demand or scheduled history compaction this server finished. */
 export const HostStorageCompactionResult = Schema.Struct({
@@ -90,6 +90,12 @@ export const HostStorageHealth = Schema.Struct({
   memoryBytes: Schema.NullOr(NonNegativeInt),
   /** Database bytes that are neither memory nor free pages. */
   historyBytes: NonNegativeInt,
+  /** That machine's `storageCleanup.historyBudgetBytes`. Older hosts omit it. */
+  historyBudgetBytes: Schema.optional(NonNegativeInt),
+  /** Idle threads whose tool history sits in compressed archive files, restored on open. */
+  archivedThreads: Schema.optional(NonNegativeInt),
+  /** Bytes of those archive files, outside the database. */
+  archiveBytes: Schema.optional(NonNegativeInt),
   /** Free pages inside the file. */
   reclaimableBytes: NonNegativeInt,
   measuredAt: IsoDateTime,
