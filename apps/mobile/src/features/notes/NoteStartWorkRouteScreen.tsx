@@ -111,26 +111,24 @@ export function NoteStartWorkRouteScreen({
     storeAttempt(captured);
     setPending(true);
     setError(null);
-    try {
-      const result = await startWork({ environmentId, input: captured.input! });
-      if (AsyncResult.isSuccess(result)) {
-        attempts.delete(attemptKey);
-        setCompleted(true);
-      } else if (AsyncResult.isFailure(result)) {
-        const failure = Cause.squash(result.cause);
-        const ambiguous =
-          typeof failure === "object" &&
-          failure !== null &&
-          "reason" in failure &&
-          failure.reason === "launch_ambiguous";
-        storeAttempt({ ...captured, ambiguous });
-        setError(notesError(failure));
-      }
-    } catch (error) {
-      setError(notesError(error));
-    } finally {
-      setPending(false);
-    }
+    await startWork({ environmentId, input: captured.input! })
+      .then((result) => {
+        if (AsyncResult.isSuccess(result)) {
+          attempts.delete(attemptKey);
+          setCompleted(true);
+        } else if (AsyncResult.isFailure(result)) {
+          const failure = Cause.squash(result.cause);
+          const ambiguous =
+            typeof failure === "object" &&
+            failure !== null &&
+            "reason" in failure &&
+            failure.reason === "launch_ambiguous";
+          storeAttempt({ ...captured, ambiguous });
+          setError(notesError(failure));
+        }
+      })
+      .catch((error: unknown) => setError(notesError(error)))
+      .finally(() => setPending(false));
   };
   const frozen = pending || completed || attempt.input !== null;
   return (

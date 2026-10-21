@@ -17,6 +17,47 @@ const NATIVE_FOLDER_TRUST_OPTION =
   "\u001b[4GYes,\u001b[9GI\u001b[11Gtrust\u001b[17Gthis\u001b[22Gfolder\r\r\n";
 
 it.effect(
+  "neutralizes GIT_PAGER for readiness, start and follow-up without mutating the sibling",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const environment = { ...LOGIN.environment, GIT_PAGER: "less -FRX", PAGER: "less" };
+        const login = { ...LOGIN, environment };
+        const expectedEnvironment = { ...LOGIN.environment, GIT_PAGER: "", PAGER: "less" };
+        expect(yield* h.service.readiness(login, "/fixture/repo")).toEqual({ version: "2.1.296" });
+        expect(h.commands.map((command) => command.args)).toEqual([
+          ["auth", "status"],
+          ["--version"],
+          ["--help"],
+        ]);
+        const fiber = yield* h.service.start(login, "/fixture/repo", "task").pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(RECEIPT);
+        const handle = yield* Fiber.join(fiber);
+        h.fake.finish(0);
+        yield* handle.exited;
+        expect(
+          yield* h.service.send(login, "/fixture/control", "session_ABC123", "follow-up"),
+        ).toEqual({ taskId: "session_ABC123", url: "https://claude.ai/code/session_ABC123" });
+        expect(h.commands).toHaveLength(4);
+        for (const command of h.commands) {
+          expect(command.command).toBe(LOGIN.binary);
+          expect(command.options.env).toEqual(expectedEnvironment);
+        }
+        expect(h.starts).toHaveLength(1);
+        expect(h.starts[0]?.env).toEqual(expectedEnvironment);
+        expect(h.fake.writes).toEqual([]);
+        expect(environment).toEqual({
+          ...LOGIN.environment,
+          GIT_PAGER: "less -FRX",
+          PAGER: "less",
+        });
+      }),
+    ),
+);
+
+it.effect(
   "readiness does not create work or open a PTY and reuses the sibling executable/environment",
   () =>
     Effect.scoped(
@@ -604,14 +645,35 @@ it.effect("a spawned print timeout is uncertain and never retried", () =>
 it.effect.each([
   "CCR_FORCE_BUNDLE",
   "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
   "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_INDEX_FILE",
+  "GIT_CONFIG",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_KEY_0",
+  "GIT_CONFIG_VALUE_0",
+  "GIT_SSH_COMMAND",
+  "GIT_PROXY_COMMAND",
+  "GIT_UNKNOWN_OVERRIDE",
 ])("rejects %s before invoking any sibling command", (key) =>
   Effect.scoped(
     Effect.gen(function* () {
       const h = yield* makeCliHarness();
-      const login = { ...LOGIN, environment: { ...LOGIN.environment, [key]: "fixture-routing" } };
+      const login = {
+        ...LOGIN,
+        environment: { ...LOGIN.environment, GIT_PAGER: "less", [key]: "fixture-routing" },
+      };
       expect(
         (yield* h.service.readiness(login, "/fixture/control").pipe(Effect.flip)).outcome,
       ).toBe("rejected");
@@ -621,6 +683,9 @@ it.effect.each([
           .pipe(Effect.flip)).outcome,
       ).toBe("rejected");
       expect(h.commands).toEqual([]);
+      expect(
+        (yield* h.service.start(login, "/fixture/repo", "task").pipe(Effect.flip)).outcome,
+      ).toBe("rejected");
       expect(h.starts).toEqual([]);
     }),
   ),

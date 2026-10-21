@@ -111,6 +111,7 @@ export class GitWorkflowService extends Context.Service<
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
+    readonly inspectExistingBranch: GitVcsDriver.GitVcsDriver["Service"]["inspectExistingBranch"];
     /** The worktree that has `branch` checked out, or null when none has it. */
     readonly branchWorktreePath: (input: {
       readonly cwd: string;
@@ -442,6 +443,10 @@ export const make = Effect.gen(function* () {
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(git.removeWorktree(input)),
+      ),
+    inspectExistingBranch: (input) =>
+      ensureGitCommand("GitWorkflowService.inspectExistingBranch", input.cwd).pipe(
+        Effect.andThen(git.inspectExistingBranch(input)),
       ),
     branchWorktreePath: (input) =>
       ensureGitCommand("GitWorkflowService.branchWorktreePath", input.cwd).pipe(

@@ -3,6 +3,7 @@ import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ProviderDriverKind, ProviderReplayTranscript } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -183,7 +184,10 @@ export interface OrchestratorV2ProviderReplayHarness<
   ) => Effect.Effect<Transcript, Error>;
   readonly makeProviderAdapterRegistryLayer: (
     transcript: Transcript,
-    options?: { readonly replayGate?: ProviderReplayGate },
+    options?: {
+      readonly replayGate?: ProviderReplayGate;
+      readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
+    },
   ) => Layer.Layer<
     ProviderAdapterRegistry.ProviderAdapterRegistryV2,
     Error,
@@ -216,16 +220,32 @@ export function runOrchestratorV2ProviderReplayScenario<
         : [],
     ) ?? [],
   );
-  const layer = layerProviderReplay(scenario, harness, {
-    ...options,
-    replayGate,
-  });
-
   return Effect.gen(function* () {
-    const result = yield* runOrchestratorV2Scenario(scenario, { replayGate });
-    const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;
-    return { ...result, commandOutput: yield* recorder.snapshot };
-  }).pipe(Effect.provide(layer));
+    const completions = new Map<string, Deferred.Deferred<void>>();
+    for (const step of scenario.steps ?? []) {
+      if (step.type === "await_replay_turn_complete") {
+        completions.set(step.nativeTurnId, yield* Deferred.make<void>());
+      }
+    }
+    const layer = layerProviderReplay(scenario, harness, {
+      ...options,
+      replayGate,
+      onReplayTurnComplete: (nativeTurnId) => {
+        const completion = completions.get(nativeTurnId);
+        return completion === undefined
+          ? Effect.void
+          : Deferred.succeed(completion, undefined).pipe(Effect.asVoid);
+      },
+    });
+    return yield* Effect.gen(function* () {
+      const result = yield* runOrchestratorV2Scenario(scenario, {
+        replayGate,
+        awaitReplayTurnComplete: (nativeTurnId) => Deferred.await(completions.get(nativeTurnId)!),
+      });
+      const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;
+      return { ...result, commandOutput: yield* recorder.snapshot };
+    }).pipe(Effect.provide(layer));
+  });
 }
 
 export function layerProviderReplay<Transcript extends ProviderReplayTranscript, Error>(
@@ -238,6 +258,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly replayGate?: ProviderReplayGate;
+    readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -247,10 +268,12 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
   | ProviderSessionManager.ProviderSessionManagerV2,
   Error | ReplayDatabaseError
 > {
-  const layerRegistry = harness.makeProviderAdapterRegistryLayer(
-    scenario.transcript,
-    options.replayGate === undefined ? {} : { replayGate: options.replayGate },
-  );
+  const layerRegistry = harness.makeProviderAdapterRegistryLayer(scenario.transcript, {
+    ...(options.replayGate === undefined ? {} : { replayGate: options.replayGate }),
+    ...(options.onReplayTurnComplete === undefined
+      ? {}
+      : { onReplayTurnComplete: options.onReplayTurnComplete }),
+  });
   return layerWithRegistry(scenario, layerRegistry, options);
 }
 
