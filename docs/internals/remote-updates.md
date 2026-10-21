@@ -396,8 +396,10 @@ closes admission) and starts the ADR-0013 supervisor. The drain stops this serve
 nothing in it can interrupt the swap. A busy check, a cancelled drain, or a client
 holding the lock retries in 10 minutes.
 
-On Windows, the command supervisor owns a kill-on-close Job Object before starting
-Git Bash. It stays alive while descendants hold command output, even if Bash exits
+On Windows, PowerShell 5.1 compiles the command supervisor before Node detaches its
+executable: detaching PowerShell itself can exit successfully without running its
+script. The executable owns a kill-on-close Job Object before starting Git Bash.
+It stays alive while descendants hold command output, even if Bash exits
 first. Timeout and cancellation terminate that supervisor through its retained native
 process handle, so cleanup neither depends on a live parent PID nor selects a reused
 PID. The replacement supervisor and server use the existing WMI detached launch,

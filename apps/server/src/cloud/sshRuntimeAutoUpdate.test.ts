@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -14,7 +15,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import { SSH_REPLACEMENT_ID_ENV } from "../serverOwnerLock.ts";
-import { bashScriptArg, resolveWindowsGitBash } from "./sshRuntimeGitBash.ts";
+import {
+  bashScriptArg,
+  defaultWindowsGitBash,
+  resolveWindowsGitBash,
+} from "./sshRuntimeGitBash.ts";
 import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
 
 const PID = 4242;
@@ -436,58 +441,67 @@ it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
   );
 });
 
-it.effect("the detached launcher returns the script's output through files", () =>
+it.live("the detached launcher returns the script's output through files", () =>
   Effect.gen(function* () {
     const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+    const shell =
+      (yield* HostProcess.Platform) === "win32" ? yield* defaultWindowsGitBash() : "/bin/sh";
+    if (shell === undefined) throw new Error("Git Bash is required for the Windows launcher test");
     const result = yield* host.runDetached({
-      shell: "/bin/sh",
+      shell,
       script: ['printf "%s\\n" "$1"', 'printf "%s\\n" "$GOAT_TEST_MARKER" >&2', "exit 3"].join(
         "\n",
       ),
       args: ["runtime"],
-      env: { PATH: process.env.PATH, GOAT_TEST_MARKER: "marker" },
+      env: { ...process.env, GOAT_TEST_MARKER: "marker" },
       cwd: process.cwd(),
     });
     expect(result).toEqual({ code: 3, stdout: "runtime\n", stderr: "marker\n" });
   }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
 );
 
-it.effect("a timed-out host command also stops the processes it started", () =>
-  Effect.gen(function* () {
-    const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
-    // The shell waits on a long download-like child; the timeout is the behavior under test.
-    const result = yield* host.run({
-      command: "/bin/sh",
-      args: [
-        "-c",
-        'trap \'wait "$descendant"; exit 0\' TERM; sleep 600 & descendant=$!; printf "%s\\n" "$descendant"; wait "$descendant"',
-      ],
-      env: { PATH: process.env.PATH },
-      timeoutMs: 200,
-    });
-    const descendant = Number(result.stdout.trim());
-    expect(descendant).toBeGreaterThan(0);
-    // The shell reaps its child before closing output, so a zombie cannot still answer signal 0.
-    expect(() => process.kill(descendant, 0)).toThrow();
-  }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
-);
+// quarantine: #612 Windows Job cleanup is exercised by the native socket cases in sshRuntimeWindowsJob.test.ts.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "POSIX process-group cleanup",
+  () => {
+    it.live("a timed-out host command also stops the processes it started", () =>
+      Effect.gen(function* () {
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        // The shell waits on a long download-like child; the timeout is the behavior under test.
+        const result = yield* host.run({
+          command: "/bin/sh",
+          args: [
+            "-c",
+            'trap \'wait "$descendant"; exit 0\' TERM; sleep 600 & descendant=$!; printf "%s\\n" "$descendant"; wait "$descendant"',
+          ],
+          env: { PATH: process.env.PATH },
+          timeoutMs: 200,
+        });
+        const descendant = Number(result.stdout.trim());
+        expect(descendant).toBeGreaterThan(0);
+        // The shell reaps its child before closing output, so a zombie cannot still answer signal 0.
+        expect(() => process.kill(descendant, 0)).toThrow();
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
 
-it.effect("a host command whose shell exits first still stops what it left running", () =>
-  Effect.gen(function* () {
-    const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
-    const result = yield* host.run({
-      command: "/bin/sh",
-      args: [
-        "-c",
-        `/bin/sh -c 'trap "wait; exit 0" TERM; sleep 600 & printf "%s\\n" "$!"; wait' & exit 0`,
-      ],
-      env: { PATH: process.env.PATH },
-      timeoutMs: 200,
-    });
-    const descendant = Number(result.stdout.trim());
-    expect(descendant).toBeGreaterThan(0);
-    expect(() => process.kill(descendant, 0)).toThrow();
-  }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    it.live("a host command whose shell exits first still stops what it left running", () =>
+      Effect.gen(function* () {
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        const result = yield* host.run({
+          command: "/bin/sh",
+          args: [
+            "-c",
+            `/bin/sh -c 'trap "wait; exit 0" TERM; sleep 600 & printf "%s\\n" "$!"; wait' & exit 0`,
+          ],
+          env: { PATH: process.env.PATH },
+          timeoutMs: 200,
+        });
+        const descendant = Number(result.stdout.trim());
+        expect(descendant).toBeGreaterThan(0);
+        expect(() => process.kill(descendant, 0)).toThrow();
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
+  },
 );
 
 const GIT_BASH_ENV = {

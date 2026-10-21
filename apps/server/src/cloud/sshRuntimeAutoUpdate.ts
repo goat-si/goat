@@ -118,16 +118,26 @@ const stopProcessTree = (child: NodeChildProcess.ChildProcess, signal: NodeJS.Si
   child.kill(signal);
 };
 
-const spawnOwnedCommand = (
+const spawnOwnedCommand = async (
   command: string,
   args: ReadonlyArray<string>,
   options: NodeChildProcess.SpawnOptions & { env: NodeJS.ProcessEnv },
+  signal?: AbortSignal,
 ) => {
   const owned =
     HostProcess.Platform.defaultValue() === "win32"
-      ? windowsJobCommand({ command, args, env: options.env })
-      : { command, args };
-  return NodeChildProcess.spawn(owned.command, [...owned.args], options);
+      ? await windowsJobCommand({ command, args, env: options.env })
+      : { command, args, dispose: async () => {} };
+  try {
+    signal?.throwIfAborted();
+    return {
+      child: NodeChildProcess.spawn(owned.command, [...owned.args], options),
+      dispose: owned.dispose,
+    };
+  } catch (error) {
+    await owned.dispose();
+    throw error;
+  }
 };
 
 export const layerHost = Layer.succeed(SshRuntimeHost, {
@@ -135,7 +145,8 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
     Effect.callback<SshRuntimeProcessResult>((resume) => {
       // Its own process group, so a timeout or an interruption also stops the downloader the
       // install script waits on, and with it the install lock.
-      const child = spawnOwnedCommand(
+      const controller = new AbortController();
+      const started = spawnOwnedCommand(
         input.command,
         input.args.map((arg) => bashScriptArg(input.command, arg)),
         {
@@ -144,28 +155,48 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           windowsHide: true,
           stdio: ["pipe", "pipe", "pipe"],
         },
+        controller.signal,
       );
-      child.stdin?.on("error", () => undefined);
-      child.stdin?.end(input.stdin ?? "");
       // Done means every process holding the output has exited, which the leader alone does not
       // show: a shell can exit and leave its downloader running.
       let done = false;
-      const closed = collect(child).then((result) => {
-        done = true;
-        clearTimeout(bound);
-        return result;
-      });
-      const bound = setTimeout(() => {
-        if (done || child.pid === undefined) return;
-        stopProcessTree(child, "SIGTERM");
-        setTimeout(() => {
-          if (!done && child.pid !== undefined) stopProcessTree(child, "SIGKILL");
-        }, 5_000).unref();
-      }, input.timeoutMs);
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const closed = started
+        .then(async ({ child, dispose }) => {
+          const result = collect(child);
+          child.stdin?.on("error", () => undefined);
+          child.stdin?.end(input.stdin ?? "");
+          bound = setTimeout(() => {
+            if (done || child.pid === undefined) return;
+            stopProcessTree(child, "SIGTERM");
+            setTimeout(() => {
+              if (!done && child.pid !== undefined) stopProcessTree(child, "SIGKILL");
+            }, 5_000).unref();
+          }, input.timeoutMs);
+          try {
+            return await result;
+          } finally {
+            await dispose();
+          }
+        })
+        .catch((error: unknown) => ({
+          code: null,
+          stdout: "",
+          stderr: error instanceof Error ? error.message : String(error),
+        }))
+        .then((result) => {
+          done = true;
+          clearTimeout(bound);
+          return result;
+        });
       void closed.then((result) => resume(Effect.succeed(result)));
       // Interruption waits for the group to end, so a server shutting down cannot drop the kill.
       return Effect.promise(async () => {
+        controller.abort();
+        const owned = await started.catch(() => undefined);
         clearTimeout(bound);
+        if (owned === undefined) return;
+        const { child } = owned;
         if (done || child.pid === undefined) return;
         stopProcessTree(child, "SIGTERM");
         const ended = await Promise.race([
@@ -173,6 +204,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
         ]);
         if (!ended) stopProcessTree(child, "SIGKILL");
+        await closed;
       });
     }),
   runDetached: (input) =>
@@ -180,42 +212,51 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       const dir = await NodeFS.promises.mkdtemp(
         NodePath.join(NodeOS.tmpdir(), "goat-runtime-update-"),
       );
-      const scriptFile = NodePath.join(dir, "launch.sh");
-      const stdoutFile = NodePath.join(dir, "stdout");
-      const stderrFile = NodePath.join(dir, "stderr");
-      await NodeFS.promises.writeFile(scriptFile, input.script, { mode: 0o600 });
-      // Files, never pipes: the drain stops this server mid-script, and a write to a closed pipe
-      // would kill the script before it releases the replacement lock and drain fence.
-      const stdout = NodeFS.openSync(stdoutFile, "w", 0o600);
-      const stderr = NodeFS.openSync(stderrFile, "w", 0o600);
-      // Never killed from here: once it drains this server, the script and the supervisor it
-      // starts own the host until the replacement answers or the previous version is restored.
-      // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
-      const scriptArg = bashScriptArg(input.shell, scriptFile);
-      const child = spawnOwnedCommand(input.shell, [scriptArg, ...input.args], {
-        cwd: input.cwd,
-        detached: true,
-        windowsHide: true,
-        env: input.env,
-        stdio: ["ignore", stdout, stderr],
-      });
-      NodeFS.closeSync(stdout);
-      NodeFS.closeSync(stderr);
-      const code = await new Promise<number | null>((resolve) => {
-        child.once("error", () => resolve(null));
-        child.once("close", resolve);
-        // Still alive here means the script never drained this server: it is stuck before the
-        // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
-        const bound = setTimeout(() => {
-          if (child.pid !== undefined) stopProcessTree(child, "SIGTERM");
-        }, DETACHED_TIMEOUT_MS);
-        bound.unref();
-        child.once("close", () => clearTimeout(bound));
-      });
-      const read = (file: string) => NodeFS.promises.readFile(file, "utf8").catch(() => "");
-      const result = { code, stdout: await read(stdoutFile), stderr: await read(stderrFile) };
-      await NodeFS.promises.rm(dir, { recursive: true, force: true });
-      return result;
+      try {
+        const scriptFile = NodePath.join(dir, "launch.sh");
+        const stdoutFile = NodePath.join(dir, "stdout");
+        const stderrFile = NodePath.join(dir, "stderr");
+        await NodeFS.promises.writeFile(scriptFile, input.script, { mode: 0o600 });
+        // Files, never pipes: the drain stops this server mid-script, and a write to a closed pipe
+        // would kill the script before it releases the replacement lock and drain fence.
+        const stdout = NodeFS.openSync(stdoutFile, "w", 0o600);
+        const stderr = NodeFS.openSync(stderrFile, "w", 0o600);
+        // Never killed from here: once it drains this server, the script and the supervisor it
+        // starts own the host until the replacement answers or the previous version is restored.
+        // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
+        const scriptArg = bashScriptArg(input.shell, scriptFile);
+        const { child, dispose } = await spawnOwnedCommand(
+          input.shell,
+          [scriptArg, ...input.args],
+          {
+            cwd: input.cwd,
+            detached: true,
+            windowsHide: true,
+            env: input.env,
+            stdio: ["ignore", stdout, stderr],
+          },
+        ).finally(() => {
+          NodeFS.closeSync(stdout);
+          NodeFS.closeSync(stderr);
+        });
+        const code = await new Promise<number | null>((resolve) => {
+          child.once("error", () => resolve(null));
+          child.once("close", resolve);
+          // Still alive here means the script never drained this server: it is stuck before the
+          // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
+          const bound = setTimeout(() => {
+            if (child.pid !== undefined) stopProcessTree(child, "SIGTERM");
+          }, DETACHED_TIMEOUT_MS);
+          bound.unref();
+          child.once("close", () => clearTimeout(bound));
+        });
+        const read = (file: string) => NodeFS.promises.readFile(file, "utf8").catch(() => "");
+        const result = { code, stdout: await read(stdoutFile), stderr: await read(stderrFile) };
+        await dispose();
+        return result;
+      } finally {
+        await NodeFS.promises.rm(dir, { recursive: true, force: true });
+      }
     }),
   sha256: (file) =>
     Effect.promise(() =>

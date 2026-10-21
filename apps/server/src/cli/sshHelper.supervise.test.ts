@@ -5,6 +5,8 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import * as NodeEvents from "node:events";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -37,6 +39,21 @@ const deadPid = () => {
   ]);
   return Number(child.stdout.toString());
 };
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  // These fixtures exercise replacement/rollback with real Node processes. Windows cannot
+  // execute their POSIX shebang; WMI detachment is verified separately with native executables.
+  return {
+    ...actual,
+    spawn: (...input: Parameters<typeof actual.spawn>) => {
+      const [command, args, options] = input;
+      return HostProcess.Platform.defaultValue() === "win32" && command.endsWith(".mjs")
+        ? actual.spawn(process.execPath, [command, ...(args ?? [])], options)
+        : actual.spawn(...input);
+    },
+  };
+});
 
 /**
  * The target runner never becomes ready. As the failed replacement it writes "trial"; as another
@@ -220,7 +237,9 @@ const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
 it("restores the previous runner when the drained server stays alive", async () => {
-  const sleep = NodeChildProcess.spawn("sleep", ["600"], { stdio: "ignore" });
+  const sleep = NodeChildProcess.spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
   try {
     const sleepPid = sleep.pid ?? 0;
     assert.isAbove(sleepPid, 0);
@@ -271,12 +290,10 @@ it("restores the previous runner when the drained server stays alive", async () 
     assert.equal(record(stateDir, "identity"), `${previousIdentity}\n`);
     assert.equal(record(stateDir, "managed"), "managed\n");
   } finally {
-    if (sleep.pid !== undefined) {
-      try {
-        process.kill(sleep.pid, "SIGKILL");
-      } catch {
-        // The sleep already exited.
-      }
+    if (sleep.exitCode === null) {
+      const stopped = NodeEvents.EventEmitter.once(sleep, "exit");
+      sleep.kill("SIGKILL");
+      await stopped;
     }
   }
 });
