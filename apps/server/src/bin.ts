@@ -25,6 +25,10 @@ if (
   if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));
+  } else if (command === "cua-lease-proxy") {
+    // Spawned by providers for an unattended thread's approved computer use; see ComputerUseLeaseProxy.
+    const { runLeaseProxyCli } = await import("./cua/ComputerUseLeaseProxyCli.ts");
+    await runLeaseProxyCli(process.argv.slice(3));
   } else {
     // Before anything reads stdin: the desktop app's Windows launcher starts
     // the CLI without one. Never for the fast paths, whose stdin is a pipe.

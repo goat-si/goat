@@ -5,12 +5,15 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as ComputerUse from "./ComputerUseAttachment.ts";
+import type { ComputerUseLease } from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 const mcp: CuaDriverMcpConfiguration = {
@@ -19,6 +22,14 @@ const mcp: CuaDriverMcpConfiguration = {
   environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
   socketPath: "/tmp/cua.sock",
 };
+
+const lease: ComputerUseLease = {
+  threadId: ThreadId.make("thread-cua"),
+  handoffId: TurnItemId.make("handoff:grant"),
+  expiresAt: DateTime.makeUnsafe("2026-10-21T12:30:00.000Z"),
+};
+const proxy = { command: "/goat/node", entrypoint: "/goat/bin.mjs" };
+const ROUTE = "/api/computer-use/lease";
 
 const fakeDriver = (input: { readonly enabled: boolean; readonly running: boolean }) => {
   const calls = { acquire: 0 };
@@ -34,17 +45,36 @@ const fakeDriver = (input: { readonly enabled: boolean; readonly running: boolea
   return { service: Option.some(service), calls };
 };
 
+const interactive = { _tag: "interactive" } as const;
+const unattended = { _tag: "unattended", reason: "goat_bot" } as const;
+
+const input = (
+  overrides: Partial<ComputerUse.ComputerUseAttachmentInput> = {},
+): ComputerUse.ComputerUseAttachmentInput => ({
+  threadId: ThreadId.make("thread-cua"),
+  driver: ProviderDriverKind.make("codex"),
+  interactionMode: "default",
+  readOnly: false,
+  origin: interactive,
+  lease: Option.none(),
+  proxy,
+  ...overrides,
+});
+
 const decide = (
   driver: ReturnType<typeof fakeDriver>,
   overrides: Partial<ComputerUse.ComputerUseAttachmentInput> = {},
-) =>
-  ComputerUse.computerUseAttachment(driver.service, {
-    threadId: ThreadId.make("thread-cua"),
-    driver: ProviderDriverKind.make("codex"),
-    interactionMode: "default",
-    readOnly: false,
-    ...overrides,
-  });
+) => ComputerUse.computerUseAttachment(driver.service, input(overrides));
+
+const session: McpProviderSessionConfig = {
+  environmentId: EnvironmentId.make("environment-cua"),
+  threadId: ThreadId.make("thread-cua"),
+  providerSessionId: "credential",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  endpoint: "http://127.0.0.1:4100/mcp",
+  authorizationHeader: "Bearer fixture",
+  browserToolsAvailable: false,
+};
 
 describe("computerUseAttachment", () => {
   it.effect("attaches the running driver to an interactive local provider thread", () =>
@@ -80,18 +110,18 @@ describe("computerUseAttachment", () => {
       ] as const;
       for (const [settings, overrides, reason] of cases) {
         const driver = fakeDriver({ ...settings, running: true });
-        assert.deepEqual(yield* decide(driver, overrides), { _tag: "none", reason });
+        assert.deepEqual(yield* decide(driver, overrides), {
+          _tag: "none",
+          reason,
+          blockUserConfig: false,
+        });
         assert.equal(driver.calls.acquire, 0, reason);
       }
-      assert.deepEqual(
-        yield* ComputerUse.computerUseAttachment(Option.none(), {
-          threadId: ThreadId.make("thread-cua"),
-          driver: ProviderDriverKind.make("codex"),
-          interactionMode: "default",
-          readOnly: false,
-        }),
-        { _tag: "none", reason: "disabled" },
-      );
+      assert.deepEqual(yield* ComputerUse.computerUseAttachment(Option.none(), input()), {
+        _tag: "none",
+        reason: "disabled",
+        blockUserConfig: false,
+      });
     }),
   );
 
@@ -100,31 +130,103 @@ describe("computerUseAttachment", () => {
       assert.deepEqual(yield* decide(fakeDriver({ enabled: true, running: false })), {
         _tag: "none",
         reason: "unavailable",
+        blockUserConfig: false,
       });
     }),
   );
 
+  it.effect("gives an unattended turn nothing without a lease, and blocks a user's driver", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      assert.deepEqual(yield* decide(driver, { origin: unattended }), {
+        _tag: "none",
+        reason: "needs-approval",
+        blockUserConfig: true,
+      });
+      // The daemon is not started for a turn that cannot use it.
+      assert.equal(driver.calls.acquire, 0);
+      // Every other refusal of an unattended turn still blocks a user-defined server.
+      assert.deepEqual(
+        yield* decide(fakeDriver({ enabled: false, running: true }), { origin: unattended }),
+        { _tag: "none", reason: "disabled", blockUserConfig: true },
+      );
+    }),
+  );
+
+  it.effect("routes a leased unattended turn through the proxy, failing closed without one", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      assert.deepEqual(yield* decide(driver, { origin: unattended, lease: Option.some(lease) }), {
+        _tag: "leased",
+        mcp,
+        lease,
+        proxy,
+      });
+      assert.deepEqual(
+        yield* decide(driver, {
+          origin: unattended,
+          lease: Option.some(lease),
+          proxy: undefined,
+        }),
+        { _tag: "none", reason: "unavailable", blockUserConfig: true },
+      );
+      // A lease means nothing to an interactive turn; it keeps the direct driver.
+      assert.equal(
+        (yield* decide(driver, { origin: interactive, lease: Option.some(lease) }))._tag,
+        "direct",
+      );
+    }),
+  );
+
   it("replaces the session's previous driver with exactly the decision's", () => {
-    const session: McpProviderSessionConfig = {
-      environmentId: EnvironmentId.make("environment-cua"),
-      threadId: ThreadId.make("thread-cua"),
-      providerSessionId: "credential",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorizationHeader: "Bearer fixture",
-      browserToolsAvailable: false,
-      cuaDriver: mcp,
-      cuaDriverOverridesUserConfig: true,
-    };
-    const detached = ComputerUse.withComputerUse(session, { _tag: "none", reason: "plan" });
+    const detached = ComputerUse.withComputerUse(
+      { ...session, cuaDriver: mcp, cuaDriverOverridesUserConfig: true },
+      { _tag: "none", reason: "plan", blockUserConfig: false },
+      ROUTE,
+    );
     assert.isFalse("cuaDriver" in detached);
     assert.isFalse("cuaDriverOverridesUserConfig" in detached);
-    const attached = ComputerUse.withComputerUse(detached, {
-      _tag: "direct",
-      mcp,
-      overrideUserConfig: false,
-    });
+    assert.isFalse("cuaDriverBlocked" in detached);
+    const attached = ComputerUse.withComputerUse(
+      detached,
+      { _tag: "direct", mcp, overrideUserConfig: false },
+      ROUTE,
+    );
     assert.deepEqual(attached.cuaDriver, mcp);
     assert.isFalse("cuaDriverOverridesUserConfig" in attached);
+    const blocked = ComputerUse.withComputerUse(
+      attached,
+      { _tag: "none", reason: "needs-approval", blockUserConfig: true },
+      ROUTE,
+    );
+    assert.isFalse("cuaDriver" in blocked);
+    assert.isTrue(blocked.cuaDriverBlocked);
+  });
+
+  it("hands a leased turn the proxy with its lease, credential and driver, never the raw driver", () => {
+    const leased = ComputerUse.withComputerUse(
+      session,
+      { _tag: "leased", mcp, lease, proxy },
+      ROUTE,
+    );
+    assert.isTrue(leased.cuaDriverOverridesUserConfig);
+    assert.deepEqual(leased.cuaDriver, {
+      command: "/goat/node",
+      args: [
+        "/goat/bin.mjs",
+        "cua-lease-proxy",
+        "--handoff",
+        "handoff:grant",
+        "--expires",
+        "2026-10-21T12:30:00.000Z",
+      ],
+      environment: [
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+        { name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1:4100/api/computer-use/lease" },
+        { name: "GOAT_CUA_LEASE_AUTHORIZATION", value: "Bearer fixture" },
+        { name: "GOAT_CUA_DRIVER_MCP", value: JSON.stringify(mcp) },
+      ],
+      socketPath: "/tmp/cua.sock",
+    });
   });
 });

@@ -503,6 +503,48 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it("takes the cua-driver name for an unattended turn without a lease, approving nothing", () => {
+    const mcpSession = {
+      ...mcpSessionFor(ThreadId.make("thread-claude-cua-blocked")),
+      cuaDriverBlocked: true,
+    };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession,
+      readOnlySandbox: false,
+      // A user rule that pre-approves their own driver's tools is dropped too.
+      allowedTools: ["Read", "mcp__cua-driver__click"],
+    });
+    const blocked = overrides.mcpServers?.["cua-driver"];
+    assert.isTrue(McpProviderSession.isBlockedCuaServer(blocked));
+    assert.deepEqual(overrides.allowedTools, [
+      "Read",
+      ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD,
+    ]);
+  });
+
+  it("routes a leased turn's cua-driver name to GOAT's proxy", () => {
+    const proxy: M.CuaDriverMcpConfiguration = {
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      environment: [{ name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1/api" }],
+    };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: {
+        ...mcpSessionFor(ThreadId.make("thread-claude-cua-leased")),
+        cuaDriver: proxy,
+        cuaDriverOverridesUserConfig: true,
+      },
+      readOnlySandbox: false,
+    });
+    assert.deepEqual(overrides.mcpServers?.["cua-driver"], {
+      type: "stdio",
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      env: { GOAT_CUA_LEASE_URL: "http://127.0.0.1/api" },
+    });
+    assert.isFalse(McpProviderSession.isBlockedCuaServer(overrides.mcpServers?.["cua-driver"]));
+  });
+
   it("extends an explicit allowlist with the goat wildcard", () => {
     const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
     const mcpSession = mcpSessionFor(threadId);

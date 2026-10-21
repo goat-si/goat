@@ -80,6 +80,30 @@ const PROVIDER_SETTINGS_HANDOFF_PATHS: ReadonlySet<string> = new Set([
  */
 export const isProviderHandoffPath = (path: string) => PROVIDER_SETTINGS_HANDOFF_PATHS.has(path);
 
+/**
+ * An unattended thread's request to use this host's screen. Approving it is admission for the
+ * thread until the handoff's expiry, not approval of each action; ending it early moves the
+ * approved handoff to cancelled. Like provider handoffs it expires on a clock, because the
+ * person usually answers after the bot or scheduled turn that asked has ended.
+ */
+export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
+
+/** Handoffs that expire on their clock instead of when the requesting run ends. */
+export const isClockedHandoffPath = (path: string) =>
+  isProviderHandoffPath(path) || path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+
+/** When an approved computer use admission ends (epoch ms), while it still lasts; else null. */
+export const computerUseGrantLiveUntil = (
+  handoff: Pick<Handoff, "state" | "expiresAt" | "target">,
+  nowMillis: number,
+): number | null =>
+  handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+  handoff.state === "completed" &&
+  handoff.expiresAt !== null &&
+  handoff.expiresAt.epochMilliseconds > nowMillis
+    ? handoff.expiresAt.epochMilliseconds
+    : null;
+
 /** Returned only through authenticated client RPC, never a thread projection or MCP result. */
 export const HandoffHuman = Schema.Struct({
   location: TrimmedNonEmptyString,

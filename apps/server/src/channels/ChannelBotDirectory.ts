@@ -26,6 +26,10 @@ export class ChannelBotDirectory extends Context.Service<
   ChannelBotDirectory,
   {
     readonly isBotThread: (threadId: ThreadId) => Effect.Effect<boolean, ChannelBotDirectoryError>;
+    /** Whether the thread was launched to work on a channel task. */
+    readonly isWorkerThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<boolean, ChannelBotDirectoryError>;
   }
 >()("goat/channels/ChannelBotDirectory") {}
 
@@ -37,6 +41,13 @@ const make = Effect.gen(function* () {
         SELECT key FROM channel_runtime_state
         WHERE key LIKE 'bot:%' AND json_extract(value_json, '$.bot.threadId') = ${threadId}
         LIMIT 1
+      `.pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError((cause) => new ChannelBotDirectoryError({ cause })),
+      ),
+    isWorkerThread: (threadId) =>
+      sql<{ readonly found: number }>`
+        SELECT 1 AS found FROM channel_tasks WHERE worker_thread_id = ${threadId} LIMIT 1
       `.pipe(
         Effect.map((rows) => rows.length > 0),
         Effect.mapError((cause) => new ChannelBotDirectoryError({ cause })),

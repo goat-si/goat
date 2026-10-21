@@ -109,6 +109,54 @@ const wp4Memory = () =>
     ],
   })!;
 
+describe("CodexAdapterV2 computer use for unattended turns", () => {
+  const session: McpProviderSession.McpProviderSessionConfig = {
+    environmentId: M.EnvironmentId.make("fixture"),
+    threadId: M.ThreadId.make("thread-cua-unattended"),
+    providerSessionId: "credential",
+    providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+    endpoint: "http://127.0.0.1:43123/mcp",
+    authorizationHeader: "Bearer fixture",
+    browserToolsAvailable: false,
+  };
+  const entry = (params: ReturnType<typeof CodexAdapterV2.codexThreadRuntimeParams>) =>
+    params.config["mcp_servers.cua-driver"];
+
+  it("disables a cua-driver the user configured when the turn has no lease", () => {
+    const blocked = entry(
+      CodexAdapterV2.codexThreadRuntimeParams({
+        mcpSession: { ...session, cuaDriverBlocked: true },
+      }),
+    );
+    // The whole dotted entry replaces the user's server, and it never starts.
+    assert.deepEqual(blocked, {
+      command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+      args: ["-e", ""],
+      env: { ELECTRON_RUN_AS_NODE: "1", GOAT_CUA_BLOCKED: "1" },
+      enabled: false,
+    });
+    // An interactive turn without computer use leaves the user's own config alone.
+    assert.isUndefined(entry(CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: session })));
+  });
+
+  it("resolves cua-driver to the lease proxy even when the user defines one", () => {
+    const proxy: M.CuaDriverMcpConfiguration = {
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      environment: [{ name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1:43123/api" }],
+    };
+    const leased = { ...session, cuaDriver: proxy, cuaDriverOverridesUserConfig: true };
+    assert.deepEqual(
+      entry(CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: leased, userCuaDriver: true })),
+      {
+        command: "/goat/node",
+        args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+        env: { GOAT_CUA_LEASE_URL: "http://127.0.0.1:43123/api" },
+      },
+    );
+  });
+});
+
 describe("CodexAdapterV2 context usage", () => {
   it("uses the current context rather than cumulative processed tokens", () => {
     const usage = CodexAdapterV2.codexProviderTurnTokenUsage(

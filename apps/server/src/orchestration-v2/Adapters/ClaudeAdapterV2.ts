@@ -1378,7 +1378,11 @@ export function makeClaudeQueryOptions(input: {
       append: [
         buildRuntimeInstructions({
           harness: "Claude Code",
-          computerUse: input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined,
+          computerUse:
+            input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
+            !McpProviderSession.isBlockedCuaServer(
+              input.mcpServers[McpProviderSession.CUA_MCP_SERVER_NAME],
+            ),
         }) +
           "\n\n" +
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
@@ -1549,6 +1553,19 @@ export function claudeMcpQueryOverrides(input: {
   const cuaServers = input.readOnlySandbox ? {} : McpProviderSession.cuaStdioMcpServers(session);
   const cuaAllowedTools =
     Object.keys(cuaServers).length === 0 ? [] : [CLAUDE_CUA_MCP_TOOL_WILDCARD];
+  // Claude merges its settings' MCP servers with these by name; an unattended turn without a
+  // lease takes the name so a user's own `cua-driver` cannot start, and nothing is preapproved.
+  const blockedServers =
+    session.cuaDriverBlocked === true && Object.keys(cuaServers).length === 0
+      ? {
+          [McpProviderSession.CUA_MCP_SERVER_NAME]: {
+            type: "stdio" as const,
+            command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+            args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
+            env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
+          },
+        }
+      : {};
   return {
     allowedTools: Array.from(
       new Set([
@@ -1573,6 +1590,7 @@ export function claudeMcpQueryOverrides(input: {
         timeout: CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS,
       },
       ...cuaServers,
+      ...blockedServers,
     },
     // Only the proxy exemption travels in the environment; the credential stays in the header.
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
@@ -9329,11 +9347,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (tool) => !tool.startsWith("mcp__goat__memory_"),
             ),
           });
-          const cuaKey = McpProviderSession.cuaDriverKey(
-            mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] === undefined
-              ? undefined
-              : mcpSession?.cuaDriver,
-          );
+          const cuaServer = mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME];
+          const cuaKey = McpProviderSession.isBlockedCuaServer(cuaServer)
+            ? "blocked"
+            : McpProviderSession.cuaDriverKey(
+                cuaServer === undefined ? undefined : mcpSession?.cuaDriver,
+              );
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -9603,7 +9622,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         // computer use rules from the first prompt after it was attached.
         const withComputerUseNotice = (message: SDKUserMessage, query: ClaudeLiveQueryContext) =>
           Effect.sync(() => {
-            if (query.cuaDriverKey === "" || query.computerUseInstructed) return message;
+            if (
+              query.cuaDriverKey === "" ||
+              query.cuaDriverKey === "blocked" ||
+              query.computerUseInstructed
+            )
+              return message;
             query.computerUseInstructed = true;
             return appendClaudeUserText(message, COMPUTER_USE_INSTRUCTIONS);
           });

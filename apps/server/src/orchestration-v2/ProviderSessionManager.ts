@@ -5,6 +5,7 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
+  COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
   type AuthEnvironmentScope,
@@ -55,6 +56,8 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -385,6 +388,40 @@ export const layerWithOptions = (
        * turn.
        */
       const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+      /** Absent only in test assemblies; without it every turn counts as unleased. */
+      const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+      const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
+        ComputerUseOrigin.computerUseOrigin(
+          {
+            channelOrigin: (id) =>
+              Option.isSome(computerUseLeases)
+                ? ComputerUseOrigin.originRead(computerUseLeases.value.channelOrigin(id))
+                : Effect.succeed(undefined),
+            thread: (id) =>
+              ComputerUseOrigin.originRead(
+                projectionStore.getThread(id).pipe(
+                  Effect.map((thread) => ({
+                    createdAt: thread.createdAt,
+                    lineage: thread.lineage,
+                    launchedBy: thread.launchedBy,
+                  })),
+                ),
+              ),
+            runs: (id) =>
+              ComputerUseOrigin.originRead(
+                projectionStore
+                  .getThreadRecords(id, ["runs"])
+                  .pipe(Effect.map((records) => records.runs)),
+              ),
+            message: (id, messageId) =>
+              ComputerUseOrigin.originRead(
+                projectionStore
+                  .getThreadRecords(id, ["messages"], { messageIds: [messageId] })
+                  .pipe(Effect.map((records) => records.messages[0])),
+              ),
+          },
+          { threadId, runId },
+        );
       const memoryPolicy = yield* Effect.serviceOption(
         ServerSettings.MemoryProviderCommittedPolicy,
       );
@@ -690,6 +727,7 @@ export const layerWithOptions = (
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
+                const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
                 const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
                   threadId,
                   driver: yield* registry.get(providerInstanceId).pipe(
@@ -698,6 +736,16 @@ export const layerWithOptions = (
                   ),
                   interactionMode: preparedInput.interactionMode,
                   readOnly,
+                  origin: computerUseOrigin,
+                  lease:
+                    computerUseOrigin._tag === "unattended" && Option.isSome(computerUseLeases)
+                      ? yield* computerUseLeases.value
+                          .active(threadId)
+                          .pipe(Effect.orElseSucceed(() => Option.none()))
+                      : Option.none(),
+                  proxy: Option.isSome(computerUseLeases)
+                    ? computerUseLeases.value.proxy
+                    : undefined,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
@@ -727,7 +775,9 @@ export const layerWithOptions = (
                     resolved.memoryPolicy?.grant === grant &&
                     resolved.memoryPolicy.policyEpoch === committed.epoch
                   ) {
-                    yield* mcpSessions.set(ComputerUse.withComputerUse(existing, computerUse));
+                    yield* mcpSessions.set(
+                      ComputerUse.withComputerUse(existing, computerUse, COMPUTER_USE_LEASE_ROUTE),
+                    );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -762,7 +812,13 @@ export const layerWithOptions = (
                   yield* mcpSessionRegistry.revokeThread(threadId, {
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
-                yield* mcpSessions.set(ComputerUse.withComputerUse(credential.config, computerUse));
+                yield* mcpSessions.set(
+                  ComputerUse.withComputerUse(
+                    credential.config,
+                    computerUse,
+                    COMPUTER_USE_LEASE_ROUTE,
+                  ),
+                );
                 yield* Ref.update(
                   sessions,
                   (current) =>

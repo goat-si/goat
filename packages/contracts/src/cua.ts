@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HandoffSummary } from "./handoff.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -74,3 +75,55 @@ export const DesktopCuaVerification = Schema.Struct({
   steps: Schema.Array(CuaVerificationStep),
 });
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
+
+/**
+ * What the computer use lease proxy hears from its own server about the lease it was started
+ * for, one JSON object per line. Anything other than "active" for that handoff ends it.
+ */
+export const ComputerUseLeaseUpdate = Schema.Union([
+  Schema.Struct({
+    state: Schema.Literal("active"),
+    handoffId: TrimmedNonEmptyString,
+    expiresAt: Schema.String,
+  }),
+  Schema.Struct({
+    state: Schema.Literal("ended"),
+    reason: Schema.Literals(["expired", "revoked", "replaced", "disabled", "unauthorized"]),
+  }),
+]);
+export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
+
+/** Path the proxy reads lease updates from, on the server that issued its MCP credential. */
+export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+
+export const ComputerUseRequestInput = Schema.Struct({
+  purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(500)).annotate({
+    description:
+      "What you will do on the screen and why, in one or two sentences. The person sees it before approving.",
+  }),
+  minutes: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 120 })).annotate({
+      description: "How long the admission lasts after the request. Default 30, at most 120.",
+    }),
+  ),
+});
+export type ComputerUseRequestInput = typeof ComputerUseRequestInput.Type;
+
+export const ComputerUseRequestResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("available"),
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("needs_human"),
+    handoff: HandoffSummary,
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("refused"),
+    reason: Schema.Literals(["disabled", "unsupported", "held", "not_unattended"]),
+    holderThreadId: Schema.optionalKey(ThreadId),
+    message: Schema.String,
+  }),
+]);
+export type ComputerUseRequestResult = typeof ComputerUseRequestResult.Type;

@@ -89,10 +89,14 @@ import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 
 const toolkits = {
   attachment: AttachmentToolkit,
   channel: ChannelToolkit,
+  computerUse: ComputerUseToolkit,
   note: NoteToolkit,
   connection: ConnectionToolkit,
   device: DeviceToolkit,
@@ -128,6 +132,8 @@ const dependencies = Layer.mergeAll(
   Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+  Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
+  Layer.mock(Handoffs.Handoffs)({}),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),
@@ -221,7 +227,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(174); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, and notes tools.
+  expect(entries).toHaveLength(175); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, and computer use tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);

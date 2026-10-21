@@ -1390,7 +1390,7 @@ export const CODEX_THREAD_CONFIG = {
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
-function codexThreadRuntimeParams(input: {
+export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -1413,12 +1413,21 @@ function codexThreadRuntimeParams(input: {
     ...(!memory.write ? ["memory_upsert", "memory_forget", "memory_revert_resolution"] : []),
   ];
   const cuaDriver = codexManagedCuaDriver(mcpSession, input.userCuaDriver === true);
+  // Codex merges a dotted thread-config entry over the user's own `cua-driver`; disabling the
+  // whole entry keeps theirs from running for an unattended turn without a lease.
   const cuaServer =
     cuaDriver !== undefined
       ? McpProviderSession.cuaCodexMcpServer(cuaDriver)
-      : input.previousCuaDriver === undefined
-        ? undefined
-        : { ...McpProviderSession.cuaCodexMcpServer(input.previousCuaDriver), enabled: false };
+      : input.previousCuaDriver !== undefined
+        ? { ...McpProviderSession.cuaCodexMcpServer(input.previousCuaDriver), enabled: false }
+        : mcpSession?.cuaDriverBlocked === true
+          ? {
+              command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+              args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
+              env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
+              enabled: false,
+            }
+          : undefined;
   return {
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
@@ -1954,7 +1963,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           cuaDriver: CuaDriverMcpConfiguration | undefined,
         ) => {
           const { read, write, source } = McpProviderSession.memoryToolAvailability(config);
-          return `${config.providerSessionId}:${read}:${write}:${source}:${McpProviderSession.cuaDriverKey(cuaDriver)}`;
+          return `${config.providerSessionId}:${read}:${write}:${source}:${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`;
         };
         const credentialsByThread = new Map<string, string>();
         /** The managed driver each live native thread's config carries now. */
