@@ -119,6 +119,12 @@ to check out.
 
 ## Providers
 
+`apps/server/src/opencodex/OpenCodexInventory.ts` reads this machine's OpenCodex through
+loopback health/readiness probes and read-only CLI status commands. It defaults existing
+installs to adopted ownership and caches discovery for host-status polling. Its optional
+`metrics.opencodex` travels through the existing host-status fan-out; older hosts omit it.
+Child link records remain Home-owned, so a missing Child link directory is normal.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.
