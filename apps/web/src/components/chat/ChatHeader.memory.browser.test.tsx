@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
@@ -30,7 +29,8 @@ vi.mock("../../state/session", async (original) => ({
   useEnvironmentScope: () => useSyncExternalStore(subscribe, () => state.allowed),
   readEnvironmentScope: () => state.allowed,
 }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
   useNavigate: () => async (input: { to: string; search: Record<string, unknown> }) => {
     const query = new URLSearchParams(
       Object.entries(input.search)

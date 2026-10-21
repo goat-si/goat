@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+import { fakeTimers } from "../../../test/render";
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
@@ -148,7 +148,6 @@ afterEach(async () => {
   if (mounted) await act(async () => root.unmount());
   registry.dispose();
   container.remove();
-  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -208,7 +207,7 @@ describe("SSH human handoff", () => {
       targetPath: handoff.target.path,
     });
     expect(harness.open).not.toHaveBeenCalled();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    using _timers = fakeTimers();
     await publish(diagnosis);
     expect(container.textContent).toContain("Approved · GOAT is updating vps-1");
     expect(container.textContent).toContain("Checking providers");
@@ -277,7 +276,7 @@ it("shows the environment guidance only after the current operation completes", 
 });
 it("refreshes waiting hosts every ten seconds", async () => {
   await render();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  using _timers = fakeTimers();
   await publish({
     kind: "available",
     host: "vps-1",
