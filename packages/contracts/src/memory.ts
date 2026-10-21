@@ -150,6 +150,16 @@ export const MEMORY_FTS_ALLOCATED_RESUME_BYTES = 100663296;
 export const MEMORY_STORE_BUDGET_BYTES = 104857600;
 /** Where a healthy memory store sits. Storage samples above it log a warning. */
 export const MEMORY_STORE_TARGET_BYTES = 52428800;
+/**
+ * Default ceiling for orchestration history: the state database minus memory and free pages.
+ * While history is above it, compaction trims bulky tool output in idle threads. Configurable
+ * as `storageCleanup.historyBudgetBytes`.
+ */
+export const ORCHESTRATION_HISTORY_BUDGET_BYTES = 2147483648;
+/** Threads untouched this long are eligible for trimming while history is over its budget. */
+export const ORCHESTRATION_HISTORY_TRIM_IDLE_MS = 604800000;
+/** Bulky history fields above this are cut to a head and tail that fit it, marker included. */
+export const ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES = 8192;
 export const MEMORY_STORAGE_SAMPLE_MAX_DAYS = 30;
 export const MEMORY_STORAGE_SAMPLE_MAX_UTF8_BYTES = 16384;
 export const MEMORY_STORAGE_SAMPLE_MAX_TABLES = 64;
