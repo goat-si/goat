@@ -126,6 +126,9 @@ jobs:
         run: |
           if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
             echo "HOME=$HOME"
+            # The runners share one host, so its load explains a slow job.
+            echo "nproc=$(nproc) loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+            readlink -f /bin/sleep
             test "$HOME" = "/opt/actions-runner/$RUNNER_NAME/_home"
             test -w "$HOME"
             echo "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64" >> "$GITHUB_ENV"
