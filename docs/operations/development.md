@@ -28,6 +28,12 @@ Git reads the hook from the checkout that runs `git worktree add`, so that check
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
 
+GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
+same script as the `goat.json` setup action, with its output in the launch view. They also leave
+`.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
+Read the references from the main checkout, or run `git sparse-checkout disable` in the worktree;
+`vpr sync:repos` does that itself before syncing.
+
 ## Choosing a dev process
 
 Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron client.

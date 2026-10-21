@@ -9,7 +9,7 @@ import {
 } from "@goat/contracts";
 
 // Indexed phrase search works at every supported scope size, unlike bounded substring scans.
-export const MEMORY_SEARCH_MODE = "fts" satisfies MemorySearchInput["mode"];
+const MEMORY_SEARCH_MODE = "fts" satisfies MemorySearchInput["mode"];
 
 /** Call only after binding lookup succeeds: a failed lookup cannot rule out an explicit key. */
 export function memoryProjectScope(

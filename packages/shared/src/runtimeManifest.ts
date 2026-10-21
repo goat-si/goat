@@ -14,7 +14,7 @@ import {
  * A reader refuses any other schema, so bump this only for a change an older reader would
  * misread. New optional fields do not need a bump.
  */
-export const RUNTIME_MANIFEST_SCHEMA = 1;
+const RUNTIME_MANIFEST_SCHEMA = 1;
 /** Sits at the archive root, next to the executable. */
 export const RUNTIME_MANIFEST_ARCHIVE_ENTRY = "goat-runtime.json";
 
@@ -26,9 +26,9 @@ export function runtimeManifestAssetName(version: string): string {
  * What this build's runtime can do for a client beyond its protocol ranges. `memory-scopes`:
  * `goat auth session issue` can grant `memory:*` scopes (#285).
  */
-export const RUNTIME_CAPABILITIES: ReadonlyArray<string> = ["memory-scopes"];
+const RUNTIME_CAPABILITIES: ReadonlyArray<string> = ["memory-scopes"];
 /** A runtime this client starts on its own initiative must have every one of these. */
-export const REQUIRED_RUNTIME_CAPABILITIES: ReadonlyArray<string> = ["memory-scopes"];
+const REQUIRED_RUNTIME_CAPABILITIES: ReadonlyArray<string> = ["memory-scopes"];
 
 const ProtocolRange = Schema.Struct({ min: Schema.Int, max: Schema.Int });
 

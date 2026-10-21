@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 /** Temp entries with this prefix are GOAT's own; one left in a sandbox is a test leak. */
-export const LEAK_PREFIX = "goat-";
+const LEAK_PREFIX = "goat-";
 const SANDBOX_PREFIX = "goat-test-";
 /** The temp directory the first sandbox was made in, so a reused worker never nests sandboxes. */
 const PARENT_ENV = "GOAT_TEST_PARENT_TMPDIR";

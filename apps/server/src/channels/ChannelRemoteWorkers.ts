@@ -95,14 +95,14 @@ import { BACKGROUND_HOLD } from "./ChannelWorkerReports.ts";
 import { newApprovals, observesUsageLimit, withApprovalHost } from "./channelWorkerObservation.ts";
 
 /** How long one report wait may block on the remote, and the transport's extra headroom. */
-export const REMOTE_WAIT_MS = 50_000;
+const REMOTE_WAIT_MS = 50_000;
 export const REMOTE_SETTLE_WAIT_MS = 10_000;
 const TRANSPORT_HEADROOM_MS = 40_000;
 const READ_TIMEOUT_MS = 60_000;
 const SEND_TIMEOUT_MS = 90_000;
 /** A launch whose thread or first run has not shown up by then is reported as failed. */
-export const LAUNCH_GRACE_MS = 300_000;
-export const MAX_LAUNCH_ATTEMPTS = 3;
+const LAUNCH_GRACE_MS = 300_000;
+const MAX_LAUNCH_ATTEMPTS = 3;
 /** Consecutive unreachable waits before the requester hears about it, once per outage. */
 export const OUTAGE_NOTICE_AFTER = 3;
 const BACKOFF_START_MS = 5_000;
@@ -357,7 +357,7 @@ const resumeNote = (fromHost: string, capturedAt: string) =>
   " (as one extra commit on top). New files over 2 MiB and new files that look like secrets were not copied. Check git status and git log before you go on.";
 
 /** Why a move was refused, written for whoever asked. */
-export const MOVE_COPY = {
+const MOVE_COPY = {
   taskNotFound: "I can't find that task.",
   notRemote: "That task runs on this machine, so there is nothing to move.",
   notRunning: "That task isn't running anymore.",

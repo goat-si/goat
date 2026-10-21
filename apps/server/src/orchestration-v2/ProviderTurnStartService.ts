@@ -115,7 +115,7 @@ export interface ProviderTurnStartServiceV2Shape {
 }
 
 /** A registered cloud task whose first run has not started: that run attaches, never submits. */
-export const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
+const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
   thread?.cloudTask?.attach === "registered" &&
   thread.firstRunOrdinal === null &&
   thread.nativeThreadRef !== null &&

@@ -230,7 +230,7 @@ const boundTail = (
  * The GOAT Bot turn a follow-up in this conversation steers: the newest turn whose coding thread
  * is running here. Messages in other conversations, or when no turn runs, start their own.
  */
-export const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
+const turnToSteer = (tasks: ReadonlyArray<ChannelTask>): ChannelTask | undefined =>
   tasks
     .filter(
       (task) =>

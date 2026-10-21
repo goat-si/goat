@@ -5,10 +5,10 @@ import type { HostStatusMetrics } from "@goat/contracts";
  * cards and the Fleet graph so both read one sample the same way.
  */
 
-export const clampPercent = (value: number) => Math.min(100, Math.max(0, Math.round(value)));
+const clampPercent = (value: number) => Math.min(100, Math.max(0, Math.round(value)));
 
 /** Used share of a total from what is still free. Null when the total is unknown. */
-export function usedPercent(availableBytes: number, totalBytes: number): number | null {
+function usedPercent(availableBytes: number, totalBytes: number): number | null {
   if (!(totalBytes > 0)) return null;
   return clampPercent((1 - availableBytes / totalBytes) * 100);
 }

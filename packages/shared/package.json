@@ -403,6 +403,10 @@
       "types": "./src/testing/symlinks.ts",
       "import": "./src/testing/symlinks.ts"
     },
+    "./testing/fileNames": {
+      "types": "./src/testing/fileNames.ts",
+      "import": "./src/testing/fileNames.ts"
+    },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
