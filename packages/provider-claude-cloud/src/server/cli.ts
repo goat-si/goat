@@ -80,14 +80,14 @@ const run = Effect.fn("ClaudeCloudCli.run")(function* (
   args: string[],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  yield* checkLogin(login);
+  const environment = yield* checkLogin(login);
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const child = yield* spawner
         .spawn(
           ChildProcess.make(login.binary, args, {
             cwd,
-            env: login.environment,
+            env: environment,
             shell: false,
             stdin: "ignore",
           }),
@@ -196,7 +196,7 @@ const make = Effect.gen(function* () {
   return ClaudeCloudCli.of({
     readiness: (login, cwd) => provideSpawner(probeReadiness(login, cwd)),
     start: Effect.fn("ClaudeCloudCli.start")(function* (login, cwd, prompt) {
-      yield* checkLogin(login);
+      const environment = yield* checkLogin(login);
       // --cloud accepts IDs and URLs as well as descriptions. Never reinterpret a create as attach.
       if (
         !prompt.trim() ||
@@ -270,7 +270,7 @@ const make = Effect.gen(function* () {
               cwd,
               cols: 120,
               rows: 30,
-              env: login.environment,
+              env: environment,
             })
             .pipe(
               Effect.mapError(
