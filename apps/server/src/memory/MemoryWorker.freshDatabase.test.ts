@@ -127,6 +127,10 @@ it.effect.each(["catch-up", "maintenance"] as const)(
       assert.strictEqual(error.code, "storage_failed");
       assert.strictEqual(error.stage, stage);
       assert.isDefined(error.cause);
+      // A failed sample is retried once per sample interval, so the started worker only
+      // reaches it again after that interval.
+      if (stage === "maintenance")
+        yield* TestClock.adjust(Maintenance.MEMORY_STORAGE_SAMPLE_INTERVAL_MS);
       yield* worker.start();
       yield* worker.drain;
       assert.isAtLeast(warnings.length, 1);
