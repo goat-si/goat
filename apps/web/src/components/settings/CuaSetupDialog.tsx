@@ -66,12 +66,15 @@ export function CuaSetupDialog({
     pending.current = true;
     setBusy(kind);
     setError(null);
-    try {
-      await action();
-    } finally {
+    const settle = () => {
       pending.current = false;
       setBusy(null);
-    }
+    };
+    // Promise handlers instead of try/finally, which React Compiler cannot optimize.
+    await action().then(settle, (cause: unknown) => {
+      settle();
+      setError(cause instanceof Error ? cause.message : "Something went wrong. Try again.");
+    });
   };
   const allow = (target: CuaPermission) =>
     run("allow", async () => {

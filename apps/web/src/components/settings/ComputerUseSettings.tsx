@@ -95,11 +95,7 @@ export function ComputerUseSetup({
       onVerify={async () => {
         const verifyDriver = window.desktopBridge?.verifyCuaDriver;
         if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
-        try {
-          return await verifyDriver();
-        } finally {
-          host.refresh();
-        }
+        return verifyDriver().finally(host.refresh);
       }}
       onClose={(outcome) => {
         host.refresh();
