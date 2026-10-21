@@ -140,11 +140,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("native runtime
             stderr: "Runtime command filesystem or spawn failure (EACCES).",
           });
           const retained = NodeFS.readdirSync(root);
-          expect(retained).toHaveLength(1);
-          expect(retained[0]).toMatch(/^goat-job-/u);
-          // The simulated removal failure remains visible; the fixture releases its owned artifact.
+          expect(retained.every((name) => name.startsWith("goat-job-"))).toBe(true);
+          // The independent cleanup owner may already have reclaimed the job. The injected
+          // caller-side failure must remain visible either way; no launch directory may remain.
           yield* Effect.promise(() =>
-            remove(NodePath.join(root, retained[0]!), { recursive: true }),
+            Promise.all(
+              retained.map((name) =>
+                remove(NodePath.join(root, name), { recursive: true, force: true }),
+              ),
+            ),
           );
           expect(NodeFS.readdirSync(root)).toEqual([]);
         }).pipe(Effect.provide(Runtime.layerHost), Effect.scoped),

@@ -405,6 +405,11 @@ process handle, so cleanup neither depends on a live parent PID nor selects a re
 PID. The replacement supervisor and server use the existing WMI detached launch,
 outside the command job, and survive the updater's exit.
 
+Before joining the job, the compiled supervisor starts an exact-artifact cleanup owner
+outside it. That process retains the supervisor's handle and removes its unique helper
+directory after exit, even when the original server drained first. Unlaunched preparation
+remains the original caller's responsibility.
+
 The supervisor writes `last-replacement.json` (status, target, previous version) in the
 launch state directory for every swap it runs. A `rolled-back` or `failed` record is the
 failed-target memory, so it covers swaps started by clients as well, and it survives the

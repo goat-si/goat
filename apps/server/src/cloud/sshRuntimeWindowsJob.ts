@@ -74,8 +74,43 @@ public static class GoatRuntimeJob {
     finally { target.Dispose(); }
   }
 
+  static void StartCleanup() {
+    var directory = Path.GetDirectoryName(typeof(GoatRuntimeJob).Assembly.Location);
+    var encodedDirectory = Convert.ToBase64String(Encoding.UTF8.GetBytes(directory));
+    string script;
+    using (var self = Process.GetCurrentProcess()) {
+      script = "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; " +
+        "$owner = [Diagnostics.Process]::GetProcessById(" + self.Id + "); $null = $owner.Handle; " +
+        "$directory = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encodedDirectory + "')); " +
+        "[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); $owner.WaitForExit(); $owner.Dispose(); " +
+        "try { [IO.Directory]::Delete($directory, $true) } catch [IO.DirectoryNotFoundException] { }";
+    }
+    var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+      "WindowsPowerShell", "v1.0", "powershell.exe");
+    var start = new ProcessStartInfo(powershell,
+      "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script)));
+    start.UseShellExecute = false;
+    start.CreateNoWindow = true;
+    start.WorkingDirectory = Path.GetPathRoot(directory);
+    start.RedirectStandardInput = true;
+    start.RedirectStandardOutput = true;
+    start.RedirectStandardError = true;
+    using (var cleanup = Process.Start(start)) {
+      cleanup.StandardInput.Close();
+      var ready = cleanup.StandardOutput.ReadLineAsync();
+      if (!ready.Wait(30000) || ready.Result != "ready") {
+        if (!cleanup.HasExited) cleanup.Kill();
+        cleanup.WaitForExit();
+        throw new InvalidOperationException("Cleanup owner did not become ready");
+      }
+    }
+  }
+
   public static void Run(string command, string[] args) {
     try {
+      // The cleanup process must start outside this job and retain our HANDLE before the
+      // command can drain its original server. It deletes only this invocation's artifact.
+      StartCleanup();
       job = CreateJobObject(IntPtr.Zero, null);
       if (job == IntPtr.Zero) throw new Win32Exception();
       var limits = new ExtendedLimits();
