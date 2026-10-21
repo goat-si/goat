@@ -884,9 +884,10 @@ export const make = (
       owner?: Handoff["requestedBy"],
       requestGeneration = aliasGenerations.get(host) ?? 0,
       beforeRun?: Effect.Effect<void, HandoffError>,
+      authorizeCaller: ReturnType<typeof authorize> = authorize(caller, "environment:maintain"),
     ) =>
       Effect.gen(function* () {
-        yield* authorize(caller, "environment:maintain");
+        yield* authorizeCaller;
         if ((aliasGenerations.get(host) ?? 0) !== requestGeneration)
           return yield* new HandoffError({ reason: "expired" });
         const existing = jobs.get(host);
@@ -912,7 +913,7 @@ export const make = (
         };
         let diagnosing = false;
         const work = Effect.gen(function* () {
-          yield* authorize(caller, "environment:maintain");
+          yield* authorizeCaller;
           if ((aliasGenerations.get(host) ?? 0) !== requestGeneration)
             return yield* new HandoffError({ reason: "expired" });
           if (beforeRun) yield* beforeRun;
@@ -1122,7 +1123,20 @@ export const make = (
     };
     const prepare: SshHostSetup["Service"]["prepare"] = (input, caller) =>
       Effect.gen(function* () {
-        yield* authorize(caller, "environment:maintain");
+        yield* authorize(caller, "environment:maintain").pipe(
+          Effect.catchTags({
+            // A thread can never gain this grant, so say what it can do instead.
+            EnvironmentAuthorizationError: (error) =>
+              Effect.fail(
+                caller.kind === "mcp" && caller.scope.thread !== undefined
+                  ? new EnvironmentAuthorizationError({
+                      requiredScope: error.requiredScope,
+                      message: `${error.message} GOAT threads never hold it. Ask a person to prepare ${input.host} in Settings → Connections, or call goat_ssh_runtime_update: when_idle updates an idle host on its own, and now asks a person to approve.`,
+                    })
+                  : error,
+              ),
+          }),
+        );
         const generation = aliasGenerations.get(input.host) ?? 0;
         yield* validateManaged(input.host);
         return yield* Deferred.await(
@@ -1150,8 +1164,30 @@ export const make = (
             "Server client SSH runtime updates are not supported. Choose Update now in Settings → Connections on the desktop app that owns this connection.",
           );
         if ((input.mode ?? "when_idle") !== "now") {
-          yield* authorize(caller, "environment:maintain");
-          return yield* Deferred.await(yield* startJob(input.host, caller, true, false));
+          // An idle update drains only an owned, older runtime with no running work and never
+          // replaces a newer or foreign one, so a live, writable thread may start it without
+          // the maintenance grant threads never hold. Everyone else still needs that grant.
+          const authorizeIdle =
+            caller.scope.thread !== undefined &&
+            !caller.scope.grantedScopes?.includes("environment:maintain")
+              ? authorizeApprovalRequest(caller.scope)
+              : authorize(caller, "environment:maintain");
+          yield* authorizeIdle;
+          return yield* Deferred.await(
+            yield* startJob(
+              input.host,
+              caller,
+              true,
+              false,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              authorizeIdle,
+            ),
+          );
         }
         if (!caller.scope.thread) {
           yield* authorize(caller, "environment:maintain");

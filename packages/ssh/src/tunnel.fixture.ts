@@ -231,15 +231,22 @@ export const installArchivePsDouble = Effect.fn("test.installArchivePsDouble")(f
   pid: number,
   port: number,
   version: string,
+  /** A command that is not GOAT's managed invocation, for a server GOAT must not adopt. */
+  foreignCommand?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const bin = `${home}/.test/identity-bin`;
   yield* fs.makeDirectory(bin, { recursive: true });
+  const command =
+    foreignCommand ??
+    `$HOME/.goat/runtime/goat/versions/${version}/goat serve --host 127.0.0.1 --port ${port} --base-dir $HOME/.goat`;
   yield* fs.writeFileString(
     `${bin}/ps`,
     `#!/bin/sh
 if [ "$1 $2 $3 $4" = '-o command= -p ${pid}' ]; then
-  printf '%s\\n' "$HOME/.goat/runtime/goat/versions/${version}/goat serve --host 127.0.0.1 --port ${port} --base-dir $HOME/.goat"
+  # A test hands the server to a foreign owner by naming another command here.
+  if [ -f "$HOME/.test/foreign-command" ]; then exec cat "$HOME/.test/foreign-command"; fi
+  printf '%s\\n' "${command}"
 else
   exec /bin/ps "$@"
 fi
