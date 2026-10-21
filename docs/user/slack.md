@@ -46,6 +46,13 @@ GOAT Bot screen shows only a chip for the work and its final report.
   task or ask you when something needs changing. That rule is part of its
   instructions; GOAT does not block changes, so link people at a lower access
   level if they should not be able to make the bot change things.
+- GOAT Bot and work started from Slack never see or control this computer's
+  screen on their own, even when [computer use](./computer-use.md) is on. When
+  a task needs it, GOAT asks for approval in that task's thread, for a set time.
+  Someone allowed to change GOAT's settings approves it in the GOAT app on
+  desktop, web, or mobile; replying in Slack does not approve it. Approval
+  admits that thread until the time shown, not each action, and you can end it
+  early from the request.
 - Ask GOAT Bot about earlier work ("did the login PR merge?", "what did the
   docs thread do?", "when did I mention the lighthouse score?") and it looks
   it up itself and answers, without starting a coding agent. It reads the work

@@ -22,6 +22,35 @@ are already open; Pi picks them up the next time it starts. Plan mode and
 read-only sessions never get them. Agents running in the cloud and Muse Code do
 not get computer use, because it controls the computer that runs GOAT.
 
+## What agents can use
+
+Agents can see the screen and use the apps that were installed when computer use
+started. They cannot use GOAT's own windows, password managers such as
+Passwords, Keychain Access or 1Password, or the clipboard, and they cannot
+install anything, change computer use's settings, or close apps. To let agents
+use an app you installed later, turn computer use off and on again.
+
+These limits keep agents away from places they never need. They do not stop an
+agent from typing into an app it may use, so give agents work you would let
+them do at that keyboard.
+
+## Work that runs on its own
+
+Work nobody is watching does not get computer use by itself: GOAT Bot, work
+started from Slack or iMessage, scheduled and webhook tasks, and threads any of
+them start. When such a thread needs the screen, GOAT asks in that thread. The
+request names the thread, this computer, what the agent wants to do, and until
+when. Someone allowed to change this environment's settings approves it in a
+GOAT app; a reply in a chat channel does not count.
+
+Approving admits that thread until the time shown. It does not approve each
+action. Only one such thread uses the screen at a time, and threads you run
+yourself can still use it meanwhile, so the two may get in each other's way.
+Choose **End computer use** on the request in the thread to stop it early;
+turning computer use off also stops it. When the time runs out or you end it,
+GOAT stops the agent's computer use right away, even in the middle of an action
+sequence: the step already under way finishes, and nothing after it runs.
+
 ## macOS permissions
 
 On a Mac, GOAT needs **Accessibility** and **Screen Recording**. When you turn

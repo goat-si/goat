@@ -63,6 +63,10 @@
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
     },
+    "./computerUseGrant": {
+      "types": "./src/computerUseGrant.ts",
+      "default": "./src/computerUseGrant.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

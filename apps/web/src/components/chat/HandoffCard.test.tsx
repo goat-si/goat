@@ -635,3 +635,48 @@ describe("provider setup request", () => {
     expect(review?.disabled).toBe(true);
   });
 });
+
+describe("computer use grant", () => {
+  const NOW = Date.UTC(2026, 9, 21, 12, 0, 0);
+  const grant: Handoff = {
+    ...handoff,
+    title: "Allow computer use on mac-mini?",
+    reason: "GOAT Bot asks to check the build window.",
+    target: { environmentId, path: "computer_use.grant" },
+    state: "completed",
+    resolvedBy: "Jun's phone",
+    expiresAt: DateTime.makeUnsafe(NOW + 20 * 60_000),
+  };
+
+  it("shows how long an approved admission lasts and ends it early", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+    await render(grant);
+    expect(container.textContent).toContain("Allowed until");
+    expect(container.textContent).toContain("by Jun's phone");
+    await click("End computer use");
+    expect(harness.respond).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        threadId: grant.requestedBy.threadId,
+        handoffId: grant.handoffId,
+        action: "cancelled",
+      },
+    });
+  });
+
+  it("needs settings access to end it, and offers nothing once it ended", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+    harness.scopeAllowed = false;
+    await render(grant);
+    const end = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "End computer use",
+    );
+    expect(end?.disabled).toBe(true);
+    harness.scopeAllowed = true;
+    await render({ ...grant, state: "cancelled" });
+    expect(container.textContent).toContain("Ended by Jun's phone");
+    expect(container.textContent).not.toContain("End computer use");
+    await render({ ...grant, expiresAt: DateTime.makeUnsafe(NOW - 1_000) });
+    expect(container.textContent).toContain("Ended at its time limit");
+  });
+});

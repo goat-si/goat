@@ -210,6 +210,15 @@ start failed, and whether a Linux host runs Wayland. Settings on any client and 
 one-time prompt read it. A desktop that stops its driver on its own (`cuaDriverReport` with
 `stopped`) is restarting it, such as after new macOS grants, so that stop is not a failure.
 
+Both hosts start the driver in standard mode under the capability manifest from
+`packages/shared/src/cuaDriverManifest.ts`. Turns nobody directs (GOAT Bot, channel tasks,
+scheduled and webhook runs, and what they launch; `ComputerUseOrigin.ts`) get the driver only
+while their thread holds a lease: an approved `computer_use.grant` handoff before its expiry
+(`ComputerUseLeases.ts`), requested with `goat_computer_use_request` (`ComputerUseRequests.ts`).
+Such a turn's provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead
+of `cua-driver mcp`; it follows the lease over `/api/computer-use/lease`
+(`ComputerUseLeaseRoute.ts`) and kills its driver child when the lease ends.
+
 > Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
 
 ## Services
