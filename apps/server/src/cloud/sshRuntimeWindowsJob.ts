@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalTimers:off - Bounds the native compiler and waits for its close event.
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -109,6 +110,14 @@ public static class GoatRuntimeJob {
 }
 `;
 
+export class WindowsJobCompilationError extends Error {
+  readonly code: number | null;
+  constructor(reason: "start" | "exit" | "timeout", code: number | null) {
+    super(`Windows runtime job compilation failed: ${reason}.`);
+    this.code = code;
+  }
+}
+
 export async function windowsJobCommand(input: {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -140,20 +149,25 @@ Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64S
           "-EncodedCommand",
           Buffer.from(script, "utf16le").toString("base64"),
         ],
-        { env: input.env, windowsHide: true, stdio: ["ignore", "ignore", "pipe"], timeout: 30_000 },
+        { env: input.env, windowsHide: true, stdio: "ignore" },
       );
-      const stderr: Buffer[] = [];
-      compiler.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-      compiler.once("error", reject);
-      compiler.once("close", (code) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(
-                `Windows job compilation failed (${code}): ${Buffer.concat(stderr).toString("utf8")}`,
-              ),
-            ),
-      );
+      let failedToStart = false;
+      let timedOut = false;
+      compiler.once("error", () => {
+        failedToStart = true;
+      });
+      const deadline = setTimeout(() => {
+        timedOut = true;
+        compiler.kill();
+      }, 30_000);
+      compiler.once("close", (code) => {
+        clearTimeout(deadline);
+        // Even spawn errors must reach close before the temporary compiler output is removed.
+        if (timedOut) reject(new WindowsJobCompilationError("timeout", null));
+        else if (failedToStart) reject(new WindowsJobCompilationError("start", null));
+        else if (code !== 0) reject(new WindowsJobCompilationError("exit", code));
+        else resolve();
+      });
     });
     return { command, args: [input.command, ...input.args], dispose };
   } catch (error) {

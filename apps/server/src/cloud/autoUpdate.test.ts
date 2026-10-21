@@ -1,4 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Path from "effect/Path";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import * as RuntimeAdmission from "../runtimeAdmission.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import { expect, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ServerSelfUpdateError } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -103,6 +109,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
     readonly activated?: boolean;
     /** Run as a client-launched SSH runtime instead of under the service launcher. */
     readonly sshRuntime?: boolean;
+    readonly sshRuntimeService?: SshRuntimeAutoUpdate.SshRuntimeAutoUpdate["Service"];
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -205,7 +212,10 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
   });
   const autoUpdate = yield* AutoUpdate.make({ ownVersion: options.ownVersion ?? "1.0.0" }).pipe(
     Effect.provideService(ServerSelfUpdate.ServerSelfUpdate, selfUpdate),
-    Effect.provideService(SshRuntimeAutoUpdate.SshRuntimeAutoUpdate, sshRuntime),
+    Effect.provideService(
+      SshRuntimeAutoUpdate.SshRuntimeAutoUpdate,
+      options.sshRuntimeService ?? sshRuntime,
+    ),
     Effect.provideService(ServiceLauncherClient.ServiceLauncherClient, {
       managed: true,
       ...(options.lastUpdate === undefined ? {} : { lastUpdate: options.lastUpdate }),
@@ -253,6 +263,108 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
 });
 
 it.layer(NodeServices.layer)("server auto-update", (it) => {
+  // quarantine: #612 This case reaches native Windows compiler startup, not a platform mock.
+  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
+    "retries activation compiler failure at the next six-hour check without losing the scheduler",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-scheduler-compiler-" });
+        const config = yield* ServerConfig.ServerConfig.pipe(
+          Effect.provide(ServerConfig.layerTest(process.cwd(), path.join(home, ".goat"))),
+        );
+        const native = yield* SshRuntimeAutoUpdate.SshRuntimeHost.pipe(
+          Effect.provide(SshRuntimeAutoUpdate.layerHost),
+        );
+        const memory = yield* ProjectionStore.ProjectionStoreV2.pipe(
+          Effect.provide(ProjectionStore.layerMemory),
+        );
+        const admission = yield* RuntimeAdmission.RuntimeAdmission.pipe(
+          Effect.provide(RuntimeAdmission.layer),
+        );
+        let attempts = 0;
+        const runtime = yield* SshRuntimeAutoUpdate.make({
+          ownVersion: "1.0.0",
+          homeDir: home,
+          pid: 4242,
+          platform: "win32",
+          resolveGitBash: () => Effect.succeed("C:\\Program Files\\Git\\bin\\bash.exe"),
+        }).pipe(
+          Effect.provideService(ServerConfig.ServerConfig, config),
+          Effect.provideService(RuntimeAdmission.RuntimeAdmission, admission),
+          Effect.provideService(ProjectionStore.ProjectionStoreV2, {
+            ...memory,
+            getServerActivity: () => Effect.succeed("idle" as const),
+          }),
+          Effect.provide(
+            Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                automaticServerUpdates: true,
+              }),
+            }),
+          ),
+          Effect.provideService(SshRuntimeAutoUpdate.SshRuntimeHost, {
+            ...native,
+            readText: (file) =>
+              Effect.succeed(
+                file.endsWith("last-replacement.json")
+                  ? undefined
+                  : file.endsWith(".install-complete")
+                    ? stable
+                    : file.endsWith(".install-record")
+                      ? `${stable} archive-sha exe-sha https`
+                      : file.endsWith("managed")
+                        ? "managed"
+                        : file.endsWith("pid")
+                          ? "4242"
+                          : "runner",
+              ),
+            sha256: () => Effect.succeed("exe-sha"),
+            run: (input) =>
+              Effect.succeed({
+                code: 0,
+                stderr: "",
+                stdout:
+                  input.args[0] === "-s"
+                    ? `goat v${stable}`
+                    : input.args[0] === "__ssh-helper"
+                      ? `${stable} ${SSH_RUNTIME_PROTOCOL_VERSION} ${ORCHESTRATION_PROTOCOL_VERSION} 0 0`
+                      : JSON.stringify({ status: "ready", version: stable, launcherProtocol: 3 }),
+              }),
+            runDetached: (input) =>
+              Effect.suspend(() => {
+                attempts++;
+                return native.runDetached({
+                  ...input,
+                  env: { ...input.env, SystemRoot: path.join(home, "missing-windows") },
+                });
+              }),
+          }),
+        );
+        yield* TestClock.setTime(published + 10 * 24 * HOUR);
+        const h = yield* makeHarness({ sshRuntime: true, sshRuntimeService: runtime });
+        const failure = h
+          .awaitEvent("failed")
+          .pipe(
+            Effect.raceFirst(
+              Fiber.join(h.fiber).pipe(Effect.andThen(Effect.die("scheduler terminated"))),
+            ),
+          );
+        yield* TestClock.adjust(10 * MINUTE);
+        expect((yield* failure)[1]).toMatchObject({ stage: "activation" });
+        expect(attempts).toBe(1);
+        expect(yield* runtime.isUpdating).toBe(false);
+        yield* TestClock.adjust(6 * HOUR - 1);
+        expect(attempts).toBe(1);
+        yield* TestClock.adjust(1);
+        expect((yield* failure)[1]).toMatchObject({ stage: "activation" });
+        expect(attempts).toBe(2);
+        expect(yield* runtime.isUpdating).toBe(false);
+      }),
+  );
+
   it.effect(
     "waits for activation, then ten minutes, and requests an unconfirmed update with its actor",
     () =>

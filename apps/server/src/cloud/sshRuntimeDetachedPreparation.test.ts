@@ -6,7 +6,6 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as WindowsJob from "./sshRuntimeWindowsJob.ts";
 import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
@@ -112,16 +111,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "win32")("detached prepa
     Effect.gen(function* () {
       const root = yield* isolatedTemp;
       const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
-      const result = yield* Effect.exit(
-        host.runDetached({
-          shell: process.execPath,
-          script: "process.exit(99)",
-          args: [],
-          env: { ...process.env, SystemRoot: NodePath.join(root, "missing-windows") },
-          cwd: root,
-        }),
-      );
-      expect(Exit.isFailure(result)).toBe(true);
+      const result = yield* host.runDetached({
+        shell: process.execPath,
+        script: "process.exit(99)",
+        args: [],
+        env: { ...process.env, SystemRoot: NodePath.join(root, "missing-windows") },
+        cwd: root,
+      });
+      expect(result).toEqual({
+        code: null,
+        stdout: "",
+        stderr: "Windows runtime job compilation failed: start.",
+      });
       expect(NodeFS.readdirSync(root)).toEqual([]);
     }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost), Effect.scoped),
   );
