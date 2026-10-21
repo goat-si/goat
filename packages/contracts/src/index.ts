@@ -103,4 +103,5 @@ export * from "./memory.ts";
 export * from "./handoff.ts";
 
 export * from "./permissionProfiles.ts";
+export * from "./goatclawLanes.ts";
 export * from "./decisions.ts";
