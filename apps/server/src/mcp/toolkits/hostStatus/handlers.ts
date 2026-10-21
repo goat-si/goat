@@ -2,6 +2,7 @@ import type { GoatHostStatusInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HostHealthMonitor from "../../../fleet/health/HostHealthMonitor.ts";
+import * as PressureNudger from "../../../fleet/pressure/PressureNudger.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -34,7 +35,16 @@ export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
       const result = yield* status.read(scope, input);
       // Every read is also a health sample; conditions are additive for older clients.
       const health = yield* Effect.serviceOption(HostHealthMonitor.HostHealthMonitor);
-      return health._tag === "Some" ? yield* health.value.annotate(result) : result;
+      const annotated = health._tag === "Some" ? yield* health.value.annotate(result) : result;
+      // And a pressure reading, which later launch advice and notices use.
+      const pressure = yield* Effect.serviceOption(PressureNudger.PressureNudger);
+      if (pressure._tag === "None") return annotated;
+      yield* pressure.value.observe(annotated);
+      if (input.placement === undefined) return annotated;
+      return {
+        ...annotated,
+        placement: yield* pressure.value.rank(annotated.hosts, input.placement),
+      };
     }),
   ),
 });

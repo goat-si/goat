@@ -491,6 +491,19 @@ export function fleetAlerts(
         detail: "Update GOAT to report status",
       });
     }
+    // The host's own verdict, held with hysteresis there; agents running work on it are told too.
+    const pressure = entry.pressure;
+    if (row.tone === "ok" && pressure !== undefined && pressure.level !== "ok") {
+      const reason = pressure.reasons[0]?.message;
+      alerts.push({
+        key: row.key + ":pressure",
+        tone: pressure.level === "critical" ? "destructive" : "warning",
+        label: row.label,
+        detail:
+          (pressure.level === "critical" ? "Overloaded" : "Under heavy load") +
+          (reason === undefined ? "" : ", " + reason),
+      });
+    }
     // As in Settings > Hosts, only the protocol verdict warns; builds of different versions
     // work together. versionMismatch decides only when the fan-out machine predates verdicts.
     const version = entry.serverVersion === undefined ? "" : ", runs GOAT " + entry.serverVersion;

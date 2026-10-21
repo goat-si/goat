@@ -1,4 +1,5 @@
 import {
+  HostPressureAdvice,
   MemoryTaskGrantCeiling,
   PermissionProfile,
   ModelSelection,
@@ -186,6 +187,8 @@ export const ThreadLaunchSuccess = Schema.Struct({
   report: Schema.optional(
     Schema.Struct({ correlationId: RemoteReportBindingInput.fields.correlationId }),
   ),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
 });
 
 const ThreadLaunchTool = Tool.make(agentSurfaceRegistry["thread.launch"].name, {

@@ -587,6 +587,12 @@ surface at launch, and the cordon set is an input that T2's `Health` fills. Goal
 belong to T1's action claims and are not counted here. Service keys follow the repository's
 deterministic-key rule (`goat/fleet/resources/Placement`), not the shorter names above.
 
+**Now (pressure, ADR-0020).** Host status entries carry `pressure` (`ok`, `elevated`,
+`critical`), which each server derives for itself with hysteresis. `hostRefusal` refuses goal
+work on a critical host with `host_pressure`. `goat_host_status` with `placement` ranks hosts for
+one lane with `choosePlacement`'s weights plus load per core and an elevated penalty; goal
+placement still scores with `choosePlacement` alone.
+
 ## Fallback chains
 
 **Now.** No fallback chain exists in contracts or settings. A thread that fails with

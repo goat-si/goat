@@ -353,7 +353,10 @@
         "packages/contracts/src/remoteReports.ts",
         "apps/server/src/goatclaw/PermissionProfiles.ts",
         "apps/server/src/persistence/Migrations/097_PermissionProfiles.ts",
-        "packages/contracts/src/permissionProfiles.ts"
+        "packages/contracts/src/permissionProfiles.ts",
+        "apps/server/src/fleet/pressure/HostPressureMonitor.ts",
+        "apps/server/src/fleet/pressure/PressureNudger.ts",
+        "packages/contracts/src/hostPressure.ts"
       ]
     },
     {

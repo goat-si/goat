@@ -33,6 +33,7 @@ import {
   ProviderApprovalDecision,
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { HostPressureAdvice } from "./hostPressure.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -307,6 +308,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
     description:
       "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
   }),
+  /** Set when this machine is under resource pressure; see goat_host_status placement. */
+  pressure: Schema.optional(HostPressureAdvice),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -1191,6 +1194,8 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
   "conflict",
   // GOAT Bot runs on another environment in this cluster; the message names it.
   "not_home",
+  // fleet.pressure.admission is "block" and the target host is critical.
+  "host_pressure",
 ]);
 export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
 

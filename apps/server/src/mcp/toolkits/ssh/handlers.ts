@@ -24,6 +24,7 @@ import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
+import { admitLaunch } from "../../pressureAdmission.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 
 const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
@@ -277,6 +278,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
           runtimeMode: caller.limits.runtimeMode,
         });
         const runtimeMode = yield* resolveRuntimeMode(effective.runtimeMode, input.runtimeMode);
+        const pressure = yield* admitLaunch(input.host);
         const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
         // The thread on this machine that launches; an outside client has none to record.
         const launcher = caller.caller;
@@ -464,6 +466,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               return {
                 ...result,
                 watching,
+                ...(pressure === undefined ? {} : { pressure }),
                 notes: [
                   ...result.notes,
                   ...(watching && launcher === undefined

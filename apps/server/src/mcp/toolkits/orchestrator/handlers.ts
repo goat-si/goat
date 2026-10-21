@@ -9,6 +9,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
+import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
 import { readCaller, unavailable } from "../../threadAccess.ts";
 
@@ -49,7 +50,8 @@ const handlers = {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        return yield* service.delegateTask(scope, input);
+        const pressure = yield* admitLaunch(input.target?.host ?? null);
+        return withPressure(yield* service.delegateTask(scope, input), pressure);
       }),
     ),
   ),

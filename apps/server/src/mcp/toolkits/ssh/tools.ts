@@ -11,6 +11,7 @@ import {
   CloudMachineAlias,
   CloudMachinesCreateInput,
   CloudMachinesListResult,
+  HostPressureAdvice,
   ModelSelection,
   ProjectId,
   ThreadId,
@@ -268,6 +269,8 @@ const SshThreadLaunchTool = Tool.make(agentSurfaceRegistry["ssh.thread_launch"].
     /** Whether the calling thread will be told when the remote thread finishes. */
     watching: Schema.Boolean,
     notes: Schema.Array(Schema.String),
+    /** Set when that host was under resource pressure at its last status read. */
+    pressure: Schema.optional(HostPressureAdvice),
   }),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["ssh.thread_launch"]));
 

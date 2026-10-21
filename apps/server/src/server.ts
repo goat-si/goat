@@ -167,6 +167,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as FleetFallback from "./fleet/resources/Fallback.ts";
+import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
 import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -351,6 +352,9 @@ const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
 // One self-healing instance for the fleet tools and the goal controller: one host monitor and one
 // move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
 const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
+
+// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
+const layerFleetPressure = FleetPressure.layer.pipe(Layer.provide(layerFleetHealth));
 
 // Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
 // would open a second reader on the desktop telemetry fd.
@@ -1335,7 +1339,7 @@ const layerMakeRoutes = Layer.mergeAll(
     Ws.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(layerFleetHealth)),
+    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
     ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit,

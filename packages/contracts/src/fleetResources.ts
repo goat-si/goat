@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { HostPressureSettings } from "./hostPressure.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -101,6 +102,8 @@ export const FleetSettings = Schema.Struct({
   fallbackChains: Schema.optional(Schema.Record(FallbackChainId, FallbackChain)),
   /** Used by goals that name no chain. */
   defaultFallbackChain: Schema.optional(Schema.NullOr(FallbackChainId)),
+  /** Resource pressure thresholds, notices and launch admission (ADR-0020). On by default. */
+  pressure: Schema.optional(HostPressureSettings),
 });
 export type FleetSettings = typeof FleetSettings.Type;
 
@@ -114,6 +117,7 @@ export const PlacementRefusalCode = Schema.Literals([
   "host_cap",
   "global_cap",
   "goals_not_allowed",
+  "host_pressure",
   "placement_unavailable",
 ]);
 export type PlacementRefusalCode = typeof PlacementRefusalCode.Type;

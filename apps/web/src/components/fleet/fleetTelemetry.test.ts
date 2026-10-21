@@ -470,6 +470,42 @@ describe("fleetAlerts", () => {
       ["warning", "GOAT on box did not answer; the connection failed before a reply.", null],
     ]);
   });
+
+  it("reports hosts under resource pressure, critical first", () => {
+    const pressured = (
+      host: string,
+      level: "elevated" | "critical",
+      message: string,
+    ): HostStatusEntry => ({
+      ...entry(host),
+      pressure: {
+        level,
+        since: "2026-10-20T11:50:00.000Z",
+        reasons: [{ signal: "load", level, message }],
+        loadPerCore: null,
+        eventLoopDelayMs: null,
+      },
+    });
+    const rows = fleetHostRows({
+      machines: [machine("studio", { environmentId: studio })],
+      sshAliases: new Map(),
+      reports: reportsOf({
+        environmentId: studio,
+        hosts: [
+          entry(null),
+          pressured("box", "elevated", "load 2 per core (threshold 1.5)"),
+          pressured("laptop", "critical", "GOAT server stalled 26.4 s (threshold 5 s)"),
+        ],
+      }),
+      primaryEnvironmentId: studio,
+    });
+    expect(
+      fleetAlerts(rows, new Map(), NOW).map((alert) => [alert.label, alert.tone, alert.detail]),
+    ).toEqual([
+      ["laptop", "destructive", "Overloaded, GOAT server stalled 26.4 s (threshold 5 s)"],
+      ["box", "warning", "Under heavy load, load 2 per core (threshold 1.5)"],
+    ]);
+  });
 });
 
 describe("fleetThroughput", () => {

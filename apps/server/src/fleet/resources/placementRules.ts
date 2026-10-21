@@ -98,6 +98,13 @@ function hostRefusal(
     return refusal("not_ready", "status is stale");
   if (input.cordoned.has(entry.host)) return refusal("cordoned", "cordoned");
   if (!isGoal(input.owner)) return undefined;
+  // Like caps, pressure binds goal work only; a person may still launch there.
+  if (entry.pressure?.level === "critical")
+    return refusal(
+      "host_pressure",
+      "under critical resource pressure: " +
+        entry.pressure.reasons.map((reason) => reason.message).join(", "),
+    );
   const limits = settings.hosts?.[hostKey(entry.host)];
   if (limits?.allowGoals === false) return refusal("goals_not_allowed", "takes no goal work");
   const threads = hostThreads(entry) ?? 0;

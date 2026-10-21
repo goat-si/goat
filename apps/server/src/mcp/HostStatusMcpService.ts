@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import packageJson from "../../package.json" with { type: "json" };
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
@@ -109,6 +110,7 @@ const make = Effect.gen(function* () {
   // Optional so layers built for one tool need not run storage passes or process scans.
   const storage = yield* Effect.serviceOption(DatabaseStorage.DatabaseStorage);
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
+  const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
@@ -168,6 +170,8 @@ const make = Effect.gen(function* () {
     // Both are the last periodic reading; neither measures anything on this call.
     const storageHealth = Option.isSome(storage) ? yield* storage.value.health : null;
     const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
+    const pressure =
+      pressureMonitor._tag === "Some" ? yield* pressureMonitor.value.current : undefined;
     const entry = {
       host: null,
       reachability: "ok" as const,
@@ -183,6 +187,7 @@ const make = Effect.gen(function* () {
         ...(storageHealth === null ? {} : { storage: storageHealth }),
         ...(strayScan === null ? {} : { strays: strayScan }),
       },
+      ...(pressure === undefined ? {} : { pressure }),
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
     return entry;

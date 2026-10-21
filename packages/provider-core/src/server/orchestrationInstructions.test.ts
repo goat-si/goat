@@ -54,6 +54,11 @@ describe("T3 orchestration provider instructions", () => {
       assert.isBelow(new TextEncoder().encode(section).length, 4000);
     }
   });
+
+  it("asks agents to check host pressure before heavy lanes", () => {
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, "`goat_host_status` with `placement:{}`");
+    assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, '"Resource pressure:"');
+  });
 });
 
 it("explains question decisions and question-aware waits", () => {

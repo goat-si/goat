@@ -8,6 +8,7 @@ import * as Repositories from "../../../sourceControl/SourceControlRepositorySer
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { admitLaunch, withPressure } from "../../pressureAdmission.ts";
 import { newCommandId, readCaller, unavailable } from "../../threadAccess.ts";
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
 import { ProjectToolkit } from "./tools.ts";
@@ -60,7 +61,8 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         Effect.gen(function* () {
           const scope = yield* McpInvocationContext.McpInvocationContext;
           const launches = yield* ThreadLaunchMcpService.ThreadLaunchMcpService;
-          return yield* launches.launch(scope, input, modes);
+          const pressure = yield* admitLaunch(null);
+          return withPressure(yield* launches.launch(scope, input, modes), pressure);
         }),
     ),
   ),
