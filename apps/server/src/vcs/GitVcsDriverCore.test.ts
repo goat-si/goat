@@ -36,6 +36,8 @@ import {
   parseGitCheckoutProgressLine,
   splitNullSeparatedGitStdoutPaths,
   windowsLongPathConfigEnv,
+  existingBranchConflictDetail,
+  isSameWorktreePath,
   worktreeFolderName,
   worktreeListLinesToFields,
 } from "./GitVcsDriverCore.ts";
@@ -54,6 +56,44 @@ describe("worktreeFolderName", () => {
     assert.equal(worktreeFolderName("CON", "win32"), "CON-branch");
     assert.equal(worktreeFolderName("lpt1.txt", "win32"), "lpt1.txt-branch");
     assert.equal(worktreeFolderName("console", "win32"), "console");
+  });
+});
+
+describe("existing worktree branches", () => {
+  // Paths from the mini host, where a retried launch hit branch_already_exists.
+  const gitForm = "C:/Users/super/.goat/worktrees/goat/fix-issues-557-588-windows-fixtures";
+  const nodeForm =
+    "C:\\Users\\Super\\.goat\\worktrees\\goat\\fix-issues-557-588-windows-fixtures\\";
+
+  it("matches a Windows worktree across slash, case and trailing separator", () => {
+    assert.isTrue(isSameWorktreePath(gitForm, nodeForm, "win32"));
+    assert.isFalse(isSameWorktreePath(gitForm, `${nodeForm}-2`, "win32"));
+    assert.isFalse(isSameWorktreePath("/Users/a/wt", "/users/a/wt", "darwin"));
+    assert.isTrue(isSameWorktreePath("/Users/a/wt/", "/Users/a/wt", "linux"));
+  });
+
+  it("names the existing_worktree launch with a pasteable Windows path", () => {
+    const detail = existingBranchConflictDetail({
+      branch: "fix/issues-557-588-windows-fixtures",
+      problem: "has 1 commit that f045007ed does not",
+      worktreePath: nodeForm,
+      suggestedPath: nodeForm,
+    });
+    assert.include(detail, "Branch fix/issues-557-588-windows-fixtures already exists");
+    assert.deepStrictEqual(JSON.parse(/\{.*\}/u.exec(detail)![0]), {
+      type: "existing_worktree",
+      worktreePath: nodeForm,
+      branch: "fix/issues-557-588-windows-fixtures",
+    });
+    assert.include(
+      existingBranchConflictDetail({
+        branch: "fix/x",
+        problem: "has 2 commits that main does not",
+        worktreePath: null,
+        suggestedPath: "C:\\wt\\fix-x",
+      }),
+      'run git worktree add "C:\\wt\\fix-x" fix/x',
+    );
   });
 });
 
@@ -3746,6 +3786,172 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
         assert.notInclude(registered, "stale");
+      }),
+    );
+
+    it.effect("reuses the clean worktree an earlier attempt left on the branch", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "retry");
+        const request = {
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/retry",
+          baseRefName: initialBranch,
+        };
+        yield* driver.createWorktree(request);
+        yield* writeTextFile(cwd, "advance.txt", "base moved\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "advance base"]);
+
+        const plain = yield* Effect.flip(driver.createWorktree(request));
+        assert.equal(plain.reason, "branch_already_exists");
+
+        const outcomes: Array<unknown> = [];
+        const claimed: Array<string> = [];
+        const reused = yield* driver.createWorktree(request, {
+          reuseExistingBranch: true,
+          progress: {
+            onExistingBranch: (outcome) => Effect.sync(() => outcomes.push(outcome)),
+            onWorktreeClaimed: (claimedPath) => Effect.sync(() => claimed.push(claimedPath)),
+          },
+        });
+
+        assert.deepStrictEqual(reused.worktree, { path: worktreePath, refName: "feature/retry" });
+        assert.deepStrictEqual(outcomes, [{ worktree: "reused", fastForwarded: true }]);
+        assert.deepStrictEqual(claimed, []);
+        assert.equal(
+          yield* git(worktreePath, ["rev-parse", "HEAD"]),
+          yield* git(cwd, ["rev-parse", "HEAD"]),
+        );
+        assert.equal(
+          yield* fs.readFileString(path.join(worktreePath, "advance.txt")),
+          "base moved\n",
+        );
+      }),
+    );
+
+    it.effect("checks out an existing branch without commits of its own", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["branch", "feature/leftover"]);
+        const worktreesDirectory = yield* makeTmpDir("git-worktrees-");
+        const outcomes: Array<unknown> = [];
+        const claimed: Array<string> = [];
+
+        const created = yield* driver.createWorktree(
+          { cwd, path: null, refName: initialBranch, newRefName: "feature/leftover" },
+          {
+            worktreesDirectory,
+            reuseExistingBranch: true,
+            progress: {
+              onExistingBranch: (outcome) => Effect.sync(() => outcomes.push(outcome)),
+              onWorktreeClaimed: (claimedPath) => Effect.sync(() => claimed.push(claimedPath)),
+            },
+          },
+        );
+
+        const expected = path.join(worktreesDirectory, path.basename(cwd), "feature-leftover");
+        assert.equal(created.worktree.path, expected);
+        assert.deepStrictEqual(outcomes, [{ worktree: "added", fastForwarded: false }]);
+        assert.deepStrictEqual(claimed, [expected]);
+        assert.equal(yield* git(expected, ["branch", "--show-current"]), "feature/leftover");
+      }),
+    );
+
+    it.effect("refuses to reuse a branch with its own commits or a dirty worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const root = yield* makeTmpDir("git-worktrees-");
+        const reuse = (branch: string, at: string) =>
+          Effect.flip(
+            driver.createWorktree(
+              { cwd, path: at, refName: initialBranch, newRefName: branch },
+              { reuseExistingBranch: true },
+            ),
+          );
+
+        const committed = path.join(root, "committed");
+        yield* driver.createWorktree({
+          cwd,
+          path: committed,
+          refName: initialBranch,
+          newRefName: "feature/committed",
+        });
+        yield* writeTextFile(committed, "work.txt", "agent work\n");
+        yield* git(committed, ["add", "."]);
+        yield* git(committed, ["commit", "-m", "agent work"]);
+        const work = yield* git(committed, ["rev-parse", "HEAD"]);
+        const unique = yield* reuse("feature/committed", committed);
+        assert.equal(unique.reason, "branch_already_exists");
+        assert.include(unique.detail, `has 1 commit that ${initialBranch} does not`);
+        assert.include(unique.detail, '"type":"existing_worktree"');
+        assert.include(unique.detail, "feature/committed");
+        assert.include(unique.detail, path.basename(committed));
+        assert.equal(yield* git(committed, ["rev-parse", "HEAD"]), work);
+
+        const dirty = path.join(root, "dirty");
+        yield* driver.createWorktree({
+          cwd,
+          path: dirty,
+          refName: initialBranch,
+          newRefName: "feature/dirty",
+        });
+        yield* writeTextFile(dirty, "draft.txt", "unsaved\n");
+        const uncommitted = yield* reuse("feature/dirty", dirty);
+        assert.include(uncommitted.detail, "has uncommitted changes");
+        assert.equal(yield* fs.readFileString(path.join(dirty, "draft.txt")), "unsaved\n");
+
+        const elsewhere = yield* reuse("feature/dirty", path.join(root, "other"));
+        assert.include(elsewhere.detail, "outside this launch's worktree folder");
+
+        yield* git(cwd, ["branch", "feature/unpicked", work]);
+        const noWorktree = yield* reuse("feature/unpicked", path.join(root, "unpicked"));
+        assert.include(noWorktree.detail, "run git worktree add");
+        assert.equal(yield* fs.exists(path.join(root, "unpicked")), false);
+      }),
+    );
+
+    it.effect("rolls back the branch and worktree when adding the worktree fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        // Git keeps the new branch and worktree when post-checkout fails the add.
+        const hook = path.join(cwd, ".git/hooks/post-checkout");
+        yield* writeTextFile(cwd, ".git/hooks/post-checkout", "#!/bin/sh\nexit 1\n");
+        yield* fs.chmod(hook, 0o755);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "partial");
+        const request = {
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/partial",
+        };
+
+        yield* Effect.flip(driver.createWorktree(request, { reuseExistingBranch: true }));
+
+        assert.equal(yield* git(cwd, ["branch", "--list", "feature/partial"]), "");
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), "partial");
+        assert.equal(yield* fs.exists(worktreePath), false);
+
+        yield* fs.remove(hook);
+        const retried = yield* driver.createWorktree(request, { reuseExistingBranch: true });
+        assert.equal(retried.worktree.path, worktreePath);
       }),
     );
   });

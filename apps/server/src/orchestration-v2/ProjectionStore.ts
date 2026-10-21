@@ -170,6 +170,7 @@ export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 export type ProjectionRecoveryKind =
   | "queued-runs"
   | "runtime"
+  | "runtime-cleanup"
   | "subagent-results"
   | "delegated-completions";
 
@@ -690,6 +691,7 @@ function needsRecovery(
       );
     }
     case "runtime":
+    case "runtime-cleanup":
       return (
         projection.runs.some(
           (run) =>
@@ -699,7 +701,8 @@ function needsRecovery(
         projection.runtimeRequests.some((request) => request.status === "pending") ||
         projection.subagents.some(
           (subagent) =>
-            subagent.origin === "provider_native" &&
+            (subagent.origin === "provider_native" ||
+              (subagent.origin === "app_owned" && subagent.remote !== undefined)) &&
             ["pending", "running", "waiting"].includes(subagent.status),
         ) ||
         projection.providerSessions.some(
@@ -713,7 +716,16 @@ function needsRecovery(
           (item) =>
             ["command_execution", "dynamic_tool", "subagent"].includes(item.type) &&
             ["pending", "running", "waiting"].includes(item.status) &&
-            !projection.runs.some((run) => run.id === item.runId && run.status === "rolled_back"),
+            !projection.runs.some(
+              (run) =>
+                run.id === item.runId &&
+                (kind === "runtime-cleanup"
+                  ? run.status === "rolled_back"
+                  : ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+                      run.status,
+                    ) ||
+                    (run.status === "queued" && run.queueHeld === true)),
+            ),
         )
       );
   }
@@ -4090,6 +4102,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ELSE 0 END
               `;
             case "runtime":
+            case "runtime-cleanup":
               return sql`
                 WITH pending_provider_threads AS MATERIALIZED (
                   SELECT provider_thread_id, thread_id, owner_node_id
@@ -4149,15 +4162,25 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND node.status IN ('pending', 'running', 'waiting')
                   )
                 UNION
-                -- No native subagent outlives the provider process that ran it.
+                -- Native tasks need process-loss cleanup; remote tasks can outlive their run.
                 SELECT thread_id FROM orchestration_v2_projection_subagents
-                WHERE origin = 'provider_native'
+                WHERE (origin = 'provider_native'
+                  OR (origin = 'app_owned' AND CASE WHEN json_valid(payload_json)
+                    THEN json_type(payload_json, '$.remote') = 'object' ELSE 0 END))
                   AND status IN ('pending', 'running', 'waiting')
                 UNION
+                -- Finished-run items need cleanup, but must not make a stopped
+                -- family live for dev seeding. Keep missing/runless items recoverable.
                 SELECT item.thread_id FROM orchestration_v2_projection_turn_items AS item
                 WHERE NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_runs AS run
-                    WHERE run.run_id = item.run_id AND run.status = 'rolled_back'
+                    WHERE run.run_id = item.run_id AND ${
+                      kind === "runtime-cleanup"
+                        ? sql`run.status = 'rolled_back'`
+                        : sql`(run.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+                        OR (run.status = 'queued' AND CASE WHEN json_valid(run.payload_json)
+                          THEN json_extract(run.payload_json, '$.queueHeld') = 1 ELSE 0 END))`
+                    }
                   )
                   AND type IN ('command_execution', 'dynamic_tool', 'subagent')
                   AND status IN ('pending', 'running', 'waiting')

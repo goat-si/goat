@@ -42,9 +42,8 @@ export function NoteConflictRouteScreen({
       navigation.goBack();
     } catch (error) {
       setError(notesError(error));
-    } finally {
-      setPending(false);
     }
+    setPending(false);
   };
   return (
     <View className="flex-1 bg-sheet">

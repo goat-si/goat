@@ -376,6 +376,12 @@ describe("fleetHostStatusNeeded", () => {
     expect(needed({ dispatchers: new Set([b]) })).toBe(true);
   });
 
+  it("reads an environment the primary cannot cover without waiting for the primary", () => {
+    expect(needed({ primaryHosts: null, sshAliases: [] })).toBe(true);
+    expect(needed({ primaryHosts: null })).toBe(false);
+    expect(needed({ primaryHosts: null, dispatchers: new Set([b]) })).toBe(true);
+  });
+
   it("always reads the primary", () => {
     expect(needed({ environmentId: primary })).toBe(true);
   });

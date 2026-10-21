@@ -263,8 +263,33 @@ describe("goat pre-push workflow guard", () => {
     const refused = hosted.hook(hosted.record(hosted.sha));
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      "jobs.scope.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.scope.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     );
+  });
+
+  const trustedRunner =
+    '${{ (github.event_name == \'workflow_dispatch\' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(\'["self-hosted","linux","x64","goat","epyc"]\') || \'ubuntu-24.04\' }}';
+
+  it("allows the trusted-run expression that keeps fork pull requests on the hosted image", () => {
+    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": trustedRunner }) });
+    expect(f.hook(f.record(f.sha)).status).toBe(0);
+  });
+
+  it.each([
+    [
+      "any pull request on EPYC",
+      trustedRunner.replace(
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "github.event_name == 'pull_request'",
+      ),
+    ],
+    ["a moving hosted fallback", trustedRunner.replace("'ubuntu-24.04'", "'ubuntu-latest'")],
+    ["the expression without its wrapper", trustedRunner.slice(4, -3)],
+  ])("rejects a runs-on expression with %s", (_name, runner) => {
+    const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": runner }) });
+    const result = f.hook(f.record(f.sha));
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("jobs.ci.runs-on must be ubuntu-24.04");
   });
 
   it.each([
@@ -330,7 +355,7 @@ describe("goat pre-push workflow guard", () => {
     const result = f.hook(f.record(f.sha), {}, ["origin", "git@github.com:Goat-Si/Goat.git"]);
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(
-      `goat pre-push: ${workflowPath} in refs/heads/test (${f.sha}): jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc; refusing to push\n${advice}\n`,
+      `goat pre-push: ${workflowPath} in refs/heads/test (${f.sha}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`,
     );
     expect(f.ghCalls()).toBe(1);
   });
@@ -455,7 +480,7 @@ describe("goat pre-push workflow guard", () => {
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(
-      `goat pre-push: ${workflowPath} in refs/heads/bad (${unchangedBad}): jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc; refusing to push\n${advice}\n`,
+      `goat pre-push: ${workflowPath} in refs/heads/bad (${unchangedBad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`,
     );
     expect(bad).not.toBe(unchangedBad);
     expect(f.ghCalls()).toBe(1);
@@ -465,7 +490,7 @@ describe("goat pre-push workflow guard", () => {
     [
       "hosted runner",
       workflow({ ...baseJob, "runs-on": "ubuntu-latest" }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "hosted runner with quoted runs-on and tagged on keys",
@@ -473,7 +498,7 @@ describe("goat pre-push workflow guard", () => {
         .replace("on:", "!!str on:")
         .replace("runs-on:", '"runs-on":')
         .replace("[self-hosted, linux, x64, goat, epyc]", "ubuntu-latest"),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "disallowed trigger with tagged on key",
@@ -560,17 +585,17 @@ describe("goat pre-push workflow guard", () => {
     [
       "duplicate labels",
       workflow({ ...baseJob, "runs-on": ["self-hosted", "linux", "x64", "goat", "goat"] }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "missing labels",
       workflow({ ...baseJob, "runs-on": runnerLabels.slice(1) }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "extra label",
       workflow({ ...baseJob, "runs-on": [...runnerLabels, "ubuntu-latest"] }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "nonliteral label",
@@ -578,12 +603,12 @@ describe("goat pre-push workflow guard", () => {
         ...baseJob,
         "runs-on": ["self-hosted", "linux", "x64", "goat", "${{ inputs.runner }}"],
       }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "nonstring label",
       workflow({ ...baseJob, "runs-on": ["self-hosted", "linux", "x64", "goat", 42] }),
-      "jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc",
+      "jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression",
     ],
     [
       "empty steps",
@@ -681,7 +706,7 @@ describe("goat pre-push workflow guard", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toBe(
         mode === "hosted runner"
-          ? `goat pre-push: ${workflowPath} in refs/heads/test (${bad}): jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc; refusing to push\n${advice}\n`
+          ? `goat pre-push: ${workflowPath} in refs/heads/test (${bad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push\n${advice}\n`
           : `goat pre-push: ${extraPath} in refs/heads/test is not disabled on goat-si/goat\n${advice}\n`,
       );
       expect(f.ghCalls()).toBe(1);
@@ -750,7 +775,7 @@ exit 1
     );
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain(
-      `goat pre-push: ${workflowPath} in HEAD (${bad}): jobs.ci.runs-on must be ubuntu-24.04 or exactly self-hosted, linux, x64, goat, epyc; refusing to push`,
+      `goat pre-push: ${workflowPath} in HEAD (${bad}): jobs.ci.runs-on must be ubuntu-24.04, exactly self-hosted, linux, x64, goat, epyc, or the trusted-run EPYC expression; refusing to push`,
     );
     const absent = NodeChildProcess.spawnSync(
       gitExecutable,

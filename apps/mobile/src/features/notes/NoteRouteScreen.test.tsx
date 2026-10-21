@@ -149,6 +149,32 @@ beforeEach(() => {
 afterEach(() => act(() => root.unmount()));
 
 describe("note editor snapshot", () => {
+  it("keeps unsaved text and releases saving after storage fails so the edit can be retried", async () => {
+    const save = Promise.withResolvers<void>();
+    mocks.enqueue.mockReturnValueOnce(save.promise);
+    await act(async () => render());
+    act(() => button("Edit markdown").click());
+    act(() => type("keep this edit"));
+    act(() => button("Save on phone").click());
+    expect(button("Saving…").disabled).toBe(true);
+    expect(container.querySelector("textarea")?.disabled).toBe(true);
+
+    await act(async () => save.reject(new Error("Phone storage unavailable")));
+    expect(container.textContent).toContain("Phone storage unavailable");
+    expect(container.textContent).toContain("Unsaved edits");
+    expect(container.querySelector("textarea")?.value).toBe("keep this edit");
+    expect(container.querySelector("textarea")?.disabled).toBe(false);
+    expect(button("Save on phone").disabled).toBe(false);
+    expect(mocks.flush).not.toHaveBeenCalled();
+
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    expect(mocks.enqueue.mock.calls[1]?.[0]).toMatchObject({ body: "keep this edit" });
+    expect(mocks.flush).toHaveBeenCalledOnce();
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.textContent).not.toContain("Phone storage unavailable");
+  });
+
   it("updates the saved-on-phone status through send, conflict and acknowledgement", async () => {
     await act(async () => render());
     const scrollContent = container.querySelector('[data-testid="note-scroll-content"]');
