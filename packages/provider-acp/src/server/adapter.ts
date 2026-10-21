@@ -611,6 +611,10 @@ interface AcpMcpContext {
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly endpoint?: string;
   readonly authorization?: string;
+  /** The session's activation lists the managed `cua-driver` server. */
+  readonly computerUse?: boolean;
+  /** Identity of that driver (`cuaDriverKey`), empty when the session has none. */
+  readonly computerUseKey?: string;
 }
 
 function acpMcpContext(
@@ -623,7 +627,10 @@ function acpMcpContext(
   // Agents that advertise optional http support still routinely fail to wire
   // injected http servers through to their backend (codex-acp 1.2.0 and pi-acp
   // both drop them), so every ACP session gets the `goat acp-mcp-bridge` stdio
-  // server, which forwards JSON-RPC to T3's authenticated MCP endpoint.
+  // server, which forwards JSON-RPC to T3's authenticated MCP endpoint. The
+  // managed Cua Driver is already a stdio server, so it is listed in both
+  // forms: an agent with MCP-over-ACP receives only `acpServers`.
+  const cua = McpProviderSession.cuaAcpMcpServers(session);
   return {
     servers: [
       {
@@ -636,10 +643,13 @@ function acpMcpContext(
           { name: "GOAT_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
+      ...cua,
     ],
-    acpServers: [{ type: "acp", name: "goat", serverId: "goat" }],
+    acpServers: [{ type: "acp", name: "goat", serverId: "goat" }, ...cua],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
+    computerUse: cua.length > 0,
+    computerUseKey: McpProviderSession.cuaDriverKey(session.cuaDriver),
     // Agent instructions and terminal fallbacks written for older builds read the legacy names.
     processEnvironment: withLegacyEnvNames({
       GOAT_ACP_MCP_ENDPOINT: session.endpoint,
@@ -1434,6 +1444,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           itemIdentityVersion = thread.nativeMetadata?.itemIdentityVersion;
         };
         const terminalEnvironmentBySessionId = new Map<string, NodeJS.ProcessEnv>();
+        /**
+         * The Cua Driver each native session was activated with, by `cuaDriverKey`. A session
+         * activated without one has no entry, so `has` means the activation listed a driver.
+         */
+        const computerUseKeyBySessionId = new Map<string, string>();
         interface PendingTerminalEnvironment {
           readonly environment: NodeJS.ProcessEnv | undefined;
           readonly claimUnknownSession: boolean;
@@ -1467,6 +1482,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ): void => {
           const environment = mcpContext.processEnvironment;
           pendingTerminalEnvironment = null;
+          if (mcpContext.computerUse === true && mcpContext.computerUseKey)
+            computerUseKeyBySessionId.set(sessionId, mcpContext.computerUseKey);
+          else computerUseKeyBySessionId.delete(sessionId);
           if (environment === undefined) {
             terminalEnvironmentBySessionId.delete(sessionId);
           } else {
@@ -7261,6 +7279,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               text: buildRuntimeInstructions({
                 harness: flavor.runtimeHarness ?? driver,
                 model: turnInput.modelSelection.model,
+                // The server list is fixed when a session is activated, so a
+                // driver enabled later reaches the agent on its next activation.
+                computerUse: computerUseKeyBySessionId.has(sessionId),
               }),
             });
           }
@@ -7309,12 +7330,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // requests can never inherit the previously active thread's policy.
             latestRuntimePolicy = turnInput.runtimePolicy;
             const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
+            const currentMcpContext = yield* readMcpContext(turnInput.threadId);
+            // An agent keeps the stdio servers a session started with, even across session/load,
+            // so a session that loses or changes its driver (Plan, read-only, a new daemon) must
+            // run on a fresh agent process before this turn can start without the old connection.
+            const installedComputerUse = computerUseKeyBySessionId.get(requestedSessionId);
+            const computerUseChanged =
+              (installedComputerUse ?? "") !== (currentMcpContext.computerUseKey ?? "");
+            if (computerUseChanged && installedComputerUse !== undefined)
+              yield* Ref.set(runtimeRestartRequired, true);
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
             );
-            const currentMcpContext = yield* readMcpContext(turnInput.threadId);
             const installedEnvironment = terminalEnvironmentBySessionId.get(requestedSessionId);
             const attachmentChanged =
+              computerUseChanged ||
               installedEnvironment?.GOAT_ACP_MCP_AUTHORIZATION !==
                 currentMcpContext.authorization ||
               installedEnvironment?.GOAT_ACP_MCP_ENDPOINT !== currentMcpContext.endpoint;

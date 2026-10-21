@@ -429,6 +429,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Request", "Requesting", "Requested", "Codex Home approval"],
     "provider-diagnose",
   ),
+  goat_computer_use_request: tool(
+    ["Request", "Requesting", "Requested", "computer use approval"],
+    "environment-update",
+  ),
   goat_provider_diagnose: tool(
     ["Diagnose", "Diagnosing", "Diagnosed", "a provider"],
     "provider-diagnose",

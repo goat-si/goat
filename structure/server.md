@@ -220,8 +220,33 @@ Desktop servers send `cuaDriverRequest` on the desktop telemetry control pipe an
 ([desktop.md](desktop.md#computer-use-host)).
 
 Every host passes the driver's telemetry and update-check opt-outs through its environment
-allowlist, and every MCP descriptor the service returns carries all of them. Nothing attaches the
-driver to provider sessions yet.
+allowlist, and every MCP descriptor the service returns carries all of them.
+
+`apps/server/src/cua/ComputerUseAttachment.ts` is the one decision for whether a provider session
+gets the driver. `ProviderSessionManager` asks it on every MCP prepare, so every turn, and stores
+the answer as `cuaDriver` on the thread's `McpProviderSessionConfig`. Plan turns, read-only
+sandboxes and providers that do not run on this host get nothing, and those threads never start the
+driver. Adapters attach `cuaDriver` as a stdio MCP server named `cua-driver` and add the
+`<computer_use>` instructions (`packages/provider-core/src/server/runtimeInstructions.ts`) only
+when the provider actually has it. Which adapters attach, and when a change reaches a live session,
+is in ADR-0020.
+
+`server.checkComputerUse` reports the host's platform, whether a driver is running, why the last
+start failed, whether a Linux host runs Wayland, and whether the host has a screen the driver can
+use (`apps/server/src/cua/CuaDisplayCapability.ts`). Settings on any client and the desktop's
+one-time prompt read it; `goat_host_status` and `goat_provider_host_matrix` carry the same
+answer per host as `computerUse`. Turning `enableCua` on where the screen is unusable fails, and
+every driver start checks the screen again. A desktop that stops its driver on its own (`cuaDriverReport` with
+`stopped`) is restarting it, such as after new macOS grants, so that stop is not a failure.
+
+Both hosts start the driver in standard mode under the capability manifest from
+`packages/shared/src/cuaDriverManifest.ts`. Turns nobody directs (GOAT Bot, channel tasks,
+scheduled and webhook runs, and what they launch; `ComputerUseOrigin.ts`) get the driver only
+while their thread holds a lease: an approved `computer_use.grant` handoff before its expiry
+(`ComputerUseLeases.ts`), requested with `goat_computer_use_request` (`ComputerUseRequests.ts`).
+Such a turn's provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead
+of `cua-driver mcp`; it follows the lease over `/api/computer-use/lease`
+(`ComputerUseLeaseRoute.ts`) and kills its driver child when the lease ends.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
 

@@ -54,6 +54,7 @@ import { cloudReadinessFromHolders, holderFromDiagnoses } from "../cloudAgents/c
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as SessionStore from "../auth/SessionStore.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -209,6 +210,7 @@ const make = Effect.gen(function* () {
   const hostname = yield* HostProcess.Hostname;
   const runtimePlatform = yield* HostProcess.Platform;
   const runtimeArch = yield* HostProcess.Architecture;
+  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const platform = hostPlatform(runtimePlatform);
   const operations = new Map<string, SyncOperation>();
   const approvals = new Map<string, PendingApproval>();
@@ -369,6 +371,7 @@ const make = Effect.gen(function* () {
         platform: runtimePlatform,
         arch: runtimeArch,
         goatVersion: packageJson.version,
+        ...(Option.isSome(cua) ? { computerUse: yield* cua.value.computerUse } : {}),
       };
       if (!includeCloud) {
         return { ...row, providers: yield* localProviders } satisfies ProviderHostRow;

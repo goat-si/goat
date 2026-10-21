@@ -14,8 +14,14 @@
  */
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, SshHostAlias, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  IsoDateTime,
+  SshHostAlias,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { CloudHolder } from "./cloudAgents.ts";
+import { HostComputerUse } from "./cua.ts";
 import { HandoffSummary } from "./handoff.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
@@ -105,6 +111,8 @@ export const ProviderHostRow = Schema.Struct({
   providers: Schema.Array(ProviderHostProviderState),
   /** Present when this GOAT can say whether the machine launches cloud runs. */
   cloud: Schema.optionalKey(ProviderHostCloudReadiness),
+  /** Whether that machine can run computer use. Older hosts omit it. */
+  computerUse: ForwardCompatibleOptional(HostComputerUse),
 });
 export type ProviderHostRow = typeof ProviderHostRow.Type;
 

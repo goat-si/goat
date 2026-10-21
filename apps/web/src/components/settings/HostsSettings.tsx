@@ -77,7 +77,7 @@ function HostCard({
             <p className="break-words text-muted-foreground">{card.message}</p>
           ) : null}
           {card.meters === null ? null : (
-            <div className="grid grid-cols-[4rem_minmax(3rem,1fr)_minmax(0,auto)] items-center gap-x-3 gap-y-1.5">
+            <div className="grid grid-cols-[5.5rem_minmax(3rem,1fr)_minmax(0,auto)] items-center gap-x-3 gap-y-1.5">
               {card.meters.map((meter) => (
                 <MeterBar key={meter.label} meter={meter} />
               ))}
@@ -92,6 +92,12 @@ function HostCard({
                     {card.threads.running} running · {card.threads.waiting} waiting for input ·{" "}
                     {card.threads.queued} queued
                   </span>
+                </>
+              ) : null}
+              {card.computerUse ? (
+                <>
+                  <span className="text-muted-foreground">Computer use</span>
+                  <span className="col-span-2 break-words text-foreground">{card.computerUse}</span>
                 </>
               ) : null}
             </div>

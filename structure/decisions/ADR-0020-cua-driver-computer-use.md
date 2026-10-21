@@ -52,9 +52,30 @@
     separately (#21696, #21697 on feat/cua-driver-desktop).
   - **Identity.** The standalone host identifies as `si.goat.server`. The Electron host is to
     use the app's `appUserModelId` (`si.goat.desktop` and its nightly and dev variants).
-  - Pending in later records: which providers get the driver as an MCP server, the permission
-    mode and capability ceiling (including removal of the driver's on-demand
-    `check_for_update` tool), approval for unattended threads, and enabling it on remote hosts.
+  - **Provider attachment.** Ported from pingdotgg/t3code#16528 at `7418a6084`: every provider
+    that runs on the GOAT host gets the driver as a stdio MCP server named `cua-driver`, with no
+    GOAT HTTP proxy, plus a short `<computer_use>` block that keeps input in the background. One
+    server function (`computerUseAttachment`) decides it for every session; see "Per-adapter
+    decision" below.
+  - **Safety.** Standard permission mode under a GOAT capability manifest, and admission of
+    unattended threads through an approved lease enforced by a GOAT proxy; see "Safety" below.
+  - **Remote hosts.** Each server checks its own screen (`CuaDisplayCapability.ts`) and reports
+    `available`, `partial` or `unavailable` with a reason and display. Turning computer use on
+    is refused only on `unavailable`; `partial` (an X display without a session bus or AT-SPI
+    that answers, a live Wayland socket without XWayland, or a Mac before its grants are seen) is
+    allowed with the reason shown, and turning it on completes the verified install before it
+    reports success. Every check proves something answers: an X11 setup handshake per Xauthority
+    cookie, a Wayland socket that accepts, a session bus and AT-SPI bus that answer D-Bus calls.
+    Only the driver can read macOS grants, so a Mac is `available` only after the running daemon's
+    `check_permissions` reports both. Only the current daemon's latest answer counts: a restart, or
+    a check that fails or times out, drops the Mac back to `partial`. The display check reruns
+    before every driver start, because a session can sign out after the last check, and its
+    DISPLAY, XAUTHORITY, D-Bus session bus and runtime directory reach the standalone host
+    through the embedded allowlist, since a server started over SSH has none of them. The host copies
+    allowlisted names from the server's own environment before these and cannot unset one, so on
+    Linux a session bus the check rejected is passed empty (`CUA_DRIVER_PROBED_SESSION_NAMES`).
+    Windows Session 0 (SSH, services) is `unavailable`: GOAT does not launch the driver into
+    another session.
 - **Reasons.**
   - Upstream's design already went through six adversarial review rounds. Carrying it unchanged
     keeps the chase small and the review history meaningful.
@@ -68,3 +89,133 @@
     packaged desktop builds carry the driver whether or not the user enables it.
   - Native macOS TCC attribution, Windows hosting and packaged Linux capture still need human
     qualification, as upstream's PRs state.
+
+## Per-adapter decision
+
+`computerUseAttachment` returns `none` (with a reason) or `direct`. It attaches only when
+`enableCua` is on, the driver is running, the provider runs on this host, and the turn is neither
+Plan nor a read-only sandbox. An unattended turn gets `none` with `cuaDriverBlocked` unless its
+thread holds a lease, and then `leased`: the same session field carries GOAT's proxy instead of
+`cua-driver mcp`, with `cuaDriverOverridesUserConfig` (see "Safety").
+
+| Provider (driver kind)                                | Decision                                    | How                                                                                                                                                                       | A change reaches a live session                                                                                                                                                      |
+| ----------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude (`claudeAgent`)                                | Attach                                      | SDK `mcpServers` beside `goat`; `mcp__cua-driver__*` preapproved, never in a read-only sandbox                                                                            | Next turn, through `setMcpServers` without replacing the process; the block rides the next prompt if needed                                                                          |
+| Codex (`codex`)                                       | Attach unless the user defines `cua-driver` | Thread config path `mcp_servers.cua-driver` beside `mcp_servers.goat`; the user's merged config is read once per directory (`config/read`), theirs wins unless overridden | Next turn, through the `thread/resume` reconfigure; a dropped driver is sent with `enabled: false`                                                                                   |
+| Cursor (`cursor`)                                     | Attach                                      | SDK `mcpServers` when the agent opens                                                                                                                                     | Next turn reopens the same agent                                                                                                                                                     |
+| Grok, Antigravity, ACP registry including Devin local | Attach                                      | ACP stdio `mcpServers`, also in the MCP-over-ACP list                                                                                                                     | Next turn. A session that loses or changes its driver (Plan, read-only, a new daemon) restarts the agent process first, because agents keep the stdio servers a session started with |
+| OpenCode 1.x (`opencode`)                             | Attach on a server GOAT owns                | `mcp.add` named `cua-driver`, disconnected when dropped                                                                                                                   | Next turn                                                                                                                                                                            |
+| OpenCode 2 (`opencode`)                               | Attach on a server GOAT owns                | Per thread and directory as `cua-driver-<digest>`. Every turn denies `cua-driver-*`, even without a driver, and only a turn with one allows its own exact server          | Next turn                                                                                                                                                                            |
+| Pi (`pi`)                                             | Attach                                      | Pi has no MCP client; GOAT's Pi extension bridges the stdio server and passes screenshots through as images                                                               | Added at the next Pi process start. Before each turn the adapter writes a gate file; a turn without the launched driver closes its connection and tools in `before_agent_start`      |
+| Muse (`muse`)                                         | Not supported                               | GOAT gives Muse session MCP servers over streamable HTTP only; the driver is a stdio server                                                                               | -                                                                                                                                                                                    |
+| Claude cloud, Cursor cloud, Devin cloud (cloud tasks) | Not supported                               | The driver operates the GOAT host's desktop, not the cloud runner's                                                                                                       | -                                                                                                                                                                                    |
+
+- **Alternatives.** Upstream #15006's per-thread proxy that ends the driver session at every turn
+  end (dropped upstream too: Stop ends the provider turn and the driver's idle timeout hides its
+  cursor). Reopening Claude's query when the server set changes, as #16528 does: GOAT refuses to
+  replace a Claude process that runs background work, so a live `setMcpServers` keeps the turn
+  from failing.
+
+## Safety
+
+Commit: on `feat/cua-safety-guard` (lane 4, Phase 3). Verified against the pinned 0.37.0 binary on
+macOS and its source at `cua-driver-rs-v0.37.0`.
+
+- **Purpose.** GOAT Bot runs with full access and is read-only by instruction only, and scheduled,
+  webhook and channel work runs with nobody watching. Seeing and operating the host's screen needs
+  a guard of its own that does not depend on the prompt.
+- **Driver ceiling.** Both hosts start the daemon in `standard` mode with
+  `--capability-manifest <file> --approve-capability-manifest`, written at each start by
+  `packages/shared/src/cuaDriverManifest.ts` (v3 schema).
+  - Tools: observation, input, `run_steps`, `run_script`, sessions and cursor. Excluded with
+    reasons in `CUA_DRIVER_EXCLUDED_TOOLS`: installs, driver configuration, update checks,
+    trajectory replay, the perception extension, deprecated capture tools, recording (writes
+    files), both clipboard tools (the person's copied secrets; file loading), `kill_app` (unsaved
+    work; no terminate scope is granted) and every browser tool (they need per-origin grants a
+    launch-time file cannot know, and logged-in profiles are never granted).
+  - Resources: `desktop.display` plus one `apps[].bundle_id` per app the driver's own
+    `list_apps` reports at start, from a short-lived `cua-driver mcp` (`--direct` on macOS). No
+    file paths, processes, origins or existing browser profiles. Excluded apps: the GOAT host
+    itself (where people approve), the driver's app and credential stores. 0.37.0 checks every
+    window and application observation and every input against the manifest once one is loaded,
+    and has no wildcard app grant, so an app installed after the start stays out until computer
+    use restarts.
+  - Verified live: a display-only manifest refused `list_windows` on Finder; an app grant
+    admitted Finder and refused Dock, including a `click` nested in `run_steps` and calls nested
+    in `run_script` (tool and resource refusals); the full GOAT manifest starts and refuses
+    `clipboard_read` and `get_config`. A bad manifest (unknown tool, empty allow list, missing
+    approval) exits 64 before listening; the SDK reports only the exit, so hosts map it to "Cua
+    Driver refused GOAT's capability manifest" and the reason stays in the inherited stderr.
+  - The manifest is a ceiling. It cannot judge intent: typing a secret into an admitted window
+    stays possible.
+- **Bounded mode, rejected.** It requires `expires_after` and `idle_timeout` (24 h at most), and
+  an expired idle lease is terminal for the daemon instance. The daemon is shared by every thread
+  on the host, so its lifetime would end interactive work too and force restarts; and it offers
+  no runtime approval path GOAT could answer. That is an ownership tradeoff, not a flaw in
+  bounded mode; GOAT keeps per-thread lifetimes in its own lease.
+- **Unattended origins.** `ComputerUseOrigin` classifies each turn: the GOAT Bot thread, channel
+  task workers, runs whose message came from a scheduled or webhook task or a channel, messages
+  sent by an unattended thread, and threads launched or delegated by an unattended turn (judged
+  at the launch time) are unattended. Launches from another machine are unattended. A person
+  promoting or forking a thread takes it over. Any read failure or runaway lineage counts as
+  unattended.
+  - Provenance is read from what is fixed before a turn can run. A channel worker is known from
+    its thread id (`channel-worker:<digest>`, `isChannelWorkerThreadId`), which the dispatcher
+    chooses before launch, not from the ledger's `task.worker.bound`, which commits after the
+    launch and could lose a race with the first turn's preparation. Scheduled and webhook runs
+    carry `scheduledTaskId` on the message that starts them, committed with the run.
+  - Steering keeps a turn's starting message, so a classification at attachment would never see
+    an instruction that joins a running turn. A message from an unattended origin (a scheduled
+    task, or a sender thread that classifies unattended) aimed at a person's running turn is
+    therefore queued behind that turn instead of steering it
+    (`gateUnattendedSteering`, applied where `ThreadManagementService` sends) while computer use
+    is on. The same gate runs when a message that queued behind a slow-starting turn would be
+    promoted into it once the turn can steer, so that delayed path keeps the message as its own
+    turn too. It then starts its own turn, which this message classifies as unattended. Steering
+    into an unattended turn is unchanged, since that turn has no direct driver, and so is all
+    steering while computer use is off, when no turn holds a driver. A sender this host cannot
+    classify, such as a thread on another machine, counts as unattended. A person promoting the
+    queued message to steer is their decision.
+- **Admission lease.** An unattended thread asks with `goat_computer_use_request`, which creates
+  an approval handoff on `computer_use.grant` whose text names the thread and turn, this host,
+  the stated purpose and the expiry. Approving it needs `settings:write` in an authenticated
+  client session, the same as turning computer use on, so channel text cannot answer it. It is
+  admission for the thread's turns until the expiry, not per-action approval. The approved
+  handoff is the lease: it expires on its clock rather than when the asking turn ends, a person
+  ends it early by moving it to cancelled (the only terminal transition allowed after approval),
+  and turning computer use off ends it. At most one live lease per host: a second request is
+  refused naming the holder, and a second approval is refused while one is live. Interactive
+  threads still overlap a leased one; there is no focus or input isolation.
+- **Proxy.** A leased turn's provider runs `goat cua-lease-proxy` in place of `cua-driver mcp`.
+  It holds the thread's own MCP credential and reads `/api/computer-use/lease`, which streams the
+  lease's state and pushes its end. Every `tools/call` waits for the server's confirmation and
+  checks the deadline; the proxy holds its own timer on the expiry. On expiry, revocation, a lost
+  stream or computer use turned off, it refuses new calls, sends MCP cancellation for every
+  outstanding request, kills its `cua-driver mcp` child, answers the provider, and only then
+  revokes the driver sessions the agent named, in the background: a slow or stuck revoke never
+  delays the kill. The deadline timer kills the child at the expiry whichever path ended the
+  lease first.
+- **Stopping boundary (0.37.0, measured on macOS).** A `run_script` launching six apps 1.5 s
+  apart was stopped three ways. MCP `notifications/cancelled` and `cua-driver revoke --session`
+  ("Revoked 1 authorization scope") both let all six launch: 0.37.0 defers session cleanup while
+  admitted work is in flight (`cua-driver-core/src/session.rs`, `end_session_with_reason`).
+  Killing the `cua-driver mcp` transport stopped it each time after the launch already
+  dispatched (kills at 2.4, 5.2 and 7.4 s left 1, 3 and 4 apps). Through the real proxy, a pushed
+  revocation and the proxy's own expiry each stopped the script after the actions already
+  dispatched and refused later calls. So the boundary is the primitive in progress, and killing
+  the transport is what enforces it; cancellation and revocation are kept as protocol hygiene.
+  Restarting the daemon is not needed for this.
+- **User-defined servers.** For an unattended turn without a lease, Codex gets a whole
+  `mcp_servers.cua-driver` entry with `enabled: false`, and Claude gets a stand-in
+  `cua-driver` that exits at once, so their merge by name never starts a user's own driver; with
+  a lease both resolve the name to the proxy. Cursor, the ACP agents, OpenCode and Pi read their
+  own MCP config in ways GOAT cannot override by name; GOAT never attaches or pre-approves a
+  driver there for such a turn, but a driver the user configured in those tools stays theirs.
+- **Limits.** The daemon's socket has no secret (the SDK keeps the MCP descriptor to the socket
+  path), so any process running as the same OS user, including a full-access agent's shell, can
+  reach it directly. The lease guards the path GOAT gives agents; separating agents from the
+  person's own account needs another OS user. Desktop sessions are shared with the person.
+- **Alternatives.** Prompt-only rules (what GOAT Bot already has); per-action approvals (the
+  driver's standard grants have no approval provider in embedded mode, and an unattended thread
+  has nobody to answer them); bounded mode (above); restarting the daemon on every lease end
+  (stops interactive threads too and is not needed once the transport kill is proven).

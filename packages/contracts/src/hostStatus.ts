@@ -7,6 +7,7 @@ import {
   PositiveInt,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { HostComputerUse } from "./cua.ts";
 import { RuntimeProtocolRanges } from "./environment.ts";
 import { HostCondition } from "./fleetHealth.ts";
 import { ORCHESTRATION_HISTORY_BUDGET_BYTES } from "./memory.ts";
@@ -176,6 +177,8 @@ export const HostStatusMetrics = Schema.Struct({
   /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
   providers: Schema.optional(Schema.Array(HostStatusProvider)),
   quotaPool: Schema.optional(QuotaPool),
+  /** Computer use on that machine. Older hosts omit it, and a malformed value decodes away. */
+  computerUse: ForwardCompatibleOptional(HostComputerUse),
   /** Read-only inventory of this host's OpenCodex. Older hosts omit it. */
   opencodex: ForwardCompatibleOptional(OpenCodexInventorySnapshot),
   /** Older hosts omit it; a host that sends it also serves `server.compactStorage`. */

@@ -84,15 +84,50 @@ export const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
   { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
 ] as const;
 
-/** Options for `EmbeddedCuaDriverHost.withOptions`; the rest match its two-argument constructor. */
-export function cuaDriverHostOptions(binaryPath: string, hostBundleId: string) {
+/**
+ * Names the Linux display probe decides for a standalone server. The embedded host copies
+ * allowlisted names from GOAT's own environment before applying `environment` and cannot unset
+ * one, so a name the probe did not supply is passed empty: D-Bus clients refuse an empty address
+ * instead of dialing the bus the probe found dead.
+ */
+export const CUA_DRIVER_PROBED_SESSION_NAMES = ["DBUS_SESSION_BUS_ADDRESS"] as const;
+
+/**
+ * Options for `EmbeddedCuaDriverHost.withOptions`. The daemon runs in standard mode under GOAT's
+ * capability manifest (cuaDriverManifest.ts); approving it here is GOAT acting as the trusted
+ * launcher that reviewed the file it just wrote.
+ * `display` carries the screen a server started over SSH must reach (DISPLAY, XAUTHORITY, the
+ * D-Bus session bus), all on the embedded allowlist. The privacy switches always win.
+ * `withheld` names the daemon must not inherit when `display` does not set them.
+ */
+export function cuaDriverHostOptions(
+  binaryPath: string,
+  hostBundleId: string,
+  capabilityManifestPath: string,
+  display: ReadonlyArray<{ readonly name: string; readonly value: string }> = [],
+  withheld: ReadonlyArray<string> = [],
+) {
+  const privacy = new Set<string>(CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => variable.name));
+  const supplied = new Set(display.map((variable) => variable.name.toUpperCase()));
   return {
     binaryPath,
     hostBundleId,
-    approveCapabilityManifest: false,
+    // EmbeddedPermissionMode.Standard. Bounded mode ties authority to manifest lifetimes that
+    // would end the shared daemon under interactive threads too (ADR-0020).
+    permissionMode: 0,
+    capabilityManifestPath,
+    approveCapabilityManifest: true,
     approveSessionPolicy: false,
     dangerouslyBypassApprovals: false,
-    environment: CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
+    environment: [
+      ...display
+        .filter((variable) => !privacy.has(variable.name.toUpperCase()))
+        .map(({ name, value }) => ({ name, value })),
+      ...withheld
+        .filter((name) => !supplied.has(name.toUpperCase()))
+        .map((name) => ({ name, value: "" })),
+      ...CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
+    ],
     inheritStderr: true,
     noOverlay: false,
   };
@@ -119,4 +154,40 @@ export function withCuaDriverPrivacyEnvironment<
       ...MCP_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
     ],
   };
+}
+
+// The short-lived listing process gets the session basics the driver needs to find apps and the
+// display, plus every opt-out; nothing else from GOAT's environment.
+const LISTING_ENVIRONMENT_NAMES = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "LANG",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_TYPE",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "SYSTEMROOT",
+  "WINDIR",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "USERPROFILE",
+] as const;
+
+export function cuaDriverListingEnvironment(
+  base: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const name of LISTING_ENVIRONMENT_NAMES) {
+    const value = base[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  for (const variable of MCP_PRIVACY_ENVIRONMENT) environment[variable.name] = variable.value;
+  return environment;
 }

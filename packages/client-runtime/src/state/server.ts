@@ -904,6 +904,11 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:worktrees-directory-setting:${environmentId}`),
     ),
   );
+  const computerUseSettingAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => get(settingsValueAtom(environmentId))?.enableCua ?? false).pipe(
+      Atom.withLabel(`environment-data:server:computer-use-setting:${environmentId}`),
+    ),
+  );
   const usagePricesAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const overrides = get(settingsValueAtom(environmentId))?.usagePriceOverrides ?? {};
@@ -1091,6 +1096,13 @@ export function createServerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       staleTimeMs: 5_000,
       refreshTrigger: ({ environmentId }) => worktreesDirectorySettingAtom(environmentId),
+    }),
+    /** Driver readiness on the host; rechecked whenever computer use is turned on or off. */
+    computerUse: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-use",
+      tag: WS_METHODS.serverCheckComputerUse,
+      idleTtlMs: 0,
+      refreshTrigger: ({ environmentId }) => computerUseSettingAtom(environmentId),
     }),
     updateStateAtom,
     settingsValueAtom,

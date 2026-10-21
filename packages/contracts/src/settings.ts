@@ -495,6 +495,10 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // The desktop asks once per profile whether agents may use this computer.
+  computerUsePrompt: Schema.Literals(["pending", "enabled", "later"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("pending")),
+  ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
@@ -1719,6 +1723,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "write-secret",
   "write-file",
   "prepare-directory",
+  "enable-computer-use",
 ]);
 export type ServerSettingsOperation = typeof ServerSettingsOperation.Type;
 
@@ -1727,15 +1732,26 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
   {
     settingsPath: Schema.String,
     operation: ServerSettingsOperation,
-    code: Schema.optionalKey(Schema.Literal("provider_instance_busy")),
+    code: Schema.optionalKey(
+      Schema.Literals([
+        "provider_instance_busy",
+        "computer_use_unavailable",
+        "computer_use_install_failed",
+      ]),
+    ),
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
+    /** Why computer use cannot run on this host, written for users. */
+    reason: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     if (this.code === "provider_instance_busy") {
       return "End this instance's active sessions before changing its model route.";
+    }
+    if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
+      return this.reason ?? "Computer use cannot run on this host.";
     }
     const provider =
       this.providerInstanceId === undefined ? "" : ` for provider ${this.providerInstanceId}`;
@@ -2098,6 +2114,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
+  computerUsePrompt: Schema.optionalKey(Schema.Literals(["pending", "enabled", "later"])),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
 });

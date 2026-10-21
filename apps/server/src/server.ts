@@ -153,6 +153,8 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
+import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -1196,7 +1198,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   // pipe takes at most 20 steps, so the Cua Driver joins this merge.
-  Layer.provideMerge(Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver)),
+  Layer.provideMerge(
+    Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver, ComputerUseLeases.layer),
+  ),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
@@ -1332,6 +1336,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(layerFleetHealth)),
+    ComputerUseLeaseRoute.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit,
     HandoffExpiry.layer,

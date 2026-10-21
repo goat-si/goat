@@ -126,6 +126,7 @@ export const PREVIEW_OPEN_LINK_CHANNEL = "desktop:preview-open-link";
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
 export const RESTART_CUA_DRIVER_CHANNEL = "desktop:restart-cua-driver";
+export const VERIFY_CUA_DRIVER_CHANNEL = "desktop:verify-cua-driver";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 

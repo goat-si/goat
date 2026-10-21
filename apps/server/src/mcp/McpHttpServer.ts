@@ -28,6 +28,8 @@ import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import * as MemoryAdministrationHandlers from "./toolkits/memoryAdministration/handlers.ts";
 import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
 import * as NoteHandlers from "./toolkits/note/handlers.ts";
+import * as ComputerUseHandlers from "./toolkits/computerUse/handlers.ts";
+import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -1247,6 +1249,7 @@ export const catalogRegistrations = {
   ssh: toolkitRegistration(SshToolkit, SshHandlers.layer),
   attachment: toolkitRegistration(AttachmentToolkit, AttachmentHandlers.layer),
   note: toolkitRegistration(NoteToolkit, NoteHandlers.layer),
+  computerUse: toolkitRegistration(ComputerUseToolkit, ComputerUseHandlers.layer),
   channel: toolkitRegistration(ChannelToolkit, ChannelHandlers.layer),
   pullRequests: toolkitRegistration(PullRequestsToolkit, PullRequestsHandlers.layer),
   deviceStandard: toolkitRegistration(DeviceStandardToolkit, DeviceHandlers.layerStandard),
@@ -1373,6 +1376,7 @@ export const layer = Layer.mergeAll(
   layerAttachmentToolkit,
   layerChannelToolkit,
   catalogRegistrations.note,
+  catalogRegistrations.computerUse,
   layerProjectRegistration,
   layerEnvironmentToolkit,
   layerHostStatusToolkit,

@@ -34,6 +34,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
 
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
@@ -1168,5 +1169,97 @@ it.effect.each(["running", "completed"] as const)(
         };
         yield* service.assertReviewTaskSendAllowed(input);
       }
+    }),
+);
+
+it.effect.each([
+  { sender: "channel-worker:abc", computerUse: true, expected: "queue_after_active" },
+  { sender: "peer", computerUse: true, expected: "steer_active" },
+  // No turn holds a driver while computer use is off, so nothing changes.
+  { sender: "channel-worker:abc", computerUse: false, expected: "steer_active" },
+] as const)(
+  "queues a steer from an unattended sender behind a person's turn ($sender, computer use $computerUse)",
+  ({ sender, computerUse, expected }) =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("mine");
+      const runId = RunId.make("typed");
+      const messageId = MessageId.make("from-sender");
+      const base = idleThreadProjection(liveThreadShell(threadId));
+      const projection = {
+        ...base,
+        runs: [
+          {
+            id: runId,
+            status: "running",
+            ordinal: 1,
+            activeAttemptId: "attempt",
+            providerThreadId: "provider-thread",
+            userMessageId: "typed-message",
+            requestedAt: DateTime.makeUnsafe(0),
+            completedAt: null,
+          },
+        ],
+        messages: [{ id: "typed-message", createdAt: DateTime.makeUnsafe(0), createdBy: "user" }],
+        providerTurns: [{ status: "running", runAttemptId: "attempt" }],
+        providerThreads: [{ id: "provider-thread", providerSessionId: "session" }],
+        providerSessions: [
+          { id: "session", capabilities: { turns: { supportsActiveSteering: true } } },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const peer = idleThreadProjection(liveThreadShell(ThreadId.make("peer")));
+      const dispatched: OrchestrationV2ServerCommand[] = [];
+      const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+        Effect.provide(
+          ThreadManagementService.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(layerReceiptsTest),
+            Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+            Layer.provide(
+              Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(computerUse) }),
+            ),
+            Layer.provide(
+              Layer.mock(Orchestrator.OrchestratorV2)({
+                getThreadRecords: (id) => Effect.succeed(id === "peer" ? peer : projection),
+                getThreadEventSequence: () => Effect.succeed(0),
+                dispatch: (command) =>
+                  Effect.sync(() => {
+                    dispatched.push(command);
+                    if (command.type !== "message.dispatch") throw new Error("Expected a message");
+                    const queued = command.dispatchMode.type === "queue_after_active";
+                    (projection as unknown as { messages: unknown[] }).messages = [
+                      { id: messageId, runId: queued ? "queued-run" : runId },
+                    ];
+                    (projection as unknown as { runs: unknown[] }).runs = [
+                      ...projection.runs.filter((item) => item.id === runId),
+                      ...(queued ? [{ id: "queued-run", status: "queued", ordinal: 2 }] : []),
+                    ];
+                    (projection as unknown as { turnItems: unknown[] }).turnItems = queued
+                      ? []
+                      : [{ type: "user_message", messageId, inputIntent: "steer" }];
+                    return { sequence: 1, storedEvents: [] };
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* service.sendToThread({
+        projectId: base.thread.projectId,
+        commandId: CommandId.make("send-" + sender),
+        threadId,
+        senderThreadId: ThreadId.make(sender),
+        messageId,
+        text: "Use the screen to check the build",
+        attachments: [],
+        mode: "steer",
+        createdBy: "agent",
+        creationSource: "mcp",
+      });
+      const command = dispatched[0];
+      expect(command?.type === "message.dispatch" ? command.dispatchMode : undefined).toEqual(
+        expected === "queue_after_active"
+          ? { type: "queue_after_active", behindRunId: runId }
+          : { type: "steer_active", targetRunId: runId },
+      );
     }),
 );

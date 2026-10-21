@@ -4,6 +4,7 @@ import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
+import { ComputerUseSettings } from "./ComputerUseSettings";
 import { useNavigate } from "@tanstack/react-router";
 /**
  * Integrations settings - preferences for surfaces GOAT embeds rather than
@@ -1651,6 +1652,7 @@ export function IntegrationsSettingsPanel() {
         <PullRequestLinksOpenInAppSetting />
       </SettingsSection>
       <DeviceIntegrationSettings />
+      <ComputerUseSettings />
       <GoatBotSettingsPointer />
     </SettingsPageContainer>
   );

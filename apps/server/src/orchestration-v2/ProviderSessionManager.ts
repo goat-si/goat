@@ -5,6 +5,7 @@ import { AgentScope } from "@goat/shared/AgentScope";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
+  COMPUTER_USE_LEASE_ROUTE,
   isOrchestrationV2WorkActive,
   ModelSelection,
   type AuthEnvironmentScope,
@@ -16,6 +17,7 @@ import {
   type OrchestrationV2ProviderThread,
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
+  type ProviderInteractionMode,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -52,6 +54,10 @@ import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ServerSettings from "../serverSettings.ts";
+import * as CuaDriver from "../cua/CuaDriver.ts";
+import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as MemoryAccess from "../memory/MemoryAccess.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as EventSink from "./EventSink.ts";
@@ -159,6 +165,8 @@ export interface ProviderMemoryPrepareInput {
   /** Explicit null is ordinary; missing legacy task authority is none. */
   readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
   readonly readOnly?: boolean;
+  /** Plan turns never get computer use. */
+  readonly interactionMode?: ProviderInteractionMode;
   readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
 }
 
@@ -374,6 +382,26 @@ export const layerWithOptions = (
        * agent one toolset and is visible immediately (#7083).
        */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+      /**
+       * Optional like settings. Every prepare asks the computer use decision
+       * again, so enabling or disabling it reaches a live session on its next
+       * turn.
+       */
+      const cuaDriver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+      /** Absent only in test assemblies; without it every turn counts as unleased. */
+      const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+      const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
+        ComputerUseOrigin.computerUseOrigin(
+          ComputerUseOrigin.projectionOriginReads({
+            getThreadRecords: (id, fields, filter) =>
+              projectionStore.getThreadRecords(id, fields, filter),
+            channelOrigin: (id) =>
+              Option.isSome(computerUseLeases)
+                ? computerUseLeases.value.channelOrigin(id)
+                : Effect.succeed(undefined),
+          }),
+          { threadId, runId },
+        );
       const memoryPolicy = yield* Effect.serviceOption(
         ServerSettings.MemoryProviderCommittedPolicy,
       );
@@ -586,6 +614,9 @@ export const layerWithOptions = (
                         ...(input.delegatedTaskId === undefined
                           ? {}
                           : { delegatedTaskId: input.delegatedTaskId }),
+                        ...(input.interactionMode === undefined
+                          ? {}
+                          : { interactionMode: input.interactionMode }),
                         readOnly: admitted.readOnly === true || input.readOnly === true,
                       }
                     : { ...input, readOnly: input.readOnly === true };
@@ -676,6 +707,26 @@ export const layerWithOptions = (
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
+                const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
+                const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
+                  threadId,
+                  driver: yield* registry.get(providerInstanceId).pipe(
+                    Effect.map((adapter) => adapter.driver),
+                    Effect.orElseSucceed(() => undefined),
+                  ),
+                  interactionMode: preparedInput.interactionMode,
+                  readOnly,
+                  origin: computerUseOrigin,
+                  lease:
+                    computerUseOrigin._tag === "unattended" && Option.isSome(computerUseLeases)
+                      ? yield* computerUseLeases.value
+                          .active(threadId)
+                          .pipe(Effect.orElseSucceed(() => Option.none()))
+                      : Option.none(),
+                  proxy: Option.isSome(computerUseLeases)
+                    ? computerUseLeases.value.proxy
+                    : undefined,
+                });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -704,6 +755,9 @@ export const layerWithOptions = (
                     resolved.memoryPolicy?.grant === grant &&
                     resolved.memoryPolicy.policyEpoch === committed.epoch
                   ) {
+                    yield* mcpSessions.set(
+                      ComputerUse.withComputerUse(existing, computerUse, COMPUTER_USE_LEASE_ROUTE),
+                    );
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
@@ -738,7 +792,13 @@ export const layerWithOptions = (
                   yield* mcpSessionRegistry.revokeThread(threadId, {
                     exceptProviderSessionId: credential.config.providerSessionId,
                   });
-                yield* mcpSessions.set(credential.config);
+                yield* mcpSessions.set(
+                  ComputerUse.withComputerUse(
+                    credential.config,
+                    computerUse,
+                    COMPUTER_USE_LEASE_ROUTE,
+                  ),
+                );
                 yield* Ref.update(
                   sessions,
                   (current) =>
@@ -2562,6 +2622,7 @@ export const layerWithOptions = (
                           input.runtimePolicy.sandboxPolicy !== null &&
                           "type" in input.runtimePolicy.sandboxPolicy &&
                           input.runtimePolicy.sandboxPolicy.type === "readOnly"),
+                      interactionMode: input.runtimePolicy.interactionMode,
                     },
                     admission ?? false,
                   );
@@ -2629,6 +2690,7 @@ export const layerWithOptions = (
                           input.runtimePolicy.sandboxPolicy !== null &&
                           "type" in input.runtimePolicy.sandboxPolicy &&
                           input.runtimePolicy.sandboxPolicy.type === "readOnly"),
+                      interactionMode: input.runtimePolicy.interactionMode,
                     },
                     admission ?? false,
                   );

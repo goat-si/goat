@@ -10,6 +10,7 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   REMOTE_CAPABLE_EDITOR_IDS,
   SystemSettingsPaneSchema,
+  type SystemSettingsPane,
   type DesktopEnvironmentBootstrap,
   type PickedThemeFile,
 } from "@goat/contracts";
@@ -39,6 +40,7 @@ import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as Electron from "electron";
 import * as MacPermissions from "../../permissions/MacPermissions.ts";
+import { macPermissionGranted } from "../../permissions/MacPermissionHelper.ts";
 import { safariPermissionCheck } from "../../preview/BrowserImport/SafariPermission.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -52,6 +54,12 @@ const ContextMenuPosition = Schema.Struct({
   x: Schema.Number,
   y: Schema.Number,
 });
+
+// Full Disk Access cannot be queried directly, so it is probed through Safari's data.
+const permissionCheck = (pane: SystemSettingsPane) =>
+  pane === "full-disk-access"
+    ? safariPermissionCheck
+    : Effect.succeed(() => Promise.resolve(macPermissionGranted(pane)));
 
 const ContextMenuInput = Schema.Struct({
   items: Schema.Array(ContextMenuItemSchema),
@@ -314,7 +322,7 @@ export const openSystemSettings = DesktopIpc.makeIpcMethod({
     const opened = yield* shell.openSystemSettings(pane);
     if (opened && environment.isPackaged) {
       const permissions = yield* MacPermissions.MacPermissions;
-      const isGranted = yield* safariPermissionCheck;
+      const isGranted = yield* permissionCheck(pane);
       yield* permissions.showHelper(pane, owner, isGranted);
     }
     return opened;
@@ -425,10 +433,10 @@ export const checkSystemPermission = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL,
   payload: SystemSettingsPaneSchema,
   result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* () {
+  handler: Effect.fn("desktop.ipc.window.checkSystemPermission")(function* (pane) {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     if (environment.platform !== "darwin") return false;
-    const check = yield* safariPermissionCheck;
+    const check = yield* permissionCheck(pane);
     return yield* Effect.promise(check);
   }),
 });

@@ -120,6 +120,7 @@
         "packages/shared/src/sshFailure.ts",
         "packages/shared/src/cliRelease.ts",
         "packages/shared/src/cuaDriverRelease.ts",
+        "packages/shared/src/cuaDriverManifest.ts",
         "packages/shared/src/path.ts",
         "packages/shared/src/themePalettes.ts",
         "apps/server/src/orchestration-v2/ThreadCommandExecutor.ts"

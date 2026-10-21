@@ -22,6 +22,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import type * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 const mcp: CuaDriverMcpConfiguration = {
@@ -64,15 +65,28 @@ const makeHost = Effect.fnUntraced(function* () {
   return { host, started, stopped, watching, ready, exited, stops: () => stops };
 });
 
+const testDisplay: CuaDisplay.CuaDisplayProbe = {
+  capability: "available",
+  reason: "Uses X display :9.",
+  display: ":9",
+  environment: [{ name: "DISPLAY", value: ":9" }],
+};
+const { environment: _, ...reportedDisplay } = testDisplay;
+
 const makeService = Effect.fnUntraced(function* (
-  createHost: Parameters<typeof CuaDriver.make>[0],
+  createHost:
+    | Effect.Effect<CuaDriver.CuaDriverHost, CuaDriver.CuaDriverError>
+    | CuaDriver.CuaDriverHostFactory,
   initialEnabled = true,
+  probe: Effect.Effect<CuaDisplay.CuaDisplayProbe> = Effect.succeed(testDisplay),
+  options: CuaDriver.CuaDriverOptions = {},
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
   const values = yield* settings.getSettings;
   const enabled = yield* Ref.make(initialEnabled);
   const changes = yield* PubSub.unbounded<boolean>();
-  const service = yield* CuaDriver.make(createHost).pipe(
+  const factory = typeof createHost === "function" ? createHost : () => createHost;
+  const service = yield* CuaDriver.make(factory, probe, options).pipe(
     Effect.provideService(ServerSettings.ServerSettingsService, {
       ...settings,
       getSettings: Ref.get(enabled).pipe(Effect.map((enableCua) => ({ ...values, enableCua }))),
@@ -227,7 +241,7 @@ it.layer(ServerSettings.layerTest())("CuaDriver lifecycle", (it) => {
   );
 });
 
-const nativeFixture = Effect.fnUntraced(function* () {
+const nativeFixture = Effect.fnUntraced(function* (platform?: NodeJS.Platform) {
   const start = Promise.withResolvers<EmbeddedDriverConnection>();
   const stop = Promise.withResolvers<void>();
   const started = yield* Deferred.make<void>();
@@ -244,11 +258,16 @@ const nativeFixture = Effect.fnUntraced(function* () {
   };
   let destroys = 0;
   let creates = 0;
+  const options: Array<{
+    readonly environment: ReadonlyArray<{ readonly name: string; readonly value: string }>;
+  }> = [];
   const factory = yield* CuaDriver.makeStandaloneHostFactory(
     Effect.succeed("/driver"),
+    () => Effect.succeed("/state/cua-driver/capability-manifest.yaml"),
     Effect.succeed({
       EmbeddedCuaDriverHost: class {
-        static withOptions() {
+        static withOptions(given: (typeof options)[number]) {
+          options.push(given);
           return new this();
         }
         constructor() {
@@ -277,7 +296,12 @@ const nativeFixture = Effect.fnUntraced(function* () {
         }
       },
     }),
-  ).pipe(Effect.provide(NodeServices.layer));
+  ).pipe(
+    Effect.provide(NodeServices.layer),
+    platform === undefined
+      ? (effect) => effect
+      : Effect.provideService(HostProcess.Platform, platform),
+  );
   return {
     factory,
     connection,
@@ -286,12 +310,58 @@ const nativeFixture = Effect.fnUntraced(function* () {
     started,
     stopping,
     destroyed,
+    options: () => options,
     creates: () => creates,
     destroys: () => destroys,
   };
 });
 
+// What the pinned 0.37.0 SDK hands the daemon (embedded.rs merge_safe_environment): GOAT's own
+// allowlisted variables, then the options' environment over them. Every name here is allowlisted.
+const daemonEnvironment = (
+  parent: Readonly<Record<string, string>>,
+  environment: ReadonlyArray<{ readonly name: string; readonly value: string }>,
+) => {
+  const values = new Map(
+    Object.entries(parent).map(([name, value]) => [name.toUpperCase(), value]),
+  );
+  for (const variable of environment) values.set(variable.name.toUpperCase(), variable.value);
+  return Object.fromEntries(values);
+};
+
 it.layer(ServerSettings.layerTest())("CuaDriver native ownership", (it) => {
+  it.effect("keeps a session bus the display probe rejected away from a Linux daemon", () =>
+    Effect.gen(function* () {
+      const parent = { PATH: "/usr/bin", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus" };
+      const daemonFor = Effect.fnUntraced(function* (
+        platform: NodeJS.Platform,
+        display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+      ) {
+        const f = yield* nativeFixture(platform);
+        const host = yield* f.factory(display);
+        f.stop.resolve();
+        yield* host.stop;
+        return daemonEnvironment(parent, f.options()[0]!.environment);
+      });
+
+      // The probe found the inherited bus dead and supplied none.
+      const rejected = yield* daemonFor("linux", [{ name: "DISPLAY", value: ":0" }]);
+      expect(rejected.DBUS_SESSION_BUS_ADDRESS).toBe("");
+      expect(rejected.DISPLAY).toBe(":0");
+      expect(rejected.PATH).toBe("/usr/bin");
+
+      const probed = yield* daemonFor("linux", [
+        { name: "DISPLAY", value: ":0" },
+        { name: "DBUS_SESSION_BUS_ADDRESS", value: "unix:path=/run/user/1000/bus" },
+      ]);
+      expect(probed.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
+
+      // A Mac's daemon has no probed session bus to protect.
+      const mac = yield* daemonFor("darwin", []);
+      expect(mac.DBUS_SESSION_BUS_ADDRESS).toBe(parent.DBUS_SESSION_BUS_ADDRESS);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("times out native startup after 30 seconds and cleans up when it settles", () =>
     Effect.gen(function* () {
       const f = yield* nativeFixture();
@@ -311,6 +381,21 @@ it.layer(ServerSettings.layerTest())("CuaDriver native ownership", (it) => {
       yield* Deferred.await(f.destroyed);
       expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
       expect(f.destroys()).toBe(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("names a manifest the driver refused at startup in host status", () =>
+    Effect.gen(function* () {
+      const f = yield* nativeFixture();
+      const { service } = yield* makeService(f.factory);
+      const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.await(f.started);
+      // What the 0.37.0 SDK reports when the daemon rejects its manifest and exits with 64.
+      f.start.reject(new Error("embedded cua-driver exited before readiness (code=Some(64))"));
+      yield* Deferred.await(f.stopping);
+      f.stop.resolve();
+      expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
+      expect((yield* service.status).failure).toBe(CuaDriver.CUA_DRIVER_REFUSED_MESSAGE);
     }).pipe(Effect.scoped),
   );
 
@@ -334,14 +419,14 @@ it.layer(ServerSettings.layerTest())("CuaDriver native ownership", (it) => {
         yield* TestClock.adjust("5 seconds");
         yield* Fiber.join(closing);
         expect(f.destroys()).toBe(0);
-        expect(Exit.isFailure(yield* Effect.exit(f.factory))).toBe(true);
+        expect(Exit.isFailure(yield* Effect.exit(f.factory([])))).toBe(true);
         expect(f.creates()).toBe(1);
         f.start.resolve(f.connection);
         yield* Deferred.await(f.stopping);
         expect(f.destroys()).toBe(0);
         f.stop.resolve();
         yield* Deferred.await(f.destroyed);
-        const replacement = yield* f.factory;
+        const replacement = yield* f.factory([]);
         expect(f.creates()).toBe(2);
         yield* replacement.stop;
         expect(f.destroys()).toBe(2);
@@ -399,12 +484,13 @@ const desktopFixture = Effect.fnUntraced(function* (
     ),
   );
   return {
-    factory: factory.pipe(
-      Effect.map((host) => ({
-        ...host,
-        waitForExit: Deferred.succeed(watching, undefined).pipe(Effect.andThen(host.waitForExit)),
-      })),
-    ),
+    factory: (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
+      factory(display).pipe(
+        Effect.map((host) => ({
+          ...host,
+          waitForExit: Deferred.succeed(watching, undefined).pipe(Effect.andThen(host.waitForExit)),
+        })),
+      ),
     reports,
     requested,
     disabled,
@@ -455,8 +541,8 @@ it.effect("does not enable a desktop host retired while subscribing to health", 
       Deferred.succeed(subscribing, undefined).pipe(Effect.andThen(Deferred.await(releaseHealth))),
     );
     const scope = yield* Scope.make();
-    const { service } = yield* makeService(
-      f.factory.pipe(
+    const { service } = yield* makeService((display) =>
+      f.factory(display).pipe(
         Effect.map((host) => ({
           ...host,
           start: host.start.pipe(Effect.onExit((exit) => Deferred.succeed(startFinished, exit))),
@@ -508,38 +594,396 @@ it.effect("preserves the desktop driver through degraded telemetry until the rec
   }).pipe(Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]), Effect.scoped),
 );
 
-it.effect("starts an explicit driver path with telemetry and update checks off", () =>
-  Effect.gen(function* () {
-    let options: { readonly binaryPath: string; readonly environment: unknown } | undefined;
-    const factory = yield* CuaDriver.makeStandaloneHostFactory(
-      Effect.die("installer must not run"),
-      Effect.succeed({
-        EmbeddedCuaDriverHost: {
-          withOptions: (received) => {
-            options = received;
-            return {
-              start: () => Promise.reject(new Error("unused")),
-              stop: () => Promise.resolve(),
-              waitForExit: () => Promise.reject(new Error("unused")),
-              uniffiDestroy: () => {},
-            };
+it.effect.each(["linux", "darwin"] as const)(
+  "starts an explicit driver path in standard mode under GOAT's manifest, privately on %s",
+  (platform) =>
+    Effect.gen(function* () {
+      let options:
+        | {
+            readonly binaryPath: string;
+            readonly environment: unknown;
+            readonly permissionMode?: number;
+            readonly capabilityManifestPath?: string;
+            readonly approveCapabilityManifest: boolean;
+            readonly dangerouslyBypassApprovals: boolean;
+          }
+        | undefined;
+      const prepared: Array<string> = [];
+      const factory = yield* CuaDriver.makeStandaloneHostFactory(
+        Effect.die("installer must not run"),
+        (binaryPath) =>
+          Effect.sync(() => {
+            prepared.push(binaryPath);
+            return "/state/cua-driver/capability-manifest.yaml";
+          }),
+        Effect.succeed({
+          EmbeddedCuaDriverHost: {
+            withOptions: (received) => {
+              options = received;
+              return {
+                start: () => Promise.reject(new Error("unused")),
+                stop: () => Promise.resolve(),
+                waitForExit: () => Promise.reject(new Error("unused")),
+                uniffiDestroy: () => {},
+              };
+            },
           },
-        },
-      }),
-    ).pipe(
-      Effect.provide(NodeServices.layer),
-      Effect.provideService(HostProcess.Environment, {
-        GOAT_CUA_DRIVER_PATH: "/explicit/driver",
-      }),
-    );
-    const host = yield* factory;
-    expect(options?.binaryPath).toBe("/explicit/driver");
-    // The driver reads these after DO_NOT_TRACK, which its embedded allowlist cannot forward.
-    expect(options?.environment).toEqual([
-      { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
-      { name: "CUA_TELEMETRY_ENABLED", value: "false" },
-      { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
-    ]);
-    yield* host.stop;
-  }),
+        }),
+      ).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(HostProcess.Environment, {
+          GOAT_CUA_DRIVER_PATH: "/explicit/driver",
+        }),
+      );
+      // A display variable cannot turn telemetry back on: the privacy switches always win.
+      const host = yield* factory([
+        { name: "DISPLAY", value: ":1" },
+        { name: "XAUTHORITY", value: "/root/.Xauthority" },
+        { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "true" },
+      ]);
+      expect(options?.binaryPath).toBe("/explicit/driver");
+      // The manifest is written for the binary that loads it, before the daemon starts.
+      expect(prepared).toEqual(["/explicit/driver"]);
+      expect(options).toMatchObject({
+        permissionMode: 0,
+        capabilityManifestPath: "/state/cua-driver/capability-manifest.yaml",
+        approveCapabilityManifest: true,
+        dangerouslyBypassApprovals: false,
+      });
+      // The driver reads these after DO_NOT_TRACK, which its embedded allowlist cannot forward.
+      // On Linux a session bus the probe did not supply is passed empty so none is inherited.
+      expect(options?.environment).toEqual([
+        { name: "DISPLAY", value: ":1" },
+        { name: "XAUTHORITY", value: "/root/.Xauthority" },
+        ...(platform === "linux" ? [{ name: "DBUS_SESSION_BUS_ADDRESS", value: "" }] : []),
+        { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
+        { name: "CUA_TELEMETRY_ENABLED", value: "false" },
+        { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
+      ]);
+      yield* host.stop;
+    }),
 );
+
+it.effect(
+  "reports the host platform, Wayland, and running only between readiness and disable",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHost();
+      const { service, setEnabled } = yield* makeService(Effect.succeed(h.host));
+      expect(yield* service.status).toEqual({
+        platform: "linux",
+        running: false,
+        wayland: true,
+        display: reportedDisplay,
+      });
+      const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.await(h.started);
+      expect((yield* service.status).running).toBe(false);
+      yield* Deferred.succeed(h.ready, mcp);
+      expect(yield* Fiber.join(acquiring)).toEqual(served(mcp));
+      expect((yield* service.status).running).toBe(true);
+      yield* setEnabled(false);
+      yield* Deferred.await(h.stopped);
+      expect(yield* service.status).toEqual({
+        platform: "linux",
+        running: false,
+        wayland: true,
+        display: reportedDisplay,
+      });
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, { XDG_SESSION_TYPE: "wayland" }),
+      Effect.scoped,
+    ),
+);
+
+it.effect("shows the desktop's reason when it cannot start the driver", () =>
+  Effect.gen(function* () {
+    const f = yield* desktopFixture();
+    const { service } = yield* makeService(f.factory);
+    const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+    const message =
+      "Allow Accessibility and Screen Recording in System Settings, then restart computer use.";
+    yield* PubSub.publish(f.reports, {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: yield* Deferred.await(f.requested),
+      status: "unavailable",
+      message,
+    });
+    expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
+    expect(yield* service.status).toEqual({
+      platform: "darwin",
+      running: false,
+      failure: message,
+      display: reportedDisplay,
+    });
+  }).pipe(
+    Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.scoped,
+  ),
+);
+
+it.effect("treats a desktop restart as a stop, then starts fresh for the next session", () =>
+  Effect.gen(function* () {
+    const f = yield* desktopFixture(true);
+    const { service } = yield* makeService(f.factory);
+    expect(yield* service.acquire).toEqual(served(mcp));
+    yield* Deferred.await(f.watching);
+    // The desktop retires a driver that predates new macOS grants without being asked.
+    yield* PubSub.publish(f.reports, {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: yield* Deferred.await(f.requested),
+      status: "stopped",
+    });
+    yield* Deferred.await(f.disabled);
+    expect(yield* service.status).toEqual({
+      platform: "darwin",
+      running: false,
+      display: reportedDisplay,
+    });
+    expect(yield* service.lastFailure).toEqual(Option.none());
+    expect(yield* service.acquire).toEqual(served(mcp));
+    expect(f.requests).toEqual([true, false, true]);
+  }).pipe(
+    Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.scoped,
+  ),
+);
+
+it.layer(ServerSettings.layerTest())("CuaDriver display gate", (it) => {
+  const reason =
+    "No X display is reachable for root. Sign in to a desktop session on this computer or start Xvfb.";
+  const unavailable = Effect.succeed<CuaDisplay.CuaDisplayProbe>({
+    capability: "unavailable",
+    reason,
+    environment: [],
+  });
+
+  it.effect("refuses to start without a usable screen and reports why", () =>
+    Effect.gen(function* () {
+      const { service } = yield* makeService(
+        Effect.die("a host must not start without a screen"),
+        true,
+        unavailable,
+      );
+      expect(yield* service.acquire).toEqual(Option.none());
+      expect(yield* service.lastFailure).toEqual(
+        Option.some(new CuaDriver.CuaDriverHostError({ operation: "display", cause: reason })),
+      );
+      const status = yield* service.status;
+      expect(status.failure).toBe(reason);
+      expect(status.display).toEqual({ capability: "unavailable", reason });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses to turn on where the screen is unusable, but lets an enabled host save", () =>
+    Effect.gen(function* () {
+      const off = yield* makeService(Effect.die("unused"), false, unavailable);
+      const refused = yield* Effect.flip(off.service.admitEnable);
+      expect(refused.message).toBe(reason);
+      const on = yield* makeService(Effect.die("unused"), true, unavailable);
+      yield* on.service.admitEnable;
+      const partial = yield* makeService(
+        Effect.die("unused"),
+        false,
+        Effect.succeed({ ...testDisplay, capability: "partial" as const }),
+      );
+      yield* partial.service.admitEnable;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("probes again at every start and runs each host on that display", () =>
+    Effect.gen(function* () {
+      const hosts = [yield* makeHost(), yield* makeHost()];
+      const seen: Array<ReadonlyArray<CuaDisplay.CuaDisplayVariable>> = [];
+      let probes = 0;
+      const probe = Effect.sync(() => {
+        probes++;
+        return { ...testDisplay, environment: [{ name: "DISPLAY", value: `:${probes}` }] };
+      });
+      const { service } = yield* makeService(
+        (display) =>
+          Effect.sync(() => {
+            seen.push(display);
+            return hosts[seen.length - 1]!.host;
+          }),
+        true,
+        probe,
+      );
+      const first = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.succeed(hosts[0]!.ready, mcp);
+      expect(yield* Fiber.join(first)).toEqual(served(mcp));
+      yield* Deferred.await(hosts[0]!.watching);
+      yield* Deferred.succeed(hosts[0]!.exited, undefined);
+      yield* Deferred.await(hosts[0]!.stopped);
+      const second = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.succeed(hosts[1]!.ready, mcp);
+      expect(yield* Fiber.join(second)).toEqual(served(mcp));
+      expect(seen).toEqual([
+        [{ name: "DISPLAY", value: ":1" }],
+        [{ name: "DISPLAY", value: ":2" }],
+      ]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(ServerSettings.layerTest())("CuaDriver enable and grants", (it) => {
+  it.effect(
+    "turns on only after the verified install completes, and reports install failures",
+    () =>
+      Effect.gen(function* () {
+        let installs = 0;
+        const install = Effect.sync(() => {
+          installs++;
+        });
+        const off = yield* makeService(Effect.die("unused"), false, undefined, { install });
+        yield* off.service.admitEnable;
+        expect(installs).toBe(1);
+
+        const blocked = yield* makeService(
+          Effect.die("unused"),
+          false,
+          Effect.succeed({ capability: "unavailable", reason: "No X display.", environment: [] }),
+          { install },
+        );
+        yield* Effect.flip(blocked.service.admitEnable);
+        expect(installs).toBe(1);
+
+        const on = yield* makeService(Effect.die("unused"), true, undefined, { install });
+        yield* on.service.admitEnable;
+        expect(installs).toBe(1);
+
+        const message = "Cua Driver installation failed during integrity.";
+        const corrupt = yield* makeService(Effect.die("unused"), false, undefined, {
+          install: Effect.fail(
+            new CuaDriver.CuaDriverHostError({ operation: "install", cause: message }),
+          ),
+        });
+        const failed = yield* Effect.flip(corrupt.service.admitEnable);
+        expect([failed.operation, failed.message]).toEqual(["install", message]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "calls a Mac available only once the running driver reports both grants, on every start",
+    () =>
+      Effect.gen(function* () {
+        const hosts = [yield* makeHost(), yield* makeHost()];
+        let created = 0;
+        let granted = { accessibility: true, screenRecording: true };
+        const seen: Array<CuaDriverMcpConfiguration> = [];
+        const { service } = yield* makeService(
+          Effect.sync(() => hosts[created++]!.host),
+          true,
+          Effect.succeed({
+            capability: "partial",
+            reason: "Accessibility and Screen Recording must be granted at this Mac.",
+            display: "console",
+            environment: [],
+          }),
+          {
+            observeGrants: (config) =>
+              Effect.sync(() => {
+                seen.push(config);
+                return granted;
+              }),
+          },
+        );
+        expect((yield* service.status).display).toEqual({
+          capability: "partial",
+          reason: "Accessibility and Screen Recording must be granted at this Mac.",
+          display: "console",
+        });
+        const first = yield* service.acquire.pipe(Effect.forkChild);
+        yield* Deferred.succeed(hosts[0]!.ready, mcp);
+        yield* Fiber.join(first);
+        expect((yield* service.computerUse).capability).toBe("available");
+        expect(seen).toEqual([mcp]);
+
+        // Screen Recording is revoked; the next start checks again.
+        granted = { accessibility: true, screenRecording: false };
+        yield* Deferred.await(hosts[0]!.watching);
+        yield* Deferred.succeed(hosts[0]!.exited, undefined);
+        yield* Deferred.await(hosts[0]!.stopped);
+        const second = yield* service.acquire.pipe(Effect.forkChild);
+        yield* Deferred.succeed(hosts[1]!.ready, mcp);
+        yield* Fiber.join(second);
+        expect(yield* service.computerUse).toMatchObject({
+          capability: "partial",
+          reason:
+            "Screen Recording is not granted at this Mac. Someone at the Mac must allow it in System Settings → Privacy & Security.",
+        });
+        expect(seen).toHaveLength(2);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("drops a Mac back to partial when the running driver cannot confirm its grants", () =>
+    Effect.gen(function* () {
+      const hosts = [yield* makeHost(), yield* makeHost()];
+      let created = 0;
+      const both = { accessibility: true, screenRecording: true };
+      let answer: Effect.Effect<CuaDisplay.MacGrants | null> = Effect.succeed(both);
+      let checks = 0;
+      const { service } = yield* makeService(
+        Effect.sync(() => hosts[created++]!.host),
+        true,
+        Effect.succeed({
+          capability: "partial",
+          reason: "Accessibility and Screen Recording must be granted at this Mac.",
+          display: "console",
+          environment: [],
+        }),
+        {
+          observeGrants: () =>
+            Effect.suspend(() => {
+              checks++;
+              return answer;
+            }),
+        },
+      );
+      const capability = service.computerUse.pipe(Effect.map((value) => value.capability));
+      // Status re-checks a running driver once the last answer is ten seconds old.
+      const recheck = (next: Effect.Effect<CuaDisplay.MacGrants | null>) =>
+        Effect.sync(() => {
+          answer = next;
+        }).pipe(Effect.andThen(TestClock.adjust("10 seconds")));
+
+      const first = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.succeed(hosts[0]!.ready, mcp);
+      yield* Fiber.join(first);
+      expect(yield* capability).toBe("available");
+
+      yield* recheck(Effect.succeed(null));
+      expect(yield* capability).toBe("partial");
+      yield* recheck(Effect.succeed(both));
+      expect(yield* capability).toBe("available");
+
+      const unanswered = yield* Deferred.make<CuaDisplay.MacGrants | null>();
+      yield* recheck(Deferred.await(unanswered));
+      const timingOut = yield* capability.pipe(Effect.forkChild);
+      yield* TestClock.adjust("15 seconds");
+      expect(yield* Fiber.join(timingOut)).toBe("partial");
+
+      yield* recheck(Effect.succeed(both));
+      expect(yield* capability).toBe("available");
+      yield* Deferred.await(hosts[0]!.watching);
+      yield* Deferred.succeed(hosts[0]!.exited, undefined);
+      yield* Deferred.await(hosts[0]!.stopped);
+      expect(yield* capability).toBe("partial");
+
+      // A new daemon whose first check says nothing inherits nothing from the last one.
+      answer = Effect.succeed(null);
+      const second = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.succeed(hosts[1]!.ready, mcp);
+      yield* Fiber.join(second);
+      expect(yield* capability).toBe("partial");
+      expect(checks).toBe(6);
+    }).pipe(Effect.scoped),
+  );
+});

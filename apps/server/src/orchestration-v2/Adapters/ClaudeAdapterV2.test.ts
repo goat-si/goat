@@ -503,6 +503,48 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it("takes the cua-driver name for an unattended turn without a lease, approving nothing", () => {
+    const mcpSession = {
+      ...mcpSessionFor(ThreadId.make("thread-claude-cua-blocked")),
+      cuaDriverBlocked: true,
+    };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession,
+      readOnlySandbox: false,
+      // A user rule that pre-approves their own driver's tools is dropped too.
+      allowedTools: ["Read", "mcp__cua-driver__click"],
+    });
+    const blocked = overrides.mcpServers?.["cua-driver"];
+    assert.isTrue(McpProviderSession.isBlockedCuaServer(blocked));
+    assert.deepEqual(overrides.allowedTools, [
+      "Read",
+      ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD,
+    ]);
+  });
+
+  it("routes a leased turn's cua-driver name to GOAT's proxy", () => {
+    const proxy: M.CuaDriverMcpConfiguration = {
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      environment: [{ name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1/api" }],
+    };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: {
+        ...mcpSessionFor(ThreadId.make("thread-claude-cua-leased")),
+        cuaDriver: proxy,
+        cuaDriverOverridesUserConfig: true,
+      },
+      readOnlySandbox: false,
+    });
+    assert.deepEqual(overrides.mcpServers?.["cua-driver"], {
+      type: "stdio",
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      env: { GOAT_CUA_LEASE_URL: "http://127.0.0.1/api" },
+    });
+    assert.isFalse(McpProviderSession.isBlockedCuaServer(overrides.mcpServers?.["cua-driver"]));
+  });
+
   it("extends an explicit allowlist with the goat wildcard", () => {
     const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
     const mcpSession = mcpSessionFor(threadId);
@@ -13986,4 +14028,240 @@ describe("Claude WP4 memory delivery", () => {
     for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_WRITE_TOOLS)
       assert.notInclude(overrides.allowedTools ?? [], tool);
   });
+});
+describe("ClaudeAdapterV2 computer use", () => {
+  const cuaDriver: M.CuaDriverMcpConfiguration = {
+    command: "/resources/cua-driver",
+    args: ["mcp", "--socket", "/tmp/cua.sock"],
+    environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+    socketPath: "/tmp/cua.sock",
+  };
+  const session = (threadId: ThreadId): McpProviderSession.McpProviderSessionConfig => ({
+    environmentId: EnvironmentId.make("fixture"),
+    threadId,
+    providerSessionId: "cua-credential",
+    providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+    endpoint: "http://127.0.0.1:43123/mcp",
+    authorizationHeader: "Bearer fixture-cua",
+    browserToolsAvailable: false,
+    grantedScopes: [],
+  });
+
+  it("attaches the driver beside goat and preapproves it only outside read-only sandboxes", () => {
+    const attached = { ...session(ThreadId.make("cua-overrides")), cuaDriver };
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: attached,
+      readOnlySandbox: false,
+    });
+    assert.deepEqual(overrides.mcpServers?.["cua-driver"], {
+      type: "stdio",
+      command: "/resources/cua-driver",
+      args: ["mcp", "--socket", "/tmp/cua.sock"],
+      env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+    });
+    assert.include(overrides.allowedTools ?? [], "mcp__cua-driver__*");
+
+    const readOnly = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: attached,
+      readOnlySandbox: true,
+      allowedTools: ["mcp__cua-driver__click"],
+    });
+    assert.isUndefined(readOnly.mcpServers?.["cua-driver"]);
+    assert.isFalse(
+      (readOnly.allowedTools ?? []).some((tool) => tool.startsWith("mcp__cua-driver__")),
+    );
+
+    const detached = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: session(ThreadId.make("cua-overrides")),
+      readOnlySandbox: false,
+    });
+    assert.isUndefined(detached.mcpServers?.["cua-driver"]);
+    assert.notInclude(detached.allowedTools ?? [], "mcp__cua-driver__*");
+    // The live process takes the driver through setMcpServers instead of being replaced.
+    const policy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+      CLAUDE_TEST_RUNTIME_POLICY,
+    );
+    assert.equal(
+      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(policy, overrides),
+      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(policy, detached),
+    );
+  });
+
+  it.effect("attaches and detaches the driver on a live query at the next turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-cua-claude-",
+        });
+        const offers: SDKUserMessage[] = [];
+        const sdkMessages = yield* Queue.unbounded<SDKMessage>();
+        const registrations: Array<Record<string, unknown>> = [];
+        const opened: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions[] = [];
+        let closes = 0;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("cua-claude-native"),
+            open: (input) =>
+              Effect.sync(() => {
+                opened.push(input.options);
+                return {
+                  messages: Stream.fromQueue(sdkMessages),
+                  offer: (message) =>
+                    Effect.sync(() => {
+                      offers.push(message);
+                    }),
+                  setMcpServers: (servers) =>
+                    Effect.sync(() => {
+                      registrations.push(servers);
+                    }),
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.sync(() => {
+                    closes++;
+                  }),
+                } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        }).pipe(
+          Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
+            issue: () => Effect.die("unused"),
+            resolve: () => Effect.succeed(undefined),
+            touch: () => Effect.void,
+            revokeProviderSession: () => Effect.void,
+            revokeThread: () => Effect.void,
+            revokeAll: Effect.void,
+            currentMemoryPolicy: () => Effect.succeed(undefined),
+          }),
+        );
+        const threadId = ThreadId.make("cua-claude");
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = session(threadId);
+        yield* sessions.set(config);
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("cua-claude-session"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        const terminals = yield* Queue.unbounded<void>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+        });
+        // Permission checks run while the turn is active, as Claude asks during one.
+        const turn = (ordinal: number, whileActive: Effect.Effect<void> = Effect.void) =>
+          Effect.gen(function* () {
+            yield* runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId,
+                providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make(`cua-claude-${ordinal}`),
+                text: `turn ${ordinal}`,
+                attachments: [],
+              }),
+            );
+            const offered = offers[offers.length - 1]!;
+            yield* whileActive;
+            yield* Queue.offer(sdkMessages, { ...offered, session_id: "cua-claude-native" });
+            yield* Queue.offer(sdkMessages, {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              duration_ms: 0,
+              duration_api_ms: 0,
+              num_turns: 1,
+              result: "done",
+              stop_reason: "end_turn",
+              total_cost_usd: 0,
+              usage: {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+                inference_geo: "fixture",
+                iterations: [],
+                server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
+                service_tier: "standard",
+                speed: "standard",
+              },
+              modelUsage: {},
+              permission_denials: [],
+              uuid: `00000000-0000-4000-8000-00000000010${ordinal}`,
+              session_id: "cua-claude-native",
+              terminal_reason: "completed",
+            });
+            yield* Queue.take(terminals);
+            return offered;
+          });
+        const expectPermission = (behavior: "allow" | "deny") =>
+          Effect.promise(() =>
+            opened[0]!.canUseTool!(
+              "mcp__cua-driver__click",
+              {},
+              {
+                signal: new AbortController().signal,
+                toolUseID: `fixture-${behavior}`,
+                requestId: `fixture-${behavior}`,
+              },
+            ),
+          ).pipe(
+            Effect.map((result) => {
+              assert.equal(result?.behavior, behavior);
+              if (behavior === "deny")
+                assert.include(JSON.stringify(result), "Computer use is not attached");
+            }),
+          );
+        const mentionsComputerUse = (message: SDKUserMessage) =>
+          JSON.stringify(message.message.content).includes("<computer_use>");
+
+        // Opened before computer use was enabled: no driver, no instructions.
+        const first = yield* turn(1, expectPermission("deny"));
+        assert.isUndefined(opened[0]?.mcpServers?.["cua-driver"]);
+        assert.notInclude(JSON.stringify(opened[0]?.systemPrompt), "<computer_use>");
+        assert.isFalse(mentionsComputerUse(first));
+
+        // Enabled while the process lives: the next turn attaches it in place.
+        yield* sessions.set({ ...config, cuaDriver });
+        const second = yield* turn(2, expectPermission("allow"));
+        assert.equal(opened.length, 1);
+        assert.equal(closes, 0);
+        assert.deepEqual(Object.keys(registrations[0] ?? {}).toSorted(), ["cua-driver", "goat"]);
+        assert.isTrue(mentionsComputerUse(second));
+        const third = yield* turn(3);
+        assert.equal(registrations.length, 1);
+        assert.isFalse(mentionsComputerUse(third));
+
+        // Disabled: the driver leaves the live process and its tools are denied.
+        yield* sessions.set(config);
+        yield* turn(4, expectPermission("deny"));
+        assert.equal(opened.length, 1);
+        assert.deepEqual(Object.keys(registrations[1] ?? {}), ["goat"]);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
 });

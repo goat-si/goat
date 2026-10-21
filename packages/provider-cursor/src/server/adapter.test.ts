@@ -835,12 +835,49 @@ describe("CursorAdapterV2", () => {
       assert.equal(opens[5]!.agentId, "native-cursor-error");
       assert.equal(opens[5]!.options.local?.cwd, movedPolicy.cwd);
       assert.include(sentMessages[11]!, "read=true, write=true, source=true");
+      // Servers are fixed when the agent opens: enabling computer use reopens the
+      // same agent with the driver, and only then does the prompt describe it.
+      const cuaDriver = {
+        command: "/resources/cua-driver",
+        args: ["mcp"],
+        environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+      };
+      for (const [offset, attachment] of [
+        { ...authorizationConfig, cuaDriver },
+        authorizationConfig,
+      ].entries()) {
+        yield* sessions.set(attachment);
+        yield* runtime.startTurn({
+          ...ordinaryInput,
+          runtimePolicy: movedPolicy,
+          runOrdinal: 13 + offset,
+          providerTurnOrdinal: 13 + offset,
+        });
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+        assert.equal(opens.length, 7 + offset);
+        assert.equal(opens[6 + offset]!.operation, "resume");
+        assert.deepEqual(
+          opens[6 + offset]!.options.mcpServers?.["cua-driver"],
+          offset === 0
+            ? {
+                type: "stdio",
+                command: "/resources/cua-driver",
+                args: ["mcp"],
+                env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+              }
+            : undefined,
+        );
+        assert.equal(sentMessages[12 + offset]!.includes("<computer_use>"), offset === 0);
+      }
       memory = { ...snapshot, renderedText: snapshot.renderedText.replace("data", "tampered") };
       const failed = yield* runtime
         .startTurn({ ...ordinaryInput, runOrdinal: 4, providerTurnOrdinal: 4 })
         .pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(failed));
-      assert.equal(sentMessages.length, 12);
+      assert.equal(sentMessages.length, 14);
     }).pipe(
       Effect.scoped,
       Effect.provide(

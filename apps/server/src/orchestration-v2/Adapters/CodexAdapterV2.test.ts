@@ -109,6 +109,54 @@ const wp4Memory = () =>
     ],
   })!;
 
+describe("CodexAdapterV2 computer use for unattended turns", () => {
+  const session: McpProviderSession.McpProviderSessionConfig = {
+    environmentId: M.EnvironmentId.make("fixture"),
+    threadId: M.ThreadId.make("thread-cua-unattended"),
+    providerSessionId: "credential",
+    providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+    endpoint: "http://127.0.0.1:43123/mcp",
+    authorizationHeader: "Bearer fixture",
+    browserToolsAvailable: false,
+  };
+  const entry = (params: ReturnType<typeof CodexAdapterV2.codexThreadRuntimeParams>) =>
+    params.config["mcp_servers.cua-driver"];
+
+  it("disables a cua-driver the user configured when the turn has no lease", () => {
+    const blocked = entry(
+      CodexAdapterV2.codexThreadRuntimeParams({
+        mcpSession: { ...session, cuaDriverBlocked: true },
+      }),
+    );
+    // The whole dotted entry replaces the user's server, and it never starts.
+    assert.deepEqual(blocked, {
+      command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+      args: ["-e", ""],
+      env: { ELECTRON_RUN_AS_NODE: "1", GOAT_CUA_BLOCKED: "1" },
+      enabled: false,
+    });
+    // An interactive turn without computer use leaves the user's own config alone.
+    assert.isUndefined(entry(CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: session })));
+  });
+
+  it("resolves cua-driver to the lease proxy even when the user defines one", () => {
+    const proxy: M.CuaDriverMcpConfiguration = {
+      command: "/goat/node",
+      args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+      environment: [{ name: "GOAT_CUA_LEASE_URL", value: "http://127.0.0.1:43123/api" }],
+    };
+    const leased = { ...session, cuaDriver: proxy, cuaDriverOverridesUserConfig: true };
+    assert.deepEqual(
+      entry(CodexAdapterV2.codexThreadRuntimeParams({ mcpSession: leased, userCuaDriver: true })),
+      {
+        command: "/goat/node",
+        args: ["/goat/bin.mjs", "cua-lease-proxy", "--handoff", "handoff:grant"],
+        env: { GOAT_CUA_LEASE_URL: "http://127.0.0.1:43123/api" },
+      },
+    );
+  });
+});
+
 describe("CodexAdapterV2 context usage", () => {
   it("uses the current context rather than cumulative processed tokens", () => {
     const usage = CodexAdapterV2.codexProviderTurnTokenUsage(
@@ -1013,6 +1061,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                         onRequest(method, params).pipe(
                           Effect.andThen(client.request(method, params)),
                         ),
+                      // Reconfiguring resumes go through the raw protocol.
+                      raw: {
+                        ...client.raw,
+                        request: (method, params) =>
+                          onRequest(method, params).pipe(
+                            Effect.andThen(client.raw.request(method, params)),
+                          ),
+                      },
                     }) satisfies CodexClient.CodexAppServerClient["Service"],
                 ),
                 Effect.provide(context),
@@ -2084,6 +2140,224 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             );
             yield* Queue.take(terminals);
           }
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect.each(["managed", "user", "override"] as const)(
+    "attaches computer use to a live thread at the next turn unless the user defines it (%s)",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `cua-live-${mode}`;
+          const nativeThreadId = scenario;
+          const threadId = ThreadId.make(`thread-${scenario}`);
+          const cuaDriver: M.CuaDriverMcpConfiguration = {
+            command: "/resources/cua-driver",
+            args: ["mcp", "--socket", "/tmp/cua.sock"],
+            environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
+            socketPath: "/tmp/cua.sock",
+          };
+          const config: McpProviderSession.McpProviderSessionConfig = {
+            environmentId: M.EnvironmentId.make("fixture"),
+            threadId,
+            providerSessionId: "credential-cua",
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer fixture-cua",
+            browserToolsAvailable: false,
+            grantedScopes: [],
+          };
+          const withCua = {
+            ...config,
+            cuaDriver,
+            ...(mode === "override" ? { cuaDriverOverridesUserConfig: true } : {}),
+          };
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(config);
+          // The wire shape Codex receives: each server under its own dotted path.
+          const managed = {
+            command: "/resources/cua-driver",
+            args: ["mcp", "--socket", "/tmp/cua.sock"],
+            env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
+          };
+          const threadParams = (cua?: Record<string, unknown>) => ({
+            cwd: "/workspace",
+            model: CODEX_TEST_MODEL_SELECTION.model,
+            config: {
+              "tools.update_plan.enabled": true,
+              mcp_optional_startup_grace_ms: 10_000,
+              "mcp_servers.goat": {
+                url: config.endpoint,
+                disabled_tools: [
+                  "memory_list",
+                  "memory_search",
+                  "memory_read",
+                  "memory_history",
+                  "memory_sync_status",
+                  "memory_read_source",
+                  "memory_upsert",
+                  "memory_forget",
+                  "memory_revert_resolution",
+                ],
+                tool_timeout_sec: 3900,
+                http_headers: { Authorization: config.authorizationHeader },
+              },
+              ...(cua === undefined ? {} : { "mcp_servers.cua-driver": cua }),
+            },
+          });
+          const preamble = codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId: "unused",
+            prompt: "unused",
+          });
+          const threadResult = preamble[4]!;
+          const entries: CodexReplay.CodexAppServerReplayEntry[] = [
+            ...preamble.slice(0, 3),
+            {
+              type: "expect_outbound",
+              frame: { id: 2, method: "thread/start", params: threadParams() },
+            },
+            threadResult,
+          ];
+          const resume = (id: number, params: ReturnType<typeof threadParams>) => {
+            entries.push(
+              {
+                type: "expect_outbound",
+                frame: {
+                  id,
+                  method: "thread/resume",
+                  params: { threadId: nativeThreadId, excludeTurns: true, ...params },
+                },
+              },
+              withReplayRequestId(threadResult, id),
+            );
+          };
+          const turn = (id: number, ordinal: number, computerUse: boolean) =>
+            Effect.gen(function* () {
+              const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+                nativeThreadId,
+                codexInput: [{ type: "text", text: `turn-${ordinal}` }],
+                runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+                modelSelection: CODEX_TEST_MODEL_SELECTION,
+                hasGoatMcp: true,
+                browserToolsAvailable: false,
+                computerUse,
+              });
+              assert.equal(
+                JSON.stringify(params.additionalContext ?? {}).includes("<computer_use>"),
+                computerUse,
+              );
+              entries.push(
+                { type: "expect_outbound", frame: { id, method: "turn/start", params } },
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    id,
+                    result: {
+                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    method: "turn/completed",
+                    params: {
+                      threadId: nativeThreadId,
+                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
+                    },
+                  },
+                },
+              );
+            });
+          // Turn 1 runs before computer use is enabled.
+          yield* turn(3, 1, false);
+          // Turn 2: enabled. Unless the decision overrides it, the user's config
+          // is read once for the directory.
+          let id = 4;
+          if (mode !== "override") {
+            entries.push(
+              {
+                type: "expect_outbound",
+                frame: {
+                  id,
+                  method: "config/read",
+                  params: { cwd: "/workspace", includeLayers: false },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  id,
+                  result: {
+                    config: {
+                      mcp_servers:
+                        mode === "user" ? { "cua-driver": { command: "/opt/my/cua-driver" } } : {},
+                    },
+                    origins: {},
+                  },
+                },
+              },
+            );
+            id++;
+          }
+          if (mode === "user") {
+            // The user's own cua-driver wins: no reconfigure and no instructions.
+            yield* turn(id++, 2, false);
+            yield* turn(id++, 3, false);
+          } else {
+            resume(id++, threadParams(managed));
+            yield* turn(id++, 2, true);
+            // Turn 3: disabled again. The managed entry is switched off, not left behind.
+            resume(id++, threadParams({ ...managed, enabled: false }));
+            yield* turn(id++, 3, false);
+          }
+          const terminals = yield* Queue.unbounded<void>();
+          // The replay ignores MCP server config, so the thread requests are checked here.
+          const threadConfigs: Array<Record<string, unknown>> = [];
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({ scenario, entries }),
+            (event) =>
+              event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+            (method, params) =>
+              Effect.sync(() => {
+                if (method === "thread/start" || method === "thread/resume")
+                  threadConfigs.push((params as { config: Record<string, unknown> }).config);
+              }),
+          ).pipe(
+            Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
+              issue: () => Effect.die("unused"),
+              resolve: () => Effect.succeed(undefined),
+              touch: () => Effect.void,
+              revokeProviderSession: () => Effect.void,
+              revokeThread: () => Effect.void,
+              revokeAll: Effect.void,
+              currentMemoryPolicy: () => Effect.succeed(undefined),
+            }),
+          );
+          for (const [ordinal, attachment] of [config, withCua, config].entries()) {
+            yield* sessions.set(attachment);
+            yield* harness.runtime.startTurn(
+              makeCodexTestTurnInput({
+                threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make(`cua-${mode}-${ordinal + 1}`),
+                text: `turn-${ordinal + 1}`,
+              }),
+            );
+            yield* Queue.take(terminals);
+          }
+          assert.deepEqual(
+            threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            mode === "user" ? [undefined] : [undefined, managed, { ...managed, enabled: false }],
+          );
+          for (const threadConfig of threadConfigs)
+            assert.deepEqual(
+              threadConfig["mcp_servers.goat"],
+              threadParams().config["mcp_servers.goat"],
+            );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );

@@ -163,7 +163,10 @@ import {
 import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
-import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import {
+  buildRuntimeInstructions,
+  COMPUTER_USE_INSTRUCTIONS,
+} from "@goat/provider-core/server/runtimeInstructions";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -1373,7 +1376,14 @@ export function makeClaudeQueryOptions(input: {
       type: "preset" as const,
       preset: "claude_code" as const,
       append: [
-        buildRuntimeInstructions({ harness: "Claude Code" }) +
+        buildRuntimeInstructions({
+          harness: "Claude Code",
+          computerUse:
+            input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
+            !McpProviderSession.isBlockedCuaServer(
+              input.mcpServers[McpProviderSession.CUA_MCP_SERVER_NAME],
+            ),
+        }) +
           "\n\n" +
           MemoryContext.MEMORY_DATA_BOUNDARY_REMINDER +
           (input.mcpServers === undefined ? "" : GOAT_ORCHESTRATION_INSTRUCTIONS),
@@ -1429,6 +1439,8 @@ const readClaudeAppendSystemPromptFile = Effect.fnUntraced(function* (input: {
 });
 
 export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
+const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
+const CLAUDE_CUA_MCP_TOOL_WILDCARD = `${CLAUDE_CUA_MCP_TOOL_PREFIX}*`;
 
 // Automatic approval policy is separate from Tool.Readonly metadata.
 // Preserve html_render preapproval; reading another thread still requires approval.
@@ -1537,16 +1549,35 @@ export function claudeMcpQueryOverrides(input: {
   const mcpAllowedTools = input.readOnlySandbox
     ? [...CLAUDE_READ_ONLY_GOAT_MCP_ALLOWED_TOOLS, ...memoryReadTools]
     : [CLAUDE_GOAT_MCP_TOOL_WILDCARD];
+  // Computer use never reaches a read-only sandbox, even with a stale session.
+  const cuaServers = input.readOnlySandbox ? {} : McpProviderSession.cuaStdioMcpServers(session);
+  const cuaAllowedTools =
+    Object.keys(cuaServers).length === 0 ? [] : [CLAUDE_CUA_MCP_TOOL_WILDCARD];
+  // Claude merges its settings' MCP servers with these by name; an unattended turn without a
+  // lease takes the name so a user's own `cua-driver` cannot start, and nothing is preapproved.
+  const blockedServers =
+    session.cuaDriverBlocked === true && Object.keys(cuaServers).length === 0
+      ? {
+          [McpProviderSession.CUA_MCP_SERVER_NAME]: {
+            type: "stdio" as const,
+            command: McpProviderSession.BLOCKED_CUA_STDIO_SERVER.command,
+            args: [...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.args],
+            env: { ...McpProviderSession.BLOCKED_CUA_STDIO_SERVER.env },
+          },
+        }
+      : {};
   return {
     allowedTools: Array.from(
       new Set([
         ...(input.allowedTools ?? []).filter(
           (tool) =>
-            !input.readOnlySandbox ||
-            !tool.startsWith("mcp__goat__") ||
-            mcpAllowedTools.includes(tool),
+            !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX) &&
+            (!input.readOnlySandbox ||
+              !tool.startsWith("mcp__goat__") ||
+              mcpAllowedTools.includes(tool)),
         ),
         ...mcpAllowedTools,
+        ...cuaAllowedTools,
       ]),
     ),
     mcpServers: {
@@ -1558,9 +1589,25 @@ export function claudeMcpQueryOverrides(input: {
         },
         timeout: CLAUDE_GOAT_MCP_TOOL_TIMEOUT_MS,
       },
+      ...cuaServers,
+      ...blockedServers,
     },
     // Only the proxy exemption travels in the environment; the credential stays in the header.
     mcpEnvironment: claudeMcpProxyBypassEnvironment(session.endpoint, input.environment),
+  };
+}
+
+function appendClaudeUserText(message: SDKUserMessage, text: string): SDKUserMessage {
+  const content = message.message.content;
+  return {
+    ...message,
+    message: {
+      ...message.message,
+      content: [
+        ...(typeof content === "string" ? [{ type: "text" as const, text: content }] : content),
+        { type: "text" as const, text },
+      ],
+    },
   };
 }
 
@@ -2242,7 +2289,8 @@ function claudeRuntimeQueryPolicyKey(policy: ClaudeRuntimeQueryPolicy): string {
 }
 
 // Runtime permissions and connection routing determine query identity. Credential
-// rotation uses setMcpServers on the live query; memory preapprovals are excluded by openQuery.
+// rotation and computer use changes use setMcpServers on the live query, so the
+// driver is excluded here; memory preapprovals are excluded by openQuery.
 export function claudeEffectiveQueryPolicyKey(
   queryPolicy: ClaudeRuntimeQueryPolicy,
   mcpOverrides: {
@@ -2256,13 +2304,19 @@ export function claudeEffectiveQueryPolicyKey(
       ...queryPolicy,
       ...(mcpOverrides.allowedTools === undefined
         ? {}
-        : { allowedTools: mcpOverrides.allowedTools }),
+        : {
+            allowedTools: mcpOverrides.allowedTools.filter(
+              (tool) => !tool.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX),
+            ),
+          }),
     }),
     mcpServers: Object.fromEntries(
-      Object.entries(mcpOverrides.mcpServers ?? {}).map(([name, config]) => [
-        name,
-        { ...config, ...("headers" in config ? { headers: undefined } : {}) },
-      ]),
+      Object.entries(mcpOverrides.mcpServers ?? {})
+        .filter(([name]) => name !== McpProviderSession.CUA_MCP_SERVER_NAME)
+        .map(([name, config]) => [
+          name,
+          { ...config, ...("headers" in config ? { headers: undefined } : {}) },
+        ]),
     ),
     mcpEnvironment: mcpOverrides.mcpEnvironment,
   });
@@ -3510,6 +3564,10 @@ interface ClaudeLiveQueryContext {
   readonly query: ClaudeAgentSdkQuerySession;
   readonly queryPolicyKey: string;
   mcpCredentialId: string | undefined;
+  /** The Cua Driver attached to this process now (`cuaDriverKey`); empty when none. */
+  cuaDriverKey: string;
+  /** The process has seen the computer use instructions, in its system prompt or a prompt. */
+  computerUseInstructed: boolean;
   // The selection this process runs now. Live changes update it.
   selection: CompiledClaudeModelSelection;
   readonly closed: Deferred.Deferred<void, never>;
@@ -4097,7 +4155,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (existing?.lastTurn?.memoryRelease) yield* existing.lastTurn.memoryRelease;
                 if (!existing || existing.stopping) return;
                 const config = yield* readMcpSession(rotation.threadId);
-                if (existing.mcpCredentialId === config?.providerSessionId) return;
+                const cuaKey = McpProviderSession.cuaDriverKey(config?.cuaDriver);
+                if (
+                  existing.mcpCredentialId === config?.providerSessionId &&
+                  existing.cuaDriverKey === cuaKey
+                )
+                  return;
                 if (!existing.query.setMcpServers) {
                   yield* Effect.logWarning("Claude MCP credential refresh unavailable.");
                   return;
@@ -4110,6 +4173,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   Effect.tap(() =>
                     Effect.sync(() => {
                       existing.mcpCredentialId = config?.providerSessionId;
+                      existing.cuaDriverKey = cuaKey;
                     }),
                   ),
                   Effect.catch(() =>
@@ -8886,6 +8950,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          // A process opened before the driver was attached lacks its
+          // preapproval; the live session decides instead.
+          if (toolName.startsWith(CLAUDE_CUA_MCP_TOOL_PREFIX)) {
+            const attached =
+              (yield* readMcpSession(context.input.threadId))?.cuaDriver !== undefined &&
+              sandboxPolicyKindForClaudeRuntimePolicy(context.input.runtimePolicy) !== "readOnly";
+            return attached
+              ? ({ behavior: "allow", updatedInput: toolInput } satisfies PermissionResult)
+              : ({
+                  behavior: "deny",
+                  message: "Computer use is not attached to this thread.",
+                  toolUseID: callbackOptions.toolUseID,
+                } satisfies PermissionResult);
+          }
+
           if (toolName.startsWith("mcp__goat__memory_")) {
             const availability = McpProviderSession.memoryToolAvailability(
               yield* readMcpSession(context.input.threadId),
@@ -9268,6 +9347,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               (tool) => !tool.startsWith("mcp__goat__memory_"),
             ),
           });
+          const cuaServer = mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME];
+          const cuaKey = McpProviderSession.isBlockedCuaServer(cuaServer)
+            ? "blocked"
+            : McpProviderSession.cuaDriverKey(
+                cuaServer === undefined ? undefined : mcpSession?.cuaDriver,
+              );
           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
           const existing = yield* Ref.get(queryContext);
@@ -9309,7 +9394,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.queryPolicyKey === queryPolicyKey &&
             existing.selection.queryIdentity === compiledSelection.queryIdentity
           ) {
-            if (existing.mcpCredentialId !== mcpSession?.providerSessionId) {
+            // Enabling or disabling computer use reaches a live process here,
+            // without replacing it (background work would block that).
+            if (
+              existing.mcpCredentialId !== mcpSession?.providerSessionId ||
+              existing.cuaDriverKey !== cuaKey
+            ) {
               if (!existing.query.setMcpServers)
                 return yield* queryRunnerError(
                   "MCP credential refresh unavailable.",
@@ -9317,6 +9407,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 );
               yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
               existing.mcpCredentialId = mcpSession?.providerSessionId;
+              existing.cuaDriverKey = cuaKey;
             }
             // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
             // Auto/default may reflect a policy restriction that forbids restoring bypass.
@@ -9442,6 +9533,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             query: querySession,
             queryPolicyKey,
             mcpCredentialId: mcpSession?.providerSessionId,
+            cuaDriverKey: cuaKey,
+            computerUseInstructed: cuaKey !== "",
             selection: compiledSelection,
             closed,
             lastTurn: null,
@@ -9522,20 +9615,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             : turnInput.memoryContext;
           if (snapshot === undefined) return message;
           const text = yield* Effect.try(() => MemoryContext.memoryContextText(snapshot));
-          const content = message.message.content;
-          return {
-            ...message,
-            message: {
-              ...message.message,
-              content: [
-                ...(typeof content === "string"
-                  ? [{ type: "text" as const, text: content }]
-                  : content),
-                { type: "text" as const, text },
-              ],
-            },
-          } satisfies SDKUserMessage;
+          return appendClaudeUserText(message, text);
         });
+
+        // A process whose system prompt predates the driver learns the
+        // computer use rules from the first prompt after it was attached.
+        const withComputerUseNotice = (message: SDKUserMessage, query: ClaudeLiveQueryContext) =>
+          Effect.sync(() => {
+            if (
+              query.cuaDriverKey === "" ||
+              query.cuaDriverKey === "blocked" ||
+              query.computerUseInstructed
+            )
+              return message;
+            query.computerUseInstructed = true;
+            return appendClaudeUserText(message, COMPUTER_USE_INSTRUCTIONS);
+          });
 
         const startTurn = Effect.fn("ClaudeAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput, nativeControl = false) {
@@ -9709,7 +9804,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (userMessage !== null) {
               const admittedMessage = nativeControl
                 ? userMessage
-                : yield* withFreshMemory(userMessage, turnInput);
+                : yield* withFreshMemory(userMessage, turnInput).pipe(
+                    Effect.flatMap((message) => withComputerUseNotice(message, querySession)),
+                  );
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;
                 context.memoryRelease = yield* derivedCache
