@@ -84,7 +84,7 @@ const OrchestratorCapabilitiesTool = Tool.make(agentSurfaceRegistry["provider.li
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.list"]));
 
-export const DelegateTaskTool = Tool.make(agentSurfaceRegistry["task.create"].name, {
+const DelegateTaskTool = Tool.make(agentSurfaceRegistry["task.create"].name, {
   description: agentSurfaceRegistry["task.create"].description,
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
@@ -138,7 +138,7 @@ const WorkflowStopTool = Tool.make(agentSurfaceRegistry["workflow.stop"].name, {
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["workflow.stop"]));
 
-export const ScheduleTaskTool = Tool.make(agentSurfaceRegistry["schedule.create"].name, {
+const ScheduleTaskTool = Tool.make(agentSurfaceRegistry["schedule.create"].name, {
   description: agentSurfaceRegistry["schedule.create"].description,
   parameters: OrchestratorMcpScheduleTaskInput,
   success: OrchestratorMcpScheduleTaskResult,
@@ -183,7 +183,7 @@ const RequestSecretTool = Tool.make(agentSurfaceRegistry["handoff.create"].name,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["handoff.create"]));
 
-export const CreateThreadsTool = Tool.make(agentSurfaceRegistry["thread.create_many"].name, {
+const CreateThreadsTool = Tool.make(agentSurfaceRegistry["thread.create_many"].name, {
   description: agentSurfaceRegistry["thread.create_many"].description,
   parameters: OrchestratorMcpCreateThreadsInput,
   success: OrchestratorMcpCreateThreadsResult,
@@ -212,7 +212,7 @@ const ThreadReadTool = Tool.make(agentSurfaceRegistry["thread.read"].name, {
   .annotate(Tool.Strict, true)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.read"]));
 
-export const ThreadUpdateTool = Tool.make(agentSurfaceRegistry["thread.update"].name, {
+const ThreadUpdateTool = Tool.make(agentSurfaceRegistry["thread.update"].name, {
   description: agentSurfaceRegistry["thread.update"].description,
   parameters: ThreadMetadataMcpUpdateInput,
   success: ThreadMetadataMcpUpdateResult,

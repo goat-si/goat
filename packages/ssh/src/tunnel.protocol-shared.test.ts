@@ -54,32 +54,41 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
-    it.live("stale launch files from an earlier server do not block attaching", () =>
-      Effect.gen(function* () {
-        const f = yield* makeProtocolFixture({
-          live: true,
-          kind: "managed",
-          oldVersion: "1.2.2",
-          ...current,
-        });
-        const exited = yield* f.realSpawner.spawn(ChildProcess.make("true"));
-        assert.equal(Number(yield* exited.exitCode), 0);
-        const deadPid = Number(exited.pid);
-        yield* f.fs.writeFileString(`${f.state}/pid`, `${deadPid}\n`);
-        yield* f.fs.writeFileString(`${f.state}/port`, `${f.port + 1}\n`);
-        const result = yield* SshTunnel.launchOrReuseRemoteServer(secondClient, {}, f.runner).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport),
-          Effect.result,
-        );
-        if (Result.isFailure(result)) throw result.failure;
-        assert.equal(result.success.status, "ready");
-        if (result.success.status !== "ready") return;
-        assert.equal(result.success.remotePort, f.port);
-        // The stale record never grants kill authority over the live server.
-        assert.equal(result.success.remoteServerKind, "external");
-        yield* Effect.sync(() => process.kill(f.pid, 0));
-        assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    it.live(
+      "stale launch files from an earlier server do not block adopting the live runtime",
+      () =>
+        Effect.gen(function* () {
+          const f = yield* makeProtocolFixture({
+            live: true,
+            kind: "managed",
+            oldVersion: "1.2.2",
+            ...current,
+          });
+          const exited = yield* f.realSpawner.spawn(ChildProcess.make("true"));
+          assert.equal(Number(yield* exited.exitCode), 0);
+          const deadPid = Number(exited.pid);
+          yield* f.fs.writeFileString(`${f.state}/pid`, `${deadPid}\n`);
+          yield* f.fs.writeFileString(`${f.state}/port`, `${f.port + 1}\n`);
+          const result = yield* SshTunnel.launchOrReuseRemoteServer(
+            secondClient,
+            {},
+            f.runner,
+          ).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, f.transport),
+            Effect.result,
+          );
+          if (Result.isFailure(result)) throw result.failure;
+          assert.equal(result.success.status, "ready");
+          if (result.success.status !== "ready") return;
+          assert.equal(result.success.remotePort, f.port);
+          // Ownership comes from the live server's own GOAT invocation, never from the stale
+          // record, and it is used only to drain: the server is not signalled.
+          assert.equal(result.success.remoteServerKind, "managed");
+          assert.equal(yield* f.fs.readFileString(`${f.state}/pid`), `${f.pid}\n`);
+          assert.equal(yield* f.fs.readFileString(`${f.state}/port`), `${f.port}\n`);
+          yield* Effect.sync(() => process.kill(f.pid, 0));
+          assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
 
     it.live(

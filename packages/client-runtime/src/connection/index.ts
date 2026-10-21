@@ -35,5 +35,5 @@ export * from "./desktopLocal.ts";
 export { handleConnectionCatalogOperation } from "./catalogHost.ts";
 
 export * as HubProxyAuth from "./hubProxyAuthSource.ts";
-export { HubProxyAuthSource, type HubProxyAuthorization } from "./hubProxyAuthSource.ts";
+export type { HubProxyAuthorization } from "./hubProxyAuthSource.ts";
 export * from "./hubProxyDiscovery.ts";

@@ -154,7 +154,7 @@ const isUnknownToolRefusal = (error: AcpMcpBridgeError, tool: string) =>
  * Names the build each side runs and the fix. Starts with "GOAT on <host> does
  * not have <tool>", which callers match to fall back for older remotes.
  */
-export function missingRemoteToolMessage(
+function missingRemoteToolMessage(
   host: string,
   tool: string,
   remoteVersion: string | undefined,
@@ -367,7 +367,7 @@ const decodeRemoteIdentity = Schema.decodeUnknownEffect(
 
 /** A launch note when the remote GOAT runs another build than this machine. A launch reaches
     here only after the tunnel accepted the remote's protocol ranges, so this is informational. */
-export function remoteVersionNote(
+function remoteVersionNote(
   host: string,
   remoteVersion: string | undefined,
   localVersion: string,

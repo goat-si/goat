@@ -56,6 +56,10 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
+import {
+  WorktreeCheckoutHealthNotice,
+  worktreeCheckoutNeedsAttention,
+} from "./WorktreeCheckoutHealthNotice";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
@@ -2344,6 +2348,17 @@ export function ConnectionsSettings() {
                   ) : primaryServerUpdateState.status === "idle" && primaryServerConfig ? (
                     <LocalVersionStatusLabel />
                   ) : undefined
+                }
+              />
+            ) : null}
+            {worktreeCheckoutNeedsAttention(primaryServerConfig?.worktreeCheckoutHealth) ? (
+              <SettingsRow
+                title="Worktree checkouts"
+                status={
+                  <WorktreeCheckoutHealthNotice
+                    health={primaryServerConfig?.worktreeCheckoutHealth}
+                    hostLabel={primaryEnvironment?.label ?? "this computer"}
+                  />
                 }
               />
             ) : null}

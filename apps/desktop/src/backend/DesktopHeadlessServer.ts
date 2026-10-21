@@ -61,7 +61,7 @@ export interface HeadlessServerRuntime {
  * one this app can attach: a non-loopback origin, or no exact version naming
  * the runtime binary that can issue its sessions.
  */
-export function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerRuntime> {
+function parseHeadlessServerRuntime(text: string): Option.Option<HeadlessServerRuntime> {
   return Option.flatMap(decodeRuntimeRecord(text), (record) => {
     if (
       !Number.isSafeInteger(record.pid) ||

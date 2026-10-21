@@ -240,7 +240,7 @@ it.effect.each([false, true])(
 );
 
 it.effect(
-  "a thread with only orchestration:read can ask to update now and cannot mutate directly",
+  "a thread with only orchestration:read can update when idle or ask to update now, and cannot prepare",
   () =>
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -273,14 +273,31 @@ it.effect(
           )
           .pipe(Effect.flip),
       ).toMatchObject({ requiredScope: "orchestration:read" });
-      expect(yield* f.setup.prepare({ host: "box" }, caller).pipe(Effect.flip)).toMatchObject({
-        requiredScope: "environment:maintain",
-      });
-      expect(
-        yield* f.setup.update({ host: "box", mode: "when_idle" }, caller).pipe(Effect.flip),
-      ).toMatchObject({ requiredScope: "environment:maintain" });
+      const denied = yield* f.setup.prepare({ host: "box" }, caller).pipe(Effect.flip);
+      expect(denied).toMatchObject({ requiredScope: "environment:maintain" });
+      expect(denied.message).toContain("goat_ssh_runtime_update");
       expect(f.updates).toEqual([]);
       expect(seen).toEqual([["orchestration:read"]]);
+
+      // An idle update cannot interrupt work, so the thread starts it and is reauthorized live.
+      expect(yield* f.setup.update({ host: "box", mode: "when_idle" }, caller)).toMatchObject({
+        kind: "ok",
+        status: { state: "update_waiting" },
+      });
+      expect(f.updates).toEqual([{ host: "box", confirmReplacement: false }]);
+      expect(seen.length).toBeGreaterThan(1);
+      expect(
+        seen.every((scopes) => scopes.length === 1 && scopes[0] === "orchestration:read"),
+      ).toBe(true);
+      expect(
+        yield* f.setup
+          .update(
+            { host: "box", mode: "when_idle" },
+            { kind: "mcp", scope: { ...threadScope, readOnly: true } },
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ requiredScope: "orchestration:read" });
+      expect(f.updates).toHaveLength(1);
     }),
 );
 

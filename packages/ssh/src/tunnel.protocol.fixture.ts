@@ -13,7 +13,11 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { REMOTE_RUNTIME_STATE_KEY } from "./command.ts";
-import { exitWithTestParent } from "./testParentLifetime.fixture.ts";
+import {
+  exitWithTestOwner,
+  exitWithTestParent,
+  TEST_OWNER_FILE,
+} from "./testParentLifetime.fixture.ts";
 import * as SshTunnel from "./tunnel.ts";
 import {
   remoteShell,
@@ -176,7 +180,11 @@ console.log((value.status ? value.status + " " : "") + [value.serverVersion ?? "
     const action = fs.readFileSync(proof, "utf8").trim();
     event("pending-proof", { action });
     if (action === "readiness") process.exit(2);
-    if (action === "ownership-loss") fs.writeFileSync(path.join(state, "managed"), "external\\n");
+    if (action === "ownership-loss") {
+      // A foreign server now holds the port, so the next launch can neither keep nor adopt it.
+      fs.writeFileSync(path.join(test, "foreign-command"), "node /srv/dev/goat/bin.ts serve\\n");
+      fs.writeFileSync(path.join(state, "managed"), "external\\n");
+    }
   }
   // Fixture readiness uses an event, not polling or a delay.
   let record = fs.existsSync(runtimeFile) ? JSON.parse(fs.readFileSync(runtimeFile, "utf8")) : null;
@@ -200,6 +208,7 @@ res.resume(); res.on("end", () => process.exit(res.statusCode === 200 ? 0 : 1));
   console.log(JSON.stringify(args[1] === "pairing" ? {credential: version} : {token: version, expiresAt: null}));
 } else if (args[0] === "serve") {
   ${exitWithTestParent('args.includes("--test-seed") || process.env.T3_TEST_SEED === "1"')}
+  ${exitWithTestOwner("test")}
   if (fs.existsSync(path.join(test, "fail-start-" + version))) { event("failed-start"); process.exit(3); }
   const serveExitFile = path.join(test, "serve-exit-" + version);
   if (fs.existsSync(serveExitFile)) {
@@ -313,7 +322,11 @@ else if (!${JSON.stringify((signals.nodeReadiness ?? false) || signals.contested
 
 export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* (input: {
   live: boolean;
-  kind: "managed" | "external";
+  /**
+   * `external` runs a foreign command line (a developer's own server). `orphan` runs GOAT's
+   * managed invocation with no launch records or runner, as after a manual restart.
+   */
+  kind: "managed" | "external" | "orphan";
   oldVersion: string;
   ssh?: number;
   orchestration?: number;
@@ -344,6 +357,7 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
   const old = `${home}/.goat/runtime/goat/versions/${input.oldVersion}`;
   const cache = `${home}/cache`;
   for (const dir of [state, test, old, cache]) yield* fs.makeDirectory(dir, { recursive: true });
+  yield* fs.writeFileString(`${test}/${TEST_OWNER_FILE}`, String(process.pid));
   const helperSource = new URL("../../../apps/server/src/cli/sshHelper.ts", import.meta.url);
   const helperEntry = `${test}/helpers.entry.mjs`;
   yield* fs.writeFileString(
@@ -494,10 +508,23 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     assert.equal(ready.pid, Number(child.pid));
     pid = ready.pid;
     port = ready.port;
-    if (!input.nodeMode) yield* installArchivePsDouble(home, pid, port, input.oldVersion);
-    yield* fs.writeFileString(`${state}/pid`, `${pid}\n`);
-    yield* fs.writeFileString(`${state}/port`, `${port}\n`);
-    yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
+    if (!input.nodeMode)
+      yield* installArchivePsDouble(
+        home,
+        pid,
+        port,
+        input.oldVersion,
+        input.kind === "external"
+          ? `node ${home}/dev/goat/apps/server/src/bin.ts serve --port ${port}`
+          : undefined,
+      );
+    if (input.kind === "orphan") {
+      yield* fs.remove(`${state}/run-t3.sh`);
+    } else {
+      yield* fs.writeFileString(`${state}/pid`, `${pid}\n`);
+      yield* fs.writeFileString(`${state}/port`, `${port}\n`);
+      yield* fs.writeFileString(`${state}/managed`, input.kind + "\n");
+    }
     if (input.kind === "managed")
       yield* fs.writeFileString(
         `${state}/identity`,

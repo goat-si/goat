@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -97,6 +98,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
   const clock = yield* Clock.Clock;
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
@@ -158,6 +160,7 @@ const make = Effect.gen(function* () {
         platform,
         threads: countHostThreads(shells),
         ...(yield* readQuotas()),
+        opencodex: yield* opencodex.read,
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);

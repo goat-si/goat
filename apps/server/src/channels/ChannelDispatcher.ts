@@ -105,7 +105,7 @@ const MEMORY_CEILING_RANK = { none: 0, read: 1, read_write: 2 } as const;
 /** How many pieces of one person's work run at once before more wait in the queue. */
 export const WORKERS_PER_REQUESTER = 4;
 
-export const sameRequester = (left: ChannelRequester, right: ChannelRequester) =>
+const sameRequester = (left: ChannelRequester, right: ChannelRequester) =>
   left.ownerId === right.ownerId && left.principalId === right.principalId;
 
 const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {

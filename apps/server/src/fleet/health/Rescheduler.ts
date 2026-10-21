@@ -148,7 +148,7 @@ const refused = (reason: RescheduleRefusal, message: string): RescheduleResult =
 
 const clip = (text: string) => Array.from(text).slice(0, 300).join("");
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const monitor = yield* HostHealthMonitor;
   const claims = yield* FleetRescheduleClaims;

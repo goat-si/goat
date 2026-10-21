@@ -63,7 +63,7 @@ const refusal = (code: PlacementRefusal["code"], message: string): PlacementRefu
 });
 
 /** Running plus queued threads on one host that answered just now; null when it did not. */
-export const hostThreads = (entry: HostStatusEntry) =>
+const hostThreads = (entry: HostStatusEntry) =>
   entry.reachability === "ok" && entry.lastKnown !== true && entry.metrics !== undefined
     ? entry.metrics.threads.running + entry.metrics.threads.queued
     : null;
@@ -72,7 +72,7 @@ export const fleetThreads = (hosts: ReadonlyArray<HostStatusEntry>) =>
   hosts.reduce((total, entry) => total + (hostThreads(entry) ?? 0), 0);
 
 /** Why this host takes no work from this owner, or undefined when it may. */
-export function hostRefusal(
+function hostRefusal(
   entry: HostStatusEntry,
   settings: FleetSettings,
   input: Pick<PlacementInput, "owner" | "hostSelector" | "avoidHosts" | "cordoned" | "projectHost">,

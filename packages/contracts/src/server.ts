@@ -9,6 +9,7 @@ import {
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
+  ForwardCompatibleOptional,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -48,6 +49,35 @@ export const ServerConfigIssue = Schema.Union([
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 const ServerConfigIssues = ForwardCompatibleArray(ServerConfigIssue);
+
+/**
+ * How Microsoft Defender treats the folder GOAT creates thread worktrees in. Real-time
+ * scanning of every new file is what makes Windows checkouts slow. `unverified` means
+ * scanning is on and this process cannot read the exclusion list (that needs an
+ * administrator); `off` includes another antivirus being in charge; `unknown` covers
+ * an unreadable Defender and ReFS volumes, which may be Dev Drives Defender scans after
+ * the write.
+ */
+export const ServerWorktreeScanStatus = Schema.Literals([
+  "scanning",
+  "unverified",
+  "excluded",
+  "off",
+  "unknown",
+]);
+export type ServerWorktreeScanStatus = typeof ServerWorktreeScanStatus.Type;
+
+/** Only Windows servers send it. GOAT reads Defender's state and never changes it. */
+export const ServerWorktreeCheckoutHealth = Schema.Struct({
+  worktreesDirectory: TrimmedNonEmptyString,
+  defender: ServerWorktreeScanStatus,
+});
+export type ServerWorktreeCheckoutHealth = typeof ServerWorktreeCheckoutHealth.Type;
+
+/** The elevated PowerShell command that excludes the worktree folder from Defender scans. */
+export function defenderExclusionCommand(directory: string): string {
+  return `Add-MpPreference -ExclusionPath '${directory.replaceAll("'", "''")}'`;
+}
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -639,6 +669,10 @@ export const ServerConfig = Schema.Struct({
    * answering. Clients do not cache it, since it describes the host at connect.
    */
   lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
+  /**
+   * Windows only, and only once the server has checked; absent means nothing to report.
+   */
+  worktreeCheckoutHealth: ForwardCompatibleOptional(ServerWorktreeCheckoutHealth),
   /**
    * Never sent in a config snapshot: the theme stream emits the current set
    * before any change, so a snapshot carrying it too would hand every

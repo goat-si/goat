@@ -114,7 +114,7 @@ const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResul
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 /** A stored watch as the watch tools show it. */
-export function watchView(watch: LaunchWatch): OrchestratorMcpThreadWatch {
+function watchView(watch: LaunchWatch): OrchestratorMcpThreadWatch {
   return {
     ...(watch.host === null ? {} : { host: watch.host }),
     threadId: watch.threadId,
