@@ -301,6 +301,12 @@ if (${JSON.stringify(signals.stopBarrier ?? false)}) {
   for (const socket of stopObservers) socket.write("stopping\\n");
 } else stop();
   });
+  if (process.env.T3_TEST_SEED === "1") server.once("error", error => {
+    if (error.code !== "EADDRINUSE") throw error;
+    const failure = { seedBindError: error.code, pid: process.pid, port: requested };
+    event("seed-bind-failure", failure);
+    process.stdout.write(JSON.stringify(failure) + "\\n", () => process.exit(1));
+  });
   server.listen(requested, "127.0.0.1", () => {
 const record = {version: 1, pid: process.pid, port: server.address().port,
   origin: "http://127.0.0.1:" + server.address().port, startedAt: new Date().toISOString(), ...fields, ...(instanceId ? {instanceId} : {})};
@@ -465,49 +471,67 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
   let pid = 0;
   let port = 0;
   if (input.live) {
-    const nodePort = input.nodeMode ? yield* NetService.make().reserveLoopbackPort() : 0;
-    const child = yield* realSpawner.spawn(
-      ChildProcess.make(
-        input.nodeMode ? process.execPath : `${old}/goat`,
-        input.nodeMode
-          ? [
-              nodeEntry,
-              "serve",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(nodePort),
-              "--base-dir",
-              `${home}/.goat`,
-            ]
-          : ["serve", "--test-seed"],
-        {
-          env: {
-            HOME: home,
-            PATH: process.env.PATH ?? "",
-            ...(input.nodeMode ? { T3_TEST_SEED: "1" } : {}),
+    // Node identity checks need the real positive --port argv. A seed can lose
+    // its reservation before bind; only its own confirmed bind failure may retry.
+    for (let attempt = 0; attempt < (input.nodeMode ? 3 : 1); attempt++) {
+      const nodePort = input.nodeMode ? yield* NetService.make().reserveLoopbackPort() : 0;
+      const child = yield* realSpawner.spawn(
+        ChildProcess.make(
+          input.nodeMode ? process.execPath : `${old}/goat`,
+          input.nodeMode
+            ? [
+                nodeEntry,
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                String(nodePort),
+                "--base-dir",
+                `${home}/.goat`,
+              ]
+            : ["serve", "--test-seed"],
+          {
+            env: {
+              HOME: home,
+              PATH: process.env.PATH ?? "",
+              ...(input.nodeMode ? { T3_TEST_SEED: "1" } : {}),
+            },
+            extendEnv: false,
           },
-          extendEnv: false,
-        },
-      ),
-    );
-    if (input.stopBarrier)
-      yield* Effect.addFinalizer(() =>
-        Effect.gen(function* () {
-          if (yield* child.isRunning) yield* child.kill({ killSignal: "SIGKILL" });
-        }).pipe(Effect.orDie),
+        ),
       );
-    const ready = JSON.parse(
-      yield* child.stdout.pipe(
+      if (input.stopBarrier)
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            if (yield* child.isRunning) yield* child.kill({ killSignal: "SIGKILL" });
+          }).pipe(Effect.orDie),
+        );
+      const line = yield* child.stdout.pipe(
         Stream.decodeText(),
         Stream.splitLines,
         Stream.take(1),
         Stream.mkString,
-      ),
-    ) as { pid: number; port: number };
-    assert.equal(ready.pid, Number(child.pid));
-    pid = ready.pid;
-    port = ready.port;
+      );
+      if (line === "") {
+        return yield* Effect.die(new Error("Protocol seed stdout ended before readiness"));
+      }
+      const ready = JSON.parse(line) as { pid: number; port: number; seedBindError?: unknown };
+      assert.equal(ready.pid, Number(child.pid));
+      if (input.nodeMode && ready.seedBindError === "EADDRINUSE") {
+        assert.equal(ready.port, nodePort);
+        assert.notEqual(Number(yield* child.exitCode), 0);
+        if (attempt < 2) continue;
+        return yield* Effect.die(
+          new Error("Protocol Node seed exhausted 3 bind attempts (EADDRINUSE)"),
+        );
+      }
+      assert.isUndefined(ready.seedBindError);
+      assert.isTrue(Number.isInteger(ready.port) && ready.port > 0);
+      if (input.nodeMode) assert.equal(ready.port, nodePort);
+      pid = ready.pid;
+      port = ready.port;
+      break;
+    }
     if (!input.nodeMode)
       yield* installArchivePsDouble(
         home,
