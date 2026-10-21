@@ -1,7 +1,10 @@
 # ADR-0021 — decision recorded under "Providers"
 
 - Contract owner: [server.md](../server.md#providers)
-- Commit: pending on branch design/goatclaw-hub (recorded before implementation, 2026-10-21; draft for review)
+- Commit: pending on branch design/goatclaw-hub (recorded before implementation; approved by the supervisor
+  2026-10-21)
+- Supersedes: supervisor decision D14, whose documents were uncommitted local notes and no longer exist. This
+  record is authoritative.
 - Design: [000_design.md](../../devlog/_plan/261021_goatclaw_hub/000_design.md)
 - Related: [ADR-0016](ADR-0016-agentic-goals-controller.md), [ADR-0018](ADR-0018-agentic-resources-fallback.md),
   [ADR-0019](ADR-0019-update-compatibility.md), ADR-0020 host pressure (#676)
@@ -19,6 +22,7 @@
     really served by its Home (OpenCodex #6957).
   - Supervisor decision D14: OpenCodex Hub and Remote Link are GOAT's default proxy path; Remote Workspace for
     remote execution is experimental.
+  - The current Home is jun's MacBook Pro (OpenCodex 2.89.0) with five links; Children run 2.83.0 and 2.86.0.
 - **Alternatives.**
   - A GOAT-owned routing layer with GOAT-issued per-device tokens through GOAT's SSH tunnels. It duplicates Remote
     Link and Hub-mode keys, rotation and revocation, and puts credentials in a second program.
@@ -28,6 +32,8 @@
     provider, some trigger probes, and a Child cannot read all of them.
 - **Decision.**
   - The hub is the OpenCodex Home. macOS and Linux devices join as Remote Link Children; devices Remote Link does not
+  - Every part is hub-agnostic. Which device is the hub is the person's choice; moving it is a consent-gated flow
+    that keeps the old Home as rollback until every device passes parity through the new one.
     serve (Windows, password-only SSH) join as Hub-mode clients. GOAT runs OpenCodex's own commands over its
     existing SSH sessions, passes its pinned host key as the expected fingerprint, and never holds a link or data key.
   - GOAT computes a parity verdict per device from read-only evidence (role, link identity, one non-billed relayed

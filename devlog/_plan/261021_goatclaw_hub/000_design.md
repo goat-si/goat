@@ -1,8 +1,8 @@
 # 000 — goatclaw hub: one configured device runs the fleet
 
 > Written 2026-10-21 · base origin/dev ab18e2baa · OpenCodex dev 845ac6b87 · Codex af91f6ef2c
-> Phase P0 (design only). The user authorized the full program (design, implement, merge, release);
-> implementation starts after the supervisor approves this document.
+> P0 approved by the supervisor on 2026-10-21 (DH2, DH3 approved; DH1 escalated to the user). The user authorized
+> the full program: design, implement, merge, release.
 > Decision record draft: [ADR-0021](../../../structure/decisions/ADR-0021-goatclaw-hub.md)
 
 ## 0. What this is
@@ -26,11 +26,16 @@ The design adds as little as it can, because most of the machinery exists:
 
 Per the supervisor's correction, **this design builds no new routing or token system.** GOAT drives
 OpenCodex's own Remote Link and Hub flows over the SSH connections it already has, observes the result,
-and consumes the Home's pool and quota. Supervisor decision **D14** (OpenCodex Hub + Remote Link is GOAT's
-default proxy path; OpenCodex Remote Workspace for remote execution, experimental) is the premise. Its
-text is not reachable from this host: it is in no local worktree, origin branch, GOAT thread search or
-GitHub search, and jun's MacBook Pro did not answer SSH. The D14 found in
-`devlog/_plan/261013_remove-t3-internals` is an unrelated dead-code rule. §11 asks for the right path.
+and consumes the Home's pool and quota. [ADR-0021](../../../structure/decisions/ADR-0021-goatclaw-hub.md) is
+the authoritative record. It supersedes the earlier supervisor decision D14 (OpenCodex Hub + Remote Link as
+GOAT's default proxy path; OpenCodex Remote Workspace experimental for remote execution), whose documents
+were uncommitted local notes and no longer exist. The D14 in `devlog/_plan/261013_remove-t3-internals` is an
+unrelated dead-code rule.
+
+**Hub-agnostic.** Which device should be the hub is the user's decision (DH1), because it moves where every
+login and account lives. Every package works with any hub. Until the user decides, the hub is the current
+Remote Link Home, jun's MacBook Pro. It is a laptop and was overloaded on 2026-10-21, so it keeps
+`allowGoals: false` and gets no heavy lanes. Moving the hub is a separate, consent-gated flow (§1.8).
 
 Real gaps remain and are what this design adds: one provider-neutral quota model (§3), Child parity
 detection and repair (§1.4), Windows devices (§1.5), install/adopt (§5), version alignment (§6), Fleet
@@ -80,16 +85,35 @@ is refused while the first is advertised.
 
 ### 1.2 Current deployment (observed 2026-10-21)
 
-- Supervisor: macmini-ts and lidge-ts were Remote Link Children on 2026-10-11, labelled "OpenCodex Remote
-  Link children" in `~/.ssh/config` on jun's MacBook Pro. Direct Tailscale SSH aliases were used because
-  routed aliases hit the Home's 15-second link admission timeout, and noninteractive SSH needed the
-  bundled or Desktop `ocx` to win over PATH shims.
-- This Mac mini (`juniui-Macmini.local`) agrees: `~/.opencodex/config.json` has `runtimeRole: "client"` on
-  port 10100, and `~/.opencodex/backup-before-home-child-20261011-221124` exists. There is no
-  `~/.opencodex/link/` directory today, so it is a client by configuration without a live Child sidecar.
-  That is exactly the kind of drift the parity check in §1.4 reports.
-- The MacBook Pro's `~/.ssh/config` could not be read (SSH to `macbookpro2` timed out). §11 asks for the
-  labelled block so H1's fixtures use the real aliases.
+The Home is **jun's MacBook Pro**: OpenCodex 2.89.0 on `127.0.0.1:10100`, `/healthz` ok with no `role` field (a
+Home answers as standalone or Home). Its `~/.opencodex/link/links.json` holds five links, each with a live
+`lnk_*.pid` tunnel sidecar:
+
+| Link                   | Alias                    | Tunnel port | Added      | Child `/healthz`    | Notes                                                                   |
+| ---------------------- | ------------------------ | ----------- | ---------- | ------------------- | ----------------------------------------------------------------------- |
+| `lnk_51d15fa48b90b40e` | macmini-ts               | 54958       | 2026-10-11 | 2.83.0, role client | Child has `runtimeRole: "client"`, no `home-codex-settings.json`        |
+| `lnk_107d479405ab56be` | lidge-ts                 | 42255       | 2026-10-11 | 2.83.0, role client |                                                                         |
+| `lnk_781ccea3cdb84745` | mac-studio               | 54365       | 2026-10-11 | 2.86.0, role client | has `~/.opencodex/link/home-codex-settings.json`                        |
+| `lnk_ac30f40bb6167a49` | mini (Windows, Git Bash) | 52889       | 2026-10-11 | unknown             | Remote Link refuses Windows; what this link does is H6's first question |
+| `lnk_9cd79877777a0603` | clisu-oracle             | 40847       | 2026-10-19 | unknown             |                                                                         |
+
+The MacBook Pro's `~/.ssh/config` carries the block "# OpenCodex Remote Link children over Tailscale (added
+2026-10-11). # Direct Tailscale SSH keeps the Home's 15-second link admission well inside its deadline." with
+`Host macmini-ts` (100.76.170.81, user junny) and `Host lidge-ts` (100.100.125.116, user lidgeai), both
+`ServerAliveInterval 30` and `ServerAliveCountMax 6`. mac-studio is reached as `mac-studio` (juns-mac-studio), mini
+as 100.114.42.89 (user super, Git Bash default shell). Noninteractive SSH needed the bundled or Desktop `ocx` to
+win over PATH shims.
+
+Two facts shape the design:
+
+- **Where link state lives.** The link record and tunnel sidecar live on the Home. A Home-initiated Child has
+  only its config (`runtimeRole: "client"` and its saved connection) plus, once a Home settings sync has applied,
+  `~/.opencodex/link/home-codex-settings.json`. A Child with no `~/.opencodex/link/` directory is therefore normal
+  and is not drift. A missing `home-codex-settings.json` means no Home settings sync has applied there yet; it
+  fails P6 (§1.4), not P2. mac-studio is the reference for a healthy Child.
+- **Version drift.** Home 2.89.0, Children 2.83.0 and 2.86.0. Connection-bound relay authentication and the
+  management relay need matching protocol support on both sides, so drift is a first-class state in H1's
+  inventory and in §6.
 
 ### 1.3 How GOAT joins a device
 
@@ -142,16 +166,16 @@ dashboard and CLI still describe the Child, and a Home apply did not restart the
 equality is necessary but not enough. GOAT computes one **parity verdict** per device from evidence it can
 read without changing anything:
 
-| Check                | Evidence                                                                                                                                                         | Fails when                                                   |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| P1 role              | `GET 127.0.0.1:<port>/healthz` on the device                                                                                                                     | `service` is not `opencodex`, or `role` is not `client`      |
-| P2 link identity     | Child `ocx link status --json` (role `child`, linkId) and Home `ocx link status --json`; for Hub clients `ocx connect status --json` and the client's `apiKeyId` | identity missing on either side, or Home state not connected |
-| P3 real request      | one non-billed relayed request on the device's port: `GET /v1/models`                                                                                            | not 200, or catalog digest differs from the Home's           |
-| P4 served by Home    | `x-opencodex-served-by` response header (needs OCX-2)                                                                                                            | absent (verdict `unproven`) or names another Home            |
-| P5 runtime freshness | device process start (`/healthz` uptime) against the Home's last apply time for that link (needs OCX-6)                                                          | device started before the last apply, the #6957 restart miss |
-| P6 Codex settings    | applied Home codex-settings digest in device `ocx status --json` against the Home's settings document                                                            | digests differ                                               |
-| P7 client wiring     | `verifyEffectiveCodexRoute` on the device; Claude Code instance env; OpenCode provider entry                                                                     | any provider bypasses the local OpenCodex                    |
-| P8 local leak        | device `ocx provider list --json`                                                                                                                                | a local provider is active while linked                      |
+| Check                | Evidence                                                                                                                                                                                                                                                                                                                           | Fails when                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| P1 role              | `GET 127.0.0.1:<port>/healthz` on the device                                                                                                                                                                                                                                                                                       | `service` is not `opencodex`, or `role` is not `client`                                              |
+| P2 link identity     | Home `ocx link status --json` (the link record and tunnel state live on the Home) and the Child's `ocx link status --json`, which reports role `child` and the link id from its saved connection; for Hub clients `ocx connect status --json` and the client's `apiKeyId`. A missing `~/.opencodex/link/` on the Child is expected | the Home has no record for the device, the ids disagree, or the Home's tunnel state is not connected |
+| P3 real request      | one non-billed relayed request on the device's port: `GET /v1/models`                                                                                                                                                                                                                                                              | not 200, or catalog digest differs from the Home's                                                   |
+| P4 served by Home    | `x-opencodex-served-by` response header (needs OCX-2)                                                                                                                                                                                                                                                                              | absent (verdict `unproven`) or names another Home                                                    |
+| P5 runtime freshness | device process start (`/healthz` uptime) against the Home's last apply time for that link (needs OCX-6)                                                                                                                                                                                                                            | device started before the last apply, the #6957 restart miss                                         |
+| P6 Codex settings    | the device's applied record `~/.opencodex/link/home-codex-settings.json` (and the applied values `ocx status --json` lists) against the Home's settings document                                                                                                                                                                   | the record is missing (never synced) or differs                                                      |
+| P7 client wiring     | `verifyEffectiveCodexRoute` on the device; Claude Code instance env; OpenCode provider entry                                                                                                                                                                                                                                       | any provider bypasses the local OpenCodex                                                            |
+| P8 local leak        | device `ocx provider list --json`                                                                                                                                                                                                                                                                                                  | a local provider is active while linked                                                              |
 
 Verdicts: `ok` (all pass), `degraded` (P5–P8 fail: traffic works, but something describes the wrong
 machine), `broken` (P1–P3 fail), `unproven` (only P4 unavailable). The verdict and failing check ids appear
@@ -175,10 +199,15 @@ Remote Link refuses Windows (`remoteOcxArgv` exits 125, `remote_platform_unsuppo
 Workspace refuses Windows commands. Hub mode has Windows service code (`src/service/windows-*`) and
 authenticates clients with a per-client data key over HTTPS, so:
 
-1. **Now (H6).** mini joins as a Hub-mode client over the tailnet. The hub enables Hub mode with a data
-   listener behind Tailscale Serve, following OpenCodex's documented recipe. GOAT runs `ocx hub invite` on
-   the hub and feeds the one-use pairing code to `ocx connect … --pairing-code-stdin` on mini over GOAT SSH;
-   the code is never stored.
+1. **Now (H6).** First inspect the existing link `lnk_ac30f40bb6167a49` (mini, tunnel port 52889, live sidecar on
+   the Home): what mini's `/healthz` and `ocx --version` report, whether a Child connection was ever saved
+   there, and whether anything uses the tunnel. Remote Link refuses Windows, so the expected answer is a
+   tunnel with no working Child; Git Bash may have let parts of the flow run. Reuse nothing that only half works:
+   record the finding, revoke the dead link on the Home with `ocx link revoke --link-id` (an approved change,
+   DH2), and then join mini as a Hub-mode client over the tailnet. The hub enables Hub mode with a data listener
+   behind Tailscale Serve, following OpenCodex's documented recipe. GOAT runs `ocx hub invite` on the hub and
+   feeds the one-use pairing code to `ocx connect … --pairing-code-stdin` on mini over GOAT SSH; the code is
+   never stored.
 2. **Gate.** Before calling it done, prove on mini that `ocx connect` works under the Windows service, the
    key lands in the owner-only `service-api-token`, and Codex on mini is served by the hub (P3, P4). What
    fails becomes OCX-5 work, and mini stays standalone with its own logins, shown that way in Fleet.
@@ -211,6 +240,32 @@ adds a policy:
 | Claude Cloud, Cursor Cloud, Devin Cloud                                                                                             | bound to the signed-in vendor account | run on the hub as holder (§2)                                                                                                  |
 | providers with no base-URL override (Antigravity, Grok CLI, Cursor CLI, Devin CLI, Pi with its own auth, Muse, ACP registry agents) | cannot be pointed at OpenCodex        | marked "local sign-in required" in the provider × host matrix; placement sends those lanes to the hub, which has the sign-in   |
 | browser, desktop app and local file work                                                                                            | needs that machine                    | unchanged (#663)                                                                                                               |
+
+### 1.8 Switching the hub
+
+Moving the hub moves where every login and account lives, so it is a person's decision, made in Settings → Hub
+and confirmed through a decision item. It never runs automatically. The flow keeps the old Home as the rollback
+until the new one is proven:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Planned: person picks new hub, decision approved
+  Planned --> Preparing: new hub detected, OpenCodex compatible, provider sign-ins done on new hub
+  Preparing --> PoolMoving: per-account consent (OCX-4 export and import)
+  PoolMoving --> Relinking: each Child joins the new Home; old link kept until the new one passes parity
+  Relinking --> Verifying: parity ok on every device through the new Home
+  Verifying --> Committed: person confirms; old Home links revoked, old Home kept standalone
+  Relinking --> RolledBack: any device fails and the person chooses rollback
+  Verifying --> RolledBack
+  RolledBack --> [*]: devices stay on or return to the old Home
+  Committed --> [*]
+```
+
+- A device is re-linked only after its new link passes parity; until then its old link stays live.
+- Accounts are copied with consent and never deleted from the old Home by GOAT. The person removes them after
+  commit, from OpenCodex.
+- Cloud holder preference moves with the commit.
+- The audit log records each step. The work package is H7.
 
 ## 2. Cloud and service-bound providers through the hub
 
@@ -410,10 +465,17 @@ through GOAT.
   when the person clicks it.
 - **Order.** Connection-bound relay auth needs Home and Child updated together. GOAT updates a linked pair in one
   idle window, Home first and then each Child, re-running parity after each. If any member is busy, the pair waits.
-- **Lessons from 10/21.** The `fix/ssh-runtime-update-handling` branch is not on origin, so I could not read it.
-  The stated lessons are encoded directly: a compatible adopted OpenCodex is never replaced, and a managed one moves
-  only when its own channel's target is eligible under ADR-0019, never because GOAT itself updated or a nightly
-  appeared.
+- **Version drift is a normal state.** Today: Home 2.89.0, Children 2.83.0 (macmini-ts, lidge-ts) and 2.86.0
+  (mac-studio). H1 reports each device's version, protocol numbers and features, and the pair verdict. A pair is
+  `compatible` when the Child's served protocols include what the Home requires (and the reverse), whatever the
+  versions. Drift alone never triggers an update. When an update is wanted, the order is fixed: Home first,
+  then each Child, in one idle window, re-running parity after each step. If the Home's new version would make a
+  Child `incompatible`, the Children move in the same window or the Home waits. OCX-8 asks OpenCodex to state
+  per release which Child versions a Home still serves.
+- **Lessons from 10/21.** `fix/ssh-runtime-update-handling` is still in progress locally on the supervisor's side;
+  U1 builds on it once it lands and does not reimplement it. The stated lessons are encoded directly: a
+  compatible adopted OpenCodex is never replaced, and a managed one moves only when its own channel's target is
+  eligible under ADR-0019, never because GOAT itself updated or a nightly appeared.
 
 ## 7. goatclaw orchestration model
 
@@ -537,30 +599,31 @@ with the profile caps above.
 Q0 and H1 come first because they gather evidence. Contracts come next, then services, then UI. Every GOAT test
 is deterministic: `it.effect` with TestClock, recorded OpenCodex JSON fixtures, no sleeps and no live OpenCodex.
 
-| WP  | Title                                                                                        | Depends on  | Host       | Branch                          | Size | Tests                                         |
-| --- | -------------------------------------------------------------------------------------------- | ----------- | ---------- | ------------------------------- | ---- | --------------------------------------------- |
-| Q0  | Reproduce "Codex shows one weekly window" through a Child and record frames                  | —           | macmini    | `investigate/codex-5h-window`   | S    | fixture-driven `codexUsageLimits` test        |
-| H1  | `opencodexCompat` and read-only device inventory (§5 detection, §1.2 facts)                  | —           | lidge      | `feat/opencodex-inventory`      | M    | parsers over recorded `ocx --json` output     |
-| Q1  | `quotaPool` contract, optional window keys, `opencodex` source kind                          | —           | mac-studio | `feat/quota-pool-contract`      | S    | schema round trip, old-decoder compatibility  |
-| Q2  | `opencodexQuotaPool` source, host-status `quotaPool`, placement over the pool                | Q1, OCX-1   | mac-studio | `feat/quota-pool-consumer`      | M    | mapping and placement scoring                 |
-| D1  | Permission profiles: contract, settings, claim-time checks                                   | —           | macmini    | `feat/permission-profiles`      | M    | authorization tests                           |
-| H2  | Parity verifier service and `goat_hub_device_verify`                                         | H1          | lidge      | `feat/hub-parity`               | M    | verdict table from fixtures                   |
-| H3  | Join, leave and repair through `ocx` over GOAT SSH, fingerprint from GOAT pins, audit events | H2, D1      | lidge      | `feat/hub-join`                 | L    | state machine with a fake `ocx` runner        |
-| D2  | Decision inbox: table, service, MCP tools, web and mobile list                               | D1          | mac-studio | `feat/decision-inbox`           | L    | service tests, one browser test               |
-| H4  | Hub settings, RPC scopes, Settings → Hub, Fleet hub row and pool view                        | H2, Q2      | macmini    | `feat/hub-settings-ui`          | L    | browser tests for verdicts and reverse states |
-| H5  | Hub-down policy: `HubUnreachable`, fallback hop, decision item                               | H2, D2      | mac-studio | `feat/hub-down-policy`          | M    | TestClock reconcile tests                     |
-| H6  | Windows Hub-mode client for mini and its verification gate                                   | H3          | mini       | `feat/hub-windows-client`       | M    | Windows fixture tests; live gate on mini      |
-| C1  | Hub as default cloud holder and `cloud.launch` gate                                          | D1          | macmini    | `feat/hub-cloud-holder`         | S    | `chooseHolder` tests                          |
-| O1  | Lane kinds and the dispatch-or-native rule in orchestration instructions                     | D1          | lidge      | `feat/goatclaw-lanes`           | S    | instruction tests, size limits                |
-| O2  | Native subagents in Fleet, counted against `maxLanes`                                        | O1          | mac-studio | `feat/fleet-native-subagents`   | M    | adapter replay fixtures (`subagent_v2_*`)     |
-| O3  | Codex v2 settings from profiles                                                              | O1          | mac-studio | `feat/codex-v2-profile-caps`    | S    | config argument tests                         |
-| D3  | Role templates, report protocol, GOAT Bot supervisor mode                                    | D1, D2      | lidge      | `feat/goatclaw-roles`           | M    | prompt and registry tests                     |
-| F1  | First-run prompt record shared with #681 (OpenCodex, goatclaw prompts)                       | #681 merged | macmini    | `feat/hub-first-run`            | M    | browser tests                                 |
-| U1  | Managed OpenCodex update through the runtime update path, pair ordering                      | H1, H2      | mac-studio | `feat/opencodex-managed-update` | M    | launcher trial tests with a fake installer    |
+| WP  | Title                                                                                        | Depends on                                | Host       | Branch                          | Size | Tests                                               |
+| --- | -------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------- | ------------------------------- | ---- | --------------------------------------------------- |
+| Q0  | Reproduce "Codex shows one weekly window" through a Child and record frames                  | —                                         | macmini    | `investigate/codex-5h-window`   | S    | fixture-driven `codexUsageLimits` test              |
+| H1  | `opencodexCompat` and read-only device inventory (§5 detection, §1.2 facts)                  | —                                         | lidge      | `feat/opencodex-inventory`      | M    | parsers over recorded `ocx --json` output           |
+| Q1  | `quotaPool` contract, optional window keys, `opencodex` source kind                          | —                                         | mac-studio | `feat/quota-pool-contract`      | S    | schema round trip, old-decoder compatibility        |
+| Q2  | `opencodexQuotaPool` source, host-status `quotaPool`, placement over the pool                | Q1, OCX-1                                 | mac-studio | `feat/quota-pool-consumer`      | M    | mapping and placement scoring                       |
+| D1  | Permission profiles: contract, settings, claim-time checks                                   | —                                         | macmini    | `feat/permission-profiles`      | M    | authorization tests                                 |
+| H2  | Parity verifier service and `goat_hub_device_verify`                                         | H1                                        | lidge      | `feat/hub-parity`               | M    | verdict table from fixtures                         |
+| H3  | Join, leave and repair through `ocx` over GOAT SSH, fingerprint from GOAT pins, audit events | H2, D1                                    | lidge      | `feat/hub-join`                 | L    | state machine with a fake `ocx` runner              |
+| D2  | Decision inbox: table, service, MCP tools, web and mobile list                               | D1                                        | mac-studio | `feat/decision-inbox`           | L    | service tests, one browser test                     |
+| H4  | Hub settings, RPC scopes, Settings → Hub, Fleet hub row and pool view                        | H2, Q2                                    | macmini    | `feat/hub-settings-ui`          | L    | browser tests for verdicts and reverse states       |
+| H5  | Hub-down policy: `HubUnreachable`, fallback hop, decision item                               | H2, D2                                    | mac-studio | `feat/hub-down-policy`          | M    | TestClock reconcile tests                           |
+| H6  | Windows Hub-mode client for mini and its verification gate                                   | H3                                        | mini       | `feat/hub-windows-client`       | M    | Windows fixture tests; live gate on mini            |
+| C1  | Hub as default cloud holder and `cloud.launch` gate                                          | D1                                        | macmini    | `feat/hub-cloud-holder`         | S    | `chooseHolder` tests                                |
+| O1  | Lane kinds and the dispatch-or-native rule in orchestration instructions                     | D1                                        | lidge      | `feat/goatclaw-lanes`           | S    | instruction tests, size limits                      |
+| O2  | Native subagents in Fleet, counted against `maxLanes`                                        | O1                                        | mac-studio | `feat/fleet-native-subagents`   | M    | adapter replay fixtures (`subagent_v2_*`)           |
+| O3  | Codex v2 settings from profiles                                                              | O1                                        | mac-studio | `feat/codex-v2-profile-caps`    | S    | config argument tests                               |
+| D3  | Role templates, report protocol, GOAT Bot supervisor mode                                    | D1, D2                                    | lidge      | `feat/goatclaw-roles`           | M    | prompt and registry tests                           |
+| F1  | First-run prompt record shared with #681 (OpenCodex, goatclaw prompts)                       | #681 merged                               | macmini    | `feat/hub-first-run`            | M    | browser tests                                       |
+| U1  | Managed OpenCodex update through the runtime update path, pair ordering                      | H1, H2, `fix/ssh-runtime-update-handling` | mac-studio | `feat/opencodex-managed-update` | M    | launcher trial tests with a fake installer          |
+| H7  | Consent-gated hub switch (§1.8): plan, pool move, re-link with parity, commit or roll back   | H3, D2, OCX-4                             | lidge      | `feat/hub-switch`               | L    | state machine with fake `ocx` runners on both Homes |
 
-jun's MacBook Pro gets no packages and cursor2 is skipped. Merging follows the dependency column, one PR at a
+jun's MacBook Pro (the current Home) gets no packages and cursor2 is skipped. Every package is hub-agnostic: the hub is whichever environment has `hub.enabled`, and tests run each flow against a non-local Home. Merging follows the dependency column, one PR at a
 time, squash, green goat-ci. Batches for the nightly: (1) Q1, D1, H1, Q0; (2) Q2, H2, H3, D2, C1, O1;
-(3) H4, H5, H6, O2, O3, D3; (4) F1, U1. After each batch merges, the supervisor is told so the merge manager can
+(3) H4, H5, H6, O2, O3, D3; (4) F1, U1, H7. After each batch merges, the supervisor is told so the merge manager can
 publish through the nightly channel.
 
 ### OpenCodex package briefs (for the OpenCodex manager on mac-studio)
@@ -582,16 +645,23 @@ publish through the nightly channel.
   the apply time so a peer can compare it with the Child's start (P5); expose the applied codex-settings digest in
   `ocx status --json` (P6).
 - **OCX-7 header parser.** If Q0 confirms it, stop filing 5h readings as weekly on the routed path.
+- **OCX-8 linked-pair versions.** The fleet runs Home 2.89.0 with Children on 2.83.0 and 2.86.0. Publish, per release,
+  the Child versions a Home still serves and the reverse (relay auth, management relay, link protocol), expose them
+  in `/readyz` `features` or protocol numbers, and make `ocx link status --json` on the Home report each Child's
+  version and a compatibility verdict, so drift is visible without SSH to every Child.
+- **OCX-9 the mini link.** The Home has a live link `lnk_ac30f40bb6167a49` to mini (Windows, Git Bash) although
+  Remote Link refuses Windows. Find out how it was created, what its tunnel serves, and make `ocx link add` refuse a
+  Windows Child before issuing a key and starting a tunnel. Clean up such records with a clear message.
 
-## 11. Decisions for the supervisor
+## 11. Decisions
 
-| ID  | Question                      | Options                                                                                                                                                  | Recommendation                                                            |
-| --- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| DH1 | Which device is the hub       | macmini (always on, macOS, light today); mac-studio (also CI runner and OpenCodex manager); jun's MacBook Pro (Home on 10/11, but overloaded and sleeps) | **macmini**, with goal lanes kept off it (`allowGoals: false`)            |
-| DH2 | mini's transport              | Hub-mode client over tailnet HTTPS now; wait for a Windows Remote Link Child (OCX-5)                                                                     | **Hub-mode client now**, behind H6's gate                                 |
-| DH3 | Default when the hub is down  | pause plus decision item; local fallback where a local sign-in exists                                                                                    | **pause plus decision item**, local fallback opt-in per device            |
-| DH4 | D14's location                | —                                                                                                                                                        | please send the path so this design links it                              |
-| DH5 | MacBook Pro ssh config labels | —                                                                                                                                                        | please paste the "OpenCodex Remote Link children" block for H1's fixtures |
+| ID  | Question                     | Outcome (2026-10-21)                                                                                                                                                                         |
+| --- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DH1 | Which device is the hub      | **Escalated to the user.** Design and implementation are hub-agnostic; until the user decides, the hub is the current Home (jun's MacBook Pro) with `allowGoals: false`. Switching uses §1.8 |
+| DH2 | mini's transport             | **Approved:** Hub-mode client, after inspecting and cleaning up the existing mini link (§1.5)                                                                                                |
+| DH3 | Default when the hub is down | **Approved:** pause plus decision item; local fallback opt-in per device                                                                                                                     |
+| DH4 | D14                          | Its documents no longer exist; ADR-0021 supersedes it                                                                                                                                        |
+| DH5 | MacBook Pro ssh config       | Recorded in §1.2                                                                                                                                                                             |
 
 ## 12. Rollout
 
