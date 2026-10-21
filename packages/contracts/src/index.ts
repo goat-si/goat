@@ -96,3 +96,5 @@ export * from "./clientRpcPermissions.ts";
 export * from "./memory.ts";
 
 export * from "./handoff.ts";
+
+export * from "./permissionProfiles.ts";

@@ -340,7 +340,10 @@
         "apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts",
         "apps/server/src/mcp/OrchestratorMcpService.ts",
         "apps/server/src/mcp/toolkits/remoteReport/tools.ts",
-        "packages/contracts/src/remoteReports.ts"
+        "packages/contracts/src/remoteReports.ts",
+        "apps/server/src/goatclaw/PermissionProfiles.ts",
+        "apps/server/src/persistence/Migrations/095_PermissionProfiles.ts",
+        "packages/contracts/src/permissionProfiles.ts"
       ]
     },
     {

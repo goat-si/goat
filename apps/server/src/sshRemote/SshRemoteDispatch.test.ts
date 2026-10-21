@@ -1,3 +1,5 @@
+import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import {
@@ -180,6 +182,7 @@ describe("SSH dispatch tool compatibility", () => {
         }).pipe(
           Effect.provide(
             SshRemoteDispatch.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
               Layer.provide(FetchHttpClient.layer),
               Layer.provide(NodeServices.layer),
@@ -652,6 +655,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
           Effect.result,
           Effect.provide(
             SshRemoteDispatch.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-host-call-test-" })),
               Layer.provide(FetchHttpClient.layer),
               Layer.provide(NodeServices.layer),
@@ -1424,6 +1428,7 @@ const withLaunchRemote = <A, E>(
       return yield* body(record).pipe(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-saved-target-" })),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(NodeServices.layer),
@@ -1771,6 +1776,8 @@ describe("SSH dispatch launch lineage", () => {
 
   /** Launches against a fake remote and returns the arguments goat_thread_launch received. */
   const launchAgainst = (remote: {
+    readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
+    readonly declaresPermissionProfile?: boolean;
     readonly declaresLaunchedBy: boolean;
     readonly coordinatorKind?: "thread" | "task";
     readonly refuseLaunchedBy?: boolean;
@@ -1885,6 +1892,9 @@ describe("SSH dispatch launch lineage", () => {
                       type: "object",
                       properties: {
                         title: { type: "string" },
+                        ...(remote.declaresPermissionProfile
+                          ? { permissionProfileCeiling: { type: "object" } }
+                          : {}),
                         ...(catalog.declaresMemoryCeiling
                           ? { memoryGrantCeiling: { type: "string" } }
                           : {}),
@@ -2018,6 +2028,9 @@ describe("SSH dispatch launch lineage", () => {
               cwd: "/home/agent/repo",
               workspace: { type: "cwd" },
               title: "Lineage probe",
+              ...(remote.permissionProfileCeiling === undefined
+                ? {}
+                : { permissionProfileCeiling: remote.permissionProfileCeiling }),
               ...(memoryGrantCeiling === undefined ? {} : { memoryGrantCeiling }),
               runtimeMode: "approval-required",
               callerRuntimeMode: remote.callerRuntimeMode ?? "approval-required",
@@ -2090,6 +2103,7 @@ describe("SSH dispatch launch lineage", () => {
         }).pipe(
           Effect.provide(
             SshRemoteDispatch.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
               Layer.provide(FetchHttpClient.layer),
               Layer.provide(NodeServices.layer),
@@ -2103,6 +2117,32 @@ describe("SSH dispatch launch lineage", () => {
         discoverHosts.mockRestore();
       }
     });
+
+  it.effect.each([false, true])(
+    "requires profile-ceiling support before a remote launch, supported=%s",
+    (supported) =>
+      Effect.gen(function* () {
+        let attempts = 0;
+        const result = yield* launchAgainst({
+          declaresLaunchedBy: false,
+          declaresPermissionProfile: supported,
+          permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.worker!,
+          onMemoryLaunch: () => {
+            attempts += 1;
+          },
+        }).pipe(Effect.result);
+        if (result._tag === "Success") {
+          expect(supported).toBe(true);
+          expect(result.success.launches[0]?.permissionProfileCeiling).toEqual(
+            BUILTIN_PERMISSION_PROFILES.worker,
+          );
+        } else {
+          expect(supported).toBe(false);
+          expect(result.failure).toMatchObject({ remoteCode: "permission_profile_unsupported" });
+          expect(attempts).toBe(0);
+        }
+      }),
+  );
 
   it.effect("issues and reuses SSH sessions only within a task memory ceiling in both orders", () =>
     Effect.gen(function* () {
@@ -2730,6 +2770,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
         }).pipe(
           Effect.provide(
             SshRemoteDispatch.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(
                 ServerConfig.layerTest("/projects/fixture", { prefix: "report-echo-test-" }),
               ),
@@ -3218,6 +3259,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
           }).pipe(
             Effect.provide(
               SshRemoteDispatch.layer.pipe(
+                Layer.provide(ServerSettings.layerTest()),
                 Layer.provide(Layer.succeed(ServerConfig.ServerConfig, config)),
                 Layer.provide(Layer.succeed(FileSystem.FileSystem, testFs)),
                 Layer.provide(Layer.succeed(HttpClient.HttpClient, uploadHttp)),
@@ -3953,6 +3995,7 @@ describe("SSH launcher transport", () => {
       }).pipe(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-launcher-test-" })),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(NodeServices.layer),
@@ -4036,6 +4079,7 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
     }).pipe(
       Effect.provide(
         SshRemoteDispatch.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ready-only-" })),
           Layer.provide(FetchHttpClient.layer),
           Layer.provide(NodeServices.layer),

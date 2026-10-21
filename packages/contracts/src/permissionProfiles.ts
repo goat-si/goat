@@ -1,0 +1,83 @@
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
+
+export const PermissionCapability = Schema.Literals([
+  "threads.launch",
+  "threads.remote",
+  "worktree.create",
+  "pr.open",
+  "pr.merge",
+  "hub.manage",
+  "cloud.launch",
+  "boat.start",
+  "settings.write",
+  "goals.apply",
+]);
+export type PermissionCapability = typeof PermissionCapability.Type;
+
+export const PermissionProfile = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  runtimeModeCeiling: RuntimeMode,
+  capabilities: Schema.Array(PermissionCapability),
+  hosts: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  maxLanes: NonNegativeInt,
+  maxTurns: Schema.optionalKey(PositiveInt),
+  maxWallClockMs: Schema.optionalKey(PositiveInt),
+});
+export type PermissionProfile = typeof PermissionProfile.Type;
+
+const worker = ["threads.launch", "worktree.create", "pr.open"] as const;
+const manager = [...worker, "threads.remote", "goals.apply"] as const;
+export const BUILTIN_PERMISSION_PROFILES: Readonly<Record<string, PermissionProfile>> = {
+  observer: {
+    id: "observer",
+    runtimeModeCeiling: "approval-required",
+    capabilities: [],
+    maxLanes: 0,
+  },
+  worker: { id: "worker", runtimeModeCeiling: "auto", capabilities: worker, maxLanes: 3 },
+  manager: { id: "manager", runtimeModeCeiling: "full-access", capabilities: manager, maxLanes: 6 },
+  "merge-manager": {
+    id: "merge-manager",
+    runtimeModeCeiling: "full-access",
+    capabilities: [...manager, "pr.merge"],
+    maxLanes: 6,
+  },
+  owner: {
+    id: "owner",
+    runtimeModeCeiling: "full-access",
+    capabilities: PermissionCapability.literals,
+    maxLanes: 32,
+  },
+};
+
+export const GoatclawSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  defaultProfile: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("worker"))),
+  profiles: Schema.Record(TrimmedNonEmptyString, PermissionProfile).pipe(
+    Schema.withDecodingDefault(Effect.succeed(BUILTIN_PERMISSION_PROFILES)),
+  ),
+}).check(
+  Schema.makeFilter((settings) =>
+    settings.profiles[settings.defaultProfile] !== undefined &&
+    Object.entries(settings.profiles).every(([id, profile]) => id === profile.id)
+      ? undefined
+      : "Profile keys must match their ids and defaultProfile must name a stored profile.",
+  ),
+);
+export type GoatclawSettings = typeof GoatclawSettings.Type;
+
+export const GoatclawSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  defaultProfile: Schema.optionalKey(TrimmedNonEmptyString),
+  profiles: Schema.optionalKey(Schema.Record(TrimmedNonEmptyString, PermissionProfile)),
+});
+
+export const PermissionProfileView = Schema.Struct({
+  enabled: Schema.Boolean,
+  profile: PermissionProfile,
+  runtimeMode: RuntimeMode,
+});
+export type PermissionProfileView = typeof PermissionProfileView.Type;

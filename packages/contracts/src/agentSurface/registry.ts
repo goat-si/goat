@@ -45,6 +45,21 @@ const entry = <const E extends AgentSurfaceEntry>(value: E) => ({
 });
 
 export const agentSurfaceRegistry = {
+  "permission_profile.get": entry({
+    resource: "permission_profile",
+    verb: "get",
+    name: "goat_permission_profile_get",
+    toolkit: "fleet",
+    summary: "Read the caller's effective permission profile.",
+    description:
+      "Read whether goatclaw is enabled, the caller's effective permission profile, and its runtime mode ceiling after narrowing. Thread callers use their inherited profile; outside MCP clients use the server default. This grants no new authority.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "attachment.prepare_upload": entry({
     resource: "attachment",
     verb: "prepare_upload",

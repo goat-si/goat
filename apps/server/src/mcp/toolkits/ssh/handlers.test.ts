@@ -1,3 +1,6 @@
+import * as Sqlite from "../../../persistence/Sqlite.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import * as PermissionSettings from "../../../serverSettings.ts";
 import * as ConnectionCatalogBroker from "../../../connections/ConnectionCatalogBroker.ts";
 import * as HubNodes from "../../../hubNodes/HubNodes.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
@@ -70,7 +73,19 @@ type Registration = Parameters<LaunchWatchService.LaunchWatchServiceShape["regis
 type ExternalWatch = Parameters<LaunchWatchService.LaunchWatchServiceShape["watchExternal"]>[0];
 type Route = Parameters<LaunchWatchService.LaunchWatchServiceShape["releaseRoute"]>[0];
 
+const profileLayer = (id?: string) => {
+  const base = Profiles.layer.pipe(
+    Layer.provide(
+      PermissionSettings.layerTest({
+        goatclaw: { enabled: id !== undefined, defaultProfile: id ?? "worker" },
+      }),
+    ),
+  );
+  return id === undefined ? base : base.pipe(Layer.provide(Sqlite.layerMemory));
+};
+
 type LaunchOptions = {
+  readonly profile?: string;
   readonly notifyOnCompletion?: boolean;
   readonly notifyWebhook?: boolean;
   readonly reportsSupported?: boolean;
@@ -124,6 +139,9 @@ const launchRaw = (options: LaunchOptions = {}) =>
       notes: ["Remote launch succeeded."],
     };
     const dependencies = Layer.mergeAll(
+      profileLayer(options.profile),
+      PermissionSettings.layerTest(),
+      NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
         requestNamespace: "session",
@@ -535,6 +553,9 @@ const fixture = (sourceFault?: "missing" | "size") =>
         if (sourceFault !== "missing")
           yield* fs.writeFile(path, new Uint8Array(sourceFault === "size" ? 1 : 5));
         return Layer.mergeAll(
+          Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+          PermissionSettings.layerTest(),
+          NodeCrypto.layer,
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadShell: () => Ref.get(shell),
           }),
@@ -590,7 +611,7 @@ const fixture = (sourceFault?: "missing" | "size") =>
         );
       }),
     ).pipe(
-      Layer.provide(SshRemoteDispatch.layer),
+      Layer.provide(SshRemoteDispatch.layer.pipe(Layer.provide(PermissionSettings.layerTest()))),
       Layer.provideMerge(
         ServerConfig.layerTest("/fixture", { prefix: "ssh-handler-attachments-" }),
       ),
@@ -810,6 +831,9 @@ it.effect.each([undefined, 2])("passes the SSH report limit to the coordinator (
   Effect.gen(function* () {
     const limits: Array<number | undefined> = [];
     const dependencies = Layer.mergeAll(
+      Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+      PermissionSettings.layerTest(),
+      NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
       Layer.mock(LaunchWatchService.LaunchWatchService)({}),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
@@ -862,6 +886,9 @@ const handoff = (
     let currentCaller = caller;
     let callerReads = 0;
     const dependencies = Layer.mergeAll(
+      Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+      PermissionSettings.layerTest(),
+      NodeCrypto.layer,
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () =>
           Effect.sync(() => {
@@ -903,6 +930,9 @@ const handoff = (
     const registered = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
       Layer.provide(
         Layer.mergeAll(
+          Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+          PermissionSettings.layerTest(),
+          NodeCrypto.layer,
           Layer.mock(SshHostSetup.SshHostSetup)({}),
           Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
         ),
@@ -1081,6 +1111,8 @@ const cloudMachineView = {
 
 /** Calls goat_cloud_machine_create as a thread caller with the given settings grant. */
 const createCloudMachine = (grant: {
+  readonly profile?: string;
+  readonly tool?: "goat_cloud_machine_create" | "goat_cloud_machine_resume";
   readonly readOnly?: boolean;
   readonly grantedScopes?: ReadonlyArray<"settings:write" | "orchestration:read">;
   readonly reauthorize?: "ok" | "fail";
@@ -1090,6 +1122,12 @@ const createCloudMachine = (grant: {
     const reauthorized: Array<ReadonlyArray<string>> = [];
     const invocation: McpInvocationContext.McpInvocationScope = {
       ...scope,
+      ...(grant.profile === undefined
+        ? {}
+        : {
+            thread: undefined,
+            client: { sessionId: "profile-client", label: "test", access: "full-access" as const },
+          }),
       ...(grant.readOnly === undefined ? {} : { readOnly: grant.readOnly }),
       ...(grant.grantedScopes === undefined ? {} : { grantedScopes: grant.grantedScopes }),
       ...(grant.reauthorize === undefined
@@ -1111,6 +1149,9 @@ const createCloudMachine = (grant: {
           }),
     };
     const dependencies = Layer.mergeAll(
+      profileLayer(grant.profile),
+      PermissionSettings.layerTest(),
+      NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
@@ -1125,6 +1166,8 @@ const createCloudMachine = (grant: {
       Layer.mock(CloudMachineService.CloudMachineService)({
         create: (input) =>
           Effect.sync(() => void created.push(input)).pipe(Effect.as(cloudMachineView)),
+        resume: (alias) =>
+          Effect.sync(() => void created.push(alias)).pipe(Effect.as(cloudMachineView)),
       }),
     );
     const toolkit = yield* SshToolkit.pipe(
@@ -1133,7 +1176,12 @@ const createCloudMachine = (grant: {
       ),
     );
     const responses = yield* toolkit
-      .handle("goat_cloud_machine_create", { label: "Build box", type: "small", ttlSeconds: 3600 })
+      .handle(
+        grant.tool ?? "goat_cloud_machine_create",
+        grant.tool === "goat_cloud_machine_resume"
+          ? { alias: cloudMachineView.alias }
+          : { label: "Build box", type: "small", ttlSeconds: 3600 },
+      )
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
     return { response: responses.at(-1)?.result, created, reauthorized };
   });
@@ -1211,6 +1259,9 @@ const runtimeFixture = (
     runs: projection.runs.map((entry) => ({ ...entry, threadId })),
   };
   const dependencies = Layer.mergeAll(
+    Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+    PermissionSettings.layerTest(),
+    NodeCrypto.layer,
     setupDependencies,
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadSnapshot: () =>
@@ -1267,6 +1318,9 @@ const runtimeFixture = (
       SshDeviceAdd.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+            PermissionSettings.layerTest(),
+            NodeCrypto.layer,
             Layer.mock(ConnectionCatalogBroker.ConnectionCatalogBroker)({
               invoke: (operation) =>
                 Effect.sync(() => {
@@ -1663,4 +1717,42 @@ it.effect("SSH add returns preflight when a new fingerprint needs settings:write
     expect(f.catalogWrites).toEqual([]);
     expect(f.handoffs).toEqual([]);
   }),
+);
+
+it.effect.each(["worker", "manager", "owner"])(
+  "SSH launch enforces profile %s before remote effects",
+  (profile) =>
+    Effect.gen(function* () {
+      const result = yield* launchRaw({ outsideClient: true, profile });
+      if (profile === "worker") {
+        expect(result.response).toMatchObject({ code: "capability_denied" });
+        expect(result.launchInputs).toHaveLength(0);
+      } else {
+        expect(result.response).toHaveProperty("threadId");
+        expect(result.launchInputs[0]?.permissionProfileCeiling?.id).toBe(profile);
+      }
+    }),
+);
+
+it.effect.each(["goat_cloud_machine_create", "goat_cloud_machine_resume"] as const)(
+  "%s only starts Boat for owner",
+  (tool) =>
+    Effect.gen(function* () {
+      const denied = yield* createCloudMachine({
+        profile: "manager",
+        tool,
+        reauthorize: "ok",
+        grantedScopes: ["settings:write"],
+      });
+      expect(denied.response).toMatchObject({ code: "capability_denied" });
+      expect(denied.created).toHaveLength(0);
+      const allowed = yield* createCloudMachine({
+        profile: "owner",
+        tool,
+        reauthorize: "ok",
+        grantedScopes: ["settings:write"],
+      });
+      expect(allowed.response).toHaveProperty("alias");
+      expect(allowed.created).toHaveLength(1);
+    }),
 );

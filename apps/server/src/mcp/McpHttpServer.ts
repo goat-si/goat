@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   OrchestratorMcpFailure,
   PreviewAutomationError,
@@ -1314,7 +1315,7 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
 export const layerHostStatusToolkit = catalogRegistrations.hostStatus;
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
-export const layerFleetToolkit = catalogRegistrations.fleet;
+export const layerFleetToolkit = catalogRegistrations.fleet.pipe(Layer.provide(Profiles.layer));
 /** Reads Placement and FallbackChains from the server's context, like host status. */
 export const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
 
@@ -1335,7 +1336,7 @@ export const layerConnectionToolkit = catalogRegistrations.connection;
 
 const layerRemoteReportRegistration = catalogRegistrations.remoteReport;
 
-const layerSshToolkitRegistration = catalogRegistrations.ssh;
+const layerSshToolkitRegistration = catalogRegistrations.ssh.pipe(Layer.provide(Profiles.layer));
 
 export const layerAttachmentToolkit = catalogRegistrations.attachment;
 

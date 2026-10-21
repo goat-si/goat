@@ -1,3 +1,4 @@
+import * as ServerSettings from "../serverSettings.ts";
 import * as Stream from "effect/Stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { RuntimeMode } from "@goat/contracts";
@@ -115,6 +116,7 @@ const withLinkedHost = <A, E>(
         Effect.result,
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(Layer.succeed(LinkedHosts.LinkedHosts, links)),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
             Layer.provide(FetchHttpClient.layer),

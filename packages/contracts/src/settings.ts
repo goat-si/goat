@@ -38,6 +38,7 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { FleetSettings } from "./fleetResources.ts";
+import { GoatclawSettings, GoatclawSettingsPatch } from "./permissionProfiles.ts";
 import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
@@ -1423,6 +1424,7 @@ export const ServerSettings = Schema.Struct({
   compactIdleThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   fleet: FleetSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1835,6 +1837,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   /** Each top-level key it names replaces the stored one (see FleetSettings). */
   fleet: Schema.optionalKey(FleetSettings),
+  goatclaw: Schema.optionalKey(GoatclawSettingsPatch),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

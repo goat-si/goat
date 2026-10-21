@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CLOUD_AGENT_PROVIDERS,
   type CloudAgentProvider,
@@ -221,6 +222,7 @@ export const listCloudRuns = (input: CloudRunListInput) =>
   );
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const hostSync = yield* HostSync.ProviderHostSync;
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const hosts = yield* HostThreads.HostThreadsMcpService;
@@ -512,9 +514,17 @@ const make = Effect.gen(function* () {
 
   const launch: CloudAgentServiceShape["launch"] = Effect.fn("CloudAgentService.launch")(
     function* (scope, input, modes) {
+      const effective = yield* permissions.require(scope, "cloud.launch");
       const holder = yield* pick(scope, input.provider, input.holder);
+      if (holder.host !== null)
+        yield* permissions.require(scope, "cloud.launch", { host: holder.host });
       if (input.dryRun === true) return { holder, dryRun: true };
       if (holder.host !== null) {
+        if (effective.enabled)
+          return yield* failure(
+            "capability_denied",
+            "Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with goat_ssh_thread_launch.",
+          );
         const result = yield* hosts.writeOnHost(
           scope,
           {
@@ -753,4 +763,4 @@ const make = Effect.gen(function* () {
   return CloudAgentService.of({ holders, launch, register, list, forget });
 });
 
-export const layer = Layer.effect(CloudAgentService, make);
+export const layer = Layer.effect(CloudAgentService, make).pipe(Layer.provide(Profiles.layer));

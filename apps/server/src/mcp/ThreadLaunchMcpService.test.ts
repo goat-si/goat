@@ -1,3 +1,5 @@
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
@@ -60,13 +62,16 @@ function fixture(
   unpublished = false,
   sourceRestriction: OrchestrationV2CloudSourceRestriction = "published-ref",
   registered?: Layer.Layer<ProviderRegistry.ProviderRegistry>,
+  profile?: string,
 ) {
   const launched: ThreadLaunch.ThreadLaunchInput[] = [];
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
   let routes = 0;
   const deps = Layer.mergeAll(
     NodeServices.layer,
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest({
+      goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
+    }),
     ServerConfig.layerTest("/repo", { prefix: "goat-cloud-launch-ci-" }).pipe(
       Layer.provide(NodeServices.layer),
     ),
@@ -162,6 +167,7 @@ function fixture(
   return {
     layer: ThreadLaunchMcp.layer.pipe(
       Layer.provide(registered === undefined ? deps : Layer.merge(deps, registered)),
+      Layer.provideMerge(Sqlite.layerMemory),
     ),
     launched,
     sources,
@@ -316,6 +322,37 @@ it.effect(
       expect(provider.code).toBe("invalid_request");
       expect(provider.message).toContain("no provider instance gone; it has fakeCloud");
       expect(f.launched).toHaveLength(0);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect.each(["worker", "owner"])(
+  "thread launch cannot bypass the cloud capability through profile %s",
+  (profile) => {
+    const f = fixture(false, "published-ref", undefined, profile);
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      const result = yield* service
+        .launch(
+          scope,
+          { title: "Cloud", message: "Inspect", standingInstructions: false },
+          { runtimeMode: "full-access", interactionMode: "default" },
+        )
+        .pipe(Effect.result);
+      if (profile === "worker") {
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") expect(result.failure.code).toBe("capability_denied");
+        expect(f.launched).toHaveLength(0);
+      } else {
+        expect(result._tag).toBe("Success");
+        expect(f.launched).toHaveLength(1);
+        expect(yield* sql`SELECT profile_id FROM goatclaw_thread_profiles`).toEqual([
+          { profile_id: "owner" },
+        ]);
+      }
     }).pipe(Effect.provide(f.layer));
   },
 );

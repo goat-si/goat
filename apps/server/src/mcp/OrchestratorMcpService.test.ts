@@ -1,3 +1,5 @@
+import { derive } from "@goat/provider-core/server/IdAllocator";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -1083,6 +1085,233 @@ describe("OrchestratorMcpService provider resolution", () => {
     runtimeRequests: [],
     turnItems: [],
   } as unknown as OrchestrationV2ThreadProjection;
+
+  it.effect.each([false, true])(
+    "profile runtime limits reject sends before claiming, active=%s",
+    (active) =>
+      Effect.gen(function* () {
+        let sends = 0;
+        const target = idleThreadProjection(
+          liveThreadShell(childThreadId, { activeRunId: active ? RunId.make("target-run") : null }),
+        );
+        const deps = Layer.mergeAll(
+          NodeServices.layer,
+          ServerSettings.layerTest({ goatclaw: { enabled: true, defaultProfile: "worker" } }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(liveThreadShell(childThreadId)),
+            getThreadRecords: (id) =>
+              Effect.succeed(
+                id === parentThreadId
+                  ? {
+                      ...parentProjection([]),
+                      thread: { ...parentProjection([]).thread, archivedAt: null },
+                    }
+                  : {
+                      ...target,
+                      runs: active
+                        ? [
+                            {
+                              id: RunId.make("target-run"),
+                              status: "running",
+                            } as OrchestrationV2ThreadProjection["runs"][number],
+                          ]
+                        : [],
+                    },
+              ),
+            getProjectThreadRecords: () => Effect.succeed(target),
+            sendToThread: () =>
+              Effect.sync(() => {
+                sends += 1;
+                return {} as never;
+              }),
+          }),
+          providerRegistryLayer([]),
+          adapterRegistryLayer([]),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${parentThreadId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const error = yield* service
+            .sendToThread(scope, { threadId: childThreadId, message: "Continue" })
+            .pipe(Effect.flip);
+          assert.equal(error.code, "runtime_mode_escalation_denied");
+          assert.equal(sends, 0);
+          assert.deepEqual(yield* sql`SELECT * FROM goatclaw_lane_reservations`, []);
+        }).pipe(
+          Effect.provide(
+            layerOrchestratorService.pipe(
+              Layer.provide(deps),
+              Layer.provideMerge(SqlitePersistence.layerMemory),
+            ),
+          ),
+        );
+      }),
+  );
+
+  it.effect.each(["observer", "worker", "manager", "manager-refusal"])(
+    "delegation enforces and inherits profile %s",
+    (profile) =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2ServerCommand[] = [];
+        let task: OrchestrationV2ThreadProjection["subagents"][number] | undefined;
+        const dependencies = Layer.mergeAll(
+          NodeServices.layer,
+          ServerSettings.layerTest({
+            goatclaw: {
+              enabled: true,
+              defaultProfile: profile === "manager-refusal" ? "manager" : profile,
+            },
+          }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadShell: () =>
+              Effect.succeed(liveThreadShell(parentThreadId, { activeRunId: parentRunId })),
+            hasReceipt: () => Effect.succeed(false),
+            assertProviderInstanceEnabled: () => Effect.void,
+            isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+            getThreadRecords: (id) =>
+              Effect.succeed(
+                id === parentThreadId
+                  ? parentProjection(task === undefined ? [] : [task])
+                  : childProjection,
+              ),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                commands.push(command);
+                if (command.type !== "delegated_task.request")
+                  throw new Error("Unexpected command");
+                task = {
+                  id: derive.delegatedTaskNode({ commandId: command.commandId }),
+                  threadId: parentThreadId,
+                  runId: parentRunId,
+                  origin: "app_owned",
+                  childThreadId: derive.delegatedTaskThread({ commandId: command.commandId }),
+                  status: "running",
+                  providerInstanceId: codexInstanceId,
+                  model: "gpt-5.4",
+                  result: null,
+                } as OrchestrationV2ThreadProjection["subagents"][number];
+                return {
+                  sequence: 1,
+                  storedEvents: [
+                    {
+                      sequence: 1,
+                      commandId: null,
+                      event: { type: "subagent.updated", payload: task },
+                    },
+                  ],
+                } as never;
+              }),
+          }),
+          providerRegistryLayer([
+            providerSnapshot({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            }),
+          ]),
+          adapterRegistryLayer([codexInstanceId]),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+          Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
+            launch: () =>
+              Effect.fail(
+                new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "invalid_request",
+                  message: "Broad workspace root refused; nothing launched.",
+                }),
+              ),
+          }),
+          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+            callHostTool: () =>
+              Effect.succeed({
+                parentThreadId: null,
+                inheritedProviderInstanceId: codexInstanceId,
+                inheritedModel: "gpt-5.4",
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                providers: [
+                  {
+                    providerInstanceId: codexInstanceId,
+                    driverKind: "codex",
+                    displayName: null,
+                    models: [{ id: "available", label: null }],
+                    canRunChildTask: true,
+                    canRunCrossProviderChildTask: true,
+                    constraints: [],
+                  },
+                ],
+                features: {
+                  appOwnedSubagents: true,
+                  asyncPolling: true,
+                  cancellation: true,
+                  batchThreadCreation: true,
+                  threadManagement: true,
+                  incrementalThreadRead: true,
+                  scheduledTasks: true,
+                  maxBatchThreads: 20,
+                },
+              }),
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${parentThreadId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service
+            .delegateTask(scope, {
+              task: "Inspect",
+              mode: "async",
+              clientRequestId: "profile-test",
+              ...(profile.startsWith("manager")
+                ? {
+                    target: { host: "box", model: profile === "manager" ? "missing" : "available" },
+                    remote: { cwd: "/repo" },
+                  }
+                : {}),
+            })
+            .pipe(Effect.result);
+          if (profile.startsWith("manager")) {
+            assert.equal(result._tag, "Failure");
+            if (result._tag === "Failure")
+              assert.equal(
+                result.failure.code,
+                profile === "manager" ? "model_unavailable" : "invalid_request",
+              );
+            assert.deepEqual(yield* sql`SELECT * FROM goatclaw_lane_reservations`, []);
+          } else if (profile === "observer") {
+            assert.equal(result._tag, "Failure");
+            if (result._tag === "Failure") assert.equal(result.failure.code, "capability_denied");
+            assert.equal(commands.length, 0);
+          } else {
+            assert.equal(result._tag, "Success");
+            assert.equal(commands[0]?.type, "delegated_task.request");
+            assert.equal(
+              commands[0] && "runtimeMode" in commands[0] ? commands[0].runtimeMode : null,
+              "auto",
+            );
+            assert.deepEqual(yield* sql`SELECT profile_id FROM goatclaw_thread_profiles`, [
+              { profile_id: "worker" },
+            ]);
+          }
+        }).pipe(
+          Effect.provide(
+            layerOrchestratorService.pipe(
+              Layer.provide(dependencies),
+              Layer.provideMerge(SqlitePersistence.layerMemory),
+            ),
+          ),
+        );
+      }),
+  );
 
   it.effect.each([false, true])(
     "remote cancellation keeps task and mailbox with cloud=%s metadata",

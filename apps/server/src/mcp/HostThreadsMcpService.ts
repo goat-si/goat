@@ -675,6 +675,11 @@ const make = Effect.gen(function* () {
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const host = input.host;
+        if (host !== undefined && (yield* local.permissionProfile(scope)).enabled)
+          return yield* failure(
+            "capability_denied",
+            "Remote follow-up sends cannot yet preserve goatclaw permission ceilings and lane accounting. Use goat_ssh_thread_launch for a new profiled lane.",
+          );
         const requestKey =
           host === undefined || input.clientRequestId === undefined
             ? undefined

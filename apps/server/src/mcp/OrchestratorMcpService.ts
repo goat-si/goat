@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
   IsoDateTime,
@@ -206,6 +207,9 @@ type TerminalTaskStatus = Extract<
 >;
 
 export interface OrchestratorMcpServiceShape {
+  readonly permissionProfile: (
+    scope: McpInvocationScope,
+  ) => Effect.Effect<import("@goat/contracts").PermissionProfileView, OrchestratorMcpFailure>;
   readonly capabilities: (
     scope: McpInvocationScope,
   ) => Effect.Effect<OrchestratorMcpCapabilitiesResult, OrchestratorMcpFailure>;
@@ -1136,6 +1140,7 @@ function timelineItem(input: {
 }
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const crypto = yield* Crypto.Crypto;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const remoteDispatch = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
@@ -1452,6 +1457,7 @@ const make = Effect.gen(function* () {
       return caller.runtimeMode;
     });
   const preflightCloudLaunch = (
+    scope: McpInvocationScope,
     projectId: ProjectId,
     modelSelection: ModelSelection,
     worktreePath: string | null,
@@ -1473,6 +1479,7 @@ const make = Effect.gen(function* () {
           ),
         );
       if (!isCloudExecution(capabilities)) return;
+      yield* permissions.require(scope, "cloud.launch");
       if (Option.isNone(cloudSources))
         return yield* failure("orchestration_error", "Cloud source preflight is unavailable.");
       const project = Option.getOrUndefined(
@@ -2312,6 +2319,7 @@ const make = Effect.gen(function* () {
   });
 
   return OrchestratorMcpService.of({
+    permissionProfile: (scope) => permissions.resolve(scope),
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
@@ -2707,7 +2715,7 @@ const make = Effect.gen(function* () {
         const remote = input.remote;
         const parentNodeId = parentRun.rootNodeId;
         const callerRuntimeMode = yield* authorizeRemoteWrite(scope, parentRun.id);
-        const runtimeMode = yield* resolveRuntimeMode(callerRuntimeMode, input.runtimeMode);
+        let runtimeMode = yield* resolveRuntimeMode(callerRuntimeMode, input.runtimeMode);
         const interactionMode = yield* resolveInteractionMode(
           parent.thread.interactionMode,
           input.interactionMode,
@@ -2717,11 +2725,21 @@ const make = Effect.gen(function* () {
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
         if (existing !== undefined) return yield* finishTaskWait(scope, taskId, key, input);
+        yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
+        yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
         const target = yield* resolveRemoteTarget(scope, parent, {
           ...input.target,
           host: input.target.host,
         });
+        const admitted = yield* permissions.claim(scope, {
+          id: taskId,
+          runtimeMode,
+          host,
+          worktree: remote.workspace?.type === "worktree",
+        });
+        runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
+          yield* permissions.recheck(scope, admitted, { host });
           yield* authorizeRemoteWrite(scope, parentRun.id);
           const records = yield* remoteDispatch
             .listForOrigin(scope.thread.threadId)
@@ -2776,6 +2794,7 @@ const make = Effect.gen(function* () {
                 modelSelection: target.modelSelection,
                 runtimeMode,
                 callerRuntimeMode,
+                ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
                 interactionMode,
                 // Shown on the remote thread like a goat_ssh_thread_launch from this thread.
                 launchedBy: {
@@ -2791,6 +2810,25 @@ const make = Effect.gen(function* () {
             register,
           )
           .pipe(Effect.result);
+        if (admitted.enabled && launched._tag === "Failure") {
+          const underlying = isRemoteDispatchError(launched.failure)
+            ? launched.failure.cause
+            : launched.failure;
+          if (
+            underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+            (underlying.reason === "remote_refused" ||
+              underlying.reason === "invalid_request" ||
+              underlying.reason === "host_unknown") &&
+            underlying.launchMayHaveStarted !== true
+          )
+            yield* permissions.release(taskId);
+        }
+        if (admitted.enabled && launched._tag === "Success")
+          yield* permissions.complete(
+            taskId,
+            launched.success.launch.threadId,
+            launched.success.correlationId,
+          );
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -2882,7 +2920,7 @@ const make = Effect.gen(function* () {
         providers,
         skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
       });
-      const runtimeMode = yield* resolveRuntimeMode(
+      const requestedRuntimeMode = yield* resolveRuntimeMode(
         parent.thread.runtimeMode,
         input.runtimeMode,
         target,
@@ -2926,6 +2964,7 @@ const make = Effect.gen(function* () {
       // receipt-replay exemption, so no separate assert runs here.
       if (!isRetryOfAcceptedDelegation)
         yield* preflightCloudLaunch(
+          scope,
           parent.thread.projectId,
           target.modelSelection,
           parent.thread.worktreePath,
@@ -2936,6 +2975,13 @@ const make = Effect.gen(function* () {
           failure("invalid_request", "Caller memory authority is no longer available."),
         ),
       );
+      const admitted = yield* permissions.claim(scope, {
+        id: commandId,
+        childThreadId: derive.delegatedTaskThread({ commandId }),
+        runtimeMode: requestedRuntimeMode,
+        worktree: input.isolation === "worktree",
+      });
+      const runtimeMode = admitted.runtimeMode;
       const result = yield* threadManagement
         .dispatch({
           type: "delegated_task.request",
@@ -2960,6 +3006,11 @@ const make = Effect.gen(function* () {
           completionWake: input.mode === "wait" ? "settled_only" : "always",
         })
         .pipe(
+          Effect.onError(() =>
+            admitted.enabled
+              ? permissions.release(commandId, true).pipe(Effect.ignore)
+              : Effect.void,
+          ),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"
               ? threadManagementFailure(error)
@@ -2969,6 +3020,7 @@ const make = Effect.gen(function* () {
                 ),
           ),
         );
+      if (admitted.enabled) yield* permissions.complete(commandId);
       const taskEvent = result.storedEvents.find(
         (stored) =>
           stored.event.type === "subagent.updated" && stored.event.payload.origin === "app_owned",
@@ -3443,6 +3495,11 @@ const make = Effect.gen(function* () {
             "Thread creation requires an active run owned by this MCP provider session.",
           );
         }
+        if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
+          return yield* failure(
+            "capability_denied",
+            "With goatclaw enabled, use goat_thread_launch or delegate_task so every child inherits its permission profile.",
+          );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
@@ -3491,6 +3548,7 @@ const make = Effect.gen(function* () {
               yield* assertTargetEnabledForProject(parent, commandId, target);
               if (request.prompt !== undefined && !isRetryOfAcceptedCreation) {
                 yield* preflightCloudLaunch(
+                  scope,
                   parent.thread.projectId,
                   target.modelSelection,
                   parent.thread.worktreePath,
@@ -3795,6 +3853,28 @@ const make = Effect.gen(function* () {
         requestKey: key,
         operation: "thread-send",
       });
+      if (scope.thread?.threadId !== input.threadId)
+        yield* permissions.require(scope, "threads.launch", { runtimeMode: limits.runtimeMode });
+      const effective = yield* permissions.resolve(scope, limits.runtimeMode);
+      if (effective.enabled && scope.thread?.threadId !== input.threadId) {
+        yield* resolveRuntimeMode(effective.runtimeMode, target.thread.runtimeMode);
+        yield* permissions.assertTarget(
+          scope,
+          input.threadId,
+          limits.runtimeMode,
+          target.thread.runtimeMode,
+        );
+      }
+      const admissionId = stableCommandId({ scope, requestKey: key, operation: "thread-send" });
+      const admitted =
+        scope.thread?.threadId === input.threadId ||
+        target.runs.some(ThreadManagementService.isActiveRun)
+          ? null
+          : yield* permissions.claim(scope, {
+              id: admissionId,
+              childThreadId: input.threadId,
+              runtimeMode: target.thread.runtimeMode,
+            });
       const result = yield* threadManagement
         .sendToThread({
           projectId: target.thread.projectId,
@@ -3822,6 +3902,7 @@ const make = Effect.gen(function* () {
                 ),
           ),
         );
+      if (admitted?.enabled) yield* permissions.complete(admissionId);
       return {
         threadId: input.threadId,
         messageId,
@@ -3985,7 +4066,7 @@ export const layer: Layer.Layer<
   | RemoteDispatchCoordinator.RemoteDispatchCoordinator
   | SshRemoteDispatch.SshRemoteDispatch
   | ServerSettings.ServerSettingsService
-> = Layer.effect(OrchestratorMcpService, make);
+> = Layer.effect(OrchestratorMcpService, make).pipe(Layer.provide(Profiles.layer));
 
 /** OAuth and managed callers use the same live grant port, never thread modes as authority. */
 export const captureMcpTaskMemoryGrantCeiling = (scope: McpInvocationScope, readOnly: boolean) =>

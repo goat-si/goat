@@ -1,3 +1,5 @@
+import * as Crypto from "effect/Crypto";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as SshDeviceAdd from "../../../sshRemote/SshDeviceAdd.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
@@ -45,6 +47,8 @@ const shared = {
   failureMode: "return" as const,
   dependencies: [
     McpInvocationContext.McpInvocationContext,
+    Profiles.PermissionProfiles,
+    Crypto.Crypto,
     ThreadManagementService.ThreadManagementService,
     SshRemoteDispatch.SshRemoteDispatch,
     SshHostSetup.SshHostSetup,
@@ -315,6 +319,7 @@ const cloudShared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     CloudMachineService.CloudMachineService,
+    Profiles.PermissionProfiles,
   ],
 };
 const CloudAliasParameters = Schema.Struct({

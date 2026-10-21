@@ -440,6 +440,7 @@ export function applyServerSettingsPatch(
     completionWebhook: completionWebhookPatch,
     // Per top-level key: deepMerge would keep a fallback chain or host limit the patch removed.
     fleet: fleetPatch,
+    goatclaw: goatclawPatch,
     ...patchForMerge
   } = patch;
   const currentBackgroundActivity = normalizeServerBackgroundActivitySettings(current);
@@ -607,6 +608,7 @@ export function applyServerSettingsPatch(
         }
       : {}),
     ...(fleetPatch !== undefined ? { fleet: { ...current.fleet, ...fleetPatch } } : {}),
+    ...(goatclawPatch !== undefined ? { goatclaw: { ...current.goatclaw, ...goatclawPatch } } : {}),
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
       : {}),

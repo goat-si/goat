@@ -1,5 +1,6 @@
 import {
   MemoryTaskGrantCeiling,
+  PermissionProfile,
   ModelSelection,
   NonNegativeInt,
   OrchestrationV2RunStatus,
@@ -118,6 +119,7 @@ export const ThreadLaunchParameters = Schema.Struct({
   title: TrimmedNonEmptyString,
   modelSelection: Schema.optional(ModelSelection),
   memoryGrantCeiling: Schema.optional(MemoryTaskGrantCeiling),
+  permissionProfileCeiling: Schema.optional(PermissionProfile),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   workspaceStrategy: Schema.optional(

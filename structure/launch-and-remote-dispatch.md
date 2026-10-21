@@ -127,3 +127,19 @@ placement limits and fallback chains do not exist yet; the controller reaches th
 > Decision record: [ADR-0017](decisions/ADR-0017-agentic-self-healing.md)
 
 > Decision record: [ADR-0018](decisions/ADR-0018-agentic-resources-fallback.md)
+
+## Permission profiles
+
+With `goatclaw.enabled`, `apps/server/src/goatclaw/PermissionProfiles.ts` admits agent launches
+under the profiles in `packages/contracts/src/permissionProfiles.ts`. Current named settings
+intersect the inherited launch snapshot and the caller's runtime ceiling; changing the default
+does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
+existing paths.
+
+`apps/server/src/persistence/Migrations/095_PermissionProfiles.ts` stores bindings and lane
+reservations outside the orchestration event log. Admission commits before launch; pending and
+uncertain reservations retain capacity across restart. Local run projections and durable remote
+dispatches determine completion, so removing a launch watch grants no capacity. SSH requires
+a destination that accepts and enforces the inherited ceiling. Bulk creation, remote follow-up
+sends, and remote cloud-holder forwarding refuse while enabled until they preserve the same
+policy and accounting. Provider-native limits are outside this admission service.

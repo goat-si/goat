@@ -1,3 +1,5 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as Invocation from "../mcp/McpInvocationContext.ts";
 import {
   MEMORY_MCP_TOOLS,
   MEMORY_ADMINISTRATION_MCP_TOOLS,
@@ -164,6 +166,7 @@ type SshDispatchDestination =
   | { readonly host: string; readonly target?: undefined }
   | { readonly target: DesktopSshEnvironmentTarget; readonly host?: undefined };
 export type SshLaunchInput = SshDispatchDestination & {
+  readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   readonly cwd: string;
   readonly workspace: SshLaunchWorkspace;
@@ -642,6 +645,7 @@ const validateSshLaunchAttachments = Effect.fn("SshRemoteDispatch.validateSshLau
 );
 
 const make = Effect.gen(function* () {
+  const permissions = yield* Profiles.PermissionProfiles;
   const manager = yield* SshTunnel.SshEnvironmentManager;
   const runtime = yield* Effect.context<RuntimeServices>();
   const config = yield* ServerConfig.ServerConfig;
@@ -715,12 +719,21 @@ const make = Effect.gen(function* () {
       : cloudMachines.value.owns(target.alias).pipe(
           Effect.flatMap((owned) =>
             owned
-              ? cloudMachines.value.ensureReady(target.alias as CloudMachineAlias, { wake })
+              ? Effect.gen(function* () {
+                  const scope = yield* Effect.serviceOption(Invocation.McpInvocationContext);
+                  if (wake && Option.isSome(scope))
+                    yield* permissions.require(scope.value, "boat.start", { host: target.alias });
+                  return yield* cloudMachines.value.ensureReady(target.alias as CloudMachineAlias, {
+                    wake,
+                  });
+                })
               : Effect.void,
           ),
           Effect.asVoid,
           Effect.mapError((error) =>
-            failure("host_unavailable", `${target.alias}: ${error.message}`),
+            error._tag === "OrchestratorMcpFailure"
+              ? failure("remote_refused", error.message)
+              : failure("host_unavailable", `${target.alias}: ${error.message}`),
           ),
         );
 
@@ -1680,6 +1693,16 @@ const make = Effect.gen(function* () {
     // only for optional lineage/UI arguments when an ordinary launch cannot list.
     const launchAdmission = Effect.fn("SshRemoteDispatch.launchAdmission")(function* () {
       const { capabilities, declared } = yield* remoteLaunchArguments(remote);
+      if (
+        input.permissionProfileCeiling !== undefined &&
+        capabilities?.declared.has("permissionProfileCeiling") !== true
+      )
+        return yield* new SshRemoteDispatchError({
+          reason: "remote_refused",
+          remoteCode: "permission_profile_unsupported",
+          message:
+            "Remote GOAT cannot preserve a permission profile ceiling; enable goatclaw on an updated destination.",
+        });
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
         return yield* memoryRefusal("Remote task memory admission could not be verified.");
       if (
@@ -1742,6 +1765,9 @@ const make = Effect.gen(function* () {
             title: input.title,
             workspaceStrategy,
             runtimeMode: input.runtimeMode,
+            ...(input.permissionProfileCeiling === undefined
+              ? {}
+              : { permissionProfileCeiling: input.permissionProfileCeiling }),
             ...memoryArguments,
             ...(input.interactionMode === undefined
               ? {}
@@ -2161,6 +2187,7 @@ const layerManager = Layer.unwrap(
 );
 
 export const layer = Layer.effect(SshRemoteDispatch, make).pipe(
+  Layer.provide(Profiles.layer),
   Layer.provide(layerManager),
   Layer.provide(NetService.layer),
 );

@@ -1,3 +1,4 @@
+import * as ServerSettings from "../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -189,7 +190,7 @@ const storeCloudThread = (input: {
     } as never);
   });
 
-const layerFor = (world: World) => {
+const layerFor = (world: World, profile?: string) => {
   const store = ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
   const deps = Layer.mergeAll(
     Layer.mock(HostSync.ProviderHostSync)({
@@ -368,6 +369,11 @@ const layerFor = (world: World) => {
     }),
   );
   return CloudAgents.layer.pipe(
+    Layer.provide(
+      ServerSettings.layerTest({
+        goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
+      }),
+    ),
     Layer.provide(launches),
     Layer.provide(deps),
     Layer.provideMerge(store),
@@ -821,4 +827,51 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       );
     }).pipe(Effect.provide(registered));
   }),
+);
+
+it.effect.each(["worker", "manager", "owner"])(
+  "cloud launch checks profile %s before choosing or launching a holder",
+  (profile) => {
+    const world = makeWorld();
+    return Effect.gen(function* () {
+      const service = yield* CloudAgents.CloudAgentService;
+      const result = yield* service
+        .launch(
+          scope("full-access"),
+          { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Inspect", holder: "local" },
+          full,
+        )
+        .pipe(Effect.result);
+      if (profile === "owner") {
+        assert.equal(result._tag, "Success");
+        assert.equal(world.launches.length, 1);
+      } else {
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.equal(result.failure.code, "capability_denied");
+        assert.equal(world.launches.length, 0);
+        assert.equal(world.hostWrites.length, 0);
+      }
+    }).pipe(Effect.provide(layerFor(world, profile)));
+  },
+);
+
+it.effect(
+  "refuses an enabled remote cloud holder before forwarding outside the lane ledger",
+  () => {
+    const world = makeWorld();
+    world.hosts.push("new");
+    return Effect.gen(function* () {
+      const service = yield* CloudAgents.CloudAgentService;
+      const error = yield* service
+        .launch(
+          scope("full-access"),
+          { provider: "cursorCloud", repo: "goat-si/goat", prompt: "Inspect", holder: "new" },
+          full,
+        )
+        .pipe(Effect.flip);
+      assert.equal(error.code, "capability_denied");
+      assert.equal(world.hostWrites.length, 0);
+      assert.equal(world.launches.length, 0);
+    }).pipe(Effect.provide(layerFor(world, "owner")));
+  },
 );

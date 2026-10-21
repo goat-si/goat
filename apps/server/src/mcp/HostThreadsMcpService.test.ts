@@ -1,3 +1,4 @@
+import { BUILTIN_PERMISSION_PROFILES } from "@goat/contracts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
 import { describe, expect, it } from "@effect/vitest";
@@ -109,6 +110,7 @@ const remoteCloudTask: OrchestratorMcpCloudTask = {
 const runService = <A, E>(
   options: {
     readonly interactionMode: "default" | "plan";
+    readonly goatclawEnabled?: boolean;
     readonly taskThread?: boolean;
     readonly reviewFinished?: boolean | (() => boolean);
     readonly relayReceipt?: {
@@ -189,6 +191,12 @@ const runService = <A, E>(
     ),
     Layer.provide(
       Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
+        permissionProfile: () =>
+          Effect.succeed({
+            enabled: options.goatclawEnabled ?? false,
+            profile: BUILTIN_PERMISSION_PROFILES.worker!,
+            runtimeMode: "full-access",
+          }),
         listThreads: () => Effect.succeed(localList),
         readThread: () =>
           options.localRead === undefined
@@ -1035,4 +1043,26 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
     ),
     Effect.asVoid,
   ),
+);
+
+it.effect(
+  "refuses remote sends while their profile and origin lane accounting cannot be preserved",
+  () =>
+    Effect.gen(function* () {
+      const { result, calls } = yield* runService(
+        {
+          interactionMode: "default",
+          goatclawEnabled: true,
+          hostCall: () => Effect.die("Remote send must be refused"),
+        },
+        (service) =>
+          service.sendToThread(scope, {
+            host: "box",
+            threadId: ThreadId.make("remote"),
+            message: "Continue",
+          }),
+      );
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
+      expect(calls).toHaveLength(0);
+    }),
 );

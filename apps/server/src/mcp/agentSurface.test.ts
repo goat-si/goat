@@ -1,3 +1,4 @@
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
@@ -122,6 +123,7 @@ const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistrations))
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const dependencies = Layer.mergeAll(
+  Layer.mock(Profiles.PermissionProfiles)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -221,7 +223,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(174); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, and notes tools.
+  expect(entries).toHaveLength(175); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, and notes tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);

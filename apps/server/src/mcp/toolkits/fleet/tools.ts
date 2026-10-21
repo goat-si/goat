@@ -1,3 +1,5 @@
+import { PermissionProfileView } from "@goat/contracts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   GoatGoalApplyInput,
@@ -27,6 +29,14 @@ const shared = {
     GoalService.GoalService,
   ],
 };
+
+const PermissionProfileGetTool = Tool.make(agentSurfaceRegistry["permission_profile.get"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["permission_profile.get"].description,
+  parameters: Tool.EmptyParams,
+  success: PermissionProfileView,
+  dependencies: [...shared.dependencies, Profiles.PermissionProfiles],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["permission_profile.get"]));
 
 const GoalApplyTool = Tool.make(agentSurfaceRegistry["goal.apply"].name, {
   ...shared,
@@ -71,6 +81,7 @@ const GoalResumeTool = Tool.make(agentSurfaceRegistry["goal.resume"].name, {
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["goal.resume"]));
 
 export const FleetToolkit = Toolkit.make(
+  PermissionProfileGetTool,
   GoalApplyTool,
   GoalGetTool,
   GoalListTool,
