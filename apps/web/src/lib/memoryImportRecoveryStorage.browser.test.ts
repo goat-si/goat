@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { stubGlobal } from "../../test/render";
+import { expect, it, vi } from "vite-plus/test";
 import * as M from "@goat/contracts";
 import { createMemoryImportWorkflow } from "@goat/client-runtime/memory-import-workflow";
 import {
@@ -14,9 +14,13 @@ import {
 } from "./memoryImportRecoveryStorage";
 import { memorySyncFixture } from "../test/memorySyncFixture";
 import { memoryImportTestLocks } from "../test/memoryImportLocks";
-beforeEach(() => {
-  vi.stubGlobal("navigator", { locks: memoryImportTestLocks() });
-});
+function setup() {
+  const scope = new DisposableStack();
+  scope.use(stubGlobal("navigator", { locks: memoryImportTestLocks() }));
+  localStorage.clear();
+  scope.defer(() => localStorage.clear());
+  return scope;
+}
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const destination = {
   environmentId: M.EnvironmentId.make("device"),
@@ -30,11 +34,6 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  localStorage.clear();
-});
 function fixture(
   count = 65,
   store = memoryImportRecoveryStorage(localStorage),
@@ -106,6 +105,7 @@ function fixture(
   };
 }
 it("shares a store across mounts and persists only the strict handle", async () => {
+  using _scope = setup();
   const f = fixture(1);
   expect(memoryImportRecoveryStorage(localStorage)).toBe(f.store);
   await f.ready();
@@ -131,16 +131,21 @@ it("shares a store across mounts and persists only the strict handle", async () 
   expect(await f.store.load(destination)).toBeNull();
 });
 it("blocks apply until storage succeeds and never admits after storage failure", async () => {
+  using _scope = setup();
   const f = fixture(1);
   await f.ready();
   const saved = deferred<void>();
   const release = deferred<void>();
   const original = Storage.prototype.setItem;
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, key, value) {
+  using setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+    this: Storage,
+    key,
+    value,
+  ) {
     original.call(this, key, value);
   });
   const save = f.store.save.bind(f.store);
-  vi.spyOn(f.store, "save").mockImplementation(async (...args) => {
+  using _save = vi.spyOn(f.store, "save").mockImplementation(async (...args) => {
     saved.resolve();
     await release.promise;
     return save(...args);
@@ -153,7 +158,7 @@ it("blocks apply until storage succeeds and never admits after storage failure",
   expect(f.calls.filter((input) => input.action === "apply")).toHaveLength(1);
   const next = fixture(1);
   await next.ready();
-  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+  setItem.mockImplementation(() => {
     throw new Error("quota");
   });
   await next.workflow.apply();
@@ -161,6 +166,7 @@ it("blocks apply until storage succeeds and never admits after storage failure",
   expect(next.calls.filter((input) => input.action === "apply")).toHaveLength(0);
 });
 it("Stop allows the admitted chunk to settle and stops subsequent chunks", async () => {
+  using _scope = setup();
   const f = fixture();
   await f.ready();
   const admitted = deferred<void>();
@@ -187,6 +193,7 @@ it("Stop allows the admitted chunk to settle and stops subsequent chunks", async
   });
 });
 it("keeps partial and offline handles and clears not_found without reapplying", async () => {
+  using _scope = setup();
   const f = fixture(1);
   await f.ready();
   f.setRequest(async (input) => {
@@ -213,8 +220,9 @@ it("keeps partial and offline handles and clears not_found without reapplying", 
 it.each(["expired", "invalid"])(
   "drops %s handles with zero automatic apply/status",
   async (mode) => {
+    using _scope = setup();
     const now = 1000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
+    using _now = vi.spyOn(Date, "now").mockReturnValue(now);
     const f = fixture(1);
     await f.store.save(destination, M.MemoryOperationId.make(uuid(9)));
     if (mode === "expired")
@@ -226,6 +234,7 @@ it.each(["expired", "invalid"])(
   },
 );
 it("revoke/removal discards late replies and removes the old destination handle", async () => {
+  using _scope = setup();
   const f = fixture(1);
   await f.ready();
   const admitted = deferred<void>();
@@ -247,6 +256,7 @@ it("revoke/removal discards late replies and removes the old destination handle"
   expect(await f.store.load(destination)).toBeNull();
 });
 it("serializes 65 selected items into three persisted chunks", async () => {
+  using _scope = setup();
   const f = fixture();
   await f.ready();
   f.setRequest(async (input) => {
@@ -262,6 +272,7 @@ it("serializes 65 selected items into three persisted chunks", async () => {
   expect(await f.store.load(destination)).toBeNull();
 });
 it("session invalidation rejects late replies while preserving exact status recovery", async () => {
+  using _scope = setup();
   const f = fixture(1);
   await f.ready();
   const admitted = deferred<void>();
@@ -300,19 +311,21 @@ function independentAdapter() {
   };
 }
 it("without Web Locks writes no handle and admits no apply, but recovers status", async () => {
+  using _scope = setup();
   const f = fixture(1);
   await f.store.save(destination, M.MemoryOperationId.make(uuid(99)));
-  vi.stubGlobal("navigator", {});
+  using _navigator = stubGlobal("navigator", {});
   await f.workflow.recover();
   expect(f.calls.map((call) => call.action)).toEqual(["status"]);
   await f.ready();
-  const write = vi.spyOn(Storage.prototype, "setItem");
+  using write = vi.spyOn(Storage.prototype, "setItem");
   await f.workflow.apply();
   expect(write).not.toHaveBeenCalled();
   expect(f.calls.filter((call) => call.action === "apply")).toEqual([]);
   expect(await f.store.load(destination)).toBeNull();
 });
 it("with Web Locks independent stores cannot overwrite an unresolved slot", async () => {
+  using _scope = setup();
   const entered = deferred<void>();
   const release = deferred<void>();
   const adapterA = independentAdapter();
@@ -336,6 +349,7 @@ it("with Web Locks independent stores cannot overwrite an unresolved slot", asyn
   expect((await b.load(destination))?.operationId).toBe(uuid(101));
 });
 it("another tab binding change preserves sent X after response loss for exact status recovery", async () => {
+  using _scope = setup();
   let a!: ReturnType<typeof fixture>;
   const admission = createMemoryImportAdmission(
     destination,
@@ -372,13 +386,14 @@ it("another tab binding change preserves sent X after response loss for exact st
   expect(a.calls.filter((call) => call.action === "apply")).toHaveLength(1);
 });
 it("another tab binding generation fences old preview even before notification, then allows re-preview", async () => {
+  using _scope = setup();
   let a!: ReturnType<typeof fixture>;
   const invalidated = vi.fn(() => a.workflow.invalidate());
   const admission = createMemoryImportAdmission(destination, invalidated, independentAdapter());
   a = fixture(1, admission.recovery, admission.capturePreview);
   await a.ready();
   await removeMemoryImportDestination(destination, independentAdapter());
-  const write = vi.spyOn(Storage.prototype, "setItem");
+  using write = vi.spyOn(Storage.prototype, "setItem");
   await a.workflow.apply();
   expect(invalidated).toHaveBeenCalledOnce();
   expect(write).not.toHaveBeenCalled();
@@ -390,6 +405,7 @@ it("another tab binding generation fences old preview even before notification, 
 });
 
 it("deleted generation after another tab binding change rejects first preview without notification, then re-previews", async () => {
+  using _scope = setup();
   let a!: ReturnType<typeof fixture>;
   const invalidated = vi.fn(() => a.workflow.invalidate());
   const admission = createMemoryImportAdmission(destination, invalidated, independentAdapter());
@@ -401,7 +417,7 @@ it("deleted generation after another tab binding change rejects first preview wi
   await removeMemoryImportDestination(destination, independentAdapter());
   expect(localStorage.getItem(key)).not.toBe(firstGeneration);
   localStorage.removeItem(key);
-  const write = vi.spyOn(Storage.prototype, "setItem");
+  using write = vi.spyOn(Storage.prototype, "setItem");
   await a.workflow.apply();
   expect(write).not.toHaveBeenCalled();
   expect(a.calls.filter((call) => call.action === "apply")).toEqual([]);
@@ -417,6 +433,7 @@ it("deleted generation after another tab binding change rejects first preview wi
 it.each(["malformed", "00000000-0000-0000-0000-000000000000", ""])(
   "initializes malformed preview generation %j and permits apply",
   async (value) => {
+    using _scope = setup();
     const key = memoryImportGenerationKey(destination);
     localStorage.setItem(key, value);
     const admission = createMemoryImportAdmission(destination, undefined, independentAdapter());
@@ -430,6 +447,7 @@ it.each(["malformed", "00000000-0000-0000-0000-000000000000", ""])(
   },
 );
 it("rejects malformed admission generation without saving or applying and preserves sent X", async () => {
+  using _scope = setup();
   let a!: ReturnType<typeof fixture>;
   const invalidated = vi.fn(() => a.workflow.invalidate());
   const admission = createMemoryImportAdmission(destination, invalidated, independentAdapter());
@@ -438,7 +456,7 @@ it("rejects malformed admission generation without saving or applying and preser
   const x = M.MemoryOperationId.make(uuid(99));
   await memoryImportRecoveryStorage(independentAdapter()).save(destination, x);
   localStorage.setItem(memoryImportGenerationKey(destination), "malformed");
-  const write = vi.spyOn(Storage.prototype, "setItem");
+  using write = vi.spyOn(Storage.prototype, "setItem");
   await a.workflow.apply();
   expect(write).not.toHaveBeenCalled();
   expect(a.calls.filter((call) => call.action === "apply")).toEqual([]);
@@ -447,6 +465,7 @@ it("rejects malformed admission generation without saving or applying and preser
   expect((await a.store.load(destination))?.operationId).toBe(x);
 });
 it("rejects repeated malformed generation at admission even when preview read the same raw value", async () => {
+  using _scope = setup();
   const key = memoryImportGenerationKey(destination);
   localStorage.setItem(key, "malformed");
   let a!: ReturnType<typeof fixture>;
@@ -455,7 +474,7 @@ it("rejects repeated malformed generation at admission even when preview read th
   a = fixture(1, admission.recovery, admission.capturePreview);
   await a.ready();
   localStorage.setItem(key, "malformed");
-  const write = vi.spyOn(Storage.prototype, "setItem");
+  using write = vi.spyOn(Storage.prototype, "setItem");
   await a.workflow.apply();
   expect(write).not.toHaveBeenCalled();
   expect(a.calls.filter((call) => call.action === "apply")).toEqual([]);

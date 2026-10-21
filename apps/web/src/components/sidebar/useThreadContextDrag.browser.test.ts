@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@goat/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { act, createElement } from "react";

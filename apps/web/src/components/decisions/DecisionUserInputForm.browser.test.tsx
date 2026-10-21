@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 import { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
