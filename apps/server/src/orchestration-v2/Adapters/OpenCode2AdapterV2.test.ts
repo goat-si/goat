@@ -93,6 +93,7 @@ const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
   { action: "goat-*", resource: "*", effect: "deny" },
   { action: "goat-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
+  { action: "cua-driver-*", resource: "*", effect: "deny" },
 ];
 const goatRules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 const TITLE = "Prime check";
@@ -2450,6 +2451,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
               { action: "t3-code-*", resource: "*", effect: "deny" },
               { action: "goat-*", resource: "*", effect: "deny" },
               { action: `${server}_*`, resource: "*", effect: "allow" },
+              { action: "cua-driver-*", resource: "*", effect: "deny" },
             ],
           }),
         ),
@@ -2528,6 +2530,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           { action: "t3-code-*", resource: "*", effect: "deny" },
           { action: "goat-*", resource: "*", effect: "deny" },
           { action: `${ownerServer}_*`, resource: "*", effect: "allow" },
+          { action: "cua-driver-*", resource: "*", effect: "deny" },
         ];
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         yield* sessions.set({
@@ -2609,6 +2612,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
                     { action: "t3-code-*", resource: "*", effect: "deny" },
                     { action: "goat-*", resource: "*", effect: "deny" },
                     { action: `${server}_*`, resource: "*", effect: "allow" },
+                    { action: "cua-driver-*", resource: "*", effect: "deny" },
                   ],
                 }),
               ),
@@ -3752,6 +3756,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             { action: "t3-code-*", resource: "*", effect: "deny" },
             { action: "goat-*", resource: "*", effect: "deny" },
             { action: "goat-7c81f4ba96860743_*", resource: "*", effect: "allow" },
+            { action: "cua-driver-*", resource: "*", effect: "deny" },
           ],
         }),
         reply("session.update", null),

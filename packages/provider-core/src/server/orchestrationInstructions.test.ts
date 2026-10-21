@@ -1,5 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "./orchestrationInstructions.ts";
+import {
+  GOAT_ORCHESTRATION_INSTRUCTIONS,
+  GOAT_ORCHESTRATION_SECTIONS,
+} from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
   it("instructs every provider to write GOAT thread links", () => {
@@ -25,6 +28,31 @@ describe("T3 orchestration provider instructions", () => {
       GOAT_ORCHESTRATION_INSTRUCTIONS,
       "for work that owns a goal, runs a loop (HOTL, `cxc-loop`, repeated PABCD), or spans several cycles",
     );
+  });
+
+  it("spreads work across connected machines", () => {
+    for (const text of [
+      "### Spread work across machines",
+      "`goat_host_status`",
+      "`goat_ssh_host_list`",
+      "`goat_host_link_list`",
+      "`goat_cloud_machine_list`",
+      "`goat_provider_host_matrix`",
+      "`goat_ssh_thread_launch` and a worktree",
+      "the user's browser, local files, signed-in desktop apps",
+      "Cordoned or Draining",
+      "Do not keep retrying a host that stopped answering",
+      "Do not create or resume a Boat cloud machine",
+      "which host ran what",
+    ]) {
+      assert.include(GOAT_ORCHESTRATION_INSTRUCTIONS, text);
+    }
+  });
+
+  it("keeps every section under Codex's per-entry limit", () => {
+    for (const section of GOAT_ORCHESTRATION_SECTIONS) {
+      assert.isBelow(new TextEncoder().encode(section).length, 4000);
+    }
   });
 });
 

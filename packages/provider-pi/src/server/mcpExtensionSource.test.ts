@@ -584,6 +584,58 @@ describe("Pi Cua Driver bridge", () => {
     }
   });
 
+  it("closes the driver for a turn its gate shuts, and reopens it when the gate opens", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-pi-cua-gate-"));
+    try {
+      const script = NodePath.join(directory, "fake-cua-driver.mjs");
+      const gate = NodePath.join(directory, "gate");
+      await NodeFSP.writeFile(script, FAKE_CUA_DRIVER);
+      await NodeFSP.writeFile(gate, "on");
+      const bridge = await loadMcpBridge({
+        cua: { command: process.execPath, args: [script] },
+        cuaGate: gate,
+      });
+      const name = "mcp__cua-driver__get_window_state";
+      const tool = bridge.tools.find((entry) => entry.name === name)!;
+      const start = bridge.handlers.get("before_agent_start")!;
+      const ctx = { ui: { notify: () => undefined } };
+      const turn = async () => {
+        const sections: Record<string, string> = {};
+        await start({ systemPrompt: "base", systemPromptOptions: { sections } }, ctx);
+        return sections;
+      };
+      try {
+        bridge.restoreActiveTools(["read", name]);
+        assert.include((await turn()).goat_computer_use, "<computer_use>");
+
+        // A Plan or read-only turn: the adapter shuts the gate before the prompt.
+        await NodeFSP.writeFile(gate, "off");
+        assert.isUndefined((await turn()).goat_computer_use);
+        assert.notInclude(bridge.getActiveTools(), name);
+        const refused = await tool.execute("capture", { window_id: 7 });
+        assert.isTrue(refused.isError);
+        assert.deepEqual(refused.content, [
+          { type: "text", text: "Computer use is off for this turn." },
+        ]);
+
+        // A missing gate fails closed.
+        await NodeFSP.rm(gate);
+        assert.isUndefined((await turn()).goat_computer_use);
+
+        await NodeFSP.writeFile(gate, "on");
+        assert.include((await turn()).goat_computer_use, "<computer_use>");
+        assert.include(bridge.getActiveTools(), name);
+        // The closed connection starts again with a fresh handshake.
+        const output = await tool.execute("capture", { window_id: 8 });
+        assert.deepEqual(output.content[0], { type: "text", text: "window 8" });
+      } finally {
+        await (bridge.handlers.get("session_shutdown") as unknown as () => void)();
+      }
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("leaves the instructions out of a session without the driver", async () => {
     const bridge = await loadMcpBridge();
     assert.isFalse(bridge.tools.some((entry) => entry.name.startsWith("mcp__cua-driver__")));

@@ -561,6 +561,112 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
+  it.live("restarts the agent without the driver when a session switches to Plan", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-cua-plan");
+      const threadId = ThreadId.make("thread-acp-cua-plan");
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const attachment = {
+        environmentId: EnvironmentId.make("environment-acp-cua"),
+        threadId,
+        providerSessionId: "mcp-session-acp-cua-plan",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer acp-cua-token",
+        browserToolsAvailable: false,
+      };
+      yield* sessions.set({
+        ...attachment,
+        cuaDriver: { command: "/resources/cua-driver", args: ["mcp"], environment: [] },
+      });
+      const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
+      const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents });
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: (input) =>
+            Effect.sync(() => {
+              runtimeInputs.push(input);
+            }).pipe(Effect.andThen(makeRuntime(input))),
+        },
+        selfInvocation,
+      });
+      const policy = (interactionMode: "default" | "plan") =>
+        ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode,
+          cwd: process.cwd(),
+        });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-cua-plan"),
+        modelSelection,
+        runtimePolicy: policy("default"),
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy: policy("default"),
+      });
+      const hasDriver = (input: AcpAdapterV2RuntimeInput | undefined) =>
+        [...(input?.mcpServers ?? []), ...(input?.acpMcpServers ?? [])].some(
+          (server) => "name" in server && server.name === "cua-driver",
+        );
+      const nextPrompt = Effect.gen(function* () {
+        while (true) {
+          const event = yield* Queue.take(protocolEvents);
+          if (event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt")
+            return rawProtocolPromptTextBlocks(event)
+              .map((block) => block.text)
+              .join("\n");
+        }
+      });
+      const turn = (ordinal: number, interactionMode: "default" | "plan") =>
+        runtime
+          .startTurn(
+            makeTurnInput({
+              threadId,
+              providerThread,
+              instanceId,
+              runtimePolicy: policy(interactionMode),
+              now: DateTime.nowUnsafe(),
+              ordinal,
+              messageText: "Look at the settings window.",
+            }),
+          )
+          .pipe(
+            Effect.andThen(
+              runtime.events.pipe(
+                Stream.takeUntil((event) => event.type === "turn.terminal"),
+                Stream.runDrain,
+              ),
+            ),
+          );
+
+      yield* turn(0, "default");
+      assert.include(yield* nextPrompt, "<computer_use>");
+      assert.isTrue(hasDriver(runtimeInputs.at(-1)));
+      const runtimesBeforePlan = runtimeInputs.length;
+
+      // Plan turns get no attachment, so the agent process holding the driver must be replaced.
+      yield* sessions.set(attachment);
+      yield* turn(1, "plan");
+      assert.notInclude(yield* nextPrompt, "<computer_use>");
+      assert.equal(runtimeInputs.length, runtimesBeforePlan + 1);
+      assert.isFalse(hasDriver(runtimeInputs.at(-1)));
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
   it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;

@@ -29,6 +29,10 @@ import type { ProviderReplayGate } from "@goat/provider-testing/replayGate";
 
 export type OrchestratorV2ScenarioStep =
   | {
+      readonly type: "await_replay_turn_complete";
+      readonly nativeTurnId: string;
+    }
+  | {
       readonly type: "dispatch";
       readonly command: OrchestrationV2Command;
       readonly await?: boolean;
@@ -257,6 +261,7 @@ export function runOrchestratorV2Scenario(
   options: {
     readonly replayGate?: ProviderReplayGate;
     readonly afterSteps?: Effect.Effect<void>;
+    readonly awaitReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -321,38 +326,41 @@ export function runOrchestratorV2Scenario(
           return yield* waitForPendingRuntimeRequest(threadId, attemptsRemaining - 1, deadlineAt);
         });
 
-      const waitForThreadIdle = (
-        threadId: ThreadId,
-        attemptsRemaining = SCENARIO_WAIT_ATTEMPTS,
-        deadlineAt = scenarioWaitDeadline(),
-      ): Effect.Effect<
-        void,
-        Orchestrator.OrchestratorV2Error | OrchestratorV2ScenarioStepError,
-        never
-      > =>
+      const waitForThreadIdle = (threadId: ThreadId) =>
         Effect.gen(function* () {
+          // Capture the cursor before reading the projection so a commit between
+          // the read and subscription is replayed instead of missed.
+          const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+          if (!hasActiveRun(yield* orchestrator.getThreadProjection(threadId))) return;
+          const idle = yield* orchestrator
+            .streamStoredEventsFrom({
+              threadId,
+              afterSequence,
+              eventType: "run.updated",
+            })
+            .pipe(
+              Stream.mapEffect(() => orchestrator.getThreadProjection(threadId)),
+              Stream.filter((projection) => !hasActiveRun(projection)),
+              Stream.runHead,
+              Effect.timeoutOption(Duration.millis(SCENARIO_WAIT_DEADLINE_MS)),
+              Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+            );
+          if (Option.isSome(idle) && Option.isSome(idle.value)) return;
           const projection = yield* orchestrator.getThreadProjection(threadId);
-          if (!hasActiveRun(projection)) {
-            return;
-          }
-          if (scenarioWaitExhausted(attemptsRemaining, deadlineAt)) {
-            const activeRuns = projection.runs
-              .filter((run) =>
-                ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
-              )
-              .map((run) => `${run.id}:${run.status}`)
-              .join(",");
-            const pendingRequests = projection.runtimeRequests
-              .filter((request) => request.status === "pending")
-              .map((request) => `${request.id}:${request.kind}`)
-              .join(",");
-            return yield* new OrchestratorV2ScenarioStepError({
-              scenario: scenario.name,
-              step: `await_thread_idle:${threadId}:runs=${activeRuns}:requests=${pendingRequests}`,
-            });
-          }
-          yield* yieldToRuntime;
-          return yield* waitForThreadIdle(threadId, attemptsRemaining - 1, deadlineAt);
+          const activeRuns = projection.runs
+            .filter((run) =>
+              ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+            )
+            .map((run) => `${run.id}:${run.status}`)
+            .join(",");
+          const pendingRequests = projection.runtimeRequests
+            .filter((request) => request.status === "pending")
+            .map((request) => `${request.id}:${request.kind}`)
+            .join(",");
+          return yield* new OrchestratorV2ScenarioStepError({
+            scenario: scenario.name,
+            step: `await_thread_idle:${threadId}:runs=${activeRuns}:requests=${pendingRequests}`,
+          });
         });
 
       const waitForNoBackgroundWork = (
@@ -637,6 +645,15 @@ export function runOrchestratorV2Scenario(
             );
             break;
           }
+          case "await_replay_turn_complete":
+            if (options.awaitReplayTurnComplete === undefined) {
+              return yield* new OrchestratorV2ScenarioStepError({
+                scenario: scenario.name,
+                step: `await_replay_turn_complete:${step.nativeTurnId}:not_configured`,
+              });
+            }
+            yield* options.awaitReplayTurnComplete(step.nativeTurnId);
+            break;
           case "advance_clock":
             yield* TestClock.adjust(step.duration);
             break;

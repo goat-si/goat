@@ -1,16 +1,24 @@
 # CI
 
-goat-si/goat keeps three workflows active: `.github/workflows/goat-ci.yml` runs CI on GitHub-hosted
-`ubuntu-24.04` runners, which are free for a public repository, `goat-nightly.yml` publishes
+goat-si/goat keeps three workflows active: `.github/workflows/goat-ci.yml` runs CI, `goat-nightly.yml` publishes
 nightlies after a manual goat-ci run on `dev`, and `close-outside-prs.yml` closes pull requests from
 forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate` and `result`, the pinned
-`ubuntu-24.04` image or the EPYC self-hosted labels, the `push`, `pull_request`, and
+`ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expression below, the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
 `pull_request_target` trigger outside `close-outside-prs.yml`, or
 `actions/github-script` does not pass the guard.
+
+Every goat-ci job carries one `runs-on` expression. A manual run, or a pull request whose head
+branch lives in goat-si/goat, runs on the EPYC self-hosted runners; a pull request from a fork runs
+on GitHub-hosted `ubuntu-24.04`, so fork code never reaches EPYC. The free plan caps hosted
+concurrency at about 20 jobs, which a few full pull request runs saturate, while EPYC carries two
+dozen runners. The trust test lives in that expression, so the guard pins its exact text. EPYC
+runners persist between jobs and give jobs no sudo: each keeps its caches in its own HOME, and the
+steps that install packages or unlock the runner account for the test sshd run on hosted runners
+only.
 
 `close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`main`)
 with a write token, so the guard pins it to the `opened` and `reopened` events and to

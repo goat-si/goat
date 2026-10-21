@@ -14,12 +14,16 @@ import {
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -39,8 +43,9 @@ import {
 } from "./hostStatusModel.ts";
 
 /**
- * Shorter than the thread tools' remote deadline. A silent host is unreachable
- * and the previous sample, when there is one, stands in.
+ * Shorter than the thread tools' remote deadline, and it covers connecting as well as the call:
+ * a host still setting up SSH is unreachable for this answer and its previous sample, when there
+ * is one, stands in.
  */
 export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 
@@ -93,9 +98,12 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const hosts = yield* HostThreadsMcpService.HostThreadsMcpService;
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+  const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
   const clock = yield* Clock.Clock;
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
+  /** Per caller and host, so a slow host's connection keeps going between polls instead of restarting. */
+  const remoteReads = yield* FiberMap.make<string, HostStatusEntry, OrchestratorMcpFailure>();
 
   const remember = (key: string | null, entry: HostStatusEntry) =>
     Ref.update(known, (current) => {
@@ -152,6 +160,7 @@ const make = Effect.gen(function* () {
         platform,
         threads: countHostThreads(shells),
         ...(yield* readQuotas()),
+        opencodex: yield* opencodex.read,
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
@@ -166,7 +175,7 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const readRemote = Effect.fn("HostStatus.readRemote")(function* (
+  const readRemoteOnce = Effect.fn("HostStatus.readRemoteOnce")(function* (
     scope: McpInvocationScope,
     host: string,
     failInvalid: boolean,
@@ -197,6 +206,33 @@ const make = Effect.gen(function* () {
           );
         }),
       );
+  });
+
+  /**
+   * The read's own deadline covers only the tool call, not connecting first, so one host stuck
+   * connecting could hold the whole fan-out past the client's timeout. The read runs on past this
+   * deadline and remembers what it gets for the next poll.
+   */
+  const readRemote = Effect.fn("HostStatus.readRemote")(function* (
+    scope: McpInvocationScope,
+    host: string,
+    failInvalid: boolean,
+  ) {
+    const key = scope.requestNamespace + "\u0000" + host + (failInvalid ? "\u0000named" : "");
+    const running = yield* FiberMap.get(remoteReads, key);
+    const fiber = Option.isSome(running)
+      ? running.value
+      : yield* FiberMap.run(remoteReads, key, readRemoteOnce(scope, host, failInvalid));
+    const answer = yield* Fiber.join(fiber).pipe(
+      Effect.timeoutOption(HOST_STATUS_REMOTE_TIMEOUT_MS),
+    );
+    if (Option.isSome(answer)) return answer.value;
+    const current = yield* Ref.get(known);
+    return unreachableHostStatus(
+      host,
+      `${host} did not answer within ${HOST_STATUS_REMOTE_TIMEOUT_MS / 1000}s.`,
+      current.get(host),
+    );
   });
 
   const read: HostStatusMcpServiceShape["read"] = Effect.fn("HostStatus.read")(

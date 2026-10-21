@@ -42,6 +42,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
+import * as Scope from "effect/Scope";
 import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -464,12 +466,28 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       if (!resolvedLaunchArgs.ok) {
         return yield* protocolError(resolvedLaunchArgs.message);
       }
+      // Pi's driver is fixed at launch, so each turn tells the extension through this file
+      // whether it may still use it; a Plan or read-only turn closes it before it starts.
+      const cuaGate =
+        mcpSession?.cuaDriver === undefined
+          ? undefined
+          : {
+              path: yield* provideCacheFs(
+                Effect.gen(function* () {
+                  const path = yield* fileSystem.makeTempFileScoped({ prefix: "goat-pi-cua-" });
+                  yield* fileSystem.writeFileString(path, "on");
+                  return path;
+                }).pipe(Effect.provideService(Scope.Scope, scope)),
+              ),
+              key: McpProviderSession.cuaDriverKey(mcpSession.cuaDriver),
+            };
       const launch = buildPiRpcLaunch({
         launchArgs: resolvedLaunchArgs.args,
         environment: options.environment,
         mcpSession,
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
+        cuaGatePath: cuaGate?.path,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -2434,6 +2452,18 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const continuation =
               turnInput.message.createdBy === "agent" &&
               turnInput.message.creationSource === "provider";
+            if (cuaGate !== undefined) {
+              // Written before the prompt, so the extension reads it in before_agent_start.
+              const attached = yield* mcpSessions.read(turnInput.threadId);
+              const allowed = McpProviderSession.cuaDriverKey(attached?.cuaDriver) === cuaGate.key;
+              yield* fileSystem
+                .writeFileString(cuaGate.path, allowed ? "on" : "off")
+                .pipe(
+                  Effect.mapError(() =>
+                    protocolError("Could not update Pi's computer use access for this turn"),
+                  ),
+                );
+            }
             if (!continuation) yield* applySelection(turnInput.modelSelection);
             if (turnInput.appThread.title !== appliedSessionName) {
               yield* request({

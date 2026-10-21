@@ -55,11 +55,15 @@ const event = (
 });
 const durable = { durable: { aggregateID: SESSION, seq: 1, version: 1 } };
 
-/** The rules T3 gives every session it runs, with only this thread's own T3 MCP server allowed. */
+/**
+ * The rules GOAT gives every session it runs: only this thread's own GOAT server is allowed,
+ * and every managed Cua Driver is denied whether or not this thread has one.
+ */
 const mcpRules = [
   { action: "t3-code-*", resource: "*", effect: "deny" },
   { action: "goat-*", resource: "*", effect: "deny" },
   { action: "goat-c26f2f1fb6fbbcc2_*", resource: "*", effect: "allow" },
+  { action: "cua-driver-*", resource: "*", effect: "deny" },
 ];
 const goatRules = [{ action: "*", resource: "*", effect: "allow" }, ...mcpRules];
 /** The thread's title, which the recorded session already carries. */
@@ -327,16 +331,13 @@ it.layer(McpProviderSessions.layer)("OpenCode v2 MCP routing", (it) => {
         promptAccepted,
         event("session.execution.succeeded", { sessionID: SESSION }),
       ];
-      // Only a thread with the driver carries its rules, and only its own driver is allowed.
+      // Every turn denies all managed drivers; only a turn with the driver allows its own, so an
+      // excluded turn (Plan, read-only) cannot reach a driver another thread registered here.
       const rules = (computerUse: boolean) => [
         out("session.update", {
           sessionID: SESSION,
           permissions: computerUse
-            ? [
-                ...goatRules,
-                { action: "cua-driver-*", resource: "*", effect: "deny" },
-                { action: `${cuaName}_*`, resource: "*", effect: "allow" },
-              ]
+            ? [...goatRules, { action: `${cuaName}_*`, resource: "*", effect: "allow" }]
             : goatRules,
         }),
         reply("session.update", null),

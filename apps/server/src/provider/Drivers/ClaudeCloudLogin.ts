@@ -8,7 +8,11 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { ClaudeCloudError, type ClaudeCloudLogin } from "@goat/provider-claude-cloud/server";
+import {
+  ClaudeCloudError,
+  prepareClaudeCloudEnvironment,
+  type ClaudeCloudLogin,
+} from "@goat/provider-claude-cloud/server";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -22,7 +26,7 @@ const decodeSiblingSettings = Schema.decodeUnknownEffect(ClaudeSettings);
 const isCloudError = Schema.is(ClaudeCloudError);
 
 /** Routing that would send a cloud login through bundles, API keys, Git overrides, or third parties. */
-export const CLAUDE_CLOUD_FORBIDDEN_ENVIRONMENT = [
+const CLAUDE_CLOUD_FORBIDDEN_ENVIRONMENT = [
   "CCR_FORCE_BUNDLE",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
@@ -41,8 +45,9 @@ export const CLAUDE_CLOUD_FORBIDDEN_ENVIRONMENT = [
 ] as const;
 
 /** Names of the forbidden variables set in `environment`. An empty value counts as unset. */
-export const forbiddenClaudeCloudVariables = (environment: NodeJS.ProcessEnv): string[] =>
-  Object.keys(environment)
+export const forbiddenClaudeCloudVariables = (input: NodeJS.ProcessEnv): string[] => {
+  const environment = prepareClaudeCloudEnvironment(input);
+  return Object.keys(environment)
     .filter((key) =>
       key.startsWith("GIT_")
         ? Boolean(environment[key])
@@ -50,6 +55,7 @@ export const forbiddenClaudeCloudVariables = (environment: NodeJS.ProcessEnv): s
           Boolean(environment[key]?.trim()),
     )
     .toSorted();
+};
 
 const fail = (detail: string, fields: Partial<ConstructorParameters<typeof ClaudeCloudError>[0]>) =>
   Effect.fail(new ClaudeCloudError({ detail, outcome: "rejected", ...fields }));
@@ -88,7 +94,7 @@ export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(
     });
   const sibling = yield* decodeSiblingSettings(entry?.config ?? {});
   const merged = yield* mergeProviderInstanceEnvironment(entry?.environment, processEnvironment);
-  const environment = yield* makeClaudeEnvironment(sibling, merged);
+  const environment = prepareClaudeCloudEnvironment(yield* makeClaudeEnvironment(sibling, merged));
   const binary = yield* resolveClaudeSdkExecutablePath(
     expandHomePath(sibling.binaryPath, homeDirectory),
     environment,

@@ -187,6 +187,68 @@ it.effect("a configured Claude Cloud with a signed-in claude.ai sibling is ready
   }),
 );
 
+it.effect.each([false, true])(
+  "Claude Cloud diagnosis neutralizes GIT_PAGER (redacted sibling: %s)",
+  (redacted) =>
+    Effect.gen(function* () {
+      const env = { HOME: "/home/user", GIT_PAGER: "less -FRX", PAGER: "less" };
+      const { result, spawned } = yield* diagnose(
+        { instanceId: id("cloud-work") },
+        {
+          instances: {
+            ...claudeCloud(),
+            ...(redacted
+              ? {
+                  claudeAgent: {
+                    driver: driver("claudeAgent"),
+                    environment: [
+                      { name: "GIT_PAGER", value: "", sensitive: true, valueRedacted: true },
+                    ],
+                  },
+                }
+              : {}),
+          },
+          env,
+        },
+      );
+      expect(only(result.diagnoses).ready).toBe(true);
+      expect(failures(only(result.diagnoses))).toEqual([]);
+      expect(spawned.map((command) => command.args)).toEqual([
+        ["auth", "status"],
+        ["--version"],
+        ["--help"],
+      ]);
+      for (const command of spawned) {
+        expect(command.options.env).toEqual({ HOME: "/home/user", GIT_PAGER: "", PAGER: "less" });
+      }
+      expect(env.GIT_PAGER).toBe("less -FRX");
+    }),
+);
+
+it.effect.each([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_SSH_COMMAND",
+  "GIT_UNKNOWN_OVERRIDE",
+])("Claude Cloud diagnosis still refuses %s alongside GIT_PAGER", (key) =>
+  Effect.gen(function* () {
+    const { result } = yield* diagnose(
+      { instanceId: id("cloud-work") },
+      {
+        instances: claudeCloud(),
+        env: { HOME: "/home/user", GIT_PAGER: "less", [key]: "fixture-routing" },
+      },
+    );
+    const diagnosis = only(result.diagnoses);
+    expect(diagnosis.ready).toBe(false);
+    expect(failures(diagnosis)).toEqual(["forbidden_environment"]);
+    expect(checkOf(diagnosis, "environment")?.summary).toContain(key);
+    expect(checkOf(diagnosis, "environment")?.summary).not.toContain("GIT_PAGER");
+  }),
+);
+
 it.effect("the automatic Claude Cloud slot checks its default claude.ai login", () =>
   Effect.gen(function* () {
     const { result } = yield* diagnose({ driver: driver("claudeCloud") });

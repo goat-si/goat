@@ -735,7 +735,7 @@ Each PR ships on its own and leaves `tools/list` unchanged until phase 11.
 
 Testing follows the repository rules: focused tests for each behavior, effect
 worker draining instead of sleeps, and one real-client pass for the handoff cards
-(`test-t3-app` for web, `test-t3-mobile` for mobile).
+(`test-goat-app` for web, `test-goat-mobile` for mobile).
 
 ## Open questions
 

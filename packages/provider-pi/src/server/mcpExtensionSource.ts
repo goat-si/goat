@@ -13,6 +13,11 @@ export const GOAT_PI_RUNTIME_MODE_ENV = "GOAT_PI_RUNTIME_MODE";
 export const GOAT_PI_MCP_EXTENSION_PATH_ENV = "GOAT_PI_MCP_EXTENSION_PATH";
 /** The managed Cua Driver's stdio MCP command, as JSON `{ command, args, env }`. */
 export const GOAT_CUA_MCP_ENV = "GOAT_CUA_MCP";
+/**
+ * A file the adapter rewrites before every turn: `on` while the turn may use the driver this
+ * process launched with, anything else (Plan, read-only, a changed driver) closes it for the turn.
+ */
+export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
 
 /**
  * Pi tools whose confirmations the bridge raises as file-change approvals.
@@ -32,6 +37,7 @@ const TOKEN_ENV = ${JSON.stringify(GOAT_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
+const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
 const PROTOCOL = "2025-06-18";
@@ -340,6 +346,19 @@ function createStdioMcpClient(spec: StdioMcpSpec) {
   };
 }
 
+// A process launched by an adapter without the gate keeps its launch-time behavior. Once the
+// gate exists, anything but "on", including a missing or unreadable file, closes the driver.
+async function readCuaGate(): Promise<boolean> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return true;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path, "utf8")).trim() === "on";
+  } catch {
+    return false;
+  }
+}
+
 function cuaSpec(): StdioMcpSpec | undefined {
   const raw = env(CUA_ENV);
   if (raw === undefined) return undefined;
@@ -565,8 +584,13 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   // harnesses name it. Its screenshots pass through as image content.
   const cua = cuaSpec();
   let computerUse = false;
+  // Turns this process may not use the driver on (Plan, read-only, a changed driver) close it.
+  let cuaOpen = true;
+  const cuaToolNames: string[] = [];
+  let closeCua: () => void = () => undefined;
   if (cua !== undefined) {
     const cuaClient = createStdioMcpClient(cua);
+    closeCua = () => cuaClient.close();
     pi.on("session_shutdown", () => cuaClient.close());
     try {
       const signal = AbortSignal.timeout(20_000);
@@ -574,6 +598,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       for (const tool of await cuaClient.listTools(signal)) {
         const name = tool.name;
         const description = tool.description ?? name;
+        cuaToolNames.push("mcp__cua-driver__" + name);
         pi.registerTool({
           name: \`mcp__cua-driver__\${name}\`,
           label: name,
@@ -581,6 +606,12 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
           promptSnippet: description.split("\\n")[0] ?? name,
           parameters: jsonSchemaToTypebox(tool.inputSchema),
           async execute(_toolCallId, params, signal) {
+            if (!cuaOpen)
+              return {
+                content: [{ type: "text", text: "Computer use is off for this turn." }],
+                details: { server: "cua-driver", tool: name },
+                isError: true,
+              };
             const result = await cuaClient.callTool(
               name,
               (params ?? {}) as Record<string, unknown>,
@@ -604,13 +635,27 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   }
 
   // Keep guidance in the system prompt so leading slash commands still expand.
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
     reconcileDiscovery(ctx);
+    if (computerUse) {
+      const open = await readCuaGate();
+      if (!open && cuaOpen) {
+        // End the driver connection before the turn starts, not just its tools.
+        closeCua();
+        pi.setActiveTools(pi.getActiveTools().filter((name) => !cuaToolNames.includes(name)));
+      } else if (open && !cuaOpen) {
+        const active = pi.getActiveTools();
+        pi.setActiveTools([...active, ...cuaToolNames.filter((name) => !active.includes(name))]);
+      }
+      cuaOpen = open;
+    }
+    const withComputerUse = computerUse && cuaOpen;
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
       sections.goat_code_orchestration = ORCHESTRATION_INSTRUCTIONS;
-      if (computerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
+      if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
+      else delete sections.goat_computer_use;
       return undefined;
     }
     return {
@@ -618,7 +663,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         event.systemPrompt +
         "\\n\\n" +
         ORCHESTRATION_INSTRUCTIONS +
-        (computerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
+        (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : ""),
     };
   });
 }

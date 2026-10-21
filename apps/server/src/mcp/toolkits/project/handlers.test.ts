@@ -938,6 +938,7 @@ it.effect(
               workspaceRoot: "/projects/client-target",
               branch: workspaceStrategy.branch ?? "",
               worktreePath: "/worktrees/lane",
+              problem: "has 1 commit that origin/lane does not",
             }),
           ),
       });
@@ -961,7 +962,7 @@ it.effect(
         )).at(-1)?.result;
       expect(refused).toMatchObject({ code: "invalid_request" });
       expect((refused as { message: string }).message).toBe(
-        'Branch "lane" is already checked out at /worktrees/lane in project "Client target". No thread was created. Launch into that checkout with workspaceStrategy {type:"existing_worktree", worktreePath:"/worktrees/lane"}, or pass a branch name that does not exist yet.',
+        'Branch "lane" is already checked out at /worktrees/lane in project "Client target" and has 1 commit that origin/lane does not, so a new worktree cannot reuse it. No thread was created. Launch into that checkout with workspaceStrategy {"type":"existing_worktree","worktreePath":"/worktrees/lane","branch":"lane"}, or pass a branch name that does not exist yet.',
       );
       expect(launched).toHaveLength(0);
     }),

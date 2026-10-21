@@ -401,25 +401,23 @@ export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadI
 /**
  * The rules that keep T3's MCP servers to their own thread, after the mode's:
  * the last matching rule wins, so every thread's T3 server is denied and then
- * this thread's own is allowed again, in every mode. A thread with computer use
- * gets the same pair for the Cua Driver, which is registered per directory too.
+ * this thread's own is allowed again, in every mode. Cua Drivers are registered
+ * per directory, so every turn denies all of them, including a turn excluded from
+ * computer use (Plan, read-only) that would otherwise inherit full access's
+ * `* allow`, and only a turn with the driver allows its own exact server.
  */
 const mcpRules = (
   names: { readonly goat: string; readonly cua: string | null } | null,
 ): ReadonlyArray<Rule> =>
   names === null
-    ? []
+    ? [rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny")]
     : [
         // A reused daemon can still carry registrations from before the rename.
         { action: "t3-code-*", resource: "*", effect: "deny" },
         { action: "goat-*", resource: "*", effect: "deny" },
         { action: `${names.goat}_*`, resource: "*", effect: "allow" },
-        ...(names.cua === null
-          ? []
-          : [
-              rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny"),
-              rule(`${names.cua}_*`, "allow"),
-            ]),
+        rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny"),
+        ...(names.cua === null ? [] : [rule(`${names.cua}_*`, "allow")]),
       ];
 
 const sessionRules = (
