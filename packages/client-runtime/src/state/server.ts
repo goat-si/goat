@@ -1245,6 +1245,18 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:hub:device-verify",
       tag: WS_METHODS.hubDeviceVerify,
     }),
+    joinHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-join",
+      tag: WS_METHODS.hubDeviceJoin,
+    }),
+    leaveHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-leave",
+      tag: WS_METHODS.hubDeviceLeave,
+    }),
+    repairHubDevice: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:hub:device-repair",
+      tag: WS_METHODS.hubDeviceRepair,
+    }),
     scheduledTaskWebhookDeliveries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:scheduled-task:webhook-deliveries",
       tag: WS_METHODS.scheduledTasksListWebhookDeliveries,
