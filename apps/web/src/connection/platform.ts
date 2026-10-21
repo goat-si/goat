@@ -251,7 +251,7 @@ export type CloudMachinePreflight = (alias: string) => Effect.Effect<void, Conne
  * wakes a stopped machine, because reconnects and route checks run this too; Resume in Settings
  * does. Loaded lazily: the server state module depends on this connection layer.
  */
-export const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
+const readyCloudMachineThroughPrimary: CloudMachinePreflight = Effect.fn(
   "web.connectionPlatform.ssh.readyCloudMachine",
 )(function* (alias) {
   const [{ serverEnvironment }, { primaryEnvironmentIdAtom }] = yield* Effect.promise(() =>
@@ -316,7 +316,7 @@ const pairingGrantKey = (server: PairingGrantServer, target: DesktopSshEnvironme
       ]);
 
 /** The standard scopes a saved SSH token must still hold to be reused instead of re-paired. */
-export function requiredSshTokenScopes(
+function requiredSshTokenScopes(
   grants: SshPairingGrants,
   server: PairingGrantServer,
   target: DesktopSshEnvironmentTarget,
@@ -963,7 +963,7 @@ export function secondsUntil(expiresAt: string | undefined, nowEpochMs: number):
     : 0;
 }
 
-export function secondaryBearerExpiresAtEpochMs(
+function secondaryBearerExpiresAtEpochMs(
   issuedAtEpochMs: number,
   expiresInSeconds: number,
 ): number {

@@ -1255,7 +1255,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-image-" });
         const savedPath = path.join(directory, "generated image.png");
         if (scenario.fileExists) yield* fs.writeFileString(savedPath, "png fixture");
-        const relativePath = path.relative("/workspace", savedPath);
+        // Markdown hrefs separate segments with `/` on every host.
+        const relativePath = path.relative("/workspace", savedPath).split(path.sep).join("/");
         const authoredImage = `![Already here](<${savedPath}>)`;
         const answerVariants: Record<string, string> = {
           authored: `Done\n\n${authoredImage}`,
@@ -8131,6 +8132,11 @@ describe("OpenCodex Home routing", () => {
     "reads the actual session config after initialize and checks Home before a goal command",
     () =>
       Effect.gen(function* () {
+        // A real project cwd is native, which is drive-qualified on Windows.
+        const path = yield* Path.Path;
+        const workspace = path.resolve("/workspace");
+        const runtimePolicy = { ...CODEX_TEST_RUNTIME_POLICY, cwd: workspace };
+        const catalog = path.resolve("/route-catalog.json");
         const preamble = codexReplayPreamble({
           nativeThreadId: "home-thread",
           nativeTurnId: "unused",
@@ -8146,7 +8152,7 @@ describe("OpenCodex Home routing", () => {
               frame: {
                 id: 2,
                 method: "config/read",
-                params: { cwd: "/workspace", includeLayers: false },
+                params: { cwd: workspace, includeLayers: false },
               },
             },
             {
@@ -8158,7 +8164,7 @@ describe("OpenCodex Home routing", () => {
                   config: {
                     model_provider: "openai",
                     openai_base_url: "http://127.0.0.1:10100/v1",
-                    model_catalog_json: "/route-catalog.json",
+                    model_catalog_json: catalog,
                   },
                   origins: {},
                 },
@@ -8170,7 +8176,7 @@ describe("OpenCodex Home routing", () => {
               frame: {
                 id: 3,
                 method: "config/read",
-                params: { cwd: "/workspace", includeLayers: false },
+                params: { cwd: workspace, includeLayers: false },
               },
             },
             {
@@ -8182,7 +8188,7 @@ describe("OpenCodex Home routing", () => {
                   config: {
                     model_provider: "openai",
                     openai_base_url: "http://127.0.0.1:10100/v1",
-                    model_catalog_json: "/route-catalog.json",
+                    model_catalog_json: catalog,
                   },
                   origins: {},
                 },
@@ -8195,7 +8201,7 @@ describe("OpenCodex Home routing", () => {
               frame: {
                 id: 5,
                 method: "config/read",
-                params: { cwd: "/workspace", includeLayers: false },
+                params: { cwd: workspace, includeLayers: false },
               },
             },
             {
@@ -8207,7 +8213,7 @@ describe("OpenCodex Home routing", () => {
                   config: {
                     model_provider: "openai",
                     openai_base_url: "http://127.0.0.1:10100/v1",
-                    model_catalog_json: "/route-catalog.json",
+                    model_catalog_json: catalog,
                   },
                   origins: {},
                 },
@@ -8231,7 +8237,7 @@ describe("OpenCodex Home routing", () => {
                   config: {
                     model_provider: "openai",
                     openai_base_url: "http://127.0.0.1:10101/v1",
-                    model_catalog_json: "/route-catalog.json",
+                    model_catalog_json: catalog,
                   },
                   origins: {},
                 },
@@ -8281,7 +8287,7 @@ describe("OpenCodex Home routing", () => {
                 "-c",
                 'openai_base_url="http://127.0.0.1:10100/v1"',
                 "-c",
-                'model_catalog_json="/route-catalog.json"',
+                `model_catalog_json=${JSON.stringify(catalog)}`,
               ]),
             requireAvailable: () =>
               disconnected
@@ -8296,12 +8302,12 @@ describe("OpenCodex Home routing", () => {
           threadId,
           providerSessionId: ProviderSessionId.make("home-session"),
           modelSelection: CODEX_TEST_MODEL_SELECTION,
-          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          runtimePolicy,
         });
         const providerThread = yield* runtime.ensureThread({
           threadId,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
-          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          runtimePolicy,
         });
         const mismatch = yield* runtime
           .ensureThread({

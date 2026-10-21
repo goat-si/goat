@@ -22,7 +22,7 @@ export const CLOUD_AGENT_LABELS: Record<CloudAgentProvider, string> = {
 };
 
 /** What a person runs, on the machine that should hold the login. */
-export const CLOUD_AGENT_LOGIN_STEP: Record<CloudAgentProvider, string> = {
+const CLOUD_AGENT_LOGIN_STEP: Record<CloudAgentProvider, string> = {
   claudeCloud: "run `claude auth login --claudeai`",
   cursorCloud: "sign in to Cursor in GOAT Settings and enable Cursor Cloud",
   devinCloud: "sign in to Devin (`devin auth login`) and enable Devin Cloud",

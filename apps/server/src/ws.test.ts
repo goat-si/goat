@@ -124,6 +124,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -197,6 +198,31 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
     assert.equal(late?.type, "snapshot");
     if (late?.type === "snapshot") {
       assert.equal(late.config.shellRevealInFileManagerKind, "file-explorer");
+    }
+  }),
+);
+
+it.effect("sends a Defender result that missed the snapshot, once", () =>
+  Effect.gen(function* () {
+    const health = {
+      worktreesDirectory: "C:\\Users\\super\\.goat\\worktrees",
+      defender: "scanning" as const,
+    };
+    const events = yield* withLateEditorConfig(
+      snapshotConfig({ settings: { enableProviderUpdateChecks: true } as never }),
+      Stream.make(settingsUpdated({ enableProviderUpdateChecks: false })),
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.succeed(undefined as never),
+      },
+      Stream.make(health, health),
+    ).pipe(Stream.runCollect);
+
+    const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
+    assert.equal(snapshots.length, 1);
+    const [late] = snapshots;
+    if (late?.type === "snapshot") {
+      assert.deepEqual(late.config.worktreeCheckoutHealth, health);
     }
   }),
 );
@@ -526,6 +552,10 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
+  Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({
+    current: Effect.succeed(null),
+    subscribeChanges: Effect.succeed(Stream.empty),
+  }),
   Layer.mock(TerminalManager.TerminalManager)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),

@@ -270,6 +270,31 @@ const runGit = Effect.fn("runGit")(function* (rootDir: string, plan: ReferenceRe
   }
 });
 
+/**
+ * Thread worktrees leave .repos/ out through sparse checkout (worktreeSparseExclude in
+ * goat.json), and git subtree needs those files, so a sync restores the full checkout first.
+ */
+const expandSparseCheckout = Effect.fn("expandSparseCheckout")(function* (rootDir: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const git = (args: ReadonlyArray<string>) =>
+    spawner.spawn(ChildProcess.make("git", args, { cwd: rootDir })).pipe(
+      Effect.flatMap((child) =>
+        Effect.all([collectStreamAsString(child.stdout), child.exitCode.pipe(Effect.map(Number))], {
+          concurrency: "unbounded",
+        }),
+      ),
+      Effect.scoped,
+      Effect.orDie,
+    );
+  const [sparse] = yield* git(["config", "--bool", "core.sparseCheckout"]);
+  if (sparse.trim() !== "true") return;
+  yield* Console.log("This checkout uses sparse checkout; restoring every file before syncing.");
+  const [, exitCode] = yield* git(["sparse-checkout", "disable"]);
+  if (exitCode !== 0) {
+    return yield* Effect.die(new Error("git sparse-checkout disable failed; run it by hand."));
+  }
+});
+
 export const syncReferenceRepos = Effect.fn("syncReferenceRepos")(function* (
   options: ReferenceRepoSyncOptions = {},
 ) {
@@ -277,6 +302,9 @@ export const syncReferenceRepos = Effect.fn("syncReferenceRepos")(function* (
   const rootDir = path.resolve(options.rootDir ?? process.cwd());
   const repos = yield* getSelectedRepos(options.repoId);
   const plans: Array<ReferenceRepoSyncPlan> = [];
+  if (!(options.dryRun ?? false)) {
+    yield* expandSparseCheckout(rootDir);
+  }
 
   for (const repo of repos) {
     const plan = yield* planReferenceRepoSync(repo, rootDir, options.latest ?? false);

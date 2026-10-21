@@ -7,7 +7,7 @@ export interface FileChangeLineCounts {
 }
 
 /** Logical lines in file content; a trailing newline does not start another line. */
-export function countTextLines(text: string): number {
+function countTextLines(text: string): number {
   if (text.length === 0) return 0;
   let lines = 1;
   for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {

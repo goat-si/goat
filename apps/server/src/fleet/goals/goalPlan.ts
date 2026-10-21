@@ -26,15 +26,15 @@ export const LAUNCH_GRACE_MS = 300_000;
 export const MAX_ACTIONS_PER_GOAL = 3;
 export const MAX_ACTIONS_PER_TICK = 10;
 export const MAX_GOALS_PER_TICK = 20;
-export const RECONCILE_INTERVAL_MS = 60_000;
-export const BACKOFF_BASE_MS = 30_000;
-export const BACKOFF_MAX_MS = 15 * 60_000;
+const RECONCILE_INTERVAL_MS = 60_000;
+const BACKOFF_BASE_MS = 30_000;
+const BACKOFF_MAX_MS = 15 * 60_000;
 /** Follow-ups per attempt before the slot asks for a person. */
-export const MAX_FOLLOW_UPS = 3;
+const MAX_FOLLOW_UPS = 3;
 
 export const launchActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
   "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":launch";
-export const followUpActionId = (
+const followUpActionId = (
   goal: Pick<FleetGoal, "id">,
   slot: number,
   attempt: number,
@@ -47,13 +47,13 @@ export const fallbackActionId = (
   runId: string,
   hop: number,
 ) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":fallback:" + hop;
-export const resumeActionId = (
+const resumeActionId = (
   goal: Pick<FleetGoal, "id">,
   slot: number,
   attempt: number,
   runId: string,
 ) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":resume";
-export const interruptActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
+const interruptActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
   "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":interrupt";
 
 export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>

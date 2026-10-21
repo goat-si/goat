@@ -15,9 +15,9 @@ export interface ReportedRunOutcome {
   readonly summary?: string | undefined;
 }
 
-export const REPORTED_FAILED_FALLBACK = "The worker reported that it could not finish.";
-export const REPORTED_CANCELLED_FALLBACK = "The worker reported that it stopped before finishing.";
-export const REPORTED_BLOCKED_FALLBACK =
+const REPORTED_FAILED_FALLBACK = "The worker reported that it could not finish.";
+const REPORTED_CANCELLED_FALLBACK = "The worker reported that it stopped before finishing.";
+const REPORTED_BLOCKED_FALLBACK =
   "The worker reported that it is blocked without giving a reason. How should it continue?";
 
 /**

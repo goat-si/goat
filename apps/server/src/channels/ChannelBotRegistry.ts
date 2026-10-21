@@ -40,7 +40,7 @@ import { botFullAccessCommandIdFor, botLaunchIdsFor } from "./channelIds.ts";
 
 const GOAT_BOT_TITLE = "GOAT bot";
 
-export const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
+const GOAT_BOT_RUNTIME_MODE = "full-access" satisfies RuntimeMode;
 
 const ACTIVE_RUN_STATUSES = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 

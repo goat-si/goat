@@ -114,7 +114,7 @@ export function carryDisplacedCustomAnswerIntoPrompt(
   return `${prompt.trimEnd()}${DISPLACED_ANSWER_SEPARATOR}${displaced}`;
 }
 
-export function countAnsweredPendingUserInputQuestions(
+function countAnsweredPendingUserInputQuestions(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {

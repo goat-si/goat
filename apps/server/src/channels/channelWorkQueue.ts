@@ -18,7 +18,7 @@ export type WorkItemState =
   | "cancelled";
 
 /** At most this many open items answer a "what's pending" read. */
-export const PENDING_ITEM_LIMIT = 20;
+const PENDING_ITEM_LIMIT = 20;
 
 /**
  * The item state of a task, given the delivery state of its newest outcome message (undefined
