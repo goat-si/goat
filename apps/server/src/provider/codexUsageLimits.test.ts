@@ -1,3 +1,5 @@
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -8,10 +10,65 @@ import {
   codexUsageLimitMessage,
   mergeCodexRateLimits,
 } from "./codexUsageLimits.ts";
+import weeklyOnlyRead from "./testing/fixtures/codex-rate-limits-weekly-only.json" with { type: "json" };
 
 const checkedAt = "2026-07-18T10:00:00.000Z";
 
 describe("codexRateLimitsToLimits", () => {
+  effectIt.effect("keeps the recorded Pro primary weekly without inventing a session window", () =>
+    Effect.sync(() => {
+      const { rateLimits, rateLimitsByLimitId } = weeklyOnlyRead.response.result;
+      const windows = [
+        {
+          id: "primary",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 37,
+          windowDurationMins: 10080,
+          resetsAt: "2026-07-19T22:26:40.000Z",
+        },
+      ];
+
+      expect(
+        codexRateLimitsToLimits({ checkedAt, snapshot: rateLimits, rateLimitsByLimitId }),
+      ).toEqual({ checkedAt, windows });
+      // No turn was captured; reuse the read snapshot to exercise the notification mapper.
+      expect(codexRateLimitsToUpdate(rateLimits)).toEqual({ windows });
+    }),
+  );
+
+  effectIt.effect(
+    "uses declared durations when synthetic windows reverse the usual positions",
+    () =>
+      Effect.sync(() => {
+        const snapshot = {
+          planType: "plus",
+          primary: { usedPercent: 42, windowDurationMins: 10080 },
+          secondary: { usedPercent: 12, windowDurationMins: 300 },
+        };
+        const weekly = {
+          id: "primary",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 42,
+          windowDurationMins: 10080,
+        };
+        const session = {
+          id: "secondary",
+          kind: "session",
+          label: "Session",
+          usedPercent: 12,
+          windowDurationMins: 300,
+        };
+
+        expect(codexRateLimitsToLimits({ checkedAt, snapshot })).toEqual({
+          checkedAt,
+          windows: [session, weekly],
+        });
+        expect(codexRateLimitsToUpdate(snapshot)).toEqual({ windows: [weekly, session] });
+      }),
+  );
+
   it("shows an Enterprise monthly credit allowance in reads and notifications without a duration", () => {
     const snapshot = {
       limitId: "codex",
