@@ -93,6 +93,7 @@ it.effect(
         [92, "RemoteDispatchObservation"],
         [93, "MemoryRevisionCheckpointSize"],
         [94, "HubNodes"],
+        [95, "MemorySummaryWorkThreadIndex"],
       ]);
       assert.deepStrictEqual(
         yield* sql`SELECT resolution_id,revert_operation_id,json_extract(revert_result_json,'$.status') AS status FROM memory_resolutions ORDER BY resolution_id`,
