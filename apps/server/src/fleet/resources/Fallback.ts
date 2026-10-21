@@ -111,7 +111,7 @@ const MAX_NOTICED_RUNS = 1000;
 const label = (selection: Pick<ModelSelection, "instanceId" | "model">) =>
   selection.instanceId + "/" + selection.model;
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
