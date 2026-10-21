@@ -13,9 +13,6 @@ import { EVENT_CODE_SHORTCUT_KEYS } from "./keybindings.ts";
 export const HTML_RENDER_TOOL_NAME = "html_render";
 export const HTML_RENDER_MIN_HEIGHT = 80;
 export const HTML_RENDER_MAX_HEIGHT = 2000;
-// A client fits the frame to the live page up to this height. It only stops a
-// page that grows with its frame, since vh units are rejected at publish.
-export { HTML_RENDER_MAX_FIT_HEIGHT } from "@goat/contracts/agentSurface/html";
 export const HTML_RENDER_MAX_TITLE_LENGTH = 200;
 
 export interface HtmlRenderReference {

@@ -31,9 +31,7 @@ const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatch
  * worktree starts from origin unless the caller says otherwise. The remote
  * falls back to its local base when origin or the remote branch is missing.
  */
-export const sshLaunchWorkspace = (
-  workspace: SshLaunchWorkspace | undefined,
-): SshLaunchWorkspace =>
+const sshLaunchWorkspace = (workspace: SshLaunchWorkspace | undefined): SshLaunchWorkspace =>
   workspace === undefined
     ? { type: "cwd" }
     : workspace.type === "worktree"
@@ -90,7 +88,7 @@ const requireOrchestration = McpInvocationContext.McpInvocationContext.pipe(
  * Cloud machines bill the user's Boat account, so changing them needs what changing settings
  * needs: a live settings:write grant that is reconfirmed for this call (as memory's settings tools).
  */
-export const requireSettingsWrite = McpInvocationContext.McpInvocationContext.pipe(
+const requireSettingsWrite = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => {
     const deny = () =>
       new OrchestratorMcpFailure({

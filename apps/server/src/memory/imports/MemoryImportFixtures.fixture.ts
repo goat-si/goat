@@ -28,8 +28,8 @@ import type {
   ImportSlot,
 } from "./MemoryImportTypes.ts";
 
-export const MEMORY_IMPORT_FIXTURE_SEED = "wp5-fixture-v1";
-export const MEMORY_IMPORT_FIXTURE_CLOCK = "2026-10-13T00:00:00.000Z";
+const MEMORY_IMPORT_FIXTURE_SEED = "wp5-fixture-v1";
+const MEMORY_IMPORT_FIXTURE_CLOCK = "2026-10-13T00:00:00.000Z";
 export const MEMORY_IMPORT_FIXTURE_PROFILES = [
   "codex-handbook-v1",
   "codex-ad-hoc-v1",

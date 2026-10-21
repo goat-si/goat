@@ -53,7 +53,7 @@ const SLACK_SECTION_TEXT_LIMIT = 3000;
 /** Slack's button value limit. A longer label stays in the numbered list and has no button. */
 const SLACK_BUTTON_VALUE_LIMIT = 2000;
 
-export const slackChoiceActionId = (index: number): string => `goat_choice_${index + 1}`;
+const slackChoiceActionId = (index: number): string => `goat_choice_${index + 1}`;
 
 /** True only for buttons this adapter posts. Other action ids are ignored. */
 export const isSlackChoiceActionId = (actionId: string): boolean =>

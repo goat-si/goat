@@ -2743,9 +2743,9 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           text: [
             index === 0 ? "What is in this image?" : "And this one?",
             `[Attached image "${attachment.name}" is saved at: ${path}]`,
-            `[Attached image "missing.png" is saved at: ${attachmentsDir}/${missing.id}.png]`,
-            `[Attached image "diagram.svg" is saved at: ${attachmentsDir}/${unsupported.id}.svg]`,
-            `[Attached file "requirements.pdf" is saved at: ${attachmentsDir}/${document.id}.pdf]`,
+            `[Attached image "missing.png" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: missing })}]`,
+            `[Attached image "diagram.svg" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: unsupported })}]`,
+            `[Attached file "requirements.pdf" is saved at: ${resolveAttachmentPath({ attachmentsDir, attachment: document })}]`,
           ].join("\n\n"),
         });
         if (external) {

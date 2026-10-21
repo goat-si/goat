@@ -191,7 +191,7 @@ export class ProviderHostSync extends Context.Service<
   }
 >()("goat/provider/ProviderHostSync") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const sessions = yield* SessionStore.SessionStore;
   const dispatch = yield* Dispatch.SshRemoteDispatch;
   const providers = yield* ProviderRegistry.ProviderRegistry;
@@ -1122,7 +1122,7 @@ export const make = Effect.gen(function* () {
 });
 
 /** `codex-cli 0.42.0` and `0.42.0 (Claude Code)` both pin to 0.42.0. */
-export function versionCore(version: string): string | null {
+function versionCore(version: string): string | null {
   return (
     /\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z]{1,20}(?:\.[0-9A-Za-z]{1,20}){0,4})?/u.exec(
       version,

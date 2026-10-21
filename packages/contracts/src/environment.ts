@@ -19,7 +19,7 @@ export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = `${ORCHESTRATION_PROTOCOL_VER
  * ORCHESTRATION_PROTOCOL_VERSION; lower this only together with the decoders and behavior that
  * keep the older protocol working, so a newer server keeps older clients connected.
  */
-export const ORCHESTRATION_PROTOCOL_MIN_SERVED: number = ORCHESTRATION_PROTOCOL_VERSION;
+export const ORCHESTRATION_PROTOCOL_MIN_SERVED: number = 1001;
 
 /** Whether this server accepts a client announcing `announced` as its orchestration protocol. */
 export function servesOrchestrationProtocol(announced: string | null | undefined): boolean {

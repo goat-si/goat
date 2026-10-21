@@ -22,6 +22,7 @@ beforeEach(() => {
 afterEach(async () => {
   act(() => root.unmount());
   container.remove();
+  document.documentElement.classList.remove("dark");
   await cdp().send("Emulation.setEmulatedMedia", { features: [] });
 });
 
@@ -104,5 +105,36 @@ describe("FleetGraph heat", () => {
     expect(container.querySelector(".fleet-heat-layer")).toBeNull();
     expect(container.querySelector(".fleet-orbit")).toBeNull();
     expect(burning.querySelector(".fill-heat-burning\\/25")).not.toBeNull();
+  });
+});
+
+describe("FleetGraph Boat machines", () => {
+  it("marks Boat machines with Boat's logo and state, and a stopped one apart from an away host", async () => {
+    const node = await renderDemo();
+    const running = node("boat-agent");
+    const stopped = node("nightly-ci");
+
+    for (const boat of [running, stopped]) {
+      expect(boat.querySelector("svg[data-fleet-boat-logo]")).not.toBeNull();
+      expect(boat.getAttribute("aria-label")).toContain("Boat machine");
+    }
+    expect(node("box").querySelector("svg[data-fleet-boat-logo]")).toBeNull();
+
+    expect(running.textContent).toContain("Boat · Running");
+    expect(running.getAttribute("aria-label")).toContain("Connected");
+    expect(stopped.textContent).toContain("Boat · Stopped");
+    expect(stopped.getAttribute("aria-label")).toContain("Stopped: Resume it in Settings");
+    // A stop square, where an unreachable host gets the dashed ring.
+    expect(stopped.querySelector("rect")).not.toBeNull();
+    expect(stopped.querySelector("circle[stroke-dasharray]")).toBeNull();
+  });
+
+  it("draws the mark in Boat's ocean blue on light surfaces and its wash on dark ones", async () => {
+    const node = await renderDemo();
+    const mark = () =>
+      node("nightly-ci").querySelector<SVGSVGElement>("svg[data-fleet-boat-logo]")!;
+    expect(getComputedStyle(mark()).fill).toBe("rgb(38, 63, 169)");
+    document.documentElement.classList.add("dark");
+    expect(getComputedStyle(mark()).fill).toBe("rgb(254, 254, 254)");
   });
 });

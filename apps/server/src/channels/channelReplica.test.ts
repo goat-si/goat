@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, assert, describe, it } from "@effect/vitest";
+import { hostCanStoreFileName } from "@goat/shared/testing/fileNames";
 
 import {
   applyReplicaScript,
@@ -40,6 +41,13 @@ afterEach(() => {
   for (const root of roots.splice(0)) NodeFS.rmSync(root, { recursive: true, force: true });
 });
 
+/** Windows cannot store a newline in a path, so it keeps the quote and space around it. */
+const storableName = (name: string) =>
+  hostCanStoreFileName(name) ? name : name.replaceAll("\n", "");
+
+// Remote hosts run these scripts under a POSIX sh; on Windows one exists only via Git Bash.
+const posixShellAvailable = NodeChildProcess.spawnSync("sh", ["-c", "exit 0"]).status === 0;
+
 function fixture() {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-channel-replica-"));
   roots.push(root);
@@ -73,7 +81,7 @@ function fixture() {
     git(root, "init", "--quiet", "--initial-branch=main", cwd);
     return cwd;
   };
-  const repo = init("source's repo\n");
+  const repo = init(storableName("source's repo\n"));
   NodeFS.writeFileSync(NodePath.join(repo, "tracked.txt"), "original\n");
   NodeFS.writeFileSync(NodePath.join(repo, "staged.txt"), "original staged\n");
   NodeFS.writeFileSync(NodePath.join(repo, "deleted.txt"), "delete me\n");
@@ -263,7 +271,7 @@ describe("parseApplyOutput", () => {
   });
 });
 
-describe("replica scripts with real Git repositories", () => {
+describe.skipIf(!posixShellAvailable)("replica scripts with real Git repositories", () => {
   it("captures dirty and staged files, exclusions and hostile filenames while preserving HEAD and index", () => {
     const f = fixture();
     NodeFS.writeFileSync(NodePath.join(f.repo, "tracked.txt"), "unstaged\n");
@@ -279,7 +287,7 @@ describe("replica scripts with real Git repositories", () => {
       "-option.txt",
       "dollar$(literal)`literal`.txt",
       "tail\n",
-    ];
+    ].filter(hostCanStoreFileName);
     for (const name of names) NodeFS.writeFileSync(NodePath.join(f.repo, name), name);
     NodeFS.writeFileSync(NodePath.join(f.repo, "new-staged.txt"), "newly staged\n");
     f.git(f.repo, "add", "new-staged.txt");
@@ -293,7 +301,7 @@ describe("replica scripts with real Git repositories", () => {
       "id_ed25519",
       "large.bin",
       "line\n'private.key",
-    ];
+    ].filter(hostCanStoreFileName);
     for (const name of excluded)
       NodeFS.writeFileSync(NodePath.join(f.repo, name), "x".repeat(name === "large.bin" ? 129 : 6));
     NodeFS.mkdirSync(NodePath.join(f.repo, "nested"));
@@ -353,7 +361,7 @@ describe("replica scripts with real Git repositories", () => {
 
   it("finds the worker worktree with a newline path and supports root strategy without branch", () => {
     const f = fixture();
-    const worker = NodePath.join(f.root, "worker ' space\n");
+    const worker = NodePath.join(f.root, storableName("worker ' space\n"));
     f.git(f.repo, "worktree", "add", "--quiet", "-b", "goat/channel/test", worker);
     NodeFS.writeFileSync(NodePath.join(worker, "tracked.txt"), "worker tree\n");
     const result = f.capture({ branch: "goat/channel/test" });

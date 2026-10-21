@@ -1,3 +1,4 @@
+import type { BoatMachineIdentity } from "@goat/client-runtime/cloud-machines";
 import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
 
 /**
@@ -14,6 +15,8 @@ export type FleetConnectionState =
   | "degraded"
   | "unreachable"
   | "offline"
+  /** A Boat machine that is not running, so it cannot answer by design. */
+  | "stopped"
   | "attention"
   /** Hosts this client has no connection to, such as an SSH host a dispatcher reported. */
   | "unknown";
@@ -64,10 +67,42 @@ export function presentFleetConnection(connection: FleetConnectionInput | null):
   }
 }
 
+const RESUME_HINT = "Resume it in Settings → Connections → Cloud machines.";
+
+/**
+ * A machine's state as the graph shows it. For a Boat machine, what Boat says outranks the SSH
+ * connection: a stopped machine reads as stopped, not as a host that went away. While Boat says
+ * it is running, or its state is unknown, the connection decides.
+ */
+export function presentFleetMachineConnection(
+  boat: BoatMachineIdentity | null,
+  connection: FleetConnection | null,
+): FleetConnection {
+  const live = connection ?? UNKNOWN_FLEET_CONNECTION;
+  switch (boat?.status) {
+    case "stopped":
+      return { state: "stopped", label: "Stopped", reason: RESUME_HINT };
+    case "cancelled":
+      return { state: "stopped", label: "Cancelled", reason: null };
+    case "gone":
+      return { state: "stopped", label: "Removed from Boat", reason: null };
+    case "starting":
+      return { state: "connecting", label: "Starting", reason: null };
+    case "stopping":
+      return { state: "connecting", label: "Stopping", reason: null };
+    case "deleting":
+      return { state: "connecting", label: "Deleting", reason: null };
+    case "failed":
+      return { state: "attention", label: "Failed", reason: null };
+    default:
+      return live;
+  }
+}
+
 export type FleetConnectionTone = "success" | "warning" | "destructive" | "muted";
 
 /** A shape that tells states apart without color. */
-export type FleetConnectionShape = "dot" | "arc" | "half" | "ring" | "alert";
+export type FleetConnectionShape = "dot" | "arc" | "half" | "ring" | "square" | "alert";
 
 export interface FleetConnectionVisual {
   /** Null leaves the node without a status mark. */
@@ -122,6 +157,12 @@ const VISUALS: Record<FleetConnectionState, FleetConnectionVisual> = {
     edge: { className: "stroke-border", dash: "1 5", animated: false },
     quiet: true,
   },
+  stopped: {
+    glyph: "square",
+    tone: "muted",
+    edge: { className: "stroke-border", dash: "1 5", animated: false },
+    quiet: true,
+  },
   attention: {
     glyph: "alert",
     tone: "destructive",
@@ -143,6 +184,7 @@ const LEGEND: ReadonlyArray<{ readonly state: FleetConnectionState; readonly lab
   // Unreachable, offline and switched-off-but-saved hosts share the quiet mark;
   // each node's tooltip names which.
   { state: "unreachable", label: "Not connected" },
+  { state: "stopped", label: "Stopped" },
   { state: "attention", label: "Needs attention" },
 ];
 
