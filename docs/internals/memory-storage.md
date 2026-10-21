@@ -24,3 +24,13 @@ An idle server does almost no memory work. The worker still wakes every 5 second
 - Storage measurement and retention follow the sample interval above.
 
 A due 24-hour consolidation can start up to one scan interval late.
+
+## Orchestration history
+
+History is everything else in the file. On a real 961 MB database, most of it was command output, stored once in the turn item projection and again in the item's `turn-item.updated` events. Database storage's six-hourly compaction calls `ProjectionMaintenance.boundHistory` after `compactEventStore`. While allocated pages minus memory exceed `storageCleanup.historyBudgetBytes` (default `ORCHESTRATION_HISTORY_BUDGET_BYTES`, 2 GiB), it trims command output, tool output, and reasoning above 8 KiB to a head and tail in threads idle a week, oldest first. It rewrites events before projections so an interrupted pass leaves visible work for the next one.
+
+Traps measured on real data:
+
+- Payload bytes overstate the pages a trim frees, so the walk re-measures allocation (three pragmas) after each thread.
+- Memory's size comes from its hourly sample, because a `dbstat` walk of the memory tables costs about 18 ms.
+- Pages select keys with `octet_length`, which SQLite answers from the record header without reading overflow pages. Each payload is then read, trimmed, and written alone with a yield, because a single tool output can be a megabyte.

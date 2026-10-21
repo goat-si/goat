@@ -258,6 +258,11 @@ Results also list folders in the worktree folder that no thread uses, with their
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.
 
+Thread history has a size budget of 2 GiB per machine, set as `storageCleanup.historyBudgetBytes`
+in the server's `settings.json`. While history is larger, GOAT trims long command output, tool
+output, and reasoning in threads untouched for a week, oldest first. Each trimmed field keeps its
+start and end with an _output trimmed_ note. Messages are never trimmed.
+
 ## Project icons
 
 Select the project and open Project to choose an icon, emoji, monogram, or image. The choice applies to
