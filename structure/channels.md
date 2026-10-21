@@ -56,11 +56,18 @@ worker thread messages through `ThreadManagementService.getThreadRecords`, and
 visibility (`canSeeTask`) and size bounds are pure functions in
 `apps/server/src/channels/channelBotRecall.ts`.
 
+Channel observations keep agent-reported tests separate from the check run by the worker's host.
+A late check updates the bound run's evidence without reopening the task or changing its outcome.
+Local reconciliation and authenticated remote observation recover this evidence from persisted state.
+An absent check remains pending until the check worker records a disposition; an explicit no-check
+disposition ends observation without manufacturing a passing result. Web, mobile, Slack, and bot
+recall present the two kinds of evidence separately.
+
 MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.md`](mcp-toolkits.md).
 `CHANNEL_MCP_TOOL_NAMES` has no tool that sends to an arbitrary channel.
 
 `ChannelTaskExport` joins ledger outcome pairs with local native-question response provenance
-and memory lineage through existing read services; `ChannelLedger` reads only channel records.
+and memory lineage through existing read services; `ChannelLedger` exports the ledger outcome snapshots.
 Both human answer counters are scoped to the outcome's generation, stop at the terminal timestamp,
 and exclude native resolutions produced by channel-forward commands. Reruns remain task-cumulative. Notes hashes are frozen at launch. Memory lineage is observed at export
 time and is cumulative for the worker thread, including ancestor revisions and memory delivered

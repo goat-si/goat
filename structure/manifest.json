@@ -220,7 +220,7 @@
       "path": "channels.md",
       "tier": 3,
       "title": "Channels and GOAT Bot",
-      "scope": "The channel ledger, Slack, MCP, and iMessage ingress, and the GOAT Bot thread clients render.",
+      "scope": "The channel ledger, worker verification evidence, channel ingress, and the GOAT Bot thread clients render.",
       "documents": [
         "packages/contracts/src/channelCommon.ts",
         "packages/contracts/src/settings.ts",

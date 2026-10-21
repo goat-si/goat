@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelGatewayError, ChannelTask, ChannelTaskEvent } from "@goat/contracts";
+import {
+  ChannelGatewayError,
+  ChannelTask,
+  ChannelTaskEvent,
+  ChannelWorkerResult,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
@@ -8,6 +13,7 @@ import { effectiveRequester, lowerRuntimeMode, mayAnswerFor } from "./ChannelGat
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
 
 const decodeTask = Schema.decodeUnknownSync(ChannelTask);
+const decodeWorkerResult = Schema.decodeUnknownSync(ChannelWorkerResult);
 const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
 const NOW = "2026-10-12T00:00:00.000Z";
 
@@ -319,5 +325,96 @@ describe("linked account permissions", () => {
         runtimeModeCeiling: "approval-required",
       }),
     );
+  });
+});
+
+describe("terminal check evidence", () => {
+  const check = {
+    status: "completed",
+    command: "vp test run",
+    exitCode: 1,
+    durationMs: 50,
+    at: NOW,
+    outputTail: "failed",
+  };
+  const result = decodeWorkerResult({
+    runId: "run-1",
+    tests: { ok: true },
+    observedCheck: check,
+    observedCheckPending: false,
+  });
+  it.each(["completed", "failed", "cancelled"])(
+    "preserves %s and its outcome fields on late evidence",
+    (status) => {
+      const before = task({
+        status,
+        completedAt: NOW,
+        resultSummary: "original",
+        completionReport: "present",
+      });
+      const next = applyChannelTaskEvent(
+        before,
+        event("task.worker.observed", {
+          generation: 2,
+          observed: { pullRequests: [], needsYou: [{ kind: "question", since: NOW }], result },
+        }),
+      );
+      assert.isTrue(next.ok);
+      if (!next.ok) return;
+      assert.strictEqual(next.task.status, status);
+      assert.strictEqual(next.task.resultSummary, "original");
+      assert.strictEqual(next.task.completedAt, NOW);
+      assert.strictEqual(next.task.completionReport, "present");
+      assert.deepStrictEqual(next.task.observed?.needsYou, []);
+      assert.deepStrictEqual(next.task.observed?.result, result);
+      const sparse = applyChannelTaskEvent(
+        next.task,
+        event(
+          "task.worker.observed",
+          {
+            generation: 2,
+            observed: {
+              pullRequests: [],
+              needsYou: [],
+              result: {
+                runId: "run-1",
+                observedCheck: { ...check, status: "running" },
+                observedCheckPending: true,
+              },
+            },
+          },
+          6,
+        ),
+      );
+      assert.isTrue(sparse.ok);
+      if (sparse.ok) assert.deepStrictEqual(sparse.task.observed?.result, result);
+    },
+  );
+  it("rejects evidence from another run or generation and clears evidence on rebind", () => {
+    const before = task({
+      status: "completed",
+      observed: { pullRequests: [], needsYou: [], result },
+    });
+    for (const [generation, runId] of [
+      [1, "run-1"],
+      [2, "other-run"],
+    ] as const) {
+      assert.isFalse(
+        applyChannelTaskEvent(
+          before,
+          event("task.worker.observed", {
+            generation,
+            observed: { pullRequests: [], needsYou: [], result: { ...result, runId } },
+          }),
+        ).ok,
+      );
+    }
+    const running = task({ observed: { pullRequests: [], needsYou: [], result } });
+    const rebound = applyChannelTaskEvent(
+      running,
+      event("task.worker.bound", { worker: { ...running.worker, runId: "run-2" } }),
+    );
+    assert.isTrue(rebound.ok);
+    if (rebound.ok) assert.isUndefined(rebound.task.observed?.result);
   });
 });

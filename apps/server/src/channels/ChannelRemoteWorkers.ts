@@ -1475,6 +1475,80 @@ const make = Effect.gen(function* () {
     stored.task.worker?.host === state.host &&
     stored.task.worker.threadId === state.remoteThreadId;
 
+  // Terminal tasks follow only the check evidence for the run that settled them. They never
+  // import reports, rebind, replicate, or re-enter outcome settlement.
+  const awaitingEvidence = (stored: Stored | undefined, state: RemoteWorkerState) =>
+    stored !== undefined &&
+    (stored.task.status === "completed" ||
+      stored.task.status === "failed" ||
+      stored.task.status === "cancelled") &&
+    stored.task.generation === state.generation &&
+    stored.task.worker?.host === state.host &&
+    stored.task.worker.threadId === state.remoteThreadId &&
+    stored.task.observed?.result?.runId === stored.task.worker.runId &&
+    (stored.task.observed?.result?.observedCheckPending === true ||
+      stored.task.observed?.result?.observedCheck?.status === "running");
+
+  const recordLateEvidence = Effect.fn("ChannelRemoteWorkers.recordLateEvidence")(function* (
+    owner: string,
+    taskId: ChannelTaskId,
+    followed: Followed,
+    answer: RemoteOriginReportsWaitResult,
+  ) {
+    const state = yield* readState(taskId);
+    const stored = yield* ledger.getTask(taskId);
+    if (
+      state === undefined ||
+      stored === undefined ||
+      !awaitingEvidence(stored, state) ||
+      state.correlationId !== followed.correlationId ||
+      state.generation !== followed.generation ||
+      state.remoteThreadId !== followed.remoteThreadId
+    )
+      return "stop" as const;
+    const result = answer.observedRun?.observation?.result;
+    if (
+      answer.threadId !== followed.remoteThreadId ||
+      answer.observedRun?.runId !== stored.task.worker?.runId ||
+      result === undefined ||
+      result.runId !== stored.task.worker?.runId
+    )
+      return "stop" as const;
+    const observed = {
+      pullRequests: stored.task.observed?.pullRequests ?? [],
+      needsYou: [],
+      result,
+    };
+    const update = stateUpdate(taskId, state.generation, (current) => ({
+      ...current,
+      cursor: Math.max(current.cursor, ...answer.reports.map((report) => report.sequence)),
+      inbox: [],
+      knownRun: {
+        runId: answer.observedRun!.runId,
+        status: answer.observedRun!.status,
+        observation: answer.observedRun!.observation!,
+      },
+    }));
+    if (!channelWorkerObservationEquals(stored.task.observed, observed)) {
+      yield* commitTransition(
+        ledger,
+        stored,
+        {
+          type: "task.worker.observed",
+          payload: { generation: stored.task.generation, observed },
+        },
+        {
+          owner,
+          narrate: result.observedCheck !== undefined && result.observedCheck.status !== "running",
+          remoteWorker: update,
+        },
+      );
+    } else yield* ledger.updateRemoteWorker({ owner, now: yield* nowIso, update });
+    return result.observedCheckPending === true || result.observedCheck?.status === "running"
+      ? ("wait" as const)
+      : ("stop" as const);
+  });
+
   /** The binding an observer follows; answers for any other binding are stale. */
   interface Followed {
     readonly generation: number;
@@ -1881,7 +1955,8 @@ const make = Effect.gen(function* () {
           { owner, narrate: true, completionHold: null },
         );
       }
-      return "stop" as const;
+      const finished = yield* ledger.getTask(taskId);
+      return awaitingEvidence(finished, state) ? ("wait" as const) : ("stop" as const);
     });
 
   /** One observer: long-polls the binding until the task settles, moves on, or ownership goes. */
@@ -1894,7 +1969,9 @@ const make = Effect.gen(function* () {
         if (!(yield* ledger.isOwner(owner))) return;
         const state = yield* readState(taskId);
         const stored = yield* ledger.getTask(taskId);
-        if (state === undefined || !sameWorker(stored, state)) return;
+        if (state === undefined || (!sameWorker(stored, state) && !awaitingEvidence(stored, state)))
+          return;
+        const evidenceOnly = awaitingEvidence(stored, state);
         if (state.generation !== generation) return;
         const followed: Followed = {
           generation: state.generation,
@@ -1914,8 +1991,9 @@ const make = Effect.gen(function* () {
               correlationId: state.correlationId,
               readKey: state.readKey,
               afterSequence: state.cursor,
-              watchRunId:
-                stored!.pendingAnswerMessageId !== undefined && state.receipt !== undefined
+              watchRunId: evidenceOnly
+                ? stored!.task.worker!.runId!
+                : stored!.pendingAnswerMessageId !== undefined && state.receipt !== undefined
                   ? state.receipt.runId
                   : null,
               knownRun: state.knownRun ?? null,
@@ -1929,6 +2007,14 @@ const make = Effect.gen(function* () {
         if (answer._tag === "Success") {
           failures = 0;
           backoff = BACKOFF_START_MS;
+          if (evidenceOnly) {
+            const next = yield* serialized(taskId)(
+              recordLateEvidence(owner, taskId, followed, answer.success),
+            );
+            if (next === "stop") return;
+            mode = next;
+            continue;
+          }
           if (state.outageNoticed) yield* noticeOutage(owner, taskId, followed, false);
           // A turn boundary: copy the work off the machine while it still answers.
           const watched = answer.success.observedRun;
@@ -1994,7 +2080,7 @@ const make = Effect.gen(function* () {
           host: state.host,
           reason: error._tag === "SshRemoteDispatchError" ? error.reason : "decode",
         });
-        if (failures >= OUTAGE_NOTICE_AFTER && !state.outageNoticed) {
+        if (!evidenceOnly && failures >= OUTAGE_NOTICE_AFTER && !state.outageNoticed) {
           yield* noticeOutage(owner, taskId, followed, true);
         }
         yield* Effect.sleep(Duration.millis(backoff));
@@ -2265,8 +2351,16 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       let started = 0;
       yield* hourly(owner);
-      for (const stored of yield* ledger.listTasksByStatus(["running", "waiting_input"])) {
+      const observedTasks = [
+        ...(yield* ledger.listTasksByStatus(["running", "waiting_input"])),
+        ...(yield* ledger.listRemoteCheckUpdates()),
+      ];
+      for (const stored of observedTasks) {
         if (stored.task.worker?.host === undefined) continue;
+        if (stored.task.status !== "running" && stored.task.status !== "waiting_input") {
+          const state = yield* readState(stored.task.taskId);
+          if (state === undefined || !awaitingEvidence(stored, state)) continue;
+        }
         const key = observerKey(stored.task.taskId, stored.task.generation);
         if (yield* FiberMap.has(fibers, key)) continue;
         yield* background(key, observe(stored.task.taskId, stored.task.generation, owner));

@@ -13,6 +13,7 @@ import type {
   ChannelTaskNeedsYouKind,
   ChannelTaskPullRequest,
   ChannelWorkerObservation,
+  ThreadResult,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
   OrchestrationV2RuntimeRequest,
@@ -190,10 +191,28 @@ export const observeWorker = (input: {
   readonly pullRequests: ReadonlyArray<ChannelTaskPullRequest>;
   readonly needsYou: ReadonlyArray<ChannelTaskNeedsYou>;
   readonly usageLimitResetAt?: string | undefined;
+  readonly result?: ThreadResult | null | undefined;
 }): ChannelWorkerObservation => ({
   pullRequests: [...input.pullRequests],
   needsYou: [...input.needsYou],
   ...(input.usageLimitResetAt === undefined ? {} : { usageLimitResetAt: input.usageLimitResetAt }),
+  ...(input.result == null ||
+  (input.result.tests === undefined &&
+    input.result.observedCheck === undefined &&
+    input.result.runStatus !== "completed")
+    ? {}
+    : {
+        result: {
+          runId: input.result.runId,
+          ...(input.result.observedCheckPending === undefined
+            ? {}
+            : { observedCheckPending: input.result.observedCheckPending }),
+          ...(input.result.tests === undefined ? {} : { tests: input.result.tests }),
+          ...(input.result.observedCheck === undefined
+            ? {}
+            : { observedCheck: input.result.observedCheck }),
+        },
+      }),
 });
 
 /** Whether a failed thread read means the thread does not exist, rather than a read that failed. */
