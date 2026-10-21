@@ -19,6 +19,8 @@ export const HubDeviceStep = Schema.Struct({
     "reconnect",
     "revoke",
     "disconnect",
+    "health",
+    "link_removed",
   ]),
   outcome: Schema.Literals(["ok", "failed", "deferred"]),
   detail: Schema.optional(Schema.String),

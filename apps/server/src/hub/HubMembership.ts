@@ -29,8 +29,15 @@ const DEVICE_TIMEOUT_MS = 120_000;
 
 const LinkStatus = Schema.Struct({
   role: Schema.Literals(["standalone", "home", "child"]),
-  links: Schema.Array(Schema.Struct({ id: Schema.String, alias: Schema.String })),
+  links: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      alias: Schema.String,
+      tunnelPort: Schema.optional(Schema.Number),
+    }),
+  ),
 });
+const Health = Schema.Struct({ service: Schema.String, role: Schema.optional(Schema.String) });
 const Probe = Schema.Struct({
   alias: Schema.String,
   fingerprint: Schema.String,
@@ -64,8 +71,11 @@ const actorOf = (scope: McpInvocationScope) =>
     ? `mcp:${scope.client?.sessionId ?? scope.requestNamespace}`
     : `thread:${scope.thread.threadId}`;
 /** The decision context carries this line; an approval only counts for the same action and key. */
-export const decisionBinding = (action: "join" | "leave" | "relink", alias: string, key?: string) =>
-  `goat-hub-binding: ${action} ${alias}${key === undefined ? "" : ` ${key}`}`;
+export const decisionBinding = (
+  action: "join" | "leave" | "leave-force" | "relink",
+  alias: string,
+  key?: string,
+) => `goat-hub-binding: ${action} ${alias}${key === undefined ? "" : ` ${key}`}`;
 const phaseMessage = (phase: string | undefined) =>
   phase === "remote_platform_unsupported"
     ? "Remote Link refuses this platform; it joins as a Hub-mode client instead."
@@ -311,31 +321,74 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** Revoke on the Home, then disconnect the device. */
-  const unlink = Effect.fn("HubMembership.unlink")(function* (
+  /**
+   * Device side first. The Home's own revoke runs a remote `ocx disconnect` whose failure
+   * restarts the tunnel (OCX-9), so the Home is touched only after the device is standalone.
+   */
+  const leaveDevice = Effect.fn("HubMembership.leaveDevice")(function* (
     alias: string,
-    linkId: string,
+    steps: HubDeviceStep[],
+  ) {
+    for (const command of [["disconnect", "--json"], ["restart"]] as const) {
+      const ran = yield* ocx.device(alias, command, DEVICE_TIMEOUT_MS).pipe(
+        Effect.map((output: OcxOutput) =>
+          output.code === 0
+            ? { outcome: "ok" as const }
+            : { outcome: "failed" as const, detail: `ocx ${command[0]} exited ${output.code}.` },
+        ),
+        Effect.catch((error) => Effect.succeed(unreachable(error))),
+      );
+      steps.push({ step: command[0], ...ran });
+      if (ran.outcome !== "ok") return ran.detail;
+    }
+    const body = yield* ocx.deviceHealth(alias);
+    const health = body === undefined ? undefined : decodeJson(Health, body);
+    // A standalone or Home runtime omits role; anything else still describes the link.
+    const standalone =
+      health?.service === "opencodex" &&
+      (health.role === undefined || health.role === "standalone");
+    const detail = standalone
+      ? "Device answers as standalone."
+      : health === undefined
+        ? "Device /healthz did not answer after the restart."
+        : `Device /healthz still reports role ${health.role}.`;
+    steps.push({ step: "health", outcome: standalone ? "ok" : "failed", detail });
+    return standalone ? undefined : detail;
+  });
+
+  /** Forced revoke skips the remote cleanup the device step already did; then prove it is gone. */
+  const revokeOnHome = Effect.fn("HubMembership.revokeOnHome")(function* (
+    alias: string,
+    record: { readonly id: string; readonly tunnelPort?: number | undefined },
     steps: HubDeviceStep[],
   ) {
     const revoked = yield* ocx.home(
-      ["link", "revoke", "--link-id", linkId, "--json"],
+      ["link", "revoke", "--link-id", record.id, "--force", "--yes", "--json"],
       HOME_TIMEOUT_MS,
     );
     if (revoked.code !== 0 && revoked.phase !== "link_not_found") {
       steps.push({ step: "revoke", outcome: "failed", detail: phaseMessage(revoked.phase) });
       return false;
     }
-    steps.push({ step: "revoke", outcome: "ok", detail: linkId });
-    const disconnected = yield* ocx.device(alias, ["disconnect", "--json"], DEVICE_TIMEOUT_MS).pipe(
-      Effect.map((output: OcxOutput) =>
-        output.code === 0
-          ? { outcome: "ok" as const }
-          : { outcome: "failed" as const, detail: `ocx disconnect exited ${output.code}.` },
-      ),
-      Effect.catch((error) => Effect.succeed(unreachable(error))),
-    );
-    steps.push({ step: "disconnect", ...disconnected });
-    return disconnected.outcome === "ok";
+    steps.push({ step: "revoke", outcome: "ok", detail: record.id });
+    const status = yield* homeLinks();
+    const recorded =
+      status === undefined ||
+      status.links.some((entry) => entry.id === record.id || entry.alias === alias);
+    const tunnels = yield* ocx.homeTunnels(alias, record.tunnelPort);
+    const gone = !recorded && tunnels === 0;
+    steps.push({
+      step: "link_removed",
+      outcome: gone ? "ok" : "failed",
+      detail: gone
+        ? "No link record or ssh -R tunnel remains."
+        : recorded
+          ? "ocx link status still lists the link, or could not be read."
+          : tunnels === undefined
+            ? "This Home's ssh tunnels could not be listed."
+            : `${tunnels} ssh -R tunnel for the link is still running.`,
+    });
+    return gone;
   });
 
   const homeUnavailable = (action: Action, alias: string, steps: ReadonlyArray<HubDeviceStep>) =>
@@ -442,7 +495,15 @@ const make = Effect.gen(function* () {
       if (record === undefined)
         return result("leave", alias, "ready", `${alias} is not linked to this Home.`, steps);
       const binding = decisionBinding("leave", alias, record.id);
-      if (input.decisionId !== undefined) yield* approved(scope, input.decisionId, binding);
+      const forceBinding = decisionBinding("leave-force", alias, record.id);
+      // A forced removal is only ever a person's answer to a device that could not be cleaned up.
+      const forced =
+        input.decisionId !== undefined &&
+        (yield* inbox.get({ kind: "agent", scope }, input.decisionId)).context
+          .split("\n")
+          .includes(forceBinding);
+      if (input.decisionId !== undefined)
+        yield* approved(scope, input.decisionId, forced ? forceBinding : binding);
       else if (!caller.owner) {
         const decisionId = yield* requestDecision(scope, {
           title: `Remove ${alias} from the hub`,
@@ -464,19 +525,42 @@ const make = Effect.gen(function* () {
         );
       }
       yield* audit(caller, "hub.leave", alias, "started", input.decisionId);
-      const clean = yield* unlink(alias, record.id, steps);
+      if (!forced) {
+        const failure = yield* leaveDevice(alias, steps);
+        if (failure !== undefined) {
+          const decisionId = yield* requestDecision(scope, {
+            title: `Force-remove ${alias} from the hub`,
+            context: `Cleaning up ${alias} failed: ${failure} The Home still holds link ${record.id}. Forcing revokes it on the Home without the device's help; ${alias} keeps its client settings until someone runs ocx disconnect and ocx restart there.`,
+            binding: forceBinding,
+            approve: "Force-revoke",
+            consequence: `${alias} stops routing through this Home but keeps stale client settings.`,
+          });
+          yield* audit(caller, "hub.leave", alias, "needs_decision", decisionId);
+          return result(
+            "leave",
+            alias,
+            "needs_human",
+            `${failure} The Home link was left in place.`,
+            steps,
+            { decisionId },
+          );
+        }
+      }
+      const clean = yield* revokeOnHome(alias, record, steps);
       const revoked = steps.some(({ step, outcome }) => step === "revoke" && outcome === "ok");
-      const state = clean ? "ready" : revoked ? "degraded" : "failed";
+      const state = clean && !forced ? "ready" : revoked ? "degraded" : "failed";
       yield* audit(caller, "hub.leave", alias, state, input.decisionId);
       return result(
         "leave",
         alias,
         state,
-        clean
+        state === "ready"
           ? `${alias} left the hub.`
-          : revoked
-            ? `The Home revoked the link; run ocx disconnect on ${alias} to finish.`
-            : "The Home did not revoke the link.",
+          : !revoked
+            ? "The Home did not revoke the link."
+            : forced
+              ? `The Home revoked the link; run ocx disconnect and ocx restart on ${alias} to finish.`
+              : "The Home revoked the link, but a link record or tunnel remains.",
         steps,
       );
     }).pipe(
@@ -517,14 +601,17 @@ const make = Effect.gen(function* () {
           decisionBinding("relink", alias, offered.fingerprint),
         );
         yield* audit(caller, "hub.relink", alias, "started", input.decisionId);
-        const clean = yield* unlink(alias, record.id, steps);
+        const failure = yield* leaveDevice(alias, steps);
+        const clean = failure === undefined && (yield* revokeOnHome(alias, record, steps));
         if (!clean) {
           yield* audit(caller, "hub.relink", alias, "failed", input.decisionId);
           return result(
             "repair",
             alias,
             "failed",
-            "Re-link stopped before linking again; the device may need ocx disconnect.",
+            failure === undefined
+              ? "Re-link stopped: the old link record or tunnel remains on this Home."
+              : `Re-link stopped before touching the Home link: ${failure}`,
             steps,
           );
         }

@@ -55,6 +55,9 @@ interface Fixture {
   readonly verdicts?: ReadonlyArray<HubParityResult>;
   readonly addFails?: boolean;
   readonly deviceDown?: ReadonlyArray<string>;
+  readonly deviceExit?: Readonly<Record<string, number>>;
+  readonly health?: { readonly service: string; readonly role?: string };
+  readonly strayTunnel?: boolean;
 }
 
 const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -68,7 +71,10 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
     const [group, command, alias] = args;
     if (group === "link" && command === "status")
       return Effect.succeed(
-        json({ role: "home", links: [...links].map(([name, id]) => ({ id, alias: name })) }),
+        json({
+          role: "home",
+          links: [...links].map(([name, id]) => ({ id, alias: name, tunnelPort: 42255 })),
+        }),
       );
     if (command === "probe")
       return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
@@ -88,7 +94,7 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
     calls.push(`device ${alias} ${args.join(" ")}`);
     return fixture.deviceDown?.includes(args[0]!)
       ? Effect.fail(new HubOcxError({ reason: "unreachable", message: `${alias} is down.` }))
-      : Effect.succeed({ code: 0, stdout: "opencodex 2.89.0" });
+      : Effect.succeed({ code: fixture.deviceExit?.[args[0]!] ?? 0, stdout: "opencodex 2.89.0" });
   };
   const goatclaw = {
     enabled: true,
@@ -114,6 +120,16 @@ const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture =
             pinnedFingerprint: () => Effect.succeed(fixture.pin),
             directAlias: () => Effect.succeed(fixture.direct ?? true),
             runningTurns: () => Effect.succeed(fixture.running ?? 0),
+            deviceHealth: (alias) =>
+              Effect.sync(() => {
+                calls.push(`health ${alias}`);
+                return JSON.stringify(fixture.health ?? { service: "opencodex" });
+              }),
+            homeTunnels: (alias, port) =>
+              Effect.sync(() => {
+                calls.push(`tunnels ${alias} ${port}`);
+                return links.has(alias) || fixture.strayTunnel ? 1 : 0;
+              }),
           }),
         ),
       ),
@@ -320,23 +336,82 @@ it.effect("an exhausted ladder asks to re-link; the approval re-links with the s
     expect(relinked.state).toBe("child");
     expect(relinked.steps.map(({ step }) => step)).toEqual([
       "probe",
-      "revoke",
       "disconnect",
+      "restart",
+      "health",
+      "revoke",
+      "link_removed",
       "link_add",
     ]);
     expect(hub.calls).toContain(`home link add macmini-ts --expect-fingerprint ${PINNED} --json`);
   }),
 );
 
-it.effect("leave revokes on the Home and reports a device it could not disconnect", () =>
+it.effect("leave cleans the device first, then force-revokes and proves the link is gone", () =>
   Effect.gen(function* () {
-    const hub = yield* setup({ linked: ["lidge-ts"], deviceDown: ["disconnect"] });
+    const hub = yield* setup({ linked: ["lidge-ts"] });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
+    expect(result.state).toBe("ready");
+    expect(hub.calls).toEqual([
+      "home link status --json",
+      "device lidge-ts disconnect --json",
+      "device lidge-ts restart",
+      "health lidge-ts",
+      "home link revoke --link-id lnk_0123456789abcdef --force --yes --json",
+      "home link status --json",
+      "tunnels lidge-ts 42255",
+    ]);
+  }),
+);
+
+it.effect(
+  "a device disconnect that exits 125 files a decision and leaves the Home link alone",
+  () =>
+    Effect.gen(function* () {
+      const hub = yield* setup({ linked: ["lidge-ts"], deviceExit: { disconnect: 125 } });
+      const asked = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
+      expect(asked.state).toBe("needs_human");
+      expect(asked.message).toContain("exited 125");
+      expect(hub.calls.some((call) => call.includes("revoke"))).toBe(false);
+      expect(hub.calls).not.toContain("device lidge-ts restart");
+      const item = yield* hub.inbox.get(owner, asked.decisionId!);
+      expect(item.requiredProfile).toBe("owner");
+
+      yield* hub.approve(asked.decisionId!);
+      const forced = yield* hub.membership.leave(scope, {
+        deviceAlias: "lidge-ts",
+        decisionId: asked.decisionId!,
+      });
+      expect(forced.state).toBe("degraded");
+      expect(forced.message).toContain("ocx disconnect and ocx restart");
+      expect(forced.steps.map(({ step }) => step)).toEqual(["revoke", "link_removed"]);
+      expect((yield* hub.audit).map(({ outcome }) => outcome)).toEqual([
+        "started",
+        "needs_decision",
+        "started",
+        "degraded",
+      ]);
+    }),
+);
+
+it.effect("a device still reporting the client role after restart is not revoked", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({
+      linked: ["lidge-ts"],
+      health: { service: "opencodex", role: "client" },
+    });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
+    expect(result.state).toBe("needs_human");
+    expect(result.message).toContain("role client");
+    expect(hub.calls.some((call) => call.includes("revoke"))).toBe(false);
+  }),
+);
+
+it.effect("a tunnel that outlives the revoke is reported", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ linked: ["lidge-ts"], strayTunnel: true });
     const result = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
     expect(result.state).toBe("degraded");
-    expect(result.message).toContain("ocx disconnect");
-    expect(hub.calls).toContain("home link revoke --link-id lnk_0123456789abcdef --json");
-    const again = yield* hub.membership.leave(scope, { deviceAlias: "lidge-ts" });
-    expect(again.state).toBe("ready");
-    expect((yield* hub.audit).map(({ outcome }) => outcome)).toEqual(["started", "degraded"]);
+    expect(result.steps.at(-1)).toMatchObject({ step: "link_removed", outcome: "failed" });
   }),
 );

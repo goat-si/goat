@@ -155,6 +155,9 @@ itself; GOAT only passes GOAT's pinned host-key fingerprint as `--expect-fingerp
 missing or different pin, a non-owner join or leave, and re-link (ladder step 4) become
 owner-required decision items whose context binds the action, alias and key. An approval is
 consumed by its `started` row in `audit_events`, which records every membership change.
+Leave and re-link clean up the device before the Home (disconnect, restart, standalone
+`/healthz`), then force-revoke: the Home's own revoke runs a remote disconnect whose failure
+restarts the tunnel. A device that cannot be cleaned up keeps its link until a person decides.
 
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.

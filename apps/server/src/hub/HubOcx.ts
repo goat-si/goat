@@ -55,6 +55,13 @@ export class HubOcx extends Context.Service<
       alias: string,
       scope: McpInvocationScope,
     ) => Effect.Effect<number | undefined>;
+    /** The device's own `GET /healthz` body over GOAT SSH; undefined when it does not answer. */
+    readonly deviceHealth: (alias: string) => Effect.Effect<string | undefined>;
+    /** Live `ssh -R` link tunnels on this Home for the alias or port; undefined when unreadable. */
+    readonly homeTunnels: (
+      alias: string,
+      tunnelPort: number | undefined,
+    ) => Effect.Effect<number | undefined>;
   }
 >()("goat/hub/HubOcx") {}
 
@@ -87,6 +94,39 @@ export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   if (match === null) return undefined;
   return { code: Number(match[1]), stdout: stdout.slice(0, match.index) };
 };
+
+/** Waits up to 15 seconds for the restarted runtime on the port OpenCodex's config names. */
+export const healthScript = [
+  'goat_config="${OPENCODEX_HOME:-$HOME/.opencodex}/config.json"',
+  'goat_port=$(sed -n \'s/^[[:space:]]*"port"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p\' "$goat_config" 2>/dev/null | head -n 1)',
+  '[ -n "$goat_port" ] || goat_port=10100',
+  "goat_try=0",
+  'while [ "$goat_try" -lt 15 ]; do',
+  '  if goat_body=$(curl -fsS --max-time 3 "http://127.0.0.1:$goat_port/healthz" </dev/null 2>/dev/null); then',
+  "    printf '%s\\n__goat_ocx_exit=0\\n' \"$goat_body\"; exit 0",
+  "  fi",
+  "  goat_try=$((goat_try + 1)); sleep 1",
+  "done",
+  "printf '\\n__goat_ocx_exit=7\\n'",
+  "",
+].join("\n");
+
+/** OpenCodex runs each link tunnel as `ssh … -R 127.0.0.1:<port>:127.0.0.1:<home> -- <alias>`. */
+export const countLinkTunnels = (
+  processes: string,
+  alias: string,
+  tunnelPort: number | undefined,
+) =>
+  processes.split(/\r?\n/u).filter((line) => {
+    const argv = line.trim().split(/\s+/u);
+    if (!/(^|\/)ssh$/u.test(argv[0] ?? "")) return false;
+    const forward = argv[argv.indexOf("-R") + 1];
+    if (!argv.includes("-R") || forward === undefined) return false;
+    return (
+      (tunnelPort !== undefined && forward.startsWith(`127.0.0.1:${tunnelPort}:`)) ||
+      (argv.at(-2) === "--" && argv.at(-1) === alias)
+    );
+  }).length;
 
 const make = Effect.gen(function* () {
   const runner = yield* ProcessRunner.ProcessRunner;
@@ -204,6 +244,27 @@ const make = Effect.gen(function* () {
         const entry = status.hosts.find(({ host }) => host === null);
         return entry?.reachability === "ok" && !entry.lastKnown
           ? entry.metrics?.threads.running
+          : undefined;
+      },
+      Effect.orElseSucceed(() => undefined),
+    ),
+    deviceHealth: Effect.fn("HubOcx.deviceHealth")(
+      function* (alias) {
+        const result = yield* dispatch.runHostScript({
+          host: alias,
+          script: healthScript,
+          timeoutMs: 30_000,
+        });
+        const output = parseDeviceOutput(result.stdout);
+        return output?.code === 0 ? output.stdout : undefined;
+      },
+      Effect.orElseSucceed(() => undefined),
+    ),
+    homeTunnels: Effect.fn("HubOcx.homeTunnels")(
+      function* (alias, tunnelPort) {
+        const output = yield* run("ps", ["-axww", "-o", "command="], 10_000);
+        return output.code === 0 && !output.stdoutTruncated
+          ? countLinkTunnels(output.stdout, alias, tunnelPort)
           : undefined;
       },
       Effect.orElseSucceed(() => undefined),

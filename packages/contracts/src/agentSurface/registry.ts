@@ -661,7 +661,7 @@ export const agentSurfaceRegistry = {
     toolkit: "hostStatus",
     summary: "Remove a Remote Link Child from this OpenCodex Home.",
     description:
-      "Remove a Remote Link Child: ocx link revoke on this Home, then ocx disconnect on the device over SSH, which returns it to standalone. Routing through the Home stops for that device. Needs hub.manage; unless the caller's profile is owner, the first call returns state needs_human with a decisionId to approve in the decision inbox, then call again with it.",
+      "Remove a Remote Link Child, device first: over SSH, ocx disconnect and ocx restart on the device until its /healthz answers as standalone; then ocx link revoke --force on this Home, and check that ocx link status and the Home's ssh -R tunnels no longer show the link. If the device step fails, the Home link is left in place and the call returns state needs_human with a decisionId for an owner to approve a force-revoke. Needs hub.manage; unless the caller's profile is owner, the first call also returns needs_human with a decisionId to approve. Call again with an approved decisionId to continue.",
     effect: "destructive",
     hostRoutable: false,
     requires: "either",
