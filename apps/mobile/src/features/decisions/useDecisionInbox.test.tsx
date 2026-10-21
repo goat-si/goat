@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";

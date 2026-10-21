@@ -2,30 +2,7 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
-// GOAT tests that still select jsdom per file. Move each to a *.browser.test file or a Vitest
-// project environment, then drop it here.
-const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [
-  "apps/mobile/src/components/MediaVideoPlayer.test.tsx",
-  "apps/mobile/src/features/cloud/CloudAuthProvider.disabled.test.tsx",
-  "apps/mobile/src/features/cloud/CloudAuthProvider.test.ts",
-  "apps/mobile/src/features/decisions/useDecisionInbox.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotBubble.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotDayStamp.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotScreen.memory.test.tsx",
-  "apps/mobile/src/features/goat-bot/GoatBotTimelineRow.test.tsx",
-  "apps/mobile/src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
-  "apps/mobile/src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
-  "apps/mobile/src/features/goat-bot/useMobileGoatBotSession.test.tsx",
-  "apps/mobile/src/features/goat-bot/useReplying.test.tsx",
-  "apps/mobile/src/features/settings/MemorySyncDiagnostics.test.tsx",
-  "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx",
-  "apps/mobile/src/features/threads/HumanHandoffCard.test.tsx",
-  "apps/mobile/src/features/threads/SubagentRow.memory.test.tsx",
-  "apps/mobile/src/features/threads/ThreadHeader.memory.test.tsx",
-  "apps/mobile/src/features/threads/ThreadMarkdownImage.test.tsx",
-  "apps/mobile/src/lib/visible-animations.test.tsx",
-];
+const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [];
 
 // GOAT code that predates upstream's goat/prefer-effect-fn rule (cycle 261021). Convert a file
 // to Effect.fn and drop it here; do not add new entries.
