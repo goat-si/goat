@@ -33,6 +33,7 @@ import * as Settings from "../serverSettings.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
+import * as HubMembership from "../hub/HubMembership.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
 import * as FleetPlacement from "../fleet/resources/Placement.ts";
@@ -163,6 +164,7 @@ const dependencies = Layer.mergeAll(
   Layer.mock(ThreadCommandExecutor.ThreadCommandExecutor)({}),
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
+  Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),
   Layer.mock(FleetPlacement.Placement)({}),
@@ -235,7 +237,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it("gives every entry a unique path, legacy name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(181); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub parity, permission profile, computer use, and decision tools.
+  expect(entries).toHaveLength(184); // Includes current memory, browser, provider, SSH runtime, GOAT Bot home, fleet goal, resource and health, notes, hub parity and membership, permission profile, computer use, and decision tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);

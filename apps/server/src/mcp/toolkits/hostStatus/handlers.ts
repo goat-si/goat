@@ -1,4 +1,4 @@
-import type { GoatHostStatusInput } from "@goat/contracts";
+import type { GoatHostStatusInput, HubDeviceOperationInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import * as HostHealthMonitor from "../../../fleet/health/HostHealthMonitor.ts";
@@ -9,11 +9,22 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { readCaller } from "../../threadAccess.ts";
 import { HostStatusToolkit } from "./tools.ts";
 import * as HubParity from "../../../hub/HubParity.ts";
+import * as HubMembership from "../../../hub/HubMembership.ts";
 
 /** Fan-out and a named host use this machine's SSH keys. local:true does not. */
 const reachesAnotherHost = (input: GoatHostStatusInput) => input.local !== true;
+const membership = (operation: "join" | "leave" | "repair") =>
+  McpToolAccess.writes((input: HubDeviceOperationInput) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      return yield* (yield* HubMembership.HubMembership)[operation](scope, input);
+    }),
+  );
 
 export const layer = McpToolAccess.toLayer(HostStatusToolkit, {
+  goat_hub_device_join: membership("join"),
+  goat_hub_device_leave: McpToolAccess.destructive(membership("leave")),
+  goat_hub_device_repair: membership("repair"),
   goat_hub_device_verify: McpToolAccess.readsOrReachesHost(
     () => true,
     (input) =>

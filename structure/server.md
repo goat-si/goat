@@ -148,6 +148,14 @@ before the outage; an OpenCodex that never stated it counts as not granted. One 
 to wait or move the work, and is withdrawn when the Home answers. GOAT never switches the hub or
 changes OpenCodex settings, and a machine with `hub.enabled` takes no goal placements.
 
+`apps/server/src/hub/HubMembership.ts` joins, removes and repairs Remote Link Children by
+running OpenCodex's own commands: `ocx link …` on this Home and device commands through
+`SshRemoteDispatch.runHostScript`, all behind the `HubOcx` seam. OpenCodex moves link keys
+itself; GOAT only passes GOAT's pinned host-key fingerprint as `--expect-fingerprint`. A
+missing or different pin, a non-owner join or leave, and re-link (ladder step 4) become
+owner-required decision items whose context binds the action, alias and key. An approval is
+consumed by its `started` row in `audit_events`, which records every membership change.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.

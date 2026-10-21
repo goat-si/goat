@@ -32,6 +32,10 @@ export const HubParityEvidence = Schema.Struct({
   modelsStatus: Schema.optional(Schema.Int),
   catalogDigest: Schema.optional(Schema.String),
   servedBy: Schema.optional(Schema.String),
+  /** A Hub client's `ocx connect status` server URL. */
+  hubServerUrl: Schema.optional(Schema.String),
+  /** The Home's advertised Hub data origin (`hub.dataPublicOrigin`). */
+  hubDataOrigin: Schema.optional(Schema.String),
   wiring: Schema.optional(
     Schema.Array(
       Schema.Struct({

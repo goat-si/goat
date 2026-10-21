@@ -66,6 +66,7 @@ const Config = Schema.Struct({
   syncCodexSubagentDefaults: Schema.optional(Schema.Boolean),
   injectionModel: Schema.optional(Schema.String),
   injectionEffort: Schema.optional(Schema.String),
+  hub: Schema.optional(Schema.Struct({ dataPublicOrigin: Schema.optional(Schema.String) })),
 });
 const Health = Schema.Struct({
   service: Schema.Literal("opencodex"),
@@ -127,6 +128,7 @@ const canonical = (value: Schema.Json): Schema.Json =>
         )
       : value;
 const Connect = OpenCodexInventorySnapshot.fields.hubClient;
+const ConnectServer = Schema.Struct({ serverUrl: Schema.optional(Schema.String) });
 const Service = Schema.Struct({
   installed: Schema.optional(Schema.Boolean),
   running: Schema.optional(Schema.Boolean),
@@ -329,6 +331,8 @@ const make = Effect.gen(function* () {
     const status = outputs[0] === undefined ? undefined : decodeJson(Status, outputs[0]);
     const link = outputs[1] === undefined ? undefined : decodeJson(Link, outputs[1]);
     const connect = outputs[2] === undefined ? undefined : decodeJson(Connect, outputs[2]);
+    const connectServer =
+      outputs[2] === undefined ? undefined : decodeJson(ConnectServer, outputs[2])?.serverUrl;
     const serviceBody = outputs[3] === undefined ? undefined : decodeJson(Service, outputs[3]);
     const service =
       serviceBody && Object.values(serviceBody).some((value) => value !== undefined)
@@ -433,6 +437,11 @@ const make = Effect.gen(function* () {
             }
           : {}),
         ...(modelsResponse?.servedBy ? { servedBy: modelsResponse.servedBy } : {}),
+        // P4 for a Hub client: the hub URL it already uses, against this Home's advertised origin.
+        ...(connect?.apiKeyId && linkRole !== "child" && connectServer
+          ? { hubServerUrl: connectServer }
+          : {}),
+        ...(config?.hub?.dataPublicOrigin ? { hubDataOrigin: config.hub.dataPublicOrigin } : {}),
         ...(localProviderCount !== undefined ? { localProviderCount } : {}),
       };
     }

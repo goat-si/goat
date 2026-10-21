@@ -5,6 +5,8 @@ import {
   GoatHostStatusResult,
   GoatHubDeviceVerifyInput,
   GoatHubDeviceVerifyResult,
+  HubDeviceOperationInput,
+  HubDeviceOperationResult,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
@@ -13,6 +15,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as HubParity from "../../../hub/HubParity.ts";
+import * as HubMembership from "../../../hub/HubMembership.ts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -40,4 +43,28 @@ const VerifyTool = Tool.make(agentSurfaceRegistry["hub.device_verify"].name, {
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.device_verify"]));
 
-export const HostStatusToolkit = Toolkit.make(HostStatusTool, VerifyTool);
+const membershipTool = <
+  const Path extends "hub.device_join" | "hub.device_leave" | "hub.device_repair",
+>(
+  path: Path,
+) =>
+  Tool.make(agentSurfaceRegistry[path].name, {
+    description: agentSurfaceRegistry[path].description,
+    parameters: HubDeviceOperationInput,
+    success: HubDeviceOperationResult,
+    failure: OrchestratorMcpFailure,
+    failureMode: "return" as const,
+    dependencies: [
+      McpInvocationContext.McpInvocationContext,
+      ThreadManagementService.ThreadManagementService,
+      HubMembership.HubMembership,
+    ],
+  }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry[path]));
+
+export const HostStatusToolkit = Toolkit.make(
+  HostStatusTool,
+  VerifyTool,
+  membershipTool("hub.device_join"),
+  membershipTool("hub.device_leave"),
+  membershipTool("hub.device_repair"),
+);

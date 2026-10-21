@@ -158,3 +158,48 @@ it.effect("old inventories never become ok from inferred role and record presenc
     expect(result.failingCheckIds).toEqual([]);
   }),
 );
+
+const hubClientPair = (serverUrl: string | undefined, origin: string | undefined) => {
+  const home = fleetSnapshot("home");
+  const device = fleetSnapshot("macmini-ts");
+  return {
+    home: {
+      ...home,
+      link: {
+        ...home.link,
+        links: home.link.links.map((link) =>
+          link.alias === "macmini-ts" ? { ...link, apiKeyId: "key_mini" } : link,
+        ),
+      },
+      parityEvidence: {
+        ...home.parityEvidence!,
+        ...(origin === undefined ? {} : { hubDataOrigin: origin }),
+      },
+    },
+    device: {
+      ...device,
+      link: { ...device.link, role: "none" as const },
+      hubClient: { state: "connected" as const, apiKeyId: "key_mini" },
+      parityEvidence: {
+        ...device.parityEvidence!,
+        ...(serverUrl === undefined ? {} : { hubServerUrl: serverUrl }),
+      },
+    },
+  };
+};
+
+it.effect.each([
+  ["this Home's origin", "https://hub.tail.ts.net:8443/", "https://hub.tail.ts.net:8443", "ok"],
+  ["another hub", "https://other.tail.ts.net:8443", "https://hub.tail.ts.net:8443", "failed"],
+  ["no advertised origin", "https://hub.tail.ts.net:8443", undefined, "unproven"],
+] as const)("a Hub client's P4 compares the hub URL it uses with %s", ([, url, origin, status]) =>
+  Effect.sync(() => {
+    const result = parityVerdict({
+      deviceAlias: "macmini-ts",
+      checkedAt: 100_000,
+      ...hubClientPair(url, origin),
+    });
+    expect(result.checks.find(({ id }) => id === "P2")?.status).toBe("ok");
+    expect(result.checks.find(({ id }) => id === "P4")?.status).toBe(status);
+  }),
+);

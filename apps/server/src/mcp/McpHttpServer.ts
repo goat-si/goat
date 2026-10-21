@@ -42,6 +42,8 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
+import * as HubMembership from "../hub/HubMembership.ts";
+import * as HubOcx from "../hub/HubOcx.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -1315,6 +1317,9 @@ const layerEnvironmentToolkit = catalogRegistrations.environment.pipe(
  * RemoteDispatchCoordinator are left to the caller, like `layer`.
  */
 export const layerHostStatusService = HostStatusMcpService.layer.pipe(
+  Layer.provideMerge(
+    HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
+  ),
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),

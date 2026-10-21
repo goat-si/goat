@@ -1,5 +1,15 @@
 import type { HubParityResult, OpenCodexInventorySnapshot } from "@goat/contracts";
 
+const originOf = (value: string | undefined) => {
+  if (value === undefined) return undefined;
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return undefined;
+  }
+};
+
 /** Home-owned records are authoritative; a Child does not need a local link directory. */
 export function parityVerdict(input: {
   deviceAlias: string;
@@ -72,7 +82,20 @@ export function parityVerdict(input: {
         : "Relayed catalog differs from Home.",
     );
 
-  if (!target?.servedBy || !source?.instanceId)
+  if (device?.hubClient) {
+    const served = originOf(target?.hubServerUrl);
+    const advertised = originOf(source?.hubDataOrigin);
+    if (served === undefined || advertised === undefined)
+      add("P4", "unproven", "Hub client server URL or the Home's hub data origin is unavailable.");
+    else
+      add(
+        "P4",
+        served === advertised ? "ok" : "failed",
+        served === advertised
+          ? "Hub client uses this Home's data origin."
+          : "Hub client uses another hub's data origin.",
+      );
+  } else if (!target?.servedBy || !source?.instanceId)
     add("P4", "unproven", "Served-by header or stable Home instance id is unavailable (OCX-2).");
   else
     add(
