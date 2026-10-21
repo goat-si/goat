@@ -109,6 +109,7 @@ type LaunchOptions = {
   /** The launch is interrupted while its watch is being saved, after the remote thread exists. */
   readonly registerInterrupted?: boolean;
   readonly goatclawRole?: "issue-sweeper";
+  readonly references?: boolean;
 };
 
 /** Calls goat_ssh_thread_launch over mocks; returns its last response and what it asked for. */
@@ -178,7 +179,12 @@ const launchRaw = (options: LaunchOptions = {}) =>
         getThreadShell: () => Effect.succeed(caller),
       }),
       Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
-      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
+      Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({
+        prepareBrief: (_scope, input) =>
+          Effect.succeed(
+            (input.message ?? "") + "\nPINNED REFERENCE: source.ts at fixture-revision",
+          ),
+      }),
       Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({
         check: () =>
           options.repositoryRefused
@@ -260,6 +266,17 @@ const launchRaw = (options: LaunchOptions = {}) =>
         cwd: "/remote/project",
         title: "Audit",
         message: "Review the change",
+        ...(options.references
+          ? {
+              references: [
+                {
+                  mode: "snapshot" as const,
+                  repositoryKey: "example.test/owner/repo",
+                  files: ["source.ts"],
+                },
+              ],
+            }
+          : {}),
         ...(options.repository === undefined ? {} : { repository: options.repository }),
         ...(options.notifyOnCompletion === undefined
           ? {}
@@ -1813,25 +1830,34 @@ it.effect.each(["worker", "manager", "owner"])(
     }),
 );
 
-it.effect("SSH role launch forwards the role's narrowed ceiling and brief", () =>
-  Effect.gen(function* () {
-    const result = yield* launchRaw({
-      outsideClient: true,
-      profile: "manager",
-      goatclawRole: "issue-sweeper",
-    });
-    const forwarded = result.launchInputs[0];
-    expect(forwarded?.permissionProfileCeiling).toMatchObject({
-      id: "worker",
-      capabilities: ["threads.launch", "worktree.create", "pr.open"],
-      runtimeModeCeiling: "auto",
-    });
-    expect(forwarded?.runtimeMode).toBe("auto");
-    expect(forwarded?.message?.startsWith(goatclawRoleTemplate("issue-sweeper").preamble)).toBe(
-      true,
-    );
-    expect(forwarded?.message?.endsWith("Review the change")).toBe(true);
-  }),
+it.effect.each([false, true])(
+  "SSH role launch forwards the narrowed ceiling and brief (references: %s)",
+  (references) =>
+    Effect.gen(function* () {
+      const result = yield* launchRaw({
+        outsideClient: true,
+        profile: "manager",
+        goatclawRole: "issue-sweeper",
+        references,
+      });
+      const forwarded = result.launchInputs[0];
+      expect(forwarded?.permissionProfileCeiling).toMatchObject({
+        id: "worker",
+        capabilities: ["threads.launch", "worktree.create", "pr.open"],
+        runtimeModeCeiling: "auto",
+      });
+      expect(forwarded?.runtimeMode).toBe("auto");
+      expect(forwarded?.message?.startsWith(goatclawRoleTemplate("issue-sweeper").preamble)).toBe(
+        true,
+      );
+      expect(
+        forwarded?.message?.endsWith(
+          references
+            ? "Review the change\nPINNED REFERENCE: source.ts at fixture-revision"
+            : "Review the change",
+        ),
+      ).toBe(true);
+    }),
 );
 
 it.effect.each(["goat_cloud_machine_create", "goat_cloud_machine_resume"] as const)(
