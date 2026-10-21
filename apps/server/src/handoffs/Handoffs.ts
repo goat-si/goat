@@ -39,6 +39,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
+import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -179,6 +180,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const store = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
+  const archiveGate = yield* ThreadArchiveGate;
   const fs = yield* FileSystem.FileSystem;
   const sessions = yield* SessionStore.SessionStore;
   const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
@@ -221,6 +223,7 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.mapError(unavailable));
     });
   const read = Effect.fn("Handoffs.read")(function* (input: HandoffReadInput) {
+    yield* archiveGate.restore(input.threadId);
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items

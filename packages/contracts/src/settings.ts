@@ -3,6 +3,7 @@ import {
   MemoryOwnerSourceReadPolicy,
   DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY,
   ORCHESTRATION_HISTORY_BUDGET_BYTES,
+  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
 } from "./memory.ts";
 import * as Predicate from "effect/Predicate";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
@@ -1176,6 +1177,10 @@ export const DatabaseStorageStatus = Schema.Struct({
   incrementalVacuumEnabled: Schema.Boolean,
   /** Command to run on the host to reclaim the space offline. */
   compactCommand: Schema.String,
+  /** Threads whose tool history sits in compressed archive files. Absent on older servers. */
+  archivedThreads: Schema.optional(Schema.Number),
+  /** Bytes of those archive files, outside the database. Absent on older servers. */
+  archiveBytes: Schema.optional(Schema.Number),
 });
 export type DatabaseStorageStatus = typeof DatabaseStorageStatus.Type;
 
@@ -1273,6 +1278,18 @@ export const StorageCleanupSettings = Schema.Struct({
   /** Above this, compaction trims bulky tool output in threads idle for a week, oldest first. */
   historyBudgetBytes: HistoryBudgetBytes.pipe(
     Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_BUDGET_BYTES)),
+  ),
+  /**
+   * Threads idle this many days keep their messages in the database and move tool calls,
+   * output and reasoning to a compressed archive that is restored when the thread is opened.
+   * Null keeps every thread in the database.
+   */
+  historyArchiveAfterDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS)),
+  ),
+  /** Archives older than this many days are deleted for good. Null, the default, keeps them. */
+  historyArchiveDeleteAfterDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
@@ -1787,6 +1804,8 @@ const ServerSettingsPatchFields = Schema.Struct({
       browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
       logsAfterDays: Schema.optionalKey(StorageRetentionDays),
       historyBudgetBytes: Schema.optionalKey(HistoryBudgetBytes),
+      historyArchiveAfterDays: Schema.optionalKey(StorageRetentionDays),
+      historyArchiveDeleteAfterDays: Schema.optionalKey(StorageRetentionDays),
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),

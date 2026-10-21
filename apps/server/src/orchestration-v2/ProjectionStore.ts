@@ -1,3 +1,4 @@
+import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { applyThreadPullRequestLinkUpdate } from "@goat/shared/threadPullRequests";
@@ -2005,6 +2006,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   ProjectionStoreV2,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const archiveGate = yield* ThreadArchiveGate;
 
     // For run upserts: a snapshot without `path` keeps the value another event recorded there.
     const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
@@ -6805,7 +6807,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ cause })));
 
-    return {
+    return gateThreadReads(archiveGate, {
       apply,
       getReviewLedgerEntries,
       getShellSnapshot,
@@ -6900,7 +6902,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       searchThread,
       searchThreadStream,
       getThreadAttachmentIds,
-    } satisfies ProjectionStoreV2Shape;
+    } satisfies ProjectionStoreV2Shape);
   }),
 );
 
