@@ -34,7 +34,7 @@ export interface ThreadContextDragSubject {
 }
 
 /** Threads a drag hands over: the whole selection when the picked-up row belongs to it. */
-export function threadContextDragRefs(key: string): ScopedThreadRef[] {
+function threadContextDragRefs(key: string): ScopedThreadRef[] {
   const selected = useThreadSelectionStore.getState().selectedThreadKeys;
   const keys = selected.has(key) ? [...selected] : [key];
   return keys.flatMap((candidate) => {
@@ -109,10 +109,7 @@ interface ThreadContextDragPress {
 }
 
 /** Only a plain primary press on the row itself can start a context drag. */
-export function shouldStartThreadContextDrag(
-  press: ThreadContextDragPress,
-  platform: string,
-): boolean {
+function shouldStartThreadContextDrag(press: ThreadContextDragPress, platform: string): boolean {
   if (press.defaultPrevented || press.button !== 0 || !press.nativeEvent.isPrimary) return false;
   // Ctrl-click opens the context menu on macOS.
   if (press.ctrlKey && isMacPlatform(platform)) return false;

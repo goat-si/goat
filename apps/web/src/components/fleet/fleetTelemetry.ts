@@ -22,9 +22,9 @@ export interface FleetHostRead {
 }
 
 /** Ten minutes of 15 s samples. */
-export const HOST_HISTORY_CAPACITY = 40;
+const HOST_HISTORY_CAPACITY = 40;
 /** Samples older than this are dropped, so a host that went quiet stops drawing an old line. */
-export const HOST_HISTORY_MAX_AGE_MS = 10 * 60_000;
+const HOST_HISTORY_MAX_AGE_MS = 10 * 60_000;
 
 export function pushBounded<T>(
   list: ReadonlyArray<T>,
@@ -394,7 +394,7 @@ export interface FleetThroughput {
   readonly finishedBuckets: ReadonlyArray<number>;
 }
 
-export const THROUGHPUT_WINDOW_MS = 60 * 60_000;
+const THROUGHPUT_WINDOW_MS = 60 * 60_000;
 export const THROUGHPUT_BUCKETS = 12;
 
 interface RunTimes {

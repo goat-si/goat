@@ -3479,10 +3479,7 @@ const installOnHost = Effect.fn("ssh/tunnel.installOnHost")(function* (
  * install. It sorts above every `0.1.0-nightly.*` yet lacks their migrations, so starting it
  * against their database fails every launch.
  */
-export const compareHostRuntimeBuilds = (
-  left: RuntimeBuild,
-  right: RuntimeBuild,
-): number | undefined => {
+const compareHostRuntimeBuilds = (left: RuntimeBuild, right: RuntimeBuild): number | undefined => {
   const leftParsed = parseSemver(left.version);
   const rightParsed = parseSemver(right.version);
   const leftPlain = leftParsed?.prerelease.length === 0;
@@ -4940,7 +4937,7 @@ export const issueRemoteMcpClientSession = Effect.fn("ssh/tunnel.issueRemoteMcpC
   },
 );
 
-export const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
+const issueRemoteClientSession = Effect.fn("ssh/tunnel.issueRemoteClientSession")(function* (
   target: DesktopSshEnvironmentTarget,
   sessionOptions: RemoteClientSessionOptions,
   input?: SshAuth.SshAuthOptions,

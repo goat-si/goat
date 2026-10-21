@@ -126,7 +126,7 @@ export interface FleetSummary {
   readonly machines: ReadonlyArray<FleetMachineSummary>;
 }
 
-export function summarizeFleet(
+function summarizeFleet(
   shells: ReadonlyArray<FleetShell>,
   environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "label">>,
 ): FleetSummary {
@@ -155,7 +155,7 @@ export function summarizeFleet(
   };
 }
 
-export function fleetSummariesEqual(left: FleetSummary, right: FleetSummary): boolean {
+function fleetSummariesEqual(left: FleetSummary, right: FleetSummary): boolean {
   return (
     left.running === right.running &&
     left.attention === right.attention &&
@@ -257,7 +257,7 @@ const UNKNOWN_AGENT_LABEL = "Unknown agent";
  * streamed update never moves a row. Reported work has no start time and
  * follows in the order its dispatcher listed it.
  */
-export function compareFleetThreads(left: FleetThread, right: FleetThread): number {
+function compareFleetThreads(left: FleetThread, right: FleetThread): number {
   if (left.createdAt === null || right.createdAt === null) {
     return (left.createdAt === null ? 1 : 0) - (right.createdAt === null ? 1 : 0);
   }

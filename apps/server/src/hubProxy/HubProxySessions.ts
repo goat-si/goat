@@ -67,7 +67,7 @@ export interface HubProxyCachedSnapshot {
 
 /** Bounded so one large node cannot grow the hub's memory without limit. */
 export const SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
-export const SNAPSHOT_REFRESH_INTERVAL = Duration.seconds(60);
+const SNAPSHOT_REFRESH_INTERVAL = Duration.seconds(60);
 /** Uploads at once per node: anyone holding the URL can post, and the hub cannot check the token. */
 const UPLOADS_PER_NODE = 4;
 const SESSION_REFRESH_MARGIN_MS = 10 * 60 * 1000;

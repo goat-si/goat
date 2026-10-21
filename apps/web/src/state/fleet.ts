@@ -97,7 +97,7 @@ export const fleetPageEnvironmentsAtom = Atom.make((get) => fleetEnvironments(ge
   Atom.withLabel("fleet-page-environments"),
 );
 
-export const fleetSummaryAtom = createFleetSummaryAtom({
+const fleetSummaryAtom = createFleetSummaryAtom({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   environmentsAtom: fleetEnvironmentsAtom,
 });

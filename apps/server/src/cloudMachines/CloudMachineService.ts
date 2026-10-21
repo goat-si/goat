@@ -41,10 +41,10 @@ import { CloudMachineSsh } from "./sshConfig.ts";
  * gone or the user forgets a stopped one, so GOAT never loses track of a machine that may bill.
  */
 
-export const BOAT_API_KEY_SECRET = "cloud-machines-boat-api-key";
-export const CATALOG_FILE = "cloud-machines.json";
+const BOAT_API_KEY_SECRET = "cloud-machines-boat-api-key";
+const CATALOG_FILE = "cloud-machines.json";
 /** A non-waking check reuses a confirmed SSH mapping this long before asking Boat again. */
-export const QUIET_REFRESH_MS = 60_000;
+const QUIET_REFRESH_MS = 60_000;
 export const READY_DEADLINE_MS = 180_000;
 const READY_POLL = "2 seconds";
 /** Boat keeps an Idempotency-Key for 24 hours; an older unresolved create cannot be replayed. */
@@ -141,7 +141,7 @@ export class CloudMachineService extends Context.Service<
 
 const fail = (reason: CloudMachineErrorReason) => new CloudMachineError({ reason });
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const boat = yield* BoatClient;
   const ssh = yield* CloudMachineSsh;
   const secrets = yield* ServerSecretStore.ServerSecretStore;

@@ -587,7 +587,7 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 /** SQL-free live scope reads can safely run again after a source wait or inside a transaction. */
-export const memorySessionPermit = <E>(
+const memorySessionPermit = <E>(
   liveScopes: Effect.Effect<ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>, E>,
   capturedScopes: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
   required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
@@ -707,7 +707,7 @@ export const enqueuePublicOrchestrationCommand = <A, E>(
     Effect.andThen(Effect.suspend(() => startup.enqueueCommand(work))),
   );
 
-export function hasCompatibleOrchestrationProtocol(url: URL): boolean {
+function hasCompatibleOrchestrationProtocol(url: URL): boolean {
   return servesOrchestrationProtocol(url.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM));
 }
 

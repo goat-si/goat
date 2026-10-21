@@ -66,7 +66,7 @@ const proxyRoute = (target: HubNodeRouteTarget): HubProxyRoute => {
   }
 };
 
-export const toProxyNode = (node: HubNode): HubProxyNode => ({
+const toProxyNode = (node: HubNode): HubProxyNode => ({
   nodeId: node.nodeId,
   environmentId: node.environmentId,
   label: node.label,

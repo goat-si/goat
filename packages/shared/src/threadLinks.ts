@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
  * the reference and resolves in the environment of the message that holds it. Titles change, so
  * clients show the thread's current title; the label only stands in for a thread they cannot see.
  */
-export const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
+const THREAD_LINK_PROTOCOL = GOAT_THREAD_LINK_PROTOCOL;
 const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
 const THREAD_LINK_HREF_PREFIXES = THREAD_LINK_PROTOCOLS.map((protocol) => `${protocol}://v1/`);
 // Code comes first in the alternation so a link written inside a code span or fence is skipped.

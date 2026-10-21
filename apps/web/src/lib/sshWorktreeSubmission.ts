@@ -28,7 +28,7 @@ export interface SshWorktreeSubmissionPorts extends SshThreadOpenPorts {
 export type SshWorktreeSubmissionOutcome =
   | { kind: "opened"; remoteRef: ScopedThreadRef }
   | { kind: "started-not-opened"; remoteRef: ScopedThreadRef; reason: string };
-export class SshWorktreeNavigationError extends Error {
+class SshWorktreeNavigationError extends Error {
   constructor(
     readonly remoteRef: ScopedThreadRef,
     message: string,
