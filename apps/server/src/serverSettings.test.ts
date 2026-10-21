@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  BUILTIN_PERMISSION_PROFILES,
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -1232,6 +1233,40 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.isFalse(settings.continueThreadsAfterServerUpdate);
       assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), raw);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("turns permission profiles on and back off, storing goatclaw whole", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const next = yield* serverSettings.updateSettings({ goatclaw: { enabled: true } });
+      assert.isTrue(next.goatclaw.enabled);
+      const persisted = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
+      assert.deepEqual(persisted.goatclaw, { enabled: true });
+
+      const reverted = yield* serverSettings.updateSettings({ goatclaw: { enabled: false } });
+      assert.isFalse(reverted.goatclaw.enabled);
+
+      const custom = { ...BUILTIN_PERMISSION_PROFILES.worker!, id: "reviewer", maxLanes: 1 };
+      const named = yield* serverSettings.updateSettings({
+        goatclaw: {
+          defaultProfile: "reviewer",
+          profiles: { ...BUILTIN_PERMISSION_PROFILES, reviewer: custom },
+        },
+      });
+      assert.deepEqual(named.goatclaw.profiles.reviewer, custom);
+      const reread = JSON.parse(yield* fileSystem.readFileString(serverConfig.settingsPath));
+      assert.deepEqual(Object.keys(reread.goatclaw.profiles).toSorted(), [
+        "manager",
+        "merge-manager",
+        "observer",
+        "owner",
+        "reviewer",
+        "worker",
+      ]);
     }).pipe(Effect.provide(layerServerSettings())),
   );
 

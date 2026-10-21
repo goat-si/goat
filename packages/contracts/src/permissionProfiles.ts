@@ -53,19 +53,27 @@ export const BUILTIN_PERMISSION_PROFILES: Readonly<Record<string, PermissionProf
   },
 };
 
+const DEFAULT_GOATCLAW_PROFILE = "worker";
+
 export const GoatclawSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  defaultProfile: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("worker"))),
+  defaultProfile: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_GOATCLAW_PROFILE)),
+  ),
   profiles: Schema.Record(TrimmedNonEmptyString, PermissionProfile).pipe(
     Schema.withDecodingDefault(Effect.succeed(BUILTIN_PERMISSION_PROFILES)),
   ),
 }).check(
-  Schema.makeFilter((settings) =>
-    settings.profiles[settings.defaultProfile] !== undefined &&
-    Object.entries(settings.profiles).every(([id, profile]) => id === profile.id)
+  Schema.makeFilter((settings) => {
+    // The settings file stores only what differs from the defaults, and encoding checks that
+    // sparse copy, so an absent key means the default it decodes to.
+    const stored: Partial<typeof settings> = settings;
+    const profiles = stored.profiles ?? BUILTIN_PERMISSION_PROFILES;
+    return profiles[stored.defaultProfile ?? DEFAULT_GOATCLAW_PROFILE] !== undefined &&
+      Object.entries(profiles).every(([id, profile]) => id === profile.id)
       ? undefined
-      : "Profile keys must match their ids and defaultProfile must name a stored profile.",
-  ),
+      : "Profile keys must match their ids and defaultProfile must name a stored profile.";
+  }),
 );
 export type GoatclawSettings = typeof GoatclawSettings.Type;
 

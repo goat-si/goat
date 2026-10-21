@@ -1220,6 +1220,8 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "goatBotModelSelection",
   "textGenerationModelSelection",
   "pullRequestMergeMethod",
+  // goatclaw's permission profiles: a partial record would lose the profile defaultProfile names.
+  "profiles",
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
