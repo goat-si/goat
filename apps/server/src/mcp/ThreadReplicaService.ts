@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - hashes bounded replica bytes, never credentials.
-import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
+import { PressureAdmissionService } from "../fleet/pressure/PressureAdmissionService.ts";
 import { admitLaunch } from "./pressureAdmission.ts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeBuffer from "node:buffer";
@@ -150,7 +150,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const config = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
-  const pressure = yield* Effect.serviceOption(PressureNudger.PressureAdmissionService);
+  const pressure = yield* Effect.serviceOption(PressureAdmissionService);
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const lock = yield* Semaphore.make(1);
@@ -422,7 +422,7 @@ const make = Effect.gen(function* () {
           }
           if (pressure._tag === "Some")
             yield* admitLaunch(null).pipe(
-              Effect.provideService(PressureNudger.PressureAdmissionService, pressure.value),
+              Effect.provideService(PressureAdmissionService, pressure.value),
             );
           const worktreePath = path.join(root, "worktrees", key);
           const branch = `goat/recovery/${key}`;

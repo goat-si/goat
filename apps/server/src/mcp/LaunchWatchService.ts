@@ -1,4 +1,4 @@
-import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
+import { PressureAdmissionService } from "../fleet/pressure/PressureAdmissionService.ts";
 import { admitLaunch } from "./pressureAdmission.ts";
 import {
   OrchestratorMcpFailure,
@@ -319,7 +319,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const webhook = yield* CompletionWebhook.CompletionWebhook;
   const settings = yield* ServerSettings.ServerSettingsService;
-  const pressure = yield* Effect.serviceOption(PressureNudger.PressureAdmissionService);
+  const pressure = yield* Effect.serviceOption(PressureAdmissionService);
   const replicas = yield* ThreadReplicaService.ThreadReplicaService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1357,7 +1357,7 @@ export const make = Effect.gen(function* () {
           }
           if (pressure._tag === "Some")
             yield* admitLaunch(destinationHost).pipe(
-              Effect.provideService(PressureNudger.PressureAdmissionService, pressure.value),
+              Effect.provideService(PressureAdmissionService, pressure.value),
             );
           if (watch.replica === undefined)
             return yield* new OrchestratorMcpFailure({

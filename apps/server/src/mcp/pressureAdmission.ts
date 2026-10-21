@@ -1,7 +1,7 @@
 import { OrchestratorMcpFailure, type HostPressureAdvice } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
+import { PressureAdmissionService } from "../fleet/pressure/PressureAdmissionService.ts";
 
 /**
  * Soft admission for launch tools (ADR-0020): advice to return beside the result when the target
@@ -9,7 +9,7 @@ import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
  * Reads only what this machine already knows, so a launch never waits on a status probe.
  */
 export const admitLaunch = Effect.fn("admitLaunch")(function* (host: string | null) {
-  const nudger = yield* Effect.serviceOption(PressureNudger.PressureAdmissionService);
+  const nudger = yield* Effect.serviceOption(PressureAdmissionService);
   if (nudger._tag === "None") return undefined;
   const admission = yield* nudger.value.admit(host);
   if (admission.refuse && admission.advice !== undefined)

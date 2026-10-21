@@ -6,7 +6,6 @@ import {
   type HostPlacementRanking,
   type HostPlacementRequirements,
   type HostPressure,
-  type HostPressureAdvice,
   type HostPressureDelivery,
   type HostStatusEntry,
   type OrchestrationV2ThreadShell,
@@ -43,17 +42,14 @@ import {
   type PressureState,
   type ResolvedPressureSettings,
 } from "./pressureModel.ts";
+import { PressureAdmissionService, type PressureAdmission } from "./PressureAdmissionService.ts";
+
+export { PressureAdmissionService, type PressureAdmission };
 
 const PRESSURE_NUDGE_INTERVAL_MS = 60_000;
 /** A remote reading older than this says nothing about the host now. */
 const PRESSURE_READING_MAX_AGE_MS = 3 * 60_000;
 const WATCH_SCAN_LIMIT = 200;
-
-export interface PressureAdmission {
-  readonly advice: HostPressureAdvice | undefined;
-  /** fleet.pressure.admission is "block" and the host is critical. */
-  readonly refuse: boolean;
-}
 
 export interface PressureNudgerShape {
   /** Records each host's pressure from a goat_host_status answer. */
@@ -93,17 +89,6 @@ const deliveryFor = (
   const announced = previous === "critical" ? settings.criticalDelivery : settings.elevatedDelivery;
   return announced === "off" ? "off" : "notice";
 };
-
-/** Shared cached admission state; construction does not depend on watches or host-status reads. */
-export class PressureAdmissionService extends Context.Service<
-  PressureAdmissionService,
-  {
-    readonly observe: PressureNudgerShape["observe"];
-    readonly admit: PressureNudgerShape["admit"];
-    readonly pressureOf: (host: string | null) => Effect.Effect<HostPressure | undefined>;
-    readonly freshEntries: Effect.Effect<ReadonlyArray<HostStatusEntry>>;
-  }
->()("goat/fleet/pressure/PressureNudger/PressureAdmissionService") {}
 
 const makeAdmission = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
