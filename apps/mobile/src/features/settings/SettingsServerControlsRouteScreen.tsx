@@ -434,6 +434,16 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                     />
                   </SettingsSection>
+                  <SettingsSection title="Computer use">
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Computer use"
+                      subtitle="Allow agents to see and use apps on the selected environments' computers. A Mac also needs Accessibility and Screen Recording, granted at that Mac."
+                      value={uniform("enableCua")}
+                      disabled={disabledFor("enableCua")}
+                      onValueChange={(value) => write({ enableCua: value })}
+                    />
+                  </SettingsSection>
                   <StandingInstructionsSettings
                     key={targets
                       .map((target) => `${target.environment.environmentId}:${target.projectId}`)

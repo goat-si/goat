@@ -1,6 +1,6 @@
 import * as NodeModule from "node:module";
 
-import { CuaDriverMcpConfiguration } from "@goat/contracts";
+import { CuaDriverMcpConfiguration, type CuaHostStatus } from "@goat/contracts";
 import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import {
   cuaDriverHostOptions,
@@ -39,11 +39,14 @@ export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>
 export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()(
   "CuaDriverHostError",
   {
-    operation: Schema.Literals(["busy", "start", "stop", "exit", "desktop", "timeout"]),
+    // "restart" is the desktop retiring its driver on purpose, such as after new grants.
+    operation: Schema.Literals(["busy", "start", "stop", "exit", "desktop", "timeout", "restart"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message() {
+    // The desktop's own explanation, such as a missing macOS grant, is written for users.
+    if (this.operation === "desktop" && typeof this.cause === "string") return this.cause;
     return `Cua Driver host failed during ${this.operation}.`;
   }
 }
@@ -52,6 +55,7 @@ export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
+const isHostError = Schema.is(CuaDriverHostError);
 
 export interface CuaDriverHost {
   readonly start: Effect.Effect<CuaDriverMcpConfiguration, CuaDriverError>;
@@ -65,6 +69,7 @@ export class CuaDriver extends Context.Service<
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
+    readonly status: Effect.Effect<CuaHostStatus>;
   }
 >()("goat/cua/CuaDriver") {}
 
@@ -74,6 +79,7 @@ interface Acquisition {
   cleanup?: Fiber.Fiber<void>;
   watcher?: Fiber.Fiber<void> | undefined;
   revoked: boolean;
+  running?: boolean;
 }
 
 export const make = Effect.fn("CuaDriver.make")(function* (
@@ -103,6 +109,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
 
   const revoke = Effect.fnUntraced(function* (entry: Acquisition) {
     entry.revoked = true;
+    entry.running = false;
     if (active === entry) active = undefined;
     yield* Deferred.succeed(entry.result, Option.none());
     yield* stop(entry);
@@ -139,6 +146,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       );
       if (entry.revoked) return;
       failure = Option.none();
+      entry.running = true;
       yield* Deferred.succeed(entry.result, Option.some(withCuaDriverPrivacyEnvironment(mcp)));
       entry.watcher = yield* entry.host.waitForExit.pipe(
         Effect.match({
@@ -148,7 +156,10 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         Effect.flatMap((error) =>
           Effect.gen(function* () {
             if (active !== entry) return;
-            failure = Option.some(error);
+            failure =
+              isHostError(error) && error.operation === "restart"
+                ? Option.none()
+                : Option.some(error);
             // The watcher must not interrupt itself while retiring its host.
             entry.watcher = undefined;
             yield* revoke(entry);
@@ -200,7 +211,22 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     }
     return yield* Deferred.await(entry.result);
   });
-  return CuaDriver.of({ acquire, enabled, lastFailure: Effect.sync(() => failure) });
+  const platform = yield* HostProcess.Platform;
+  const hostEnvironment = yield* HostProcess.Environment;
+  return CuaDriver.of({
+    acquire,
+    enabled,
+    lastFailure: Effect.sync(() => failure),
+    status: Effect.sync(() => ({
+      platform:
+        platform === "darwin" || platform === "linux" || platform === "win32" ? platform : "other",
+      running: active?.running === true,
+      ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
+      ...(platform === "linux"
+        ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
+        : {}),
+    })),
+  });
 });
 
 type NativeModule = {
@@ -339,10 +365,15 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
       .pipe(Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })));
     const scope = yield* Scope.make();
     const ready = yield* Deferred.make<CuaDriverMcpConfiguration, CuaDriverError>();
-    const stopped = yield* Deferred.make<void>();
+    const stopped = yield* Deferred.make<void, CuaDriverError>();
     let requested = false;
     let retired = false;
     const unavailable = new CuaDriverHostError({ operation: "desktop" });
+    const retire = (error: CuaDriverError) =>
+      Deferred.fail(ready, error).pipe(Effect.andThen(Deferred.fail(stopped, error)));
+    const lost = Deferred.fail(ready, unavailable).pipe(
+      Effect.andThen(Deferred.succeed(stopped, undefined)),
+    );
     const start = Effect.gen(function* () {
       // Start the subscription before writing: the desktop may reply synchronously.
       yield* receiver.cuaReports.pipe(
@@ -350,17 +381,17 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
           Effect.gen(function* () {
             if (report.requestId !== requestId) return;
             if (report.status === "ready") yield* Deferred.succeed(ready, report.mcp);
-            else {
-              yield* Deferred.fail(ready, unavailable);
-              yield* Deferred.succeed(stopped, undefined);
-            }
+            else if (report.status === "stopped")
+              yield* retire(new CuaDriverHostError({ operation: "restart" }));
+            else
+              yield* retire(
+                report.message === undefined
+                  ? unavailable
+                  : new CuaDriverHostError({ operation: "desktop", cause: report.message }),
+              );
           }),
         ),
-        Effect.ensuring(
-          Deferred.fail(ready, unavailable).pipe(
-            Effect.andThen(Deferred.succeed(stopped, undefined)),
-          ),
-        ),
+        Effect.ensuring(lost),
         Effect.forkIn(scope, { startImmediately: true }),
       );
       const health = yield* receiver.subscribeHealth.pipe(
@@ -370,11 +401,7 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
         return yield* unavailable;
       yield* health.changes.pipe(
         Stream.runForEach((value) =>
-          value.status === "stopped" || value.status === "unavailable"
-            ? Deferred.fail(ready, unavailable).pipe(
-                Effect.andThen(Deferred.succeed(stopped, undefined)),
-              )
-            : Effect.void,
+          value.status === "stopped" || value.status === "unavailable" ? lost : Effect.void,
         ),
         Effect.forkIn(scope, { startImmediately: true }),
       );
@@ -391,7 +418,7 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
       yield* receiver
         .requestCuaDriver(requestId, false)
         .pipe(Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })));
-      yield* Deferred.await(stopped).pipe(Effect.timeoutOption("3 seconds"));
+      yield* Deferred.await(stopped).pipe(Effect.ignore, Effect.timeoutOption("3 seconds"));
     }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
     return { start, stop, waitForExit: Deferred.await(stopped) } satisfies CuaDriverHost;
   });

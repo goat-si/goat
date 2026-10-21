@@ -543,3 +543,75 @@ it.effect("starts an explicit driver path with telemetry and update checks off",
     yield* host.stop;
   }),
 );
+
+it.effect(
+  "reports the host platform, Wayland, and running only between readiness and disable",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHost();
+      const { service, setEnabled } = yield* makeService(Effect.succeed(h.host));
+      expect(yield* service.status).toEqual({ platform: "linux", running: false, wayland: true });
+      const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+      yield* Deferred.await(h.started);
+      expect((yield* service.status).running).toBe(false);
+      yield* Deferred.succeed(h.ready, mcp);
+      expect(yield* Fiber.join(acquiring)).toEqual(served(mcp));
+      expect((yield* service.status).running).toBe(true);
+      yield* setEnabled(false);
+      yield* Deferred.await(h.stopped);
+      expect(yield* service.status).toEqual({ platform: "linux", running: false, wayland: true });
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, { XDG_SESSION_TYPE: "wayland" }),
+      Effect.scoped,
+    ),
+);
+
+it.effect("shows the desktop's reason when it cannot start the driver", () =>
+  Effect.gen(function* () {
+    const f = yield* desktopFixture();
+    const { service } = yield* makeService(f.factory);
+    const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+    const message =
+      "Allow Accessibility and Screen Recording in System Settings, then restart computer use.";
+    yield* PubSub.publish(f.reports, {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: yield* Deferred.await(f.requested),
+      status: "unavailable",
+      message,
+    });
+    expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
+    expect(yield* service.status).toEqual({ platform: "darwin", running: false, failure: message });
+  }).pipe(
+    Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.scoped,
+  ),
+);
+
+it.effect("treats a desktop restart as a stop, then starts fresh for the next session", () =>
+  Effect.gen(function* () {
+    const f = yield* desktopFixture(true);
+    const { service } = yield* makeService(f.factory);
+    expect(yield* service.acquire).toEqual(served(mcp));
+    yield* Deferred.await(f.watching);
+    // The desktop retires a driver that predates new macOS grants without being asked.
+    yield* PubSub.publish(f.reports, {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: yield* Deferred.await(f.requested),
+      status: "stopped",
+    });
+    yield* Deferred.await(f.disabled);
+    expect(yield* service.status).toEqual({ platform: "darwin", running: false });
+    expect(yield* service.lastFailure).toEqual(Option.none());
+    expect(yield* service.acquire).toEqual(served(mcp));
+    expect(f.requests).toEqual([true, false, true]);
+  }).pipe(
+    Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.scoped,
+  ),
+);

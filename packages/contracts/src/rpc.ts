@@ -6,6 +6,7 @@ import {
   HandoffError,
 } from "./handoff.ts";
 import * as Memory from "./memory.ts";
+import { CuaHostStatus } from "./cua.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -644,6 +645,7 @@ export const WS_METHODS = {
   deviceAction: "device.action",
 
   serverProbe: "server.probe",
+  serverCheckComputerUse: "server.checkComputerUse",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -814,6 +816,12 @@ const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybinding, 
 const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, {
+  payload: Schema.Struct({}),
+  success: CuaHostStatus,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2420,6 +2428,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 // Register core handlers in smaller layers to stay below TypeScript's instantiation-depth limit.
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
+  WsServerCheckComputerUseRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

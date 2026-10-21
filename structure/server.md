@@ -205,6 +205,11 @@ driver. Adapters attach `cuaDriver` as a stdio MCP server named `cua-driver` and
 when the provider actually has it. Which adapters attach, and when a change reaches a live session,
 is in ADR-0020.
 
+`server.checkComputerUse` reports the host's platform, whether a driver is running, why the last
+start failed, and whether a Linux host runs Wayland. Settings on any client and the desktop's
+one-time prompt read it. A desktop that stops its driver on its own (`cuaDriverReport` with
+`stopped`) is restarting it, such as after new macOS grants, so that stop is not a failure.
+
 > Decision record: [ADR-0020](decisions/ADR-0020-cua-driver-computer-use.md)
 
 ## Services
