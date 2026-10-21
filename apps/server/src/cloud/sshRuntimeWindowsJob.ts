@@ -1,13 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 
 // This supervisor owns the only (non-inheritable) job handle. It joins the job before
 // starting the command, so even a shell that immediately exits cannot orphan its children.
 // Killing the supervisor by Node's retained process handle closes the job and stops its
 // members. The detached activation supervisor uses WMI and deliberately starts outside it.
 const WINDOWS_JOB_SUPERVISOR = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -17,6 +18,11 @@ using System.Text;
 using System.Threading.Tasks;
 
 public static class GoatRuntimeJob {
+  public static void Main(string[] args) {
+    var arguments = new string[args.Length - 1];
+    Array.Copy(args, 1, arguments, 0, arguments.Length);
+    Run(args[0], arguments);
+  }
   [StructLayout(LayoutKind.Sequential)]
   struct BasicLimits {
     public long ProcessTime, JobTime;
@@ -101,34 +107,57 @@ public static class GoatRuntimeJob {
     }
   }
 }
-'@
 `;
 
-export function windowsJobCommand(input: {
+export async function windowsJobCommand(input: {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
 }) {
-  const payload = Buffer.from(
-    JSON.stringify({ command: input.command, args: input.args }),
-  ).toString("base64");
-  const script = `${WINDOWS_JOB_SUPERVISOR}
-$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')) | ConvertFrom-Json
-[GoatRuntimeJob]::Run([string]$payload.command, [string[]]$payload.args)
+  const directory = await NodeFS.promises.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-job-"));
+  const command = NodePath.join(directory, "supervisor.exe");
+  const dispose = () => NodeFS.promises.rm(directory, { recursive: true, force: true });
+  // Windows PowerShell 5.1 silently exits under DETACHED_PROCESS before evaluating its script.
+  // Compile while attached, then detach the executable that owns the job and its process HANDLE.
+  const script = `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(WINDOWS_JOB_SUPERVISOR).toString("base64")}'))) -OutputAssembly '${command.replaceAll("'", "''")}' -OutputType ConsoleApplication
 `;
-  return {
-    command: NodePath.win32.join(
-      input.env.SystemRoot ?? input.env.SYSTEMROOT ?? "C:\\Windows",
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "powershell.exe",
-    ),
-    args: [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-  };
+  const powershell = NodePath.win32.join(
+    input.env.SystemRoot ?? input.env.SYSTEMROOT ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const compiler = NodeChildProcess.spawn(
+        powershell,
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from(script, "utf16le").toString("base64"),
+        ],
+        { env: input.env, windowsHide: true, stdio: ["ignore", "ignore", "pipe"], timeout: 30_000 },
+      );
+      const stderr: Buffer[] = [];
+      compiler.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      compiler.once("error", reject);
+      compiler.once("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(
+              new Error(
+                `Windows job compilation failed (${code}): ${Buffer.concat(stderr).toString("utf8")}`,
+              ),
+            ),
+      );
+    });
+    return { command, args: [input.command, ...input.args], dispose };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }

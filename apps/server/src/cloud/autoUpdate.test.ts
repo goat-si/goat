@@ -111,6 +111,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
     Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
   const events = yield* Queue.unbounded<ReadonlyArray<unknown>>();
+  const requests = yield* Queue.unbounded<number>();
   const logs: ReadonlyArray<unknown>[] = [];
   const state = {
     enabled: true,
@@ -186,6 +187,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
   const httpClient = HttpClient.make((request) =>
     Effect.gen(function* () {
       state.requests++;
+      yield* Queue.offer(requests, state.requests);
       if (state.reply === "network")
         return yield* new HttpClientError.HttpClientError({
           reason: new HttpClientError.TransportError({ request, cause: new Error("offline") }),
@@ -241,6 +243,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
     fiber,
     activation,
     awaitEvent,
+    awaitRequest: Queue.take(requests),
     prepareStarted,
     preparationGate,
     holdPreparation: () => {
@@ -535,7 +538,13 @@ it.layer(NodeServices.layer)("server auto-update", (it) => {
         const h = yield* makeHarness();
         h.state.reply = reply;
         yield* TestClock.adjust(10 * MINUTE);
-        if (reply === "network") yield* TestClock.adjust(3_000);
+        if (reply === "network") {
+          expect(yield* h.awaitRequest).toBe(1);
+          yield* TestClock.adjust(1_000);
+          expect(yield* h.awaitRequest).toBe(2);
+          yield* TestClock.adjust(2_000);
+          expect(yield* h.awaitRequest).toBe(3);
+        }
         yield* h.awaitEvent("failed");
         expect(h.state.prepared).toEqual([]);
         h.state.reply = "ok";
