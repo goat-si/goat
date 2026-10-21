@@ -1,5 +1,6 @@
 import { assert } from "@effect/vitest";
 import type { ProviderReplayTranscript } from "@goat/contracts";
+import { activeNativeSubagents } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 
 import type { OrchestratorV2ScenarioResult } from "../../OrchestratorScenario.ts";
 import {
@@ -56,6 +57,18 @@ export function assertSubagentV2Output(
     throw new Error(`Missing parent lifecycle item for subagent ${subagent.id}`);
   }
   assert.equal(parentItem.result, subagent.result);
+  // Settled, it leaves Fleet and the lane count; live, the same item names the child thread.
+  assert.deepEqual(
+    result.shellSnapshot.threads.find((thread) => thread.id === projection.thread.id)
+      ?.nativeSubagents,
+    [],
+  );
+  assert.deepEqual(
+    activeNativeSubagents({ turnItems: [{ ...parentItem, status: "running" }] }).map(
+      ({ id, childThreadId, status }) => ({ id, childThreadId, status }),
+    ),
+    [{ id: subagent.id, childThreadId: subagent.childThreadId, status: "running" }],
+  );
   if (subagent.childThreadId === null) {
     throw new Error(`Subagent ${subagent.id} is missing its child thread`);
   }

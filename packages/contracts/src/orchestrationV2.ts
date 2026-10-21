@@ -1413,6 +1413,13 @@ export const OrchestrationV2Checkpoint = Schema.Struct({
   ordinalWithinScope: NonNegativeInt,
   appRunOrdinal: Schema.NullOr(PositiveInt),
   ref: CheckpointRef,
+  /** Producer-returned evidence; absence keeps legacy local checkpoints usable, but not replicable. */
+  replicationEvidence: Schema.optional(
+    Schema.Struct({
+      commitOid: Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u)),
+      complete: Schema.Boolean,
+    }),
+  ),
   status: Schema.Literals(["ready", "missing", "error", "stale"]),
   files: Schema.Array(OrchestrationV2CheckpointFileSummary),
   capturedAt: Schema.DateTimeUtc,
@@ -2072,6 +2079,15 @@ export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
 export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
+/** A provider-native subagent (Codex spawn_agent, Claude Task) still working for this thread. */
+export const OrchestrationV2NativeSubagentSummary = Schema.Struct({
+  id: NodeId,
+  childThreadId: Schema.NullOr(ThreadId),
+  title: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["pending", "running", "waiting"]),
+});
+export type OrchestrationV2NativeSubagentSummary = typeof OrchestrationV2NativeSubagentSummary.Type;
+
 export const OrchestrationV2ThreadShell = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -2125,6 +2141,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestUserAuthoredMessageAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   hasActionableProposedPlan: Schema.Boolean,
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /** Fleet groups these under the thread and goatclaw counts them as lanes. */
+  nativeSubagents: Schema.optional(Schema.Array(OrchestrationV2NativeSubagentSummary)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   providerInstanceHistory: Schema.optional(Schema.Array(ProviderInstanceId)).pipe(

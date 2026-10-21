@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -495,7 +496,10 @@ describe("orchestrator MCP toolkit", () => {
           ),
           Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
           Layer.provide(
-            Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+            Layer.mock(LaunchWatchService.LaunchWatchService)({
+              find: () => Effect.succeed(null),
+              rearm: () => Effect.void,
+            }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
           ),
           Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
           Layer.provideMerge(McpServer.McpServer.layer),
@@ -883,7 +887,10 @@ describe("orchestrator MCP toolkit", () => {
           ),
           Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
           Layer.provide(
-            Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+            Layer.mock(LaunchWatchService.LaunchWatchService)({
+              find: () => Effect.succeed(null),
+              rearm: () => Effect.void,
+            }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
           ),
           Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
           Layer.provideMerge(McpServer.McpServer.layer),
@@ -1393,7 +1400,10 @@ it.live("delegate_task wait returns before a child question is answered", () =>
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provide(
           Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
@@ -1579,7 +1589,11 @@ it.effect("goat_thread_wait host result retains pendingRequestIds through MCP re
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provideMerge(McpServer.McpServer.layer),
-      Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+      Layer.provide(
+        Layer.mock(LaunchWatchService.LaunchWatchService)({
+          find: () => Effect.succeed(null),
+        }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
+      ),
       Layer.provide(NodeServices.layer),
       Layer.provide(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
       Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),

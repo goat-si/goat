@@ -109,6 +109,7 @@ const makeWorld = (): World => ({
 
 const layer = (world: World, fleet: FleetSettings = {}) =>
   Layer.effect(PressureNudger.PressureNudger, PressureNudger.make).pipe(
+    Layer.provideMerge(PressureNudger.layerAdmission),
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.ServerSettingsService.layerTest({ fleet }),
@@ -269,4 +270,37 @@ describe("PressureNudger.admit", () => {
       expect(yield* nudger.admit("macmini")).toEqual({ advice: undefined, refuse: false });
     }).pipe(Effect.provide(layer(world, { pressure: { admission: "block" } })));
   });
+});
+
+it.effect("constructs admission without watch or host-status services", () =>
+  Effect.gen(function* () {
+    const admission = yield* PressureNudger.PressureAdmissionService;
+    expect((yield* admission.admit(null)).refuse).toBe(true);
+  }).pipe(
+    Effect.provide(
+      PressureNudger.layerAdmission.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest({ fleet: { pressure: { admission: "block" } } }),
+            Layer.succeed(HostPressureMonitor.HostPressureMonitor, {
+              current: Effect.succeed(pressure("critical")),
+              sample: Effect.succeed(pressure("critical")),
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+it.effect("shares remote readings between launch admission and the notification service", () => {
+  const world = makeWorld();
+  return Effect.gen(function* () {
+    const nudger = yield* PressureNudger.PressureNudger;
+    const admission = yield* PressureNudger.PressureAdmissionService;
+    yield* nudger.observe({ hosts: [entry("macmini", "critical")] });
+    expect((yield* admission.admit("macmini")).refuse).toBe(true);
+    yield* admission.observe({ hosts: [entry("macmini", "ok")] });
+    expect((yield* nudger.admit("macmini")).refuse).toBe(false);
+  }).pipe(Effect.provide(layer(world, { pressure: { admission: "block" } })));
 });

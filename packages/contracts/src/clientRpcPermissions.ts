@@ -28,6 +28,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.sshHostStatus]: AuthOrchestrationReadScope,
   // It reaches the device with this machine's SSH keys, like the host-status fan-out.
   [WS_METHODS.hubDeviceVerify]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceJoin]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceLeave]: AuthOrchestrationOperateScope,
+  [WS_METHODS.hubDeviceRepair]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerHostMatrix]: AuthOrchestrationReadScope,
   [WS_METHODS.providerHostSyncStart]: AuthProvidersManageScope,
   [WS_METHODS.providerHostSyncStatus]: AuthOrchestrationReadScope,

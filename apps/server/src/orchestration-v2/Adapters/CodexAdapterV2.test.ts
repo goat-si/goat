@@ -157,6 +157,44 @@ describe("CodexAdapterV2 computer use for unattended turns", () => {
   });
 });
 
+describe("CodexAdapterV2 goatclaw subagent limits", () => {
+  const limits = (limit: number | undefined, version: string | undefined) =>
+    CodexAdapterV2.codexNativeSubagentConfig(limit, version);
+
+  it("leaves Codex's own limits alone while goatclaw is off", () => {
+    assert.deepEqual(limits(undefined, "0.164.0"), { config: {}, omitted: [] });
+  });
+
+  it("caps v1 at maxLanes and v2 at maxLanes plus its root thread", () => {
+    assert.deepEqual(limits(3, "0.164.0").config, {
+      "agents.max_threads": 3,
+      "features.multi_agent_v2.max_concurrent_threads_per_session": 4,
+    });
+  });
+
+  it("turns every multi-agent path off for a profile without lanes", () => {
+    assert.deepEqual(limits(0, "0.164.0").config, {
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
+      "agents.enabled": false,
+    });
+  });
+
+  it("omits keys an older or unidentified Codex would reject", () => {
+    // 0.146 rejects nothing here but drops a boolean v2 feature under a table overlay.
+    assert.deepEqual(limits(3, "0.146.0"), {
+      config: { "agents.max_threads": 3 },
+      omitted: ["features.multi_agent_v2.max_concurrent_threads_per_session"],
+    });
+    assert.deepEqual(limits(0, "0.140.0"), {
+      config: { "features.multi_agent": false, "features.multi_agent_v2": false },
+      omitted: ["agents.enabled"],
+    });
+    for (const version of [undefined, "0.0.0", "not-a-version", "0.147.0-alpha.1"])
+      assert.deepEqual(limits(3, version).config, { "agents.max_threads": 3 });
+  });
+});
+
 describe("CodexAdapterV2 context usage", () => {
   it("uses the current context rather than cumulative processed tokens", () => {
     const usage = CodexAdapterV2.codexProviderTurnTokenUsage(
@@ -2360,6 +2398,148 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("rebuilds a live thread when its goatclaw subagent limit changes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "subagent-limits";
+        const threadId = ThreadId.make("thread-subagent-limits");
+        const base: McpProviderSession.McpProviderSessionConfig = {
+          environmentId: M.EnvironmentId.make("fixture"),
+          threadId,
+          providerSessionId: "credential-subagents",
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer fixture-subagents",
+          browserToolsAvailable: false,
+          grantedScopes: [],
+        };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set({ ...base, nativeSubagentLimit: 3 });
+        const threadParams = (limits: Record<string, unknown>) => ({
+          cwd: "/workspace",
+          model: CODEX_TEST_MODEL_SELECTION.model,
+          config: {
+            "tools.update_plan.enabled": true,
+            mcp_optional_startup_grace_ms: 10_000,
+            ...limits,
+          },
+        });
+        const three = {
+          "agents.max_threads": 3,
+          "features.multi_agent_v2.max_concurrent_threads_per_session": 4,
+        };
+        const none = {
+          "features.multi_agent": false,
+          "features.multi_agent_v2": false,
+          "agents.enabled": false,
+        };
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "unused",
+          prompt: "unused",
+        });
+        const threadResult = preamble[4]!;
+        const entries: CodexReplay.CodexAppServerReplayEntry[] = [
+          ...preamble.slice(0, 3),
+          {
+            type: "expect_outbound",
+            frame: { id: 2, method: "thread/start", params: threadParams(three) },
+          },
+          threadResult,
+        ];
+        const reload = (id: number, limits: Record<string, unknown>) =>
+          entries.push(
+            {
+              type: "expect_outbound",
+              frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+            },
+            { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: id + 1,
+                method: "thread/resume",
+                params: { threadId: nativeThreadId, excludeTurns: true, ...threadParams(limits) },
+              },
+            },
+            withReplayRequestId(threadResult, id + 1),
+          );
+        const turn = (id: number, ordinal: number) =>
+          Effect.gen(function* () {
+            const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+              nativeThreadId,
+              codexInput: [{ type: "text", text: `turn-${ordinal}` }],
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              hasGoatMcp: true,
+              browserToolsAvailable: false,
+            });
+            entries.push(
+              { type: "expect_outbound", frame: { id, method: "turn/start", params } },
+              {
+                type: "emit_inbound",
+                frame: {
+                  id,
+                  result: {
+                    turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
+                  },
+                },
+              },
+            );
+          });
+        // Turn 1 runs on the limit thread/start applied.
+        yield* turn(3, 1);
+        // Turn 2: the profile dropped to no lanes, so the idle thread is rebuilt first.
+        reload(4, none);
+        yield* turn(6, 2);
+        // Turn 3: unchanged limit, no reload.
+        yield* turn(7, 3);
+        // Turn 4: goatclaw turned off; the thread returns to Codex's own limits.
+        reload(8, {});
+        yield* turn(10, 4);
+        const terminals = yield* Queue.unbounded<void>();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({ scenario: "subagent-limits", entries }),
+          (event) =>
+            event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+        ).pipe(
+          Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
+            issue: () => Effect.die("unused"),
+            resolve: () => Effect.succeed(undefined),
+            touch: () => Effect.void,
+            revokeProviderSession: () => Effect.void,
+            revokeThread: () => Effect.void,
+            revokeAll: Effect.void,
+            currentMemoryPolicy: () => Effect.succeed(undefined),
+          }),
+        );
+        for (const [ordinal, limit] of [3, 0, 0, undefined].entries()) {
+          yield* sessions.set(limit === undefined ? base : { ...base, nativeSubagentLimit: limit });
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`subagents-${ordinal + 1}`),
+              text: `turn-${ordinal + 1}`,
+            }),
+          );
+          yield* Queue.take(terminals);
+        }
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect(

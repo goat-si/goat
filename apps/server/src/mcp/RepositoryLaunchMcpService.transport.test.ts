@@ -23,6 +23,7 @@ import * as Launch from "./RepositoryLaunchMcpService.ts";
 import * as Orchestrator from "./OrchestratorMcpService.ts";
 import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as Watches from "./LaunchWatchService.ts";
+import * as ThreadReplica from "./ThreadReplicaService.ts";
 import * as ThreadResults from "../threadResults/ThreadResultService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
@@ -188,6 +189,7 @@ it.effect(
         Layer.mock(Orchestrator.OrchestratorMcpService)({}),
         Layer.mock(Coordinator.RemoteDispatchCoordinator)({}),
         Layer.mock(Watches.LaunchWatchService)({}),
+        Layer.mock(ThreadReplica.ThreadReplicaService)({}),
         Layer.mock(ThreadResults.ThreadResultService)({}),
         dispatch,
       );

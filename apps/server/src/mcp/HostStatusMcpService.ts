@@ -28,6 +28,7 @@ import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
+import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -38,6 +39,7 @@ import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import {
   countHostThreads,
+  runningSubagents,
   HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS,
   hostStatusProviders,
   hostStatusQuotas,
@@ -111,6 +113,10 @@ const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
   const parity = yield* HubParity.HubParity;
+  // Optional so layers built for one tool need not schedule OpenCodex updates.
+  const opencodexUpdate = yield* Effect.serviceOption(
+    OpenCodexManagedUpdate.OpenCodexManagedUpdate,
+  );
   // Optional so layers built for one tool need not run storage passes or process scans.
   const storage = yield* Effect.serviceOption(DatabaseStorage.DatabaseStorage);
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
@@ -168,7 +174,7 @@ const make = Effect.gen(function* () {
     const snapshot = yield* resources.read;
     const platform = yield* HostProcess.Platform;
     const shells = yield* threads
-      .listProjectThreads({ projectId: undefined, includeSubagents: false })
+      .listProjectThreads({ projectId: undefined, includeSubagents: true })
       .pipe(
         Effect.mapError(() =>
           failure("orchestration_error", "Could not count threads on this machine."),
@@ -179,6 +185,8 @@ const make = Effect.gen(function* () {
     const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
     const pressure =
       pressureMonitor._tag === "Some" ? yield* pressureMonitor.value.current : undefined;
+    const updateStatus =
+      opencodexUpdate._tag === "Some" ? yield* opencodexUpdate.value.status : undefined;
     const entry = {
       host: null,
       reachability: "ok" as const,
@@ -188,7 +196,8 @@ const make = Effect.gen(function* () {
       metrics: {
         ...snapshot,
         platform,
-        threads: countHostThreads(shells),
+        // Display counts still leave subagents out; the OpenCodex idle check needs them.
+        threads: { ...countHostThreads(shells), subagentsRunning: runningSubagents(shells) },
         ...(yield* readQuotas()),
         ...(cua._tag === "Some" ? { computerUse: yield* cua.value.computerUse } : {}),
         opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
@@ -196,6 +205,7 @@ const make = Effect.gen(function* () {
         ...(strayScan === null ? {} : { strays: strayScan }),
       },
       ...(pressure === undefined ? {} : { pressure }),
+      ...(updateStatus === undefined ? {} : { opencodexUpdate: updateStatus }),
     } satisfies HostStatusEntry;
     yield* remember(null, entry);
     return entry;

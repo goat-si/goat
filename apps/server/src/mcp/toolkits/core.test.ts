@@ -1,5 +1,6 @@
 import * as RepositoryReferenceMcpService from "../RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "../RepositoryLaunchMcpService.ts";
+import * as ThreadReplicaService from "../ThreadReplicaService.ts";
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as PermissionSettings from "../../serverSettings.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -121,7 +122,11 @@ const layerThreadToolkitWithoutProviders = McpHttpServer.layerThreadToolkit.pipe
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
   Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-  Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+  Layer.provide(
+    Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+      Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+    ),
+  ),
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
   Layer.provide(
@@ -259,15 +264,20 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_ssh_runtime_update",
     "goat_ssh_thread_handoff",
     "goat_ssh_thread_launch",
+    "goat_thread_checkpoint_capture",
+    "goat_thread_checkpoint_reconcile",
+    "goat_thread_checkpoint_restore",
     "goat_thread_configuration",
     "goat_thread_configure",
     "goat_thread_fork",
+    "goat_thread_handoff_host",
     "goat_thread_interrupt",
     "goat_thread_launch",
     "goat_thread_list",
     "goat_thread_merge_back",
     "goat_thread_organize",
     "goat_thread_read",
+    "goat_thread_replication_set",
     "goat_thread_report_result",
     "goat_thread_reschedule",
     "goat_thread_search",
@@ -299,7 +309,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(164);
+  expect(names.size).toBe(169);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("goat_thread_launch")).toBe(true);
   expect(names.has("t3_thread_start")).toBe(false);
@@ -875,7 +885,10 @@ it.effect("refuses act-as-caller tools to a client caller", () =>
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -922,7 +935,10 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -1030,7 +1046,10 @@ it.effect.each(["goat_thread_interrupt", "goat_workflow_stop"])(
           Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
           Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
           Layer.provide(
-            Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+            Layer.mock(LaunchWatchService.LaunchWatchService)({
+              find: () => Effect.succeed(null),
+              rearm: () => Effect.void,
+            }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
           ),
           Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
           Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
@@ -1119,7 +1138,10 @@ it.effect("discovers workflow stop targets and requires orchestration capability
         Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
         Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
         Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({ rearm: () => Effect.void }),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({
+            find: () => Effect.succeed(null),
+            rearm: () => Effect.void,
+          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         ),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(NodeCrypto.layer),
@@ -1546,6 +1568,7 @@ it.effect.each([false, true])(
         Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
         McpToolAccessTestkit.liveThreadsLayer,
         Layer.mock(LaunchWatchService.LaunchWatchService)({
+          find: () => Effect.succeed(null),
           register: (input) =>
             Effect.sync(() => {
               watches.push(input);
@@ -1557,7 +1580,7 @@ it.effect.each([false, true])(
                 now: 0,
               });
             }),
-        }),
+        }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
         Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
         Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
         Layer.mock(RepositoryLaunchMcpService.RepositoryLaunchMcpService)({}),
@@ -1627,7 +1650,11 @@ it.effect("pending toolkit host routing preserves target authority", () =>
       Layer.provide(ServerSettings.layerTest()),
       Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
       Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-      Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+      Layer.provide(
+        Layer.mock(LaunchWatchService.LaunchWatchService)({
+          find: () => Effect.succeed(null),
+        }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
+      ),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),

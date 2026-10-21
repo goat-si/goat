@@ -997,6 +997,125 @@ const dispatchMovedTask = (
   });
 
 describe("copies of remote work and host failover", () => {
+  it.effect(
+    "disabled host replication issues no capture commands while reports still settle",
+    () => {
+      const { machine, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+        });
+        const writes = yield* channelWriteMilestones;
+        const task = yield* startFailoverTask(writes, machine);
+        const correlationId = correlationOf(machine);
+        machine.finishRun(correlationId, "completed", "Finished without copying.");
+        yield* writes.waitFor((_task, state) => state?.settleRunId !== undefined);
+        yield* TestClock.adjust(Duration.millis(REMOTE_SETTLE_WAIT_MS));
+        yield* writes.waitFor((current) => current.status === "completed");
+        assert.lengthOf(
+          machine.scripts.filter((call) => call.kind === "capture"),
+          0,
+        );
+        assert.isUndefined((yield* readState(task.taskId)).replica);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([false, true])(
+    "off wins staged channel payload publication (reenable=%s)",
+    (reenable) => {
+      const { machine, harness } = failoverHarness();
+      return Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const fs = yield* FileSystem.FileSystem;
+        const staged = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const rename = fs.rename;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            Object.defineProperty(fs, "rename", {
+              value: (from: string, to: string) =>
+                rename(from, to).pipe(
+                  Effect.andThen(
+                    to.includes("channel-replicas/")
+                      ? Deferred.succeed(staged, undefined).pipe(
+                          Effect.andThen(Deferred.await(release)),
+                        )
+                      : Effect.void,
+                  ),
+                ),
+            });
+          }),
+          () =>
+            Effect.sync(() => {
+              Object.defineProperty(fs, "rename", { value: rename });
+            }),
+        );
+        const writes = yield* channelWriteMilestones;
+        const task = yield* startFailoverTask(writes, machine);
+        machine.finishRun(correlationOf(machine), "waiting", null);
+        yield* Deferred.await(staged);
+        yield* settings.updateSettings({ responseStreamingMode: "turn" });
+        yield* settings.updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+        });
+        if (reenable)
+          yield* settings.updateSettings({
+            fleet: { hosts: { "mac-studio": { checkpointReplication: "on" } } },
+          });
+        yield* Deferred.succeed(release, undefined);
+        yield* Effect.forEach(machine.captureFibers, Fiber.await);
+        assert.isUndefined((yield* readState(task.taskId)).replica);
+        assert.deepStrictEqual(yield* replicaFiles, []);
+        yield* settings.updateSettings({
+          fleet: { hosts: { "mac-studio": { checkpointReplication: "on" } } },
+        });
+        machine.startRun(correlationOf(machine));
+        machine.finishRun(correlationOf(machine), "waiting", null);
+        yield* TestClock.adjust("2 seconds");
+        yield* writes.waitFor((_task, state) => state?.replica !== undefined);
+        assert.isDefined((yield* readState(task.taskId)).replica);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("cancelled channel publication removes staged bytes and releases admission", () => {
+    const { machine, harness } = failoverHarness();
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const staged = yield* Deferred.make<void>();
+      const rename = fs.rename;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          Object.defineProperty(fs, "rename", {
+            value: (from: string, to: string) =>
+              rename(from, to).pipe(
+                Effect.andThen(
+                  to.includes("channel-replicas/")
+                    ? Deferred.succeed(staged, undefined).pipe(Effect.andThen(Effect.never))
+                    : Effect.void,
+                ),
+              ),
+          });
+        }),
+        () =>
+          Effect.sync(() => {
+            Object.defineProperty(fs, "rename", { value: rename });
+          }),
+      );
+      const writes = yield* channelWriteMilestones;
+      const task = yield* startFailoverTask(writes, machine);
+      machine.finishRun(correlationOf(machine), "waiting", null);
+      yield* Deferred.await(staged);
+      yield* Fiber.interrupt(machine.captureFibers[0]!);
+      assert.isUndefined((yield* readState(task.taskId)).replica);
+      assert.deepStrictEqual(yield* replicaFiles, []);
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        fleet: { hosts: { "mac-studio": { checkpointReplication: "off" } } },
+      });
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect.each(["completed", "waiting"] as const)(
     "saves the bundle after a %s turn and does not recapture that turn",
     (status) => {

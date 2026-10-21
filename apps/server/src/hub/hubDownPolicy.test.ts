@@ -6,7 +6,9 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 
-import { decideHubWork, homeLocalFallback, homeUnreachable } from "./hubDownPolicy.ts";
+import { homeLocalFallback } from "@goat/shared/opencodexCompat";
+
+import { decideHubWork, homeUnreachable } from "./hubDownPolicy.ts";
 import type { LocalOpenCodexRoute } from "./localRoutes.ts";
 
 const codex = ProviderDriverKind.make("codex");

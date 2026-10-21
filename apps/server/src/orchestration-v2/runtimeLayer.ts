@@ -1,4 +1,5 @@
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -142,6 +143,7 @@ const layerCommandOutputHubProvided = CommandOutputHub.layer.pipe(
 
 const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
   Layer.provide(AdapterInfrastructure.layerMemoryAdmission),
+  Layer.provide(PermissionProfiles.layer),
   Layer.provide(
     Layer.mergeAll(
       layerCommandOutputHubProvided,

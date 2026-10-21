@@ -172,6 +172,8 @@ leaves once it finishes and stays while it needs an approval or answer; open fin
 from the sidebar. Only top-level threads count: subagents are part of their parent's work, and
 archived threads do not count. Work an environment started on an SSH host you are not connected
 to appears as last reported by that environment.
+Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
+**+N** beside their thread while they work; hover it to see each one and what it is doing.
 The machine count includes only GOAT servers that answer. Machines the page shows without
 counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
 reported, are listed behind the **+N** beside the count.

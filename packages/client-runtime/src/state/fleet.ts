@@ -39,6 +39,7 @@ export type FleetShell = Pick<
   | "hasPendingUserInput"
   | "pendingSubagentRequest"
   | "pendingBackgroundTasks"
+  | "nativeSubagents"
   | "archivedAt"
   | "deletedAt"
   | "sideChatOf"
@@ -238,6 +239,19 @@ export interface FleetThread {
   readonly createdAt: string | null;
   /** The dispatching environment's label, for reported work. */
   readonly reportedBy: string | null;
+  /**
+   * Provider-native subagents working for this thread, nested ones included. They share its
+   * session, so they are part of its row rather than rows of their own.
+   */
+  readonly subagents: ReadonlyArray<FleetSubagent>;
+}
+
+export interface FleetSubagent {
+  readonly key: string;
+  /** Null until the provider reports the subagent's own thread. */
+  readonly ref: ScopedThreadRef | null;
+  readonly title: string;
+  readonly status: "pending" | "running" | "waiting";
 }
 
 export interface FleetSnapshot {
@@ -323,6 +337,7 @@ export function buildFleet(input: {
       .map((environment) => environment.environmentId),
   );
   const connectedShells = input.shells.filter((shell) => connectedIds.has(shell.environmentId));
+  const subagentsByThread = gatherNativeSubagents(connectedShells);
 
   const count = (
     machine: MutableMachine,
@@ -363,6 +378,7 @@ export function buildFleet(input: {
       state,
       createdAt: shell.createdAt,
       reportedBy: null,
+      subagents: subagentsByThread.get(shellKey(shell)) ?? [],
     });
   }
 
@@ -453,6 +469,7 @@ export function buildFleet(input: {
           state: "reported",
           createdAt: null,
           reportedBy: dispatcherLabel,
+          subagents: [],
         });
       });
     });
@@ -489,4 +506,53 @@ export function buildFleet(input: {
 
 function machineId(environmentId: EnvironmentId): string {
   return JSON.stringify(["env", environmentId]);
+}
+
+function shellKey(shell: Pick<FleetShell, "environmentId" | "id">): string {
+  return JSON.stringify([shell.environmentId, shell.id]);
+}
+
+/**
+ * Each thread's live native subagents, attached to its top-level ancestor: a nested Codex v2
+ * subagent is recorded on the subagent that spawned it, and a delegated child is not a Fleet row.
+ */
+function gatherNativeSubagents(
+  shells: ReadonlyArray<FleetShell>,
+): ReadonlyMap<string, ReadonlyArray<FleetSubagent>> {
+  const byKey = new Map(shells.map((shell) => [shellKey(shell), shell]));
+  const gathered = new Map<string, FleetSubagent[]>();
+  for (const shell of shells) {
+    const natives = shell.nativeSubagents ?? [];
+    if (natives.length === 0 || shell.archivedAt !== null || shell.deletedAt !== null) continue;
+    let root = shell;
+    const seen = new Set([shellKey(root)]);
+    while (root.lineage.relationshipToParent === "subagent" && root.lineage.parentThreadId) {
+      const parentKey = shellKey({
+        environmentId: root.environmentId,
+        id: root.lineage.parentThreadId,
+      });
+      const parent = byKey.get(parentKey);
+      if (parent === undefined || seen.has(parentKey)) break;
+      seen.add(parentKey);
+      root = parent;
+    }
+    const list = gathered.get(shellKey(root)) ?? [];
+    for (const native of natives) {
+      const child =
+        native.childThreadId === null
+          ? undefined
+          : byKey.get(shellKey({ environmentId: shell.environmentId, id: native.childThreadId }));
+      list.push({
+        key: JSON.stringify([shell.environmentId, native.id]),
+        ref:
+          native.childThreadId === null
+            ? null
+            : scopeThreadRef(shell.environmentId, native.childThreadId),
+        title: child?.title || native.title || "Subagent",
+        status: native.status,
+      });
+    }
+    gathered.set(shellKey(root), list);
+  }
+  return gathered;
 }

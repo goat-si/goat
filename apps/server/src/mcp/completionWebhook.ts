@@ -295,7 +295,11 @@ type Attempt = "delivered" | "retry" | "stop" | "skipped";
 
 export interface CompletionWebhookShape {
   /** Starts delivering one report in the background; a report id already seen is dropped. */
-  readonly notify: (watch: LaunchWatch, report: CompletionWebhookReport) => Effect.Effect<void>;
+  readonly notify: (
+    watch: LaunchWatch,
+    report: CompletionWebhookReport,
+    stillCurrent?: () => boolean,
+  ) => Effect.Effect<void>;
   /**
    * Whether a launch from outside any thread is watched: the webhook is on and
    * the launch chose a target or asked for the default (notifyWebhook), or the
@@ -358,6 +362,7 @@ export const make = Effect.gen(function* () {
     report: CompletionWebhookReport,
     body: string,
     keptSecret: string | undefined,
+    stillCurrent: () => boolean,
   ): Effect.Effect<Attempt> =>
     Effect.gen(function* () {
       const settings = (yield* serverSettings.getSettings).completionWebhook;
@@ -400,6 +405,7 @@ export const make = Effect.gen(function* () {
         ),
       );
       // A redirect would take an inline post to an address that was never checked.
+      if (!stillCurrent()) return "stop" satisfies Attempt;
       const response = yield* inline
         ? post.pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }))
         : post;
@@ -433,11 +439,13 @@ export const make = Effect.gen(function* () {
     report: CompletionWebhookReport,
     at: number,
     keptSecret: string | undefined,
+    stillCurrent: () => boolean,
   ) =>
     Effect.gen(function* () {
       const body = encodeJson(completionWebhookPayload(watch, report, at));
       for (let tries = 1; tries <= MAX_ATTEMPTS; tries++) {
-        const outcome = yield* attempt(watch, report, body, keptSecret);
+        if (!stillCurrent()) return;
+        const outcome = yield* attempt(watch, report, body, keptSecret, stillCurrent);
         if (outcome === "delivered" || outcome === "stop") return;
         if (outcome === "skipped") {
           // Never sent, so a later report of the same event may still go out.
@@ -449,7 +457,7 @@ export const make = Effect.gen(function* () {
       yield* Effect.logWarning("completion webhook: gave up", { id: report.id });
     });
 
-  const notify: CompletionWebhookShape["notify"] = (watch, report) =>
+  const notify: CompletionWebhookShape["notify"] = (watch, report, stillCurrent = () => true) =>
     Effect.gen(function* () {
       if (!remember(report.id)) return;
       const at = yield* Clock.currentTimeMillis;
@@ -464,7 +472,7 @@ export const make = Effect.gen(function* () {
             )
           : undefined;
       // Reports arrive from the launch watch's uninterruptible section; shutdown must still end retries.
-      yield* deliver(watch, report, at, keptSecret).pipe(
+      yield* deliver(watch, report, at, keptSecret, stillCurrent).pipe(
         Effect.ensuring(deliveryCompleted(report.id)),
         Effect.interruptible,
         Effect.forkIn(scope),

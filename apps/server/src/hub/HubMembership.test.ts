@@ -270,6 +270,51 @@ it.effect("a profile without hub.manage is refused before any command runs", () 
   }),
 );
 
+// What the WebSocket boundary passes for a session holding settings:write.
+const person = { sessionId: owner.sessionId, scopes: owner.scopes };
+
+it.effect("a person joins a pinned device directly, whatever the default profile allows", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ profile: "worker", pin: PINNED });
+    const result = yield* hub.membership.join(scope, { deviceAlias: "mac-studio" }, person);
+    expect(result.state).toBe("child");
+    expect(hub.calls).toContain(`home link add mac-studio --expect-fingerprint ${PINNED} --json`);
+  }),
+);
+
+it.effect("a person's unpinned join files a decision that person answers, then joins", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ profile: "worker" });
+    const first = yield* hub.membership.join(scope, { deviceAlias: "lidge-ts" }, person);
+    expect(first.state).toBe("needs_human");
+    expect(first.message).toContain("no pinned host key");
+    const item = yield* hub.inbox.get(owner, first.decisionId!);
+    expect(item.requiredProfile).toBe("owner");
+    yield* hub.approve(first.decisionId!);
+    const second = yield* hub.membership.join(
+      scope,
+      { deviceAlias: "lidge-ts", decisionId: first.decisionId! },
+      person,
+    );
+    expect(second.state).toBe("child");
+  }),
+);
+
+it.effect("a person leaves a device without a decision; the device is cleaned first", () =>
+  Effect.gen(function* () {
+    const hub = yield* setup({ profile: "worker", linked: ["mac-studio"] });
+    const result = yield* hub.membership.leave(scope, { deviceAlias: "mac-studio" }, person);
+    expect(result.state).toBe("ready");
+    expect(result.steps.map(({ step }) => step)).toEqual([
+      "disconnect",
+      "restart",
+      "health",
+      "revoke",
+      "link_removed",
+    ]);
+  }),
+);
+
 it.effect("an alias behind ProxyJump is refused before probing", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ pin: PINNED, direct: false });

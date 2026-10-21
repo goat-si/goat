@@ -1,3 +1,4 @@
+import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -260,7 +261,11 @@ const run = <A, E>(
     ),
     Layer.provide(Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({})),
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-    Layer.provide(Layer.mock(LaunchWatchService.LaunchWatchService)({})),
+    Layer.provide(
+      Layer.mock(LaunchWatchService.LaunchWatchService)({ find: () => Effect.succeed(null) }).pipe(
+        Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})),
+      ),
+    ),
   );
   return Effect.gen(function* () {
     yield* TestClock.setTime(now);
@@ -373,7 +378,7 @@ it.effect("fans out to this machine and each connected host, sorted", () =>
     expect(calls.every((call) => call.writes === false)).toBe(true);
     expect(calls.every((call) => call.timeoutMs === HOST_STATUS_REMOTE_TIMEOUT_MS)).toBe(true);
     expect(calls.every((call) => call.arguments.local === true)).toBe(true);
-    expect(queries).toEqual([{ projectId: undefined, includeSubagents: false }]);
+    expect(queries).toEqual([{ projectId: undefined, includeSubagents: true }]);
     expect(refreshes).toEqual(["codex"]);
   }),
 );

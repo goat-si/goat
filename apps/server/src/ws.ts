@@ -34,8 +34,10 @@ import {
   AssetWorkspaceContextResolutionError,
   AuthAccessStreamError,
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   authScopeResponse,
   AuthSessionId,
+  type HubDeviceOperationInput,
   ChatAttachmentId,
   ClientConnectionMethod,
   ClientDeviceType,
@@ -192,6 +194,8 @@ import { parseBase64DataUrl } from "./imageMime.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as HubParity from "./hub/HubParity.ts";
+import * as HubMembership from "./hub/HubMembership.ts";
+import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
@@ -1587,6 +1591,30 @@ export const layerWsRpc = (
       const hostResources = yield* HostResources.HostResources;
       const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
       const hubParity = yield* HubParity.HubParity;
+      const hubMembership = yield* HubMembership.HubMembership;
+      /** Hub reads stay read-only; membership changes write, so their decisions can be filed. */
+      const hubScope = (access: "read-only" | "full-access") =>
+        Effect.gen(function* () {
+          const environmentId = yield* serverEnvironment.getEnvironmentId;
+          const issuedAt = yield* Clock.currentTimeMillis;
+          return {
+            environmentId,
+            capabilities: new Set(["orchestration"] as const),
+            issuedAt,
+            requestNamespace: `client-session:${currentSessionId}`,
+            thread: undefined,
+            client: { sessionId: currentSessionId, label: "GOAT client", access },
+          } satisfies McpInvocationScope;
+        });
+      // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
+      const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
+        ? { sessionId: currentSessionId, scopes: currentSession.scopes }
+        : undefined;
+      const hubMembershipOperation =
+        (operation: "join" | "leave" | "repair") => (input: HubDeviceOperationInput) =>
+          hubScope("full-access").pipe(
+            Effect.flatMap((scope) => hubMembership[operation](scope, input, hubPerson)),
+          );
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2858,19 +2886,13 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.hubDeviceVerify]: (input) =>
-          Effect.gen(function* () {
-            const environmentId = yield* serverEnvironment.getEnvironmentId;
-            const issuedAt = yield* Clock.currentTimeMillis;
-            const parity = yield* hubParity.verify(input.deviceAlias, {
-              environmentId,
-              capabilities: new Set(["orchestration"]),
-              issuedAt,
-              requestNamespace: `client-session:${currentSessionId}`,
-              thread: undefined,
-              client: { sessionId: currentSessionId, label: "GOAT client", access: "read-only" },
-            });
-            return { deviceAlias: input.deviceAlias, parity };
-          }),
+          hubScope("read-only").pipe(
+            Effect.flatMap((scope) => hubParity.verify(input.deviceAlias, scope)),
+            Effect.map((parity) => ({ deviceAlias: input.deviceAlias, parity })),
+          ),
+        [WS_METHODS.hubDeviceJoin]: hubMembershipOperation("join"),
+        [WS_METHODS.hubDeviceLeave]: hubMembershipOperation("leave"),
+        [WS_METHODS.hubDeviceRepair]: hubMembershipOperation("repair"),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
@@ -3639,6 +3661,7 @@ export const layer = Layer.unwrap(
     const noteWork = yield* NoteWorkService.NoteWorkService;
     const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
     const hubParityService = yield* HubParity.HubParity;
+    const hubMembershipService = yield* HubMembership.HubMembership;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -3741,6 +3764,7 @@ export const layer = Layer.unwrap(
               // The goat_host_status tool's instance, so both share last-known samples.
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
               Layer.provide(Layer.succeed(HubParity.HubParity, hubParityService)),
+              Layer.provide(Layer.succeed(HubMembership.HubMembership, hubMembershipService)),
               Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(

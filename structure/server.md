@@ -159,6 +159,24 @@ Leave and re-link clean up the device before the Home (disconnect, restart, stan
 `/healthz`), then force-revoke: the Home's own revoke runs a remote disconnect whose failure
 restarts the tunnel. A device that cannot be cleaned up keeps its link until a person decides.
 
+`apps/server/src/hub/OpenCodexManagedUpdate.ts` moves GOAT-managed OpenCodex installs to the newest
+release on OpenCodex's `latest` channel under ADR-0019's rules: staged bucket, idle (subagents
+included) before every step, health then parity after each step, 10-minute probation checked every
+minute, rollback, and no retry of a rolled-back target. The hub machine (`hub.enabled` and
+`goatclaw.enabled`) whose OpenCodex is a Home or standalone coordinates; a Child never moves on its
+own. The pure planner in `opencodexUpdatePlan.ts` keeps a Child from running ahead of its Home and
+holds the Home until every Child can follow in the same window, because OpenCodex does not yet
+publish which Child versions a Home serves (OCX-8). A member whose service status is unknown
+(OCX-10), or whose `/healthz` reports no pid or uptime, does not move. Drift alone moves nothing, and adopted
+installs only get advisories. Every member a window restarts, and every member a rollback restores, must hold turn admission
+(and show no running thread, subagent or in-flight request) through its install and health check; GOAT can hold only its own (`RuntimeAdmission`), so a window that would
+restart another host waits as `admission-unsupported`. Pair windows therefore need a host
+admission hold before they run. The open window lives in `opencodex-update.json` in the state directory: probation
+survives a GOAT restart, acceptance is one write, and a restore that cannot be proven (version, role,
+P3, then pair parity) keeps the window open and is retried, Children first, before anything else
+moves. Its status rides on this
+machine's `goat_host_status` entry.
+
 `BUILT_IN_DRIVERS` in `apps/server/src/provider/builtInDrivers.ts` is the static driver list.
 `ProviderInstanceRegistry` walks it when it resolves `providerInstances` from server settings.
 Anything missing from the list becomes an unavailable snapshot.

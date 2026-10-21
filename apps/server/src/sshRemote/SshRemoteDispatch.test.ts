@@ -1119,6 +1119,74 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect.each(
+    [
+      "goat_thread_checkpoint_capture",
+      "goat_thread_checkpoint_restore",
+      "goat_thread_checkpoint_reconcile",
+      "goat_thread_interrupt",
+    ].flatMap((tool) =>
+      ["missing", "expired", "revoked", "plan", "ceiling"].map((condition) => ({
+        tool,
+        condition,
+      })),
+    ),
+  )(
+    "305 strict $tool refuses $condition without session creation or renewal",
+    ({ tool, condition }) =>
+      Effect.gen(function* () {
+        let strict = false;
+        let plan = false;
+        const { result, record } = yield* withRemote(
+          {
+            ceilingApplied: condition !== "ceiling",
+            answer: (request) => {
+              if (strict && condition === "revoked") return { status: 401 };
+              if (strict && condition === "plan" && request.method === "initialize") plan = true;
+              return initialize(request) ?? { result: { structuredContent: {} } };
+            },
+          },
+          Effect.gen(function* () {
+            if (condition !== "missing") yield* readCall();
+            if (condition === "expired") yield* TestClock.adjust("13 hours");
+            strict = true;
+            const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+            const call = {
+              host,
+              tool,
+              arguments: { threadId: "owned-source", runId: "captured-run" },
+              timeoutMs: 5_000,
+              writes: true,
+              requireReady: true as const,
+              existingSessionOnly: true as const,
+            };
+            const authorize = Effect.suspend(() =>
+              plan
+                ? Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code: "capability_denied",
+                      message: "Caller is now in plan mode.",
+                    }),
+                  )
+                : Effect.succeed("full-access" as const),
+            );
+            const refused = yield* dispatch.callHostTool(call, authorize).pipe(Effect.result);
+            expect(refused._tag).toBe("Failure");
+            if (condition === "revoked") {
+              const replay = yield* dispatch.callHostTool(call, authorize).pipe(Effect.result);
+              expect(replay).toMatchObject({
+                _tag: "Failure",
+                failure: { reason: "host_unavailable" },
+              });
+            }
+          }),
+        );
+        expect(result._tag).toBe("Success");
+        expect(record.sessionsIssued).toBe(condition === "missing" ? 0 : 1);
+        expect(record.toolCalls.filter((called) => called === tool)).toEqual([]);
+      }),
+  );
+
   it.effect("strict tools refuse HTTP 401 without retrying or minting a session", () =>
     Effect.gen(function* () {
       let reject = false;

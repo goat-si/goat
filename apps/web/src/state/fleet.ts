@@ -228,7 +228,13 @@ function snapshotKey(
         agent.reported,
       ]),
     ]),
-    snapshot.threads.map((thread) => [thread.key, thread.title, thread.state, thread.agentKey]),
+    snapshot.threads.map((thread) => [
+      thread.key,
+      thread.title,
+      thread.state,
+      thread.agentKey,
+      thread.subagents.map((subagent) => [subagent.key, subagent.title, subagent.status]),
+    ]),
   ]);
 }
 

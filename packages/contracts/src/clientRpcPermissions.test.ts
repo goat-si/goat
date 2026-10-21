@@ -151,3 +151,13 @@ it("decision reads and mutations carry environment scopes", () => {
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
+
+it("hub device verify and membership changes need orchestration:operate", () => {
+  for (const method of [
+    WS_METHODS.hubDeviceVerify,
+    WS_METHODS.hubDeviceJoin,
+    WS_METHODS.hubDeviceLeave,
+    WS_METHODS.hubDeviceRepair,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});

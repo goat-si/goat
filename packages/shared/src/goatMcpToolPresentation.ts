@@ -186,6 +186,26 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Check", "Checking", "Checked", "a GOAT thread's status"],
     "thread-read",
   ),
+  goat_thread_replication_set: tool(
+    ["Set", "Setting", "Set", "checkpoint replication"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_capture: tool(
+    ["Copy", "Copying", "Copied", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_reconcile: tool(
+    ["Check", "Checking", "Checked", "a checkpoint recovery"],
+    "thread-watch",
+  ),
+  goat_thread_checkpoint_restore: tool(
+    ["Restore", "Restoring", "Restored", "a thread checkpoint"],
+    "thread-watch",
+  ),
+  goat_thread_handoff_host: tool(
+    ["Recover", "Recovering", "Recovered", "a watched thread"],
+    "thread-watch",
+  ),
   goat_thread_watch: tool(["Watch", "Watching", "Watched", "a GOAT thread"], "thread-watch"),
   goat_thread_unwatch: tool(
     ["Stop watching", "Stopping watch of", "Stopped watching", "a GOAT thread"],

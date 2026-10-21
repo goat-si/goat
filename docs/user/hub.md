@@ -22,9 +22,25 @@ minutes. Checking only reads: it never changes a device or its OpenCodex
 settings. **Cloud runs** chooses whether Claude Cloud, Cursor Cloud and Devin
 Cloud runs start on the hub or wherever a sign-in exists.
 
-Devices join from OpenCodex (`ocx link add` on the Home) and show under
-**Devices** after the next read. Accounts and keys stay in OpenCodex; open its
-dashboard from **Accounts and keys**.
+Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys**.
+
+## Add, repair, or remove a device
+
+**Add device to hub** joins a machine by its SSH alias; a standalone device in
+the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
+the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
+for that alias, links the device, and checks its parity.
+
+**Repair** walks the fixes for failing checks in order: sync the device's
+settings, restart its OpenCodex once nothing runs there, and reconnect the link.
+**Leave** disconnects the device and returns it to its own sign-ins; GOAT asks
+before it does that.
+
+Each action lists its steps and their results. Some changes wait for a person: a
+host key GOAT has not pinned or that changed, re-linking a device, or removing
+one that could not be cleaned up. They appear in **Settings → Decision inbox**;
+answer there, then select **Continue** on the device. Approving needs permission
+to change this hub's settings.
 
 ## Permission profiles
 
@@ -43,9 +59,10 @@ when traffic works but something on the device still describes the device,
 cannot say which Home served it. **Verify** checks one device now.
 
 **Use this device's own sign-in when the hub is down** is off by default. With it
-off, goal work on that device pauses while it cannot reach the hub. OpenCodex can
-also forbid local fallback; until your OpenCodex reports that, its state reads
-**unknown**.
+off, goal work on that device pauses while it cannot reach the hub. The setting is
+stored on the device, so it works while the hub is down; to change it, GOAT needs
+a connection to that device. OpenCodex must allow it too: the row says whether it
+does, or **unknown** when your OpenCodex does not report it yet.
 
 Fleet shows the same devices in its **Hub** entry. Select its count to see each
 one.

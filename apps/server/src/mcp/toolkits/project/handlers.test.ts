@@ -1,4 +1,5 @@
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
+import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -85,6 +86,7 @@ const launchWatches = (
   registerInterrupted = false,
 ) =>
   Layer.mock(LaunchWatchService.LaunchWatchService)({
+    find: () => Effect.succeed(null),
     register: (input) =>
       registerInterrupted
         ? Effect.interrupt
@@ -109,7 +111,7 @@ const launchWatches = (
             webhookTarget: { type: "named" as const, name: input.notifyTarget?.name ?? "" },
           }),
     releaseRoute: (route) => Effect.sync(() => void released.push(route)),
-  });
+  }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({})));
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
 const launchFromThread = (params: {

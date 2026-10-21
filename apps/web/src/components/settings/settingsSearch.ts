@@ -176,6 +176,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/hub",
     searchTerms: [
       "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
+      "add device join leave remove disconnect repair relink",
     ],
   },
   {

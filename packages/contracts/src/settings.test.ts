@@ -736,3 +736,19 @@ describe("channel automatic placement settings", () => {
     );
   });
 });
+
+describe("host checkpoint replication settings", () => {
+  it("keeps omission distinct from on and off and preserves host placement fields", () => {
+    expect(decodeServerSettings({}).fleet.hosts).toBeUndefined();
+    const fleet = {
+      hosts: { box: { maxThreads: 4, allowGoals: false, checkpointReplication: "off" } },
+    };
+    expect(
+      decodeServerSettings(encodeServerSettings(decodeServerSettings({ fleet }))).fleet,
+    ).toEqual(fleet);
+    expect(decodeServerSettingsPatch({ fleet })).toEqual({ fleet });
+    expect(() =>
+      decodeServerSettings({ fleet: { hosts: { box: { checkpointReplication: "automatic" } } } }),
+    ).toThrow();
+  });
+});

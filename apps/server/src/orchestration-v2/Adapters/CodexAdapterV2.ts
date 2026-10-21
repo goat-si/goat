@@ -1,4 +1,5 @@
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import { MemoryContextSnapshot } from "@goat/contracts";
 import type { CuaDriverMcpConfiguration, RunId } from "@goat/contracts";
@@ -1427,10 +1428,53 @@ export const CODEX_THREAD_CONFIG = {
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
+// openai/codex 2f19a57704 (0.147.0) keeps a boolean `features.multi_agent_v2` enabled when a table
+// overlays it. Earlier releases drop the boolean, so the v2 cap would switch the feature off.
+const CODEX_MULTI_AGENT_V2_CAP_VERSION = "0.147.0";
+// `agents.enabled` arrived in 0.145.0 (03bb3b1236); older Codex rejects unknown `agents` keys.
+const CODEX_AGENTS_ENABLED_VERSION = "0.145.0";
+
+/** Codex settings that hold native subagents to the thread's goatclaw `maxLanes`. */
+export function codexNativeSubagentConfig(
+  limit: number | undefined,
+  codexVersion: string | undefined,
+): {
+  readonly config: Readonly<Record<string, Schema.Json>>;
+  readonly omitted: ReadonlyArray<string>;
+} {
+  if (limit === undefined) return { config: {}, omitted: [] };
+  const supports = (minimum: string) =>
+    codexVersion !== undefined &&
+    parseSemver(codexVersion) !== null &&
+    compareSemverVersions(codexVersion, minimum) >= 0;
+  if (limit === 0) {
+    // Model metadata can choose multi-agent v2 by itself; only `agents.enabled = false` overrides
+    // that, and an enabled v2 feature overrides `agents.enabled`.
+    const off = { "features.multi_agent": false, "features.multi_agent_v2": false };
+    return supports(CODEX_AGENTS_ENABLED_VERSION)
+      ? { config: { ...off, "agents.enabled": false }, omitted: [] }
+      : { config: off, omitted: ["agents.enabled"] };
+  }
+  // V1 reads `agents.max_threads` as is. V2 counts the root thread, and an explicit v2 cap in the
+  // user's config outranks the `agents` fallback.
+  const threads = { "agents.max_threads": limit };
+  return supports(CODEX_MULTI_AGENT_V2_CAP_VERSION)
+    ? {
+        config: {
+          ...threads,
+          "features.multi_agent_v2.max_concurrent_threads_per_session": limit + 1,
+        },
+        omitted: [],
+      }
+    : { config: threads, omitted: ["features.multi_agent_v2.max_concurrent_threads_per_session"] };
+}
+
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  /** From `initialize`; unknown omits the subagent keys older Codex rejects. */
+  readonly codexVersion?: string | undefined;
   /** The user's Codex config already defines `cua-driver`; theirs wins unless overridden. */
   readonly userCuaDriver?: boolean;
   /** A managed driver an earlier config attached to this live thread; disabled when dropped. */
@@ -1470,6 +1514,7 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
         : {
@@ -2003,6 +2048,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           return `${config.providerSessionId}:${read}:${write}:${source}:${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`;
         };
         const credentialsByThread = new Map<string, string>();
+        /**
+         * The subagent limits each live native thread's Codex session was built with. Codex ignores
+         * resume overrides on a thread a client still holds, so a change needs a cold reload.
+         */
+        const appliedSubagentsByThread = new Map<string, string>();
         /** The managed driver each live native thread's config carries now. */
         const managedCuaByThread = new Map<string, CuaDriverMcpConfiguration>();
         const rememberCuaDriver = (
@@ -2142,6 +2192,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.forkIn(scope),
           );
         const initialized = yield* Ref.make(false);
+        let codexVersion: string | undefined;
+        let reportedSubagentGap = false;
         // Threads share this app-server, and Codex rejects a second
         // `initialize`.
         const initializePermit = yield* Semaphore.make(1);
@@ -2175,7 +2227,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            yield* client
+            const initializeResponse = yield* client
               .request("initialize", {
                 clientInfo: buildCodexInitializeParams().clientInfo,
                 capabilities: CODEX_CLIENT_CAPABILITIES,
@@ -2190,6 +2242,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       : Effect.fail(error),
                 }),
               );
+            if (initializeResponse !== undefined)
+              codexVersion = /\/([^\s]+)/.exec(initializeResponse.userAgent)?.[1];
             yield* client.notify("initialized", undefined);
             yield* verifySessionRoute();
             yield* Ref.set(initialized, true);
@@ -2250,6 +2304,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               input.nativeThreadId === undefined
                 ? undefined
                 : managedCuaByThread.get(input.nativeThreadId);
+            const subagents = codexNativeSubagentConfig(
+              input.mcpSession?.nativeSubagentLimit,
+              codexVersion,
+            );
+            if (subagents.omitted.length > 0 && !reportedSubagentGap) {
+              reportedSubagentGap = true;
+              yield* Effect.logInfo(
+                "This Codex version lacks some multi-agent settings; goatclaw subagent limits omit them.",
+                { codexVersion: codexVersion ?? "unknown", omitted: subagents.omitted },
+              );
+            }
             return {
               params: codexThreadRuntimeParams({
                 mcpSession: input.mcpSession,
@@ -2261,8 +2326,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   : { runtimePolicy: input.runtimePolicy }),
                 userCuaDriver: configured,
                 previousCuaDriver,
+                codexVersion,
               }),
               cuaDriver: codexManagedCuaDriver(input.mcpSession, configured),
+              subagentKey: Object.entries(subagents.config)
+                .map(([key, value]) => `${key}=${String(value)}`)
+                .join(","),
             };
           });
         const now = yield* DateTime.now;
@@ -7081,6 +7150,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runtimePolicy: turnInput.runtimePolicy,
               nativeThreadId: threadId,
             });
+            if ((appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey) {
+              // Without a subscriber an idle loaded thread is shut down and rebuilt from these
+              // overrides, so the next turn runs under the profile's current limit.
+              yield* client.request("thread/unsubscribe", { threadId });
+              yield* client.raw.request("thread/resume", {
+                threadId,
+                excludeTurns: true,
+                ...runtime.params,
+              });
+              appliedSubagentsByThread.set(threadId, runtime.subagentKey);
+              if (mcpSession) {
+                credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
+                rememberCuaDriver(threadId, runtime.cuaDriver);
+              } else {
+                credentialsByThread.delete(threadId);
+                managedCuaByThread.delete(threadId);
+              }
+            }
             if (
               mcpSession &&
               credentialsByThread.get(threadId) !== attachmentKey(mcpSession, runtime.cuaDriver)
@@ -7447,6 +7534,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     client.request("thread/start", runtime.params).pipe(
                       Effect.tap((response) =>
                         Effect.sync(() => {
+                          appliedSubagentsByThread.set(response.thread.id, runtime.subagentKey);
                           if (!mcpSession) return;
                           credentialsByThread.set(
                             response.thread.id,
@@ -7484,6 +7572,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const resumedMcp = yield* readMcpSession(
                 threadInput.threadId ?? threadInput.providerThread.appThreadId,
               );
+              // The version from `initialize` decides which subagent keys this Codex accepts.
+              yield* ensureInitialized;
               const resumedRuntime = yield* threadRuntimeParams({
                 mcpSession: resumedMcp,
                 modelSelection: threadInput.modelSelection,
@@ -7496,27 +7586,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 excludeTurns: true,
                 ...resumedRuntime.params,
               });
-              const response = yield* ensureInitialized.pipe(
-                Effect.andThen(
-                  resume.pipe(
-                    Effect.catchTags({
-                      CodexAppServerRequestError: (cause) => {
-                        if (
-                          !/\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(
-                            cause.errorMessage,
-                          )
-                        ) {
-                          return Effect.fail(cause);
-                        }
-                        return client.raw
-                          .request("thread/unarchive", { threadId: nativeThreadId })
-                          .pipe(Effect.andThen(resume));
-                      },
-                    }),
-                  ),
-                ),
+              const response = yield* resume.pipe(
+                Effect.catchTags({
+                  CodexAppServerRequestError: (cause) => {
+                    if (
+                      !/\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage)
+                    ) {
+                      return Effect.fail(cause);
+                    }
+                    return client.raw
+                      .request("thread/unarchive", { threadId: nativeThreadId })
+                      .pipe(Effect.andThen(resume));
+                  },
+                }),
                 Effect.flatMap(decodeCodexResumeMetadata),
               );
+              appliedSubagentsByThread.set(nativeThreadId, resumedRuntime.subagentKey);
               if (resumedMcp)
                 credentialsByThread.set(
                   nativeThreadId,
@@ -7745,6 +7830,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* clearMemoryDelivery(nativeThreadId);
               credentialsByThread.delete(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);
+              appliedSubagentsByThread.delete(nativeThreadId);
               yield* Ref.update(additionalContextByThread, (current) => {
                 const next = new Map(current);
                 next.delete(nativeThreadId);
@@ -8329,15 +8415,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // process. After a restart or idle release, load it the same way
               // the next turn would before reverting.
               if (!loaded) {
+                const loadRuntime = yield* threadRuntimeParams({
+                  mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                  modelSelection: input.modelSelection,
+                  runtimePolicy: input.runtimePolicy,
+                });
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
-                  ...(yield* threadRuntimeParams({
-                    mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
-                    modelSelection: input.modelSelection,
-                    runtimePolicy: input.runtimePolicy,
-                  })).params,
+                  ...loadRuntime.params,
                 });
+                appliedSubagentsByThread.set(threadId, loadRuntime.subagentKey);
               }
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(revertCodexThread(client, threadId, numTurns)),
@@ -8402,6 +8490,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
               let forkedThread = response.thread;
+              appliedSubagentsByThread.set(response.thread.id, forkRuntime.subagentKey);
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(
                   Effect.andThen(readCodexThreadHistoryMetadata(client.raw, response.thread.id)),

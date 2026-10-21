@@ -94,17 +94,21 @@ const deliveryFor = (
   return announced === "off" ? "off" : "notice";
 };
 
-export const make = Effect.gen(function* () {
+/** Shared cached admission state; construction does not depend on watches or host-status reads. */
+export class PressureAdmissionService extends Context.Service<
+  PressureAdmissionService,
+  {
+    readonly observe: PressureNudgerShape["observe"];
+    readonly admit: PressureNudgerShape["admit"];
+    readonly pressureOf: (host: string | null) => Effect.Effect<HostPressure | undefined>;
+    readonly freshEntries: Effect.Effect<ReadonlyArray<HostStatusEntry>>;
+  }
+>()("goat/fleet/pressure/PressureNudger/PressureAdmissionService") {}
+
+const makeAdmission = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const monitor = yield* HostPressureMonitor.HostPressureMonitor;
-  const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
-  const watches = yield* LaunchWatchService.LaunchWatchService;
-  const threads = yield* ThreadManagementService.ThreadManagementService;
-  const environment = yield* ServerEnvironment.ServerEnvironment;
-  const health = yield* Effect.serviceOption(HostHealthMonitor.HostHealthMonitor);
   const readings = yield* Ref.make(new Map<string, RemoteReading>());
-  const announced = yield* Ref.make(new Map<string, AnnouncedPressure>());
-
   const settings = settingsService.getSettings.pipe(
     Effect.map((value) => resolvePressureSettings(value.fleet.pressure)),
     Effect.orElseSucceed(() => resolvePressureSettings(undefined)),
@@ -150,21 +154,6 @@ export const make = Effect.gen(function* () {
       .map((reading) => reading.entry);
   });
 
-  // Every connected host, as a read-only client with this machine's keys, like fleet placement.
-  const readAll = Effect.gen(function* () {
-    const descriptor = yield* environment.getDescriptor;
-    const result = yield* hostStatus
-      .readForClient({
-        environmentId: descriptor.environmentId,
-        sessionId: "fleet-pressure",
-        reachHosts: true,
-      })
-      .pipe(Effect.orElseSucceed((): GoatHostStatusResult => ({ hosts: [] })));
-    const annotated = health._tag === "Some" ? yield* health.value.annotate(result) : result;
-    yield* observe(annotated);
-    return annotated;
-  });
-
   const admit = Effect.fn("PressureNudger.admit")(function* (
     host: string | null,
   ): Effect.fn.Return<PressureAdmission> {
@@ -184,6 +173,40 @@ export const make = Effect.gen(function* () {
       advice,
       refuse: resolved.admission === "block" && pressure.level === "critical",
     };
+  });
+
+  return PressureAdmissionService.of({ observe, admit, pressureOf, freshEntries });
+});
+export const layerAdmission = Layer.effect(PressureAdmissionService, makeAdmission);
+
+export const make = Effect.gen(function* () {
+  const settingsService = yield* ServerSettings.ServerSettingsService;
+  const { observe, admit, pressureOf, freshEntries } = yield* PressureAdmissionService;
+  const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
+  const watches = yield* LaunchWatchService.LaunchWatchService;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const health = yield* Effect.serviceOption(HostHealthMonitor.HostHealthMonitor);
+  const announced = yield* Ref.make(new Map<string, AnnouncedPressure>());
+
+  const settings = settingsService.getSettings.pipe(
+    Effect.map((value) => resolvePressureSettings(value.fleet.pressure)),
+    Effect.orElseSucceed(() => resolvePressureSettings(undefined)),
+  );
+
+  // Every connected host, as a read-only client with this machine's keys, like fleet placement.
+  const readAll = Effect.gen(function* () {
+    const descriptor = yield* environment.getDescriptor;
+    const result = yield* hostStatus
+      .readForClient({
+        environmentId: descriptor.environmentId,
+        sessionId: "fleet-pressure",
+        reachHosts: true,
+      })
+      .pipe(Effect.orElseSucceed((): GoatHostStatusResult => ({ hosts: [] })));
+    const annotated = health._tag === "Some" ? yield* health.value.annotate(result) : result;
+    yield* observe(annotated);
+    return annotated;
   });
 
   const deliver = (

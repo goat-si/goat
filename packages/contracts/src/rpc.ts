@@ -421,6 +421,7 @@ import {
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
+import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
   ProviderConsumeResetCreditInput,
@@ -687,6 +688,9 @@ export const WS_METHODS = {
   serverGetHostResources: "server.getHostResources",
   serverGetHostStatus: "server.getHostStatus",
   hubDeviceVerify: "hub.deviceVerify",
+  hubDeviceJoin: "hub.deviceJoin",
+  hubDeviceLeave: "hub.deviceLeave",
+  hubDeviceRepair: "hub.deviceRepair",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1167,6 +1171,22 @@ const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
   success: GoatHubDeviceVerifyResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
+
+/** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
+const hubDeviceOperation = (
+  tag:
+    | typeof WS_METHODS.hubDeviceJoin
+    | typeof WS_METHODS.hubDeviceLeave
+    | typeof WS_METHODS.hubDeviceRepair,
+) =>
+  Rpc.make(tag, {
+    payload: HubDeviceOperationInput,
+    success: HubDeviceOperationResult,
+    error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+  });
+const WsHubDeviceJoinRpc = hubDeviceOperation(WS_METHODS.hubDeviceJoin);
+const WsHubDeviceLeaveRpc = hubDeviceOperation(WS_METHODS.hubDeviceLeave);
+const WsHubDeviceRepairRpc = hubDeviceOperation(WS_METHODS.hubDeviceRepair);
 
 const WsServerGetProcessResourceHistoryRpc = Rpc.make(WS_METHODS.serverGetProcessResourceHistory, {
   payload: ServerProcessResourceHistoryInput,
@@ -2517,6 +2537,9 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetHostResourcesRpc,
   WsServerGetHostStatusRpc,
   WsHubDeviceVerifyRpc,
+  WsHubDeviceJoinRpc,
+  WsHubDeviceLeaveRpc,
+  WsHubDeviceRepairRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

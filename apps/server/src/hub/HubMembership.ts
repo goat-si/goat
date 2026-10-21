@@ -1,4 +1,5 @@
 import {
+  type AuthEnvironmentScope,
   OrchestratorMcpFailure,
   type HubDeviceOperationInput,
   type HubDeviceOperationResult,
@@ -70,6 +71,14 @@ const actorOf = (scope: McpInvocationScope) =>
   scope.thread === undefined
     ? `mcp:${scope.client?.sessionId ?? scope.requestNamespace}`
     : `thread:${scope.thread.threadId}`;
+/**
+ * A person in a GOAT client. Only the authenticated WebSocket boundary builds it, from a session
+ * holding settings:write (the decision inbox's owner rule); tool input can never produce one.
+ */
+export interface HubPerson {
+  readonly sessionId: string;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+}
 /** The decision context carries this line; an approval only counts for the same action and key. */
 export const decisionBinding = (
   action: "join" | "leave" | "leave-force" | "relink",
@@ -89,14 +98,17 @@ export class HubMembership extends Context.Service<
     readonly join: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
+      person?: HubPerson,
     ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
     readonly leave: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
+      person?: HubPerson,
     ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
     readonly repair: (
       scope: McpInvocationScope,
       input: HubDeviceOperationInput,
+      person?: HubPerson,
     ) => Effect.Effect<HubDeviceOperationResult, OrchestratorMcpFailure>;
   }
 >()("goat/hub/HubMembership") {}
@@ -125,14 +137,29 @@ const make = Effect.gen(function* () {
   const authorize = Effect.fn("HubMembership.authorize")(function* (
     scope: McpInvocationScope,
     alias: string,
+    person: HubPerson | undefined,
   ) {
     if (!SAFE_ALIAS.test(alias)) return yield* invalid("deviceAlias must be a plain SSH alias.");
+    // A person acts with their own authority; profiles narrow agents, not people.
+    if (person !== undefined)
+      return {
+        actor: `client:${person.sessionId}`,
+        profile: "person",
+        owner: true,
+        inbox: {
+          kind: "client",
+          environmentId: scope.environmentId,
+          sessionId: person.sessionId,
+          scopes: person.scopes,
+        } satisfies DecisionInbox.DecisionCaller,
+      };
     const view = yield* profiles.require(scope, "hub.manage", { host: alias });
     return {
       actor: actorOf(scope),
       profile: view.profile.id,
       // Disabled goatclaw resolves to the default profile, so it never counts as owner.
       owner: view.enabled && view.profile.id === "owner",
+      inbox: { kind: "agent", scope } satisfies DecisionInbox.DecisionCaller,
     };
   });
 
@@ -150,11 +177,11 @@ const make = Effect.gen(function* () {
   });
 
   const approved = Effect.fn("HubMembership.approved")(function* (
-    scope: McpInvocationScope,
+    caller: DecisionInbox.DecisionCaller,
     decisionId: string,
     binding: string,
   ) {
-    const item = yield* inbox.get({ kind: "agent", scope }, decisionId);
+    const item = yield* inbox.get(caller, decisionId);
     // requiredProfile owner means only a person or an owner agent could have answered it.
     if (
       item.source !== "decision" ||
@@ -177,7 +204,7 @@ const make = Effect.gen(function* () {
   });
 
   const requestDecision = Effect.fn("HubMembership.requestDecision")(function* (
-    scope: McpInvocationScope,
+    caller: DecisionInbox.DecisionCaller,
     input: {
       readonly title: string;
       readonly context: string;
@@ -189,19 +216,16 @@ const make = Effect.gen(function* () {
     const expiresAt = DateTime.formatIso(
       DateTime.add(yield* DateTime.now, { milliseconds: DECISION_TTL_MS }),
     );
-    const item = yield* inbox.create(
-      { kind: "agent", scope },
-      {
-        title: input.title,
-        context: `${input.context}\n\n${input.binding}`,
-        options: [
-          { id: "approve", label: input.approve, consequence: input.consequence },
-          { id: "decline", label: "Decline", consequence: "Nothing changes." },
-        ],
-        requiredProfile: "owner",
-        expiresAt,
-      },
-    );
+    const item = yield* inbox.create(caller, {
+      title: input.title,
+      context: `${input.context}\n\n${input.binding}`,
+      options: [
+        { id: "approve", label: input.approve, consequence: input.consequence },
+        { id: "decline", label: "Decline", consequence: "Nothing changes." },
+      ],
+      requiredProfile: "owner",
+      expiresAt,
+    });
     return item.id;
   });
 
@@ -397,9 +421,10 @@ const make = Effect.gen(function* () {
   const join = Effect.fn("HubMembership.join")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
+    person?: HubPerson,
   ) {
     const alias = input.deviceAlias;
-    const caller = yield* authorize(scope, alias);
+    const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       if (!(yield* ocx.directAlias(alias)))
@@ -445,7 +470,7 @@ const make = Effect.gen(function* () {
       });
       const pin = yield* ocx.pinnedFingerprint(alias);
       const binding = decisionBinding("join", alias, offered.fingerprint);
-      if (input.decisionId !== undefined) yield* approved(scope, input.decisionId, binding);
+      if (input.decisionId !== undefined) yield* approved(caller.inbox, input.decisionId, binding);
       else if (pin !== offered.fingerprint || !caller.owner) {
         const reason =
           pin === undefined
@@ -453,7 +478,7 @@ const make = Effect.gen(function* () {
             : pin !== offered.fingerprint
               ? `GOAT's pinned key is ${pin}, which differs from the offered key.`
               : "Joining a device needs an owner's approval.";
-        const decisionId = yield* requestDecision(scope, {
+        const decisionId = yield* requestDecision(caller.inbox, {
           title: `Join ${alias} to the hub`,
           context: `OpenCodex offers ${offered.keyType} ${offered.fingerprint} for ${alias}. ${reason} Approving links ${alias} as a Remote Link Child; its model traffic then goes through this Home.`,
           binding,
@@ -484,9 +509,10 @@ const make = Effect.gen(function* () {
   const leave = Effect.fn("HubMembership.leave")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
+    person?: HubPerson,
   ) {
     const alias = input.deviceAlias;
-    const caller = yield* authorize(scope, alias);
+    const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const status = yield* homeLinks();
@@ -499,13 +525,13 @@ const make = Effect.gen(function* () {
       // A forced removal is only ever a person's answer to a device that could not be cleaned up.
       const forced =
         input.decisionId !== undefined &&
-        (yield* inbox.get({ kind: "agent", scope }, input.decisionId)).context
+        (yield* inbox.get(caller.inbox, input.decisionId)).context
           .split("\n")
           .includes(forceBinding);
       if (input.decisionId !== undefined)
-        yield* approved(scope, input.decisionId, forced ? forceBinding : binding);
+        yield* approved(caller.inbox, input.decisionId, forced ? forceBinding : binding);
       else if (!caller.owner) {
-        const decisionId = yield* requestDecision(scope, {
+        const decisionId = yield* requestDecision(caller.inbox, {
           title: `Remove ${alias} from the hub`,
           context: `Revokes link ${record.id} on this Home and disconnects ${alias}, which returns to its own OpenCodex settings.`,
           binding,
@@ -528,7 +554,7 @@ const make = Effect.gen(function* () {
       if (!forced) {
         const failure = yield* leaveDevice(alias, steps);
         if (failure !== undefined) {
-          const decisionId = yield* requestDecision(scope, {
+          const decisionId = yield* requestDecision(caller.inbox, {
             title: `Force-remove ${alias} from the hub`,
             context: `Cleaning up ${alias} failed: ${failure} The Home still holds link ${record.id}. Forcing revokes it on the Home without the device's help; ${alias} keeps its client settings until someone runs ocx disconnect and ocx restart there.`,
             binding: forceBinding,
@@ -574,9 +600,10 @@ const make = Effect.gen(function* () {
   const repair = Effect.fn("HubMembership.repair")(function* (
     scope: McpInvocationScope,
     input: HubDeviceOperationInput,
+    person?: HubPerson,
   ) {
     const alias = input.deviceAlias;
-    const caller = yield* authorize(scope, alias);
+    const caller = yield* authorize(scope, alias, person);
     const steps: HubDeviceStep[] = [];
     return yield* Effect.gen(function* () {
       const status = yield* homeLinks();
@@ -596,7 +623,7 @@ const make = Effect.gen(function* () {
           detail: `${offered.keyType} ${offered.fingerprint}`,
         });
         yield* approved(
-          scope,
+          caller.inbox,
           input.decisionId,
           decisionBinding("relink", alias, offered.fingerprint),
         );
@@ -664,7 +691,7 @@ const make = Effect.gen(function* () {
         yield* audit(caller, "hub.repair", alias, "failed", undefined);
         return result("repair", alias, "failed", exhausted, steps, { parity: repaired });
       }
-      const decisionId = yield* requestDecision(scope, {
+      const decisionId = yield* requestDecision(caller.inbox, {
         title: `Re-link ${alias}`,
         context: `${exhausted} Re-linking revokes link ${record.id}, disconnects ${alias} and joins it again with ${offered.keyType} ${offered.fingerprint}; routing is briefly gone.`,
         binding: decisionBinding("relink", alias, offered.fingerprint),
@@ -685,9 +712,9 @@ const make = Effect.gen(function* () {
   });
 
   return HubMembership.of({
-    join: (scope, input) => permit.withPermits(1)(join(scope, input)),
-    leave: (scope, input) => permit.withPermits(1)(leave(scope, input)),
-    repair: (scope, input) => permit.withPermits(1)(repair(scope, input)),
+    join: (scope, input, person) => permit.withPermits(1)(join(scope, input, person)),
+    leave: (scope, input, person) => permit.withPermits(1)(leave(scope, input, person)),
+    repair: (scope, input, person) => permit.withPermits(1)(repair(scope, input, person)),
   });
 });
 

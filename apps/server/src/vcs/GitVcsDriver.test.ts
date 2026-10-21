@@ -907,7 +907,11 @@ it.effect.each(["missing", "invalid"] as const)(
         yield* fileSystem.writeFileString(indexPath, "invalid index");
       }
 
-      yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+      const evidence = yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+      if (indexState === "invalid") {
+        assert.isDefined(evidence);
+        if (evidence !== undefined) assert.isFalse(evidence.complete);
+      }
 
       assert.strictEqual((yield* git(["show", `${checkpointRef}:file.txt`])).stdout, "unstaged\n");
       if (indexState === "missing") {
