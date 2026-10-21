@@ -5,6 +5,7 @@ import { RuntimeProtocolRanges } from "./environment.ts";
 import { HostCondition } from "./fleetHealth.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
+import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 
 /**
@@ -85,6 +86,7 @@ export const HostStatusMetrics = Schema.Struct({
   quotas: Schema.Array(HostStatusQuota),
   /** Every configured provider instance. Older hosts omit it, so only `quotas` says what they have. */
   providers: Schema.optional(Schema.Array(HostStatusProvider)),
+  quotaPool: Schema.optional(QuotaPool),
 });
 export type HostStatusMetrics = typeof HostStatusMetrics.Type;
 

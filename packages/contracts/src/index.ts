@@ -25,6 +25,7 @@ export * from "./providerHostSync.ts";
 export * from "./providerOnboarding.ts";
 export * from "./providerRuntime.ts";
 export * from "./providerUsageLimits.ts";
+export * from "./quotaPool.ts";
 export * from "./usageLimitSourceId.ts";
 export * from "./providerPolicy.ts";
 export * from "./modelSelection.ts";
