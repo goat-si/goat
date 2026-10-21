@@ -245,6 +245,18 @@
           ]
         }
       ]
+    },
+    {
+      "bundles": ["desktop"],
+      "license": "MIT AND MPL-2.0",
+      "name": "Cua Driver",
+      "version": "0.37.0",
+      "sourceUrl": "https://github.com/trycua/cua/tree/cua-driver-rs-v0.37.0/libs/cua-driver",
+      "noticeFiles": [
+        "apps/desktop/src/cua/notices/LICENSE.md",
+        "apps/desktop/src/cua/notices/THIRD_PARTY_NOTICES.md",
+        "apps/desktop/src/cua/notices/node-runtime-NOTICE.md"
+      ]
     }
   ],
   "packageOverrides": [

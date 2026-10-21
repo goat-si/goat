@@ -393,7 +393,10 @@
         "apps/desktop/src/preload.ts",
         "apps/desktop/src/ssh/DesktopSshEnvironment.ts",
         "packages/ssh",
-        "apps/desktop/src/app/DesktopClerk.ts"
+        "apps/desktop/src/app/DesktopClerk.ts",
+        "apps/desktop/src/cua/",
+        "scripts/build-desktop-artifact.ts",
+        "patches/@ubjs__node@0.31.0-3.patch"
       ]
     },
     {

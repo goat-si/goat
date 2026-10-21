@@ -1,4 +1,5 @@
-// The SDK and executable use a private protocol; bump the catalog pin with this manifest.
+// The SDK and executable use a private protocol; bump the catalog pin with this manifest, and the
+// Cua Driver notice version and files in third-party-licenses.config.json with both.
 const CUA_DRIVER_VERSION = "0.37.0";
 
 const archives = {
