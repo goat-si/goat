@@ -1,17 +1,24 @@
 import { type ConfirmDialogOptions, type ContextMenuItem } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const showContextMenuFallbackMock =
-  vi.fn<
-    <T extends string>(
-      items: readonly ContextMenuItem<T>[],
-      position?: { x: number; y: number },
-    ) => Promise<T | null>
-  >();
-const dismissContextMenuMock = vi.fn<() => void>();
+// Imported at collection rather than inside the test: the module reads window only when called,
+// and its first import pulls the contracts schemas, which is too slow to count against a test on a
+// loaded runner.
+import { createLocalApi } from "./localApi";
 
-const requestConfirmDialogMock =
-  vi.fn<(message: string, options?: ConfirmDialogOptions) => Promise<boolean> | undefined>();
+const { showContextMenuFallbackMock, dismissContextMenuMock, requestConfirmDialogMock } =
+  vi.hoisted(() => ({
+    showContextMenuFallbackMock:
+      vi.fn<
+        <T extends string>(
+          items: readonly ContextMenuItem<T>[],
+          position?: { x: number; y: number },
+        ) => Promise<T | null>
+      >(),
+    dismissContextMenuMock: vi.fn<() => void>(),
+    requestConfirmDialogMock:
+      vi.fn<(message: string, options?: ConfirmDialogOptions) => Promise<boolean> | undefined>(),
+  }));
 
 vi.mock("./contextMenuFallback", () => ({
   showContextMenuFallback: showContextMenuFallbackMock,
@@ -45,7 +52,6 @@ function testWindow(): Window & typeof globalThis {
 }
 
 beforeEach(() => {
-  vi.resetModules();
   vi.clearAllMocks();
   if (globalThis.window === undefined) {
     Object.defineProperty(globalThis, "window", {
@@ -67,8 +73,6 @@ afterEach(() => {
 describe("LocalApi", () => {
   it("fails closed in a browser when no themed host is available", async () => {
     requestConfirmDialogMock.mockReturnValue(undefined);
-    const { createLocalApi } = await import("./localApi");
-
     await expect(createLocalApi().dialogs.confirm("Delete this thread?")).resolves.toBe(false);
   });
 });
