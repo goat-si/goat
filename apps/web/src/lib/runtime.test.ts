@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Effect from "effect/Effect";
 import * as Tracer from "effect/Tracer";
+// Transforming runtime's module graph is the slow part of each fresh import below. Loading it
+// once at collection leaves each case only re-evaluating the modules; a cold transform inside a
+// case outran the test timeout while other test files kept a busy host's transform queue full.
+import "./runtime";
 
 vi.mock("@goat/shared/goatConnect", () => ({ isGoatConnectEnabled: () => true }));
 

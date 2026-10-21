@@ -132,6 +132,19 @@ function formatPercent(value: number | null) {
   return value === null ? "–" : Math.round(value) + "%";
 }
 
+/** Why a machine has no host status yet: its connection is not up, or an answer is on its way. */
+function noMetricsText(connection: FleetConnection | undefined, reading: boolean): string {
+  switch (connection?.state) {
+    case "connecting":
+    case "reconnecting":
+    case "unreachable":
+    case "offline":
+      return connection.label;
+    default:
+      return reading ? "Reading…" : "No metrics";
+  }
+}
+
 /** "macmini · macOS · 10 cores", with how old the numbers are when the host stopped answering. */
 function hostDetail(row: FleetHostRow, lastSeen: HostLastSeen, now: number): string {
   const metrics = row.entry?.metrics;
@@ -149,6 +162,8 @@ function HostRow({
   lastSeen,
   observedAt,
   heatTier,
+  connection,
+  reading,
 }: {
   readonly row: FleetHostRow;
   readonly samples: ReadonlyArray<HostSample>;
@@ -156,12 +171,15 @@ function HostRow({
   readonly observedAt: number;
   /** The machine's tier as its node in the graph shows it. */
   readonly heatTier: FleetHeatTier;
+  readonly connection: FleetConnection | undefined;
+  /** A host-status read is still on its way, so a row without an answer may yet get one. */
+  readonly reading: boolean;
 }) {
   const metrics = row.entry?.metrics;
   const stale = row.tone === "stale";
   const statusText =
     row.tone === "none"
-      ? "No metrics"
+      ? noMetricsText(connection, reading)
       : row.tone === "unsupported"
         ? "Update GOAT to report"
         : metrics === undefined
@@ -422,6 +440,8 @@ function FleetConsoleExpanded(props: {
                   heatTier={
                     row.machineId === null ? "normal" : (heat.get(row.machineId)?.tier ?? "normal")
                   }
+                  connection={row.machineId === null ? undefined : connections.get(row.machineId)}
+                  reading={status.loading}
                   observedAt={status.observedAt}
                   samples={
                     (row.sourceKey === null ? undefined : status.history.get(row.sourceKey)) ??

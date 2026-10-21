@@ -61,6 +61,9 @@ GOAT Bot screen shows only a chip for the work and its final report.
   handed to subagents, on this machine or another one. A machine still on an
   older GOAT stops only the current turn; subagents it started there finish on
   their own.
+- When more than one machine is connected, GOAT Bot spreads research across
+  the ones with room to spare and tells you which machine ran what. It never
+  starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
 - Work counts as waiting on you when the agent working on it, or a subagent it
