@@ -582,11 +582,10 @@ const make = Effect.gen(function* () {
       );
       const task = stored.task;
       const target = task.target!;
-      if (
-        (yield* requesterForDispatch(task).pipe(
-          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
-        )) === undefined
-      ) {
+      const currentRequester = yield* requesterForDispatch(task).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      );
+      if (currentRequester === undefined) {
         return yield* commitTransition(
           ledger,
           stored,
@@ -604,7 +603,7 @@ const make = Effect.gen(function* () {
       const ids = workerLaunchIdsFor(task.taskId, task.generation);
       // Only a requester at full access may act through the supervisor's owner profile; anyone
       // linked lower keeps the default profile, so the bot never gives them more than they hold.
-      if (supervisor && task.requester.runtimeModeCeiling === "full-access")
+      if (supervisor && currentRequester.runtimeModeCeiling === "full-access")
         yield* permissions
           .bind(
             ids.threadId,
