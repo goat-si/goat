@@ -80,6 +80,7 @@ export * from "./connectionCatalog.ts";
 export * from "./previewCapture.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./hostStatus.ts";
+export * from "./opencodex.ts";
 export * from "./fleetHealth.ts";
 export * from "./fleetGoal.ts";
 export * from "./fleetResources.ts";
