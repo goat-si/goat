@@ -1,5 +1,5 @@
-// @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { stubGlobal } from "../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("./components/ui/toast", () => ({ toastManager: { add: state.toast } }));
@@ -7,11 +7,9 @@ vi.mock("./rightPanelStore", () => ({ useRightPanelStore: {} }));
 
 import { copyFilePath, resolveFilePathCopyTargets } from "./filePathCopy";
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+function setup() {
   state.toast.mockReset();
-});
+}
 
 describe("file path copy targets", () => {
   it("preserves spaces", () => {
@@ -85,8 +83,9 @@ describe("copyFilePath", () => {
     ["logs/build:2026", "Relative path"],
     ["/remote/my project/logs/build:2026", "Full path"],
   ] as const)("copies the literal path %s unchanged", async (path, kind) => {
+    setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    using _navigator = stubGlobal("navigator", { clipboard: { writeText } });
     await copyFilePath(path, kind);
     expect(writeText).toHaveBeenCalledExactlyOnceWith(path);
     expect(state.toast).toHaveBeenCalledWith({
@@ -99,8 +98,12 @@ describe("copyFilePath", () => {
   it.each(["absent", "rejected"] as const)(
     "uses the fallback when the Clipboard API is %s",
     async (api) => {
+      setup();
       const writeText = vi.fn().mockRejectedValue(new Error("Document is not focused"));
-      vi.stubGlobal("navigator", api === "absent" ? {} : { clipboard: { writeText } });
+      using _navigator = stubGlobal(
+        "navigator",
+        api === "absent" ? {} : { clipboard: { writeText } },
+      );
       const copied: string[] = [];
       const execCommand = vi.fn(() => {
         copied.push((document.activeElement as HTMLTextAreaElement).value);
@@ -124,7 +127,8 @@ describe("copyFilePath", () => {
   );
 
   it("reports failure without claiming a copy when both methods fail", async () => {
-    vi.stubGlobal("navigator", {
+    setup();
+    using _navigator = stubGlobal("navigator", {
       clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
     });
     Object.defineProperty(document, "execCommand", {

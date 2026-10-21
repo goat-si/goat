@@ -1,5 +1,3 @@
-// @vitest-environment jsdom
-
 import type { ScopedThreadRef } from "@goat/contracts";
 import { EnvironmentId, ProjectReadFileError } from "@goat/contracts";
 import type { useFileTree } from "@pierre/trees/react";

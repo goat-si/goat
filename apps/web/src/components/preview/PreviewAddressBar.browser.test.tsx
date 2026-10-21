@@ -1,5 +1,4 @@
-// @vitest-environment jsdom
-
+import { fakeTimers } from "../../../test/render";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -18,6 +17,7 @@ const key = (tab: string, environmentId = ref.environmentId) =>
 
 describe("PreviewAddressBar", () => {
   let root: Root;
+  let timers: Disposable;
   let container: HTMLDivElement;
   let props: PreviewAddressBarProps;
   const input = () => container.querySelector<HTMLInputElement>("input")!;
@@ -51,7 +51,7 @@ describe("PreviewAddressBar", () => {
   };
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    timers = fakeTimers();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     Object.defineProperty(Element.prototype, "getAnimations", {
       configurable: true,
@@ -88,7 +88,7 @@ describe("PreviewAddressBar", () => {
     await act(async () => root.unmount());
     container.remove();
     vi.unstubAllGlobals();
-    vi.useRealTimers();
+    timers[Symbol.dispose]();
   });
 
   it("retains drafts through blur, late URL changes, tab remounts and identical ids in another environment", async () => {

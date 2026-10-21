@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+import { fakeTimers } from "../../../test/render";
 import { EnvironmentId, ThreadId, COMPOSER_CONTEXT_REVIEW_DIFF_MAX_CHARS } from "@goat/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,12 +17,13 @@ const target = {
   threadId: ThreadId.make("destination-thread"),
 };
 let root: Root;
+let timers: Disposable;
 let host: HTMLDivElement;
 let viewport: HTMLDivElement;
 const bounds = { left: 10, top: 10, right: 500, bottom: 400, width: 490, height: 390 };
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  timers = fakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
     window.setTimeout(() => callback(0), 0),
@@ -46,7 +47,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   window.getSelection()?.removeAllRanges();
   document.body.replaceChildren();
-  vi.useRealTimers();
+  timers[Symbol.dispose]();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
