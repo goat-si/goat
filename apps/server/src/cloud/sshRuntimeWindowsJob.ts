@@ -5,10 +5,10 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
-// This supervisor owns the only (non-inheritable) job handle. It joins the job before
-// starting the command, so even a shell that immediately exits cannot orphan its children.
-// Killing the supervisor by Node's retained process handle closes the job and stops its
-// members. The detached activation supervisor uses WMI and deliberately starts outside it.
+// Before cleanup readiness this supervisor owns the only non-inheritable job handle.
+// After readiness the cleanup process also holds one, so it can reclaim the executable
+// after supervisor exit. Cleanup's exit closes the last handle and stops any descendants.
+// The detached activation supervisor uses WMI and deliberately starts outside the job.
 const WINDOWS_JOB_SUPERVISOR = String.raw`
 using System;
 using System.ComponentModel;
@@ -50,9 +50,12 @@ public static class GoatRuntimeJob {
   static extern bool SetInformationJobObject(IntPtr job, int kind, ref ExtendedLimits limits, uint size);
   [DllImport("kernel32.dll", SetLastError = true)]
   static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr sourceHandle,
+    IntPtr targetProcess, out IntPtr targetHandle, uint access, bool inherit, uint options);
 
-  // Kept open until process exit, never inherited by a command. Closing it while this
-  // supervisor is alive would terminate the supervisor before it returns the exit code.
+  // Never inherited by commands. Before cleanup readiness this is the only handle;
+  // after transfer, both owners retain their handles until their respective exits.
   static IntPtr job;
 
   static string Quote(string value) {
@@ -103,14 +106,18 @@ public static class GoatRuntimeJob {
         cleanup.WaitForExit();
         throw new InvalidOperationException("Cleanup owner did not become ready");
       }
+      // Until this transfer, killing us closes the job and stops even a cleanup process
+      // stalled before its first instruction. Its new handle closes automatically at exit.
+      IntPtr cleanupJob;
+      using (var self = Process.GetCurrentProcess()) {
+        if (!DuplicateHandle(self.Handle, job, cleanup.Handle, out cleanupJob, 0, false, 2))
+          throw new Win32Exception();
+      }
     }
   }
 
   public static void Run(string command, string[] args) {
     try {
-      // The cleanup process must start outside this job and retain our HANDLE before the
-      // command can drain its original server. It deletes only this invocation's artifact.
-      StartCleanup();
       job = CreateJobObject(IntPtr.Zero, null);
       if (job == IntPtr.Zero) throw new Win32Exception();
       var limits = new ExtendedLimits();
@@ -120,6 +127,7 @@ public static class GoatRuntimeJob {
       using (var self = Process.GetCurrentProcess()) {
         if (!AssignProcessToJobObject(job, self.Handle)) throw new Win32Exception();
       }
+      StartCleanup();
       var quoted = Array.ConvertAll(args, Quote);
       var start = new ProcessStartInfo(command, string.Join(" ", quoted));
       start.UseShellExecute = false;
