@@ -84,6 +84,17 @@ export const workerLaunchIdsFor = (taskId: ChannelTaskId, generation: number) =>
  */
 export const isChannelWorkerThreadId = (threadId: string) => threadId.startsWith("channel-worker:");
 
+export const reviewLaunchIdsFor = (taskId: ChannelTaskId, generation: number, runId: string) => {
+  const key = [taskId, String(generation), runId];
+  return {
+    commandId: CommandId.make(stableId("channel-review-launch", key)),
+    threadId: ThreadId.make(stableId("channel-review", key)),
+    messageId: MessageId.make(stableId("channel-review-message", key)),
+    followupId: stableId("channel-review-followup", key) as ChannelInputId,
+    correlationId: stableId("channel-review-remote", key),
+  };
+};
+
 export const answerForwardIdsFor = (eventId: ChannelTaskEventId) => ({
   commandId: CommandId.make(stableId("channel-answer", [eventId])),
   messageId: MessageId.make(stableId("channel-answer-message", [eventId])),

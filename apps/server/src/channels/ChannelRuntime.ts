@@ -33,6 +33,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
 import * as ImessageChannelRuntime from "./imessage/ImessageChannelRuntime.ts";
 
 const HEARTBEAT_MS = 10_000;
@@ -60,6 +61,7 @@ const make = Effect.gen(function* () {
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+  const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
   const remoteWorkers = yield* ChannelRemoteWorkers.ChannelRemoteWorkers;
   const imessage = yield* ImessageChannelRuntime.ImessageChannelRuntime;
@@ -136,6 +138,7 @@ const make = Effect.gen(function* () {
       started += 1;
     }
     started += yield* reports.reconcile(owner);
+    started += yield* reviews.reconcile(owner);
     // Observers of workers on other machines run on their own fibers; this only starts missing ones.
     started += yield* remoteWorkers.ensure(owner);
     started += yield* delivery.deliverDue(owner);

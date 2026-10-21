@@ -13,6 +13,8 @@ import {
   type RemoteKnownRun,
   type RemoteObservedRun,
   RuntimeRequestId,
+  channelWorkerObservationEquals,
+  SlackChannelConnectionId,
   RunId,
   ProjectId,
   EnvironmentId,
@@ -61,6 +63,8 @@ import { remoteBranchFor, remoteCorrelationFor } from "./channelIds.ts";
 import { resumeBranchFor } from "./channelReplica.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
+import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
+import { reviewLaunchIdsFor } from "./channelIds.ts";
 import {
   botMessages,
   defaultScript,
@@ -136,6 +140,7 @@ class RemoteMachine {
   }> = [];
   readonly interrupts: Array<Readonly<Record<string, unknown>>> = [];
   readonly captureFibers: Array<Fiber.Fiber<unknown, unknown>> = [];
+  observerFiber: Fiber.Fiber<unknown, unknown> | undefined;
   captureOutput = "GOAT_REPLICA_NO_WORKTREE\n";
   applyOutput = "GOAT_REPLICA_APPLIED " + REPLICA_COMMIT + "\n";
   captureGate:
@@ -453,6 +458,8 @@ class RemoteMachine {
         }) =>
           Effect.gen(function* () {
             const machine = machineFor(input.host);
+            if (input.script.includes("base=$(git merge-base"))
+              return { stdout: "+remote guard\n", stderr: "" };
             const kind = input.script.includes("git bundle create") ? "capture" : "apply";
             assert.include(
               input.script,
@@ -505,6 +512,11 @@ class RemoteMachine {
               return yield* machine.unreachable("down");
             }
             switch (call.tool) {
+              case "goat_thread_read": {
+                const runs = machine.threads.get(String(call.arguments.threadId));
+                if (runs === undefined) return yield* machine.refused("thread_not_found");
+                return { thread: { worktreePath: null, latestRunId: runs.at(-1)?.runId ?? null } };
+              }
               case "goat_project_list":
                 yield* machine.onProjectList;
                 return { projects: machine.projects, nextCursor: null };
@@ -628,6 +640,8 @@ class RemoteMachine {
                 return { runId, messageId: "remote-message" };
               }
               case "goat_origin_reports_wait": {
+                if (Number(call.arguments.timeoutMs) > 0)
+                  machine.observerFiber = yield* Effect.withFiberSucceed((fiber) => fiber);
                 if (call.arguments.timeoutMs === 0) {
                   machine.probeCount += 1;
                   const attempted = machine.probeAttempted;
@@ -654,8 +668,10 @@ class RemoteMachine {
                     JSON.stringify(known.pendingRequestIds) !==
                       JSON.stringify(first.value.observedRun?.pendingRequestIds ?? [])) ||
                   (known?.observation !== undefined &&
-                    JSON.stringify(known.observation) !==
-                      JSON.stringify(first.value.observedRun?.observation));
+                    !channelWorkerObservationEquals(
+                      known.observation,
+                      first.value.observedRun?.observation,
+                    ));
                 const timeoutMs = call.arguments.timeoutMs as number;
                 const change = machine.changed;
                 if (machine.onWait !== undefined) yield* machine.onWait(call.arguments);
@@ -4531,4 +4547,293 @@ it.effect("automatic recovery refuses a different environment behind the same ho
     assert.lengthOf(machine.launches, 1);
     assert.isUndefined(failed.worker);
   }).pipe(Effect.scoped, Effect.provide(harness.layer));
+});
+
+describe("independent remote channel review", () => {
+  const reviewerModel = { instanceId: ProviderInstanceId.make("codex"), model: "review-model" };
+  const reviewHarness = () => {
+    const machine = new RemoteMachine();
+    machine.offeredModels = [
+      { instance: "codex", model: "gpt-6.1-sol" },
+      { instance: "codex", model: "review-model" },
+    ];
+    const channelsLayer = ChannelLayers.makeLayerServices(
+      Layer.mock(SlackChannelSettings.SlackChannelSettings)({
+        get: () =>
+          Effect.succeed([
+            {
+              connectionId: SlackChannelConnectionId.make("slack-1"),
+              enabled: true,
+              hasAppToken: true,
+              hasBotToken: true,
+              allowedChannelIds: [],
+              status: "connected",
+              review: { enabled: true, modelSelection: reviewerModel },
+            },
+          ]),
+        defaultTarget: () => Effect.succeed(Option.none()),
+      }),
+    );
+    const harness = makeHarness({ sshRemote: machine.layer, channelsLayer });
+    harness.script.current = remoteScript;
+    return { machine, harness };
+  };
+  const startReview = (machine: RemoteMachine) =>
+    Effect.gen(function* () {
+      const writes = yield* channelWriteMilestones;
+      yield* setupBot;
+      yield* linkSlackUser();
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      yield* gateway.ingest(
+        slackInput("do@mac-studio: verify the guard", "remote-review"),
+        slackContext,
+      );
+      yield* runtime.drain;
+      const running = yield* writes.waitFor((task) => task.status === "running");
+      const correlation = remoteCorrelationFor(running.taskId, running.generation);
+      yield* Deferred.await(machine.waitIdle);
+      const settling = yield* Deferred.make<void>();
+      machine.onWait = (input) =>
+        input.timeoutMs === REMOTE_SETTLE_WAIT_MS
+          ? Deferred.succeed(settling, undefined).pipe(Effect.asVoid)
+          : Effect.void;
+      machine.observeRun(correlation, {
+        pullRequests: [],
+        needsYou: [],
+        result: {
+          runId: running.worker!.runId!,
+          tests: { ok: true },
+          observedCheckPending: false,
+          observedCheck: {
+            status: "completed",
+            command: "vp test run",
+            exitCode: 3,
+            durationMs: 10,
+            at: "2026-10-12T00:00:00.000Z",
+          },
+        },
+      });
+      machine.finishRun(correlation, "completed", "Worker finished.", {
+        outcome: "succeeded",
+        summary: "Original remote summary.",
+      });
+      yield* Deferred.await(settling);
+      yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
+      const task = yield* writes.waitFor((task) => task.status === "reviewing");
+      return { runtime, task, writes, correlation };
+    });
+  const verdict = (blockers: boolean) =>
+    JSON.stringify({
+      verdict: blockers ? "blockers" : "pass",
+      summary: blockers ? "Fix the stale guard." : "Reviewed.",
+      findings: blockers
+        ? [
+            {
+              kind: "decision",
+              findingId: "remote-guard",
+              severity: "high",
+              cites: "guard.ts:1",
+              summary: "The stale report bypasses the guard.",
+              decision: "accepted",
+              evidence: { kind: "location", ref: "guard.ts:1" },
+            },
+          ]
+        : [],
+    });
+
+  it.effect(
+    "holds remote success, recovers a lost reviewer launch reply and completes once with observed checks",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine);
+        machine.loseNextLaunchAnswer = true;
+        yield* runtime.drain;
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        assert.lengthOf(machine.launches, 2);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+        const restarted = yield* ChannelTaskReviews.ChannelTaskReviews.pipe(
+          Effect.provide(ChannelTaskReviews.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* restarted.reconcile(runtime.ownerToken);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.lengthOf(machine.launches, 2);
+        assert.strictEqual((yield* onlyTask).status, "reviewing");
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(false),
+        });
+        yield* runtime.drain;
+        yield* runtime.drain;
+        const done = yield* onlyTask;
+        assert.strictEqual(done.status, "completed");
+        assert.strictEqual(done.review?.remoteThreadId, machine.thread(reviewCorrelation));
+        assert.strictEqual(done.review?.verdict, "pass");
+        assert.strictEqual(done.observed?.result?.observedCheck?.exitCode, 3);
+        assert.include(done.resultSummary!, "Original remote summary.");
+        assert.include(done.resultSummary!, "review-model");
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "forwards blockers once with a durable receipt, then asks after reviewing the correction run",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, writes, correlation } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const beforeForward = (yield* ledger.getTask(task.taskId))!;
+        assert.isDefined(beforeForward.pendingAnswerMessageId);
+        yield* ledger.updateRemoteWorker({
+          owner: runtime.ownerToken,
+          now: "2026-10-12T00:00:00.000Z",
+          update: {
+            taskId: task.taskId,
+            update: (json) =>
+              JSON.stringify({
+                ...JSON.parse(json!),
+                receipt: {
+                  eventId: "old-answer",
+                  runId: task.worker!.runId,
+                  messageId: "old-remote-message",
+                  fenceMessageId: "old-fence",
+                },
+              }),
+          },
+        });
+        machine.waitIdle = Deferred.makeUnsafe<void>();
+        yield* (yield* ChannelRemoteWorkers).ensure(runtime.ownerToken);
+        yield* Deferred.await(machine.waitIdle);
+        machine.waitIdle = Deferred.makeUnsafe<void>();
+        machine.timeoutWait();
+        yield* Deferred.await(machine.waitIdle);
+        assert.strictEqual(
+          (yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId,
+          beforeForward.pendingAnswerMessageId,
+        );
+        const followup = (yield* ledger.listPendingForwards(50))[0]!;
+        yield* runtime.drain;
+        const running = yield* writes.waitFor(
+          (task) => task.status === "running" && task.worker?.runId !== task.review?.workerRunId,
+        );
+        yield* runtime.drain;
+        assert.lengthOf(machine.sends, 1);
+        yield* (yield* ChannelRemoteWorkers).forward(followup, runtime.ownerToken);
+        yield* writes.waitForForward(followup.sequence);
+        assert.lengthOf(machine.runs(correlation), 2);
+        const pending = yield* readTaskEvent(running, "task.followup.received");
+        assert.strictEqual(pending.type, "task.followup.received");
+        const settling = yield* Deferred.make<void>();
+        machine.onWait = (input) =>
+          input.timeoutMs === REMOTE_SETTLE_WAIT_MS
+            ? Deferred.succeed(settling, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: "Fixed remote work.",
+        });
+        yield* Deferred.await(settling);
+        yield* TestClock.adjust(REMOTE_SETTLE_WAIT_MS);
+        const second = yield* writes.waitFor((task) => task.status === "reviewing");
+        assert.strictEqual(second.review?.round, 2);
+        assert.notStrictEqual(second.review?.workerRunId, task.review?.workerRunId);
+        yield* runtime.drain;
+        const nextReview = reviewLaunchIdsFor(
+          second.taskId,
+          second.generation,
+          second.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(nextReview, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        yield* runtime.drain;
+        const waiting = yield* onlyTask;
+        assert.strictEqual(waiting.status, "waiting_input");
+        assert.lengthOf(waiting.openQuestions, 1);
+        assert.lengthOf(machine.sends, 1);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect(
+    "an ambiguous dispatch reservation survives restart and times out without a second launch",
+    () => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const ids = reviewLaunchIdsFor(task.taskId, task.generation, task.worker!.runId!);
+        yield* ledger.reserveReviewDispatch({
+          owner: runtime.ownerToken,
+          key: ids.correlationId,
+          value: JSON.stringify({ readKey: "synthetic-unconfirmed-reservation" }),
+          now: task.updatedAt,
+        });
+        const restarted = yield* ChannelTaskReviews.ChannelTaskReviews.pipe(
+          Effect.provide(ChannelTaskReviews.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).status, "reviewing");
+        assert.lengthOf(machine.launches, 1);
+        yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).review?.verdict, "failed");
+        assert.include((yield* onlyTask).resultSummary!, "timed out");
+        assert.lengthOf(machine.launches, 1);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
+
+  it.effect("a newer remote worker run fences a late passing review", () => {
+    const { machine, harness } = reviewHarness();
+    return Effect.gen(function* () {
+      const { runtime, task, correlation } = yield* startReview(machine);
+      yield* runtime.drain;
+      const reviewCorrelation = reviewLaunchIdsFor(
+        task.taskId,
+        task.generation,
+        task.worker!.runId!,
+      ).correlationId;
+      const next = machine.startRun(correlation);
+      machine.finishRun(reviewCorrelation, "completed", null, {
+        outcome: "succeeded",
+        summary: verdict(false),
+      });
+      yield* runtime.drain;
+      const current = yield* onlyTask;
+      assert.strictEqual(current.status, "running");
+      assert.strictEqual(current.worker?.runId, next);
+      assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+    }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
+  });
 });

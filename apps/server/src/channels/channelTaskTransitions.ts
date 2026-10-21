@@ -28,18 +28,28 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   "task.created": [],
   "task.dispatch.claimed": ["received"],
   "task.brief.frozen": ["dispatching"],
-  "task.worker.bound": ["dispatching", "running", "waiting_input"],
+  "task.worker.bound": ["dispatching", "running", "reviewing", "waiting_input"],
   "task.progress": ["running"],
   // A question can open while another waits: a follow-up the worker refused asks its own.
-  "task.question.opened": ["received", "dispatching", "running", "waiting_input"],
+  "task.question.opened": ["received", "dispatching", "running", "reviewing", "waiting_input"],
   "task.question.answered": ["waiting_input"],
-  "task.followup.received": ["running"],
+  "task.followup.received": ["running", "reviewing"],
   "task.completion.proposed": ["running"],
-  "task.completed": ["running"],
-  "task.failed": ["received", "dispatching", "running", "waiting_input"],
-  "task.cancelled": ["received", "dispatching", "running", "waiting_input"],
+  "task.review.started": ["running"],
+  "task.review.bound": ["reviewing"],
+  "task.review.finished": ["reviewing", "cancelled"],
+  "task.completed": ["running", "reviewing"],
+  "task.failed": ["received", "dispatching", "running", "reviewing", "waiting_input"],
+  "task.cancelled": ["received", "dispatching", "running", "reviewing", "waiting_input"],
   "task.retry.requested": ["completed", "failed", "cancelled"],
-  "task.worker.observed": ["running", "waiting_input", "completed", "failed", "cancelled"],
+  "task.worker.observed": [
+    "running",
+    "reviewing",
+    "waiting_input",
+    "completed",
+    "failed",
+    "cancelled",
+  ],
   "task.moved": ["dispatching", "running", "waiting_input"],
 };
 
@@ -50,6 +60,7 @@ const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
     case "task.completed":
     case "task.failed":
     case "task.worker.observed":
+    case "task.review.bound":
       return event.payload.generation;
     case "task.brief.frozen":
       return event.payload.brief.generation;
@@ -57,6 +68,9 @@ const eventGeneration = (event: ChannelTaskEvent): number | undefined => {
       return event.payload.worker.generation;
     case "task.completion.proposed":
       return event.payload.proposal.generation;
+    case "task.review.started":
+    case "task.review.finished":
+      return event.payload.review.generation;
     default:
       return undefined;
   }
@@ -115,7 +129,12 @@ export function applyChannelTaskEvent(
         ok: true,
         task: {
           ...base,
-          status: task.status === "waiting_input" ? "waiting_input" : "running",
+          status:
+            task.status === "waiting_input"
+              ? "waiting_input"
+              : task.status === "reviewing" && task.worker?.runId === event.payload.worker.runId
+                ? "reviewing"
+                : "running",
           worker: event.payload.worker,
           ...(task.observed?.result !== undefined &&
           task.observed.result.runId !== event.payload.worker.runId
@@ -160,14 +179,66 @@ export function applyChannelTaskEvent(
     }
     // The worker takes the follow-up; the task keeps running until the run that took it settles.
     case "task.followup.received":
-      return { ok: true, task: base };
+      if (task.status === "reviewing" && task.review?.verdict !== "blockers") {
+        return reject("An open review cannot forward findings.");
+      }
+      return { ok: true, task: { ...base, status: "running" } };
     case "task.completion.proposed": {
       if (task.worker?.runId !== event.payload.proposal.runId) {
         return reject("The proposal names a run the task is not bound to.");
       }
       return { ok: true, task: { ...base, proposedCompletion: event.payload.proposal } };
     }
+    case "task.review.started": {
+      const review = event.payload.review;
+      if (review.workerRunId !== task.worker?.runId || review.verdict !== undefined) {
+        return reject("A review must reserve the current worker run.");
+      }
+      if (task.review?.workerRunId === review.workerRunId) {
+        return reject("This worker run already has a review.");
+      }
+      return { ok: true, task: { ...base, status: "reviewing", review } };
+    }
+    case "task.review.finished": {
+      const review = event.payload.review;
+      if (
+        task.review?.verdict !== undefined ||
+        review.verdict === undefined ||
+        review.workerRunId !== task.worker?.runId ||
+        review.workerRunId !== task.review?.workerRunId ||
+        review.threadId !== task.review.threadId
+      )
+        return reject("The review no longer owns this worker run.");
+      if (task.status === "cancelled" && review.verdict !== "failed")
+        return reject("A stopped task cannot pass review.");
+      return { ok: true, task: { ...base, review } };
+    }
+    case "task.review.bound": {
+      if (
+        task.review === undefined ||
+        task.review.verdict !== undefined ||
+        task.review.workerRunId !== event.payload.workerRunId ||
+        task.worker?.runId !== event.payload.workerRunId ||
+        (task.review.remoteThreadId !== undefined &&
+          task.review.remoteThreadId !== event.payload.threadId)
+      ) {
+        return reject("The reviewer binding is stale.");
+      }
+      return {
+        ok: true,
+        task: { ...base, review: { ...task.review, remoteThreadId: event.payload.threadId } },
+      };
+    }
     case "task.completed": {
+      if (
+        task.status === "reviewing" &&
+        (task.review?.verdict === undefined || task.review.verdict === "blockers")
+      ) {
+        return reject("An open or blocked review cannot complete the task.");
+      }
+      if (event.payload.runId !== undefined && event.payload.runId !== task.worker?.runId) {
+        return reject("Completion names an old worker run.");
+      }
       const { proposedCompletion: _proposed, observed: _observed, ...rest } = base;
       return {
         ok: true,
@@ -216,6 +287,7 @@ export function applyChannelTaskEvent(
         completedAt: _completedAt,
         resultSummary: _summary,
         completionReport: _report,
+        review: _review,
         observed: _observed,
         host,
         ...rest
@@ -290,6 +362,7 @@ export function applyChannelTaskEvent(
         projectId: _projectId,
         observed: _observed,
         briefVersion: _briefVersion,
+        review: _review,
         ...rest
       } = base;
       return {

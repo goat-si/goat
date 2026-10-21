@@ -72,6 +72,12 @@ An absent check remains pending until the check worker records a disposition; an
 disposition ends observation without manufacturing a passing result. Web, mobile, Slack, and bot
 recall present the two kinds of evidence separately.
 
+`ChannelTaskReviews` gates successful Slack work when that connection opts in. It launches an
+ordinary server-owned thread because the completed worker has no active run to delegate from.
+Reviews and finding decisions use the task event ledger; dispatch receipts keep private remote
+report capabilities outside client snapshots. A reserved remote dispatch is probed after restart,
+never blindly repeated, because a lost response does not prove the launch failed.
+
 MCP agents use the same ledger through the `channel_*` tools in [`mcp-toolkits.md`](mcp-toolkits.md).
 `CHANNEL_MCP_TOOL_NAMES` has no tool that sends to an arbitrary channel.
 

@@ -27,6 +27,7 @@ import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
 import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
+import { ReviewLedgerEntry } from "./orchestrationV2.ts";
 
 /**
  * The channel ledger: conversations keyed by their channel, the work requested in them, and
@@ -62,6 +63,7 @@ export const ChannelTaskStatus = Schema.Literals([
   "received",
   "dispatching",
   "running",
+  "reviewing",
   "waiting_input",
   "completed",
   "failed",
@@ -225,6 +227,25 @@ export type ChannelWorkerRun = typeof ChannelWorkerRun.Type;
 export const ChannelTaskKind = Schema.Literals(["work", "turn"]);
 export type ChannelTaskKind = typeof ChannelTaskKind.Type;
 
+export const ChannelTaskReview = Schema.Struct({
+  generation: PositiveInt,
+  workerRunId: RunId,
+  role: Schema.Literal("review"),
+  workerModel: ModelSelection,
+  reviewerModel: ModelSelection,
+  round: PositiveInt,
+  threadId: ThreadId,
+  startedAt: IsoDateTime,
+  remoteThreadId: Schema.optional(ThreadId),
+  workerSummary: Schema.String,
+  verdict: Schema.optional(Schema.Literals(["pass", "blockers", "failed", "skipped"])),
+  summary: Schema.optional(Schema.String),
+  finishedAt: Schema.optional(IsoDateTime),
+  // Orchestration also imports channel chips; resolve its shared finding contract lazily.
+  findings: Schema.Array(Schema.suspend(() => ReviewLedgerEntry)),
+});
+export type ChannelTaskReview = typeof ChannelTaskReview.Type;
+
 export const ChannelTask = Schema.Struct({
   taskId: ChannelTaskId,
   /** Missing on tasks stored before turns existed; those are work. */
@@ -248,6 +269,7 @@ export const ChannelTask = Schema.Struct({
   worker: Schema.optional(ChannelWorkerAssignment),
   resultSummary: Schema.optional(Schema.String),
   completionReport: Schema.optional(ChannelTaskCompletionReport),
+  review: Schema.optional(ChannelTaskReview),
   /** The person's request, quoted from the origin input, to change or forget a GOAT Bot note. */
   notesChangeRequested: Schema.optional(TrimmedNonEmptyString),
   proposedCompletion: Schema.optional(ChannelProposedCompletion),
@@ -277,6 +299,9 @@ export const ChannelTaskEventType = Schema.Literals([
   "task.question.answered",
   "task.followup.received",
   "task.completion.proposed",
+  "task.review.started",
+  "task.review.bound",
+  "task.review.finished",
   "task.completed",
   "task.failed",
   "task.cancelled",
@@ -354,6 +379,13 @@ export const ChannelTaskEvent = Schema.Union([
     generation: PositiveInt,
   }),
   taskEvent("task.completion.proposed", { proposal: ChannelProposedCompletion }),
+  taskEvent("task.review.started", { review: ChannelTaskReview }),
+  taskEvent("task.review.bound", {
+    generation: PositiveInt,
+    workerRunId: RunId,
+    threadId: ThreadId,
+  }),
+  taskEvent("task.review.finished", { review: ChannelTaskReview }),
   taskEvent("task.completed", {
     briefVersion: Schema.optional(PositiveInt),
     generation: PositiveInt,

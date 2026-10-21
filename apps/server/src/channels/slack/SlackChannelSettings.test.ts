@@ -4,6 +4,7 @@ import {
   ChannelDeliveryId,
   EnvironmentId,
   ProjectId,
+  ProviderInstanceId,
   SlackChannelConnectionId,
   type SlackChannelSettingsError,
 } from "@goat/contracts";
@@ -169,6 +170,54 @@ const fileState = (baseDir: string) =>
   });
 
 describe("SlackChannelSettings.live", () => {
+  it.effect(
+    "keeps independent review off by default and persists each connection's explicit choice",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = yield* tempBaseDir;
+        const sdk = makeFakeSlackSdk();
+        const modelSelection = {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "review-model",
+        };
+        const connectionId = yield* withServer(baseDir, sdk, (settings) =>
+          Effect.gen(function* () {
+            const initial = yield* settings.configure({ enabled: false }, owner);
+            assert.isUndefined(initial.review);
+            const changed = yield* settings.configure(
+              {
+                connectionId: initial.connectionId,
+                enabled: false,
+                review: { enabled: true, modelSelection },
+              },
+              owner,
+            );
+            assert.deepStrictEqual(changed.review, { enabled: true, modelSelection });
+            const other = yield* settings.configure({ enabled: false }, owner);
+            assert.isUndefined(other.review);
+            return initial.connectionId;
+          }),
+        );
+        yield* withServer(baseDir, sdk, (settings) =>
+          Effect.gen(function* () {
+            const restored = (yield* settings.get()).find(
+              (connection) => connection.connectionId === connectionId,
+            )!;
+            assert.deepStrictEqual(restored.review, { enabled: true, modelSelection });
+            const unchanged = yield* settings.configure(
+              { connectionId, enabled: false, allowedChannelIds: [] },
+              owner,
+            );
+            assert.deepStrictEqual(unchanged.review, restored.review);
+            const disabled = yield* settings.configure(
+              { connectionId, enabled: false, review: { enabled: false, modelSelection } },
+              owner,
+            );
+            assert.strictEqual(disabled.review?.enabled, false);
+          }),
+        );
+      }),
+  );
   it.effect("creates a connection, keeps tokens in the secret store, and survives a restart", () =>
     Effect.gen(function* () {
       const baseDir = yield* tempBaseDir;

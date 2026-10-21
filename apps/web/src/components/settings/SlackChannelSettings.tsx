@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { deriveGoatBotModelSettings } from "@goat/client-runtime/goatBot";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -19,6 +20,8 @@ import { useProjects } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
+import { useEnvironmentProviders } from "~/state/environments";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -128,6 +131,9 @@ function SlackConnectionForm(props: {
   onSaved: () => void;
 }) {
   const { environmentId, connection } = props;
+  const settings = useEnvironmentSettings(environmentId);
+  const providers = useEnvironmentProviders().get(environmentId) ?? [];
+  const reviewerChoices = deriveGoatBotModelSettings({ settings, providers }).choices;
   const configure = useAtomCommand(channelEnvironment.slackConfigure, { reportFailure: false });
   const disconnect = useAtomCommand(channelEnvironment.slackDisconnect, { reportFailure: false });
   const allProjects = useProjects();
@@ -297,6 +303,49 @@ function SlackConnectionForm(props: {
               {projects.map((project) => (
                 <SelectItem key={project.id} value={project.id}>
                   {project.title}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        }
+      />
+      <SettingsRow
+        title="Independent review"
+        description="Review successful work before reporting it done. Choose the reviewer for this Slack connection."
+        control={
+          <Switch
+            aria-label="Independent review for Slack work"
+            checked={draft.reviewEnabled === true}
+            disabled={busy}
+            onCheckedChange={(checked) => update({ reviewEnabled: checked })}
+          />
+        }
+      />
+      <SettingsRow
+        title="Reviewer model"
+        description="The selected model reviews in a separate thread. Unavailable or failed reviews are reported explicitly."
+        control={
+          <Select
+            disabled={busy}
+            value={
+              reviewerChoices.find(
+                (choice) =>
+                  choice.instanceId === draft.reviewerModel?.instanceId &&
+                  choice.model === draft.reviewerModel.model,
+              )?.key ?? ""
+            }
+            onValueChange={(key) => {
+              const choice = reviewerChoices.find((candidate) => candidate.key === key);
+              if (choice) update({ reviewerModel: choice.selection });
+            }}
+          >
+            <SelectTrigger size="sm" aria-label="Slack reviewer model">
+              <SelectValue>{draft.reviewerModel?.model ?? "Choose a model"}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {reviewerChoices.map((choice) => (
+                <SelectItem key={choice.key} value={choice.key}>
+                  {choice.providerLabel} · {choice.label}
                 </SelectItem>
               ))}
             </SelectPopup>

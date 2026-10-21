@@ -83,6 +83,7 @@ import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { choosePlacement, type PlacementCandidate } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
 import {
   applyReplicaScript,
   captureReplicaScript,
@@ -233,7 +234,12 @@ const RemoteWorkerState = Schema.Struct({
   dropped: Schema.Number,
   /** The run an answer started on the remote; reports wait until the remote shows it. */
   receipt: Schema.optional(
-    Schema.Struct({ eventId: Schema.String, runId: Schema.String, messageId: Schema.String }),
+    Schema.Struct({
+      eventId: Schema.String,
+      runId: Schema.String,
+      messageId: Schema.String,
+      fenceMessageId: Schema.optional(Schema.String),
+    }),
   ),
   /** Answers already sent, by task event id. */
   forwarded: Schema.Array(Schema.String),
@@ -587,6 +593,7 @@ export class ChannelTaskMoveError extends Data.TaggedError("ChannelTaskMoveError
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const settings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -2141,13 +2148,19 @@ const make = Effect.gen(function* () {
       const answerPending = stored.pendingAnswerMessageId !== undefined;
       if (answerPending) {
         const receipt = state.receipt;
-        if (receipt === undefined || watched?.runId !== receipt.runId) {
+        if (
+          receipt === undefined ||
+          watched?.runId !== receipt.runId ||
+          (receipt.fenceMessageId ??
+            answerForwardIdsFor(receipt.eventId as ChannelTaskEventId).messageId) !==
+            stored.pendingAnswerMessageId
+        ) {
           return answer.hasMore ? ("now" as const) : ("wait" as const);
         }
       }
       const latest = answer.latestRunId;
       if (
-        stored.task.status === "running" &&
+        (stored.task.status === "running" || stored.task.status === "reviewing") &&
         latest !== null &&
         (latest !== stored.task.worker?.runId || answerPending)
       ) {
@@ -2185,7 +2198,9 @@ const make = Effect.gen(function* () {
         stamped !== undefined &&
         watched !== null &&
         watched.runId === stored.task.worker?.runId &&
-        (stored.task.status === "running" || stored.task.status === "waiting_input") &&
+        (stored.task.status === "running" ||
+          stored.task.status === "reviewing" ||
+          stored.task.status === "waiting_input") &&
         !channelWorkerObservationEquals(stored.task.observed, stamped)
       ) {
         const card =
@@ -2347,6 +2362,18 @@ const make = Effect.gen(function* () {
           (proposal?.runId === runId ? proposal.summary : undefined) ||
           "Finished.";
         // An older remote sends no report, which settles as before with report "missing".
+        if (yield* ledger.hasPendingForward(taskId)) return "wait" as const;
+        if (
+          watched.reported?.outcome === "succeeded" &&
+          (yield* reviews.reserve(
+            stored,
+            runId,
+            watched.reported.summary?.trim() || fallbackSummary,
+            owner,
+          ))
+        ) {
+          return "wait" as const;
+        }
         yield* commitTransition(
           ledger,
           stored,
@@ -2621,10 +2648,12 @@ const make = Effect.gen(function* () {
   const sendAnswer = (pending: ChannelLedger.ChannelPendingEvent, owner: string) =>
     Effect.gen(function* () {
       const event = pending.event;
-      if (event.type !== "task.question.answered") {
+      if (event.type !== "task.question.answered" && event.type !== "task.followup.received") {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
       const stored = yield* ledger.getTask(event.taskId);
+      const answer =
+        event.type === "task.followup.received" ? event.payload.text : event.payload.answer;
       const worker = stored?.task.worker;
       const state = yield* readState(event.taskId);
       if (
@@ -2632,7 +2661,10 @@ const make = Effect.gen(function* () {
         worker?.host === undefined ||
         state === undefined ||
         state.generation !== stored.task.generation ||
-        state.remoteThreadId !== worker.threadId
+        state.remoteThreadId !== worker.threadId ||
+        (stored.task.status !== "running" && stored.task.status !== "waiting_input") ||
+        (event.type === "task.followup.received" &&
+          event.payload.generation !== stored.task.generation)
       ) {
         return yield* ledger.completeForward({ owner, sequence: pending.sequence });
       }
@@ -2654,7 +2686,10 @@ const make = Effect.gen(function* () {
           arguments: {
             threadId: worker.threadId,
             message:
-              "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
+              (event.type === "task.followup.received" ? "Follow-up from " : "Answer from ") +
+              stored.task.requester.displayName +
+              ": " +
+              answer,
             mode: "queue",
             clientRequestId: ids.commandId,
           },
@@ -2670,12 +2705,9 @@ const make = Effect.gen(function* () {
           code === "interaction_mode_escalation_denied"
         ) {
           // The remote thread's modes went above the requester's ceiling: keep the answer's intent.
-          yield* askAgain(
-            owner,
-            stored,
-            REMOTE_COPY.answerRefused(state.host, event.payload.answer),
-            { clearPendingAnswer: true },
-          );
+          yield* askAgain(owner, stored, REMOTE_COPY.answerRefused(state.host, answer), {
+            clearPendingAnswer: true,
+          });
           return yield* ledger.completeForward({ owner, sequence: pending.sequence });
         }
         // Left pending; the next pass sends it again with the same request id.
@@ -2695,6 +2727,9 @@ const make = Effect.gen(function* () {
           eventId: event.eventId,
           runId: sent.success.runId,
           messageId: sent.success.messageId,
+          ...(stored.pendingAnswerMessageId === undefined
+            ? {}
+            : { fenceMessageId: stored.pendingAnswerMessageId }),
         },
         forwarded: [...current.forwarded.slice(-19), event.eventId],
       }));

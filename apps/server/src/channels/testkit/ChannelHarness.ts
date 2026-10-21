@@ -124,6 +124,7 @@ class WorkerWorld {
   readonly shellFailures = new Set<string>();
   readonly dispatchFailures = new Set<string>();
   readonly launches: Array<ThreadLaunch.ThreadLaunchInput> = [];
+  readonly launchFailures = new Set<string>();
   readonly sends: Array<ThreadManagement.ThreadManagementSendInput> = [];
   /** Interrupts and subagent stops sent to worker threads, by thread id. */
   readonly interrupts: Array<string> = [];
@@ -235,6 +236,7 @@ const layerNoSshHosts = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
 /** A provider account on this machine as placement sees it: signed in, with one weekly window. */
 export interface FakeProviderInstance {
   readonly instanceId: string;
+  readonly models?: ReadonlyArray<{ readonly slug: string }>;
   readonly displayName?: string;
   /** The weekly window's use; absent when the account reports no quota. */
   readonly weeklyUsedPercent?: number;
@@ -256,7 +258,7 @@ const fakeInstance = (instance: FakeProviderInstance) =>
         status: instance.ready === false ? "error" : "ready",
         auth: { status: instance.ready === false ? "unauthenticated" : "authenticated" },
         // No models listed, so any model counts as offered.
-        models: [],
+        models: instance.models ?? [],
         ...(instance.weeklyUsedPercent === undefined
           ? {}
           : {
@@ -557,11 +559,23 @@ export function makeHarness(
 
   const layerScriptedLaunch = Layer.mock(ThreadLaunch.ThreadLaunchService)({
     launch: (input) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         world.launches.push(input);
         const threadId = input.threadId ?? ThreadId.make("thread:worker:" + input.commandId);
+        if (world.launchFailures.has(threadId))
+          return yield* new ThreadLaunch.ThreadLaunchError({
+            operation: "create-thread",
+            commandId: input.commandId,
+            projectId: input.projectId,
+            cause: new Error("Fixture launch failure"),
+          });
         // Same command, same thread and run: a retried launch finds what the first one made.
-        if (!world.runs.has(threadId) && input.initialMessage?.messageId !== undefined) {
+        if (
+          input.initialMessage?.messageId !== undefined &&
+          !(world.runs.get(threadId) ?? []).some(
+            (run) => run.userMessageId === input.initialMessage!.messageId,
+          )
+        ) {
           world.addRun(threadId, input.initialMessage.messageId);
         }
         return {
@@ -606,6 +620,8 @@ export function makeHarness(
     }),
     Layer.mock(ProjectStore.ProjectStoreV2)({
       listShells: () => Effect.succeed(shells as never),
+      getShell: (id) =>
+        Effect.succeed(Option.fromNullishOr(shells.find((shell) => shell.id === id)) as never),
     }),
     Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
       // Every instance exists and lists no models, so any model counts as offered.

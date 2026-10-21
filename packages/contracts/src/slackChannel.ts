@@ -34,6 +34,12 @@ export const SlackChannelDefaultTarget = Schema.Struct({
 });
 export type SlackChannelDefaultTarget = typeof SlackChannelDefaultTarget.Type;
 
+export const SlackChannelReviewSettings = Schema.Struct({
+  enabled: Schema.Boolean,
+  modelSelection: ModelSelection,
+});
+export type SlackChannelReviewSettings = typeof SlackChannelReviewSettings.Type;
+
 /** The most recent failed delivery, without secrets or the raw Slack response. */
 export const SlackChannelDeliveryError = Schema.Struct({
   code: ChannelDeliveryErrorCode,
@@ -51,6 +57,7 @@ export const SlackChannelSettings = Schema.Struct({
   botUserId: Schema.optional(TrimmedNonEmptyString),
   allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  review: Schema.optional(SlackChannelReviewSettings),
   status: SlackChannelConnectionStatus,
   /** Redacted; never contains a token. */
   lastError: Schema.optional(Schema.String),
@@ -71,6 +78,7 @@ export const SlackChannelConfigureInput = Schema.Struct({
   clearCredentials: Schema.optional(Schema.Boolean),
   allowedChannelIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  review: Schema.optional(SlackChannelReviewSettings),
 });
 export type SlackChannelConfigureInput = typeof SlackChannelConfigureInput.Type;
 

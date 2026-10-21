@@ -10,6 +10,7 @@ import type { ChannelTask, ChannelWorkerRun } from "@goat/contracts";
 export type WorkItemState =
   | "queued"
   | "in progress"
+  | "reviewing"
   | "waiting on you"
   | "result not sent yet"
   | "result not delivered"
@@ -32,6 +33,8 @@ export const workItemState = (task: ChannelTask, delivery: string | undefined): 
       return "queued";
     case "running":
       return "in progress";
+    case "reviewing":
+      return "reviewing";
     case "waiting_input":
       return "waiting on you";
     case "completed":

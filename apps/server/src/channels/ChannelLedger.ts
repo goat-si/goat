@@ -245,6 +245,10 @@ export class ChannelLedger extends Context.Service<
     readonly listTasksByStatus: (
       statuses: ReadonlyArray<ChannelTaskStatus>,
     ) => Effect.Effect<ReadonlyArray<ChannelStoredTask>, ChannelLedgerError>;
+    readonly listTaskReviews: () => Effect.Effect<
+      ReadonlyArray<ChannelStoredTask>,
+      ChannelLedgerError
+    >;
     /** Finished local tasks whose bound run's check has advanced since its last observation. */
     readonly listLocalCheckUpdates: () => Effect.Effect<
       ReadonlyArray<ChannelStoredTask>,
@@ -474,6 +478,15 @@ export class ChannelLedger extends Context.Service<
       readonly update: RemoteWorkerStateUpdate;
       readonly now: string;
     }) => Effect.Effect<string | undefined, ChannelLedgerError>;
+    readonly getReviewDispatch: (
+      key: string,
+    ) => Effect.Effect<string | undefined, ChannelLedgerError>;
+    readonly reserveReviewDispatch: (input: {
+      readonly owner: string;
+      readonly key: string;
+      readonly value: string;
+      readonly now: string;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly setWorkerCursor: (input: {
       readonly owner: string;
       readonly cursor: number;
@@ -1340,6 +1353,17 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("countWaitingTasks")),
       ),
 
+    listTaskReviews: () =>
+      sql<TaskRow>`
+        SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
+        WHERE status = 'reviewing' OR (status = 'cancelled'
+          AND json_type(task_json, '$.review') = 'object'
+          AND json_type(task_json, '$.review.verdict') IS NULL)
+      `.pipe(
+        Effect.map((rows) => rows.map(storedTask)),
+        Effect.mapError(toLedgerError("listTaskReviews")),
+      ),
+
     findTaskByWorkerThread: (threadId) =>
       sql<TaskRow>`
         SELECT owner_id, task_json, pending_answer_message_id, completion_hold FROM channel_tasks
@@ -1954,6 +1978,29 @@ const make = Effect.gen(function* () {
           fence(input.owner).pipe(Effect.andThen(patchRemoteWorker(input.update, input.now))),
         )
         .pipe(Effect.mapError(toLedgerError("updateRemoteWorker"))),
+
+    getReviewDispatch: (key) =>
+      sql<{ readonly value_json: string }>`
+        SELECT value_json FROM channel_runtime_state WHERE key = ${"review:" + key}
+      `.pipe(
+        Effect.map((rows) => rows[0]?.value_json),
+        Effect.mapError(toLedgerError("getReviewDispatch")),
+      ),
+
+    reserveReviewDispatch: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* fence(input.owner);
+            const rows = yield* sql<{ readonly key: string }>`
+          INSERT INTO channel_runtime_state (key, value_json, updated_at)
+          VALUES (${"review:" + input.key}, ${input.value}, ${input.now})
+          ON CONFLICT (key) DO NOTHING RETURNING key
+        `;
+            return rows.length === 1;
+          }),
+        )
+        .pipe(Effect.mapError(toLedgerError("reserveReviewDispatch"))),
 
     setWorkerCursor: (input) =>
       sql

@@ -16,6 +16,7 @@ import {
   RuntimeMode,
   SlackChannelConnectionId,
   SlackChannelDefaultTarget,
+  SlackChannelReviewSettings,
   SlackChannelSettingsError,
   TrimmedNonEmptyString,
   type SlackChannelConfigureInput,
@@ -64,6 +65,7 @@ const StoredConnection = Schema.Struct({
   revoked: Schema.optional(Schema.Literals(["bot_revoked", "app_uninstalled"])),
   allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
+  review: Schema.optional(SlackChannelReviewSettings),
   owner: Schema.optional(StoredOwner),
 });
 type StoredConnection = typeof StoredConnection.Type;
@@ -252,6 +254,7 @@ export const make = Effect.gen(function* () {
         enabled: connection.enabled,
         hasAppToken: yield* hasSecret(appTokenSecretName(connection.connectionId)),
         hasBotToken: yield* hasSecret(botTokenSecretName(connection.connectionId)),
+        ...(connection.review === undefined ? {} : { review: connection.review }),
         ...(connection.teamId === undefined ? {} : { teamId: connection.teamId }),
         ...(connection.botUserId === undefined ? {} : { botUserId: connection.botUserId }),
         allowedChannelIds: connection.allowedChannelIds,
@@ -467,6 +470,7 @@ export const make = Effect.gen(function* () {
             : { teamId: identity.teamId, botUserId: identity.botUserId }),
           allowedChannelIds: input.allowedChannelIds ?? base.allowedChannelIds,
           ...(input.defaultTarget === undefined ? {} : { defaultTarget: input.defaultTarget }),
+          ...(input.review === undefined ? {} : { review: input.review }),
           owner: resolvedOwner,
         };
         if (next.enabled) {

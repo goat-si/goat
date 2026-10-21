@@ -1292,6 +1292,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const event = pending.event;
       if (event.type === "task.followup.received") {
+        const stored = yield* ledger.getTask(event.taskId);
+        if (stored?.task.worker?.host !== undefined)
+          return yield* remoteWorkers.forward(pending, owner);
         return yield* forwardFollowUp(pending, event, owner);
       }
       if (event.type === "task.cancelled") return yield* stopWorker(pending, owner);

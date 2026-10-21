@@ -46,6 +46,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -164,6 +165,7 @@ const noNeeds: ReadonlyArray<ChannelTaskNeedsYou> = [];
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
 
@@ -469,6 +471,16 @@ const make = Effect.gen(function* () {
           (latest.task.proposedCompletion?.runId === current.id
             ? latest.task.proposedCompletion.summary
             : "Finished.");
+        if (
+          reported?.outcome === "succeeded" &&
+          (yield* reviews.reserve(
+            latest,
+            current.id,
+            reported.summary?.trim() || fallbackSummary,
+            owner,
+          ))
+        )
+          return true;
         yield* commitTransition(
           ledger,
           latest,
@@ -510,7 +522,7 @@ const make = Effect.gen(function* () {
 
   const reconcile: ChannelWorkerReports["Service"]["reconcile"] = (owner) =>
     Effect.gen(function* () {
-      const active = yield* ledger.listTasksByStatus(["running", "waiting_input"]);
+      const active = yield* ledger.listTasksByStatus(["running", "reviewing", "waiting_input"]);
       let changed = 0;
       for (const stored of active) {
         if (yield* reconcileTask(stored, owner)) changed += 1;

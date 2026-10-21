@@ -157,3 +157,26 @@ describe("slackDeliveryErrorMessage", () => {
     ).toBe("Invite the bot to C0AAAAAAAA so it can reply there.");
   });
 });
+
+describe("Slack independent review form", () => {
+  it("defaults off and requires an explicit model before enabling", () => {
+    const draft = slackSettingsDraft(saved);
+    expect(draft.reviewEnabled).toBe(false);
+    expect(slackConfigureInput({ ...draft, reviewEnabled: true }, saved)._tag).toBe("invalid");
+  });
+  it("round-trips and disables the connection's reviewer without changing the worker model", () => {
+    const review = {
+      enabled: true,
+      modelSelection: { ...saved.defaultTarget!.modelSelection!, model: "review-model" },
+    };
+    const connection = { ...saved, review };
+    const result = slackConfigureInput(
+      { ...slackSettingsDraft(connection), reviewEnabled: false },
+      connection,
+    );
+    expect(result._tag).toBe("ok");
+    if (result._tag !== "ok") throw new Error("expected valid settings");
+    expect(result.input.review).toEqual({ ...review, enabled: false });
+    expect(result.input.defaultTarget?.modelSelection).toEqual(saved.defaultTarget!.modelSelection);
+  });
+});

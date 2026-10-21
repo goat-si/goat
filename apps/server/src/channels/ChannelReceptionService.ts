@@ -1550,6 +1550,7 @@ const make = Effect.gen(function* () {
             (task.status === "received" ||
               task.status === "dispatching" ||
               task.status === "running" ||
+              task.status === "reviewing" ||
               task.status === "waiting_input") &&
             sender !== undefined &&
             mayAnswerFor(sender, task.requester),
@@ -1758,6 +1759,11 @@ const make = Effect.gen(function* () {
             task.title +
             (event.payload.summary.trim() === "" ? "" : "\n" + event.payload.summary),
         };
+      case "task.review.started":
+        return {
+          kind: "receipt" as const,
+          text: "Reviewing: " + task.title + " (" + event.payload.review.reviewerModel.model + ").",
+        };
       case "task.failed":
         return {
           kind: "failure" as const,
@@ -1837,7 +1843,9 @@ const make = Effect.gen(function* () {
       // Questions and a turn's answer keep their exact words; other results and failures may be
       // phrased by the model.
       const worded =
-        base.kind === "question" || (task.kind === "turn" && base.kind === "result")
+        base.kind === "question" ||
+        task.review !== undefined ||
+        (task.kind === "turn" && base.kind === "result")
           ? base.text
           : Option.match(
               yield* generate({

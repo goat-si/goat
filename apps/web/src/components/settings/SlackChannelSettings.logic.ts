@@ -1,5 +1,6 @@
 import type {
   ProjectId,
+  ModelSelection,
   SlackChannelConfigureInput,
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
@@ -80,6 +81,8 @@ export interface SlackSettingsDraft {
   readonly channels: string;
   /** Empty means no default project. */
   readonly projectId: string;
+  readonly reviewEnabled?: boolean;
+  readonly reviewerModel?: ModelSelection;
 }
 
 export function slackSettingsDraft(settings: SlackChannelSettings | undefined): SlackSettingsDraft {
@@ -89,6 +92,8 @@ export function slackSettingsDraft(settings: SlackChannelSettings | undefined): 
     botToken: "",
     channels: settings?.allowedChannelIds.join(", ") ?? "",
     projectId: settings?.defaultTarget?.projectId ?? "",
+    reviewEnabled: settings?.review?.enabled ?? false,
+    ...(settings?.review === undefined ? {} : { reviewerModel: settings.review.modelSelection }),
   };
 }
 
@@ -105,6 +110,12 @@ export function slackConfigureInput(
   settings: SlackChannelSettings | undefined,
 ): SlackConfigureDraftResult {
   const appToken = draft.appToken.trim();
+  if (draft.reviewEnabled && draft.reviewerModel === undefined) {
+    return {
+      _tag: "invalid",
+      message: "Choose a reviewer model before enabling independent review.",
+    };
+  }
   const botToken = draft.botToken.trim();
   if (appToken.length > 0 && !appToken.startsWith("xapp-")) {
     return { _tag: "invalid", message: "The app-level token starts with xapp-." };
@@ -140,6 +151,14 @@ export function slackConfigureInput(
       ...(botToken.length > 0 ? { botToken } : {}),
       allowedChannelIds: channels.ids,
       defaultTarget,
+      ...(draft.reviewerModel === undefined
+        ? {}
+        : {
+            review: {
+              enabled: draft.reviewEnabled === true,
+              modelSelection: draft.reviewerModel,
+            },
+          }),
     },
   };
 }

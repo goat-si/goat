@@ -14,6 +14,7 @@ import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { SlackReviewSettings } from "./SlackReviewSettings";
 /** The home belongs to the cluster, independent of the Settings environment filter. */
 export function SettingsGoatBotRouteScreen() {
   const { supported, resolution, targets, environments, writableIds, busy, error, changeHome } =
@@ -81,6 +82,9 @@ export function SettingsGoatBotRouteScreen() {
                   />
                 ))}
             </SettingsSection>
+            {resolution.state === "claimed" && resolution.homeConnected ? (
+              <SlackReviewSettings environmentId={resolution.claim.environmentId} />
+            ) : null}
             {resolution.state === "claimed" && resolution.homeConnected ? (
               <GoatBotModelSection
                 key={resolution.claim.environmentId}

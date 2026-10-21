@@ -29,6 +29,12 @@ const chip = (overrides: Partial<ChannelTaskChip> = {}): ChannelTaskChip => ({
 });
 
 describe("presentTaskChip", () => {
+  it("presents an open independent review consistently to web and mobile", () => {
+    const card = presentTaskChip(chip({ status: "reviewing" }));
+    expect(card.statusLabel).toBe("Reviewing");
+    expect(card.tone).toBe("active");
+    expect(card.target).toEqual({ kind: "thread", environmentId: "env", threadId: "worker" });
+  });
   it("links a running task to its worker thread", () => {
     expect(presentTaskChip(chip())).toEqual({
       key: "task-1",

@@ -130,6 +130,17 @@ GOAT Bot screen shows only a chip for the work and its final report.
   needs you to sign in again or a usage limit, so you know whether resending
   helps.
 
+## Independent review
+
+Independent review is optional for each Slack connection. In **Settings → Integrations → GOAT
+Bot → Slack**, choose a reviewer model and enable **Independent review**. On mobile, choose a
+model under that connection's **Slack review** section. It is off by default.
+
+Successful work waits for a separate reviewer before GOAT reports it done. A passing review names
+the reviewer model alongside the worker's summary. Blockers go back to the worker once; if the
+next review still finds blockers, GOAT asks you how to continue. An unavailable, failed, or timed-out
+review is reported explicitly and does not count as a pass. Turn review off in the same settings.
+
 ## iMessage (Mac)
 
 GOAT can read direct text messages from allowed iMessage handles on the Mac running its server

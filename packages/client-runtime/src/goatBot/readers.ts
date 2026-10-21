@@ -28,6 +28,7 @@ const TASK_STATUS = {
   received: { label: "Received", tone: "neutral" },
   dispatching: { label: "Starting", tone: "active" },
   running: { label: "Working", tone: "active" },
+  reviewing: { label: "Reviewing", tone: "active" },
   waiting_input: { label: "Needs your input", tone: "attention" },
   completed: { label: "Done", tone: "success" },
   failed: { label: "Failed", tone: "danger" },
