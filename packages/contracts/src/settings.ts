@@ -2,6 +2,7 @@ import {
   MemoryHubSettings,
   MemoryOwnerSourceReadPolicy,
   DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY,
+  ORCHESTRATION_HISTORY_BUDGET_BYTES,
 } from "./memory.ts";
 import * as Predicate from "effect/Predicate";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
@@ -1020,6 +1021,9 @@ const StorageRetentionDays = Schema.NullOr(
 const SettledWorktreeRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3650 })),
 );
+const HistoryBudgetBytes = Schema.Int.check(
+  Schema.isBetween({ minimum: 268435456, maximum: 1099511627776 }),
+);
 
 export const WorktreeKeepWhen = Schema.Literals([
   "any-local-files",
@@ -1266,6 +1270,17 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Above this, compaction trims bulky tool output in threads idle for a week, oldest first. */
+  historyBudgetBytes: HistoryBudgetBytes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_BUDGET_BYTES)),
+  ),
+  /**
+   * Threads idle this many days lose their turn items: tool calls, output and reasoning. Titles,
+   * messages and runs stay. Null, the default, keeps every thread whole.
+   */
+  historyRetireThreadsAfterDays: StorageRetentionDays.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
@@ -1778,6 +1793,8 @@ const ServerSettingsPatchFields = Schema.Struct({
       worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
       browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
       logsAfterDays: Schema.optionalKey(StorageRetentionDays),
+      historyBudgetBytes: Schema.optionalKey(HistoryBudgetBytes),
+      historyRetireThreadsAfterDays: Schema.optionalKey(StorageRetentionDays),
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),

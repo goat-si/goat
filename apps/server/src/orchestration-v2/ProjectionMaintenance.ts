@@ -1,14 +1,21 @@
-import { ThreadId } from "@goat/contracts";
+import {
+  ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES,
+  ORCHESTRATION_HISTORY_TRIM_IDLE_MS,
+  ThreadId,
+} from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import * as EventStore from "./EventStore.ts";
+import { trimHistoryItem } from "./historyTrim.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 export interface ProjectionVerificationV2 {
@@ -40,7 +47,33 @@ export interface ProjectionMaintenanceV2Shape {
     },
     ProjectionMaintenanceError
   >;
+  /**
+   * Bounds orchestration history. Retires threads idle past the retirement window when one is
+   * set, then, while history is over budget, trims bulky tool output in threads idle a week,
+   * oldest first. Works in fixed pages and yields between them.
+   */
+  readonly retireHistory: (
+    policy: HistoryRetentionPolicy,
+  ) => Effect.Effect<HistoryRetentionResult, ProjectionMaintenanceError>;
 }
+
+export interface HistoryRetentionPolicy {
+  readonly budgetBytes: number;
+  readonly retireThreadsAfterDays: number | null;
+  readonly now: number;
+}
+
+export interface HistoryRetentionResult {
+  /** History before the pass: allocated database pages minus memory tables. */
+  readonly historyBytes: number;
+  readonly retiredThreads: number;
+  readonly trimmedRows: number;
+  /** Payload bytes removed. Pages return to the freelist; the file shrinks on vacuum. */
+  readonly reclaimedBytes: number;
+}
+
+/** Rows one history statement examines; the pass yields to the event loop between pages. */
+export const HISTORY_PAGE_ROWS = 64;
 
 export class ProjectionMaintenanceV2 extends Context.Service<
   ProjectionMaintenanceV2,
@@ -55,6 +88,14 @@ type ProjectionMetadataRow = {
 const encodeEntityKey = Schema.encodeSync(
   Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String, Schema.NullOr(Schema.String)])),
 );
+const decodePayloadObjectOption = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+const encodePayloadObject = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+const decodePayloadObject = (json: string) =>
+  Option.getOrUndefined(decodePayloadObjectOption(json));
 
 export const layer: Layer.Layer<
   ProjectionMaintenanceV2,
@@ -397,10 +438,274 @@ export const layer: Layer.Layer<
       return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
     });
 
+    // Memory's own storage sample, refreshed hourly. Measuring here would cost a dbstat walk
+    // of the memory tables, and memory is small next to a history budget.
+    const memoryBytes = sql<{ readonly bytes: number | null }>`
+      SELECT sum(json_extract(current_sample_json, '$.memoryAllocatedBytes')) AS bytes
+      FROM memory_compaction_state WHERE space LIKE '\_environment:%' ESCAPE '\'
+    `.pipe(
+      Effect.map((rows) => rows[0]?.bytes ?? 0),
+      Effect.orElseSucceed(() => 0),
+    );
+    const allocatedBytes = Effect.gen(function* () {
+      const pages = yield* sql<{ readonly page_count: number }>`PRAGMA page_count`;
+      const free = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
+      const size = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
+      return (
+        ((pages[0]?.page_count ?? 0) - (free[0]?.freelist_count ?? 0)) * (size[0]?.page_size ?? 0)
+      );
+    });
+
+    // Event payloads go first: if the pass stops midway, the projection still shows what the
+    // next pass has left to do, and it revisits the thread.
+    const threadEventPages = (
+      threadId: string,
+      visit: (sequences: ReadonlyArray<number>) => Effect.Effect<void, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        let after = 0;
+        while (true) {
+          const page = yield* sql<{ readonly sequence: number }>`
+            SELECT sequence FROM orchestration_events
+            WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+              AND stream_id = ${threadId} AND sequence > ${after}
+            ORDER BY sequence LIMIT ${HISTORY_PAGE_ROWS}
+          `;
+          if (page.length === 0) return;
+          yield* visit(page.map((row) => row.sequence));
+          yield* Effect.yieldNow;
+          if (page.length < HISTORY_PAGE_ROWS) return;
+          after = page.at(-1)!.sequence;
+        }
+      });
+
+    const threadItemPages = (
+      threadId: string,
+      visit: (ids: ReadonlyArray<string>) => Effect.Effect<boolean, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        let afterOrdinal = Number.MIN_SAFE_INTEGER;
+        let afterId = "";
+        while (true) {
+          const page = yield* sql<{ readonly turn_item_id: string; readonly ordinal: number }>`
+            SELECT turn_item_id, ordinal FROM orchestration_v2_projection_turn_items
+            WHERE thread_id = ${threadId} AND (ordinal, turn_item_id) > (${afterOrdinal}, ${afterId})
+            ORDER BY ordinal, turn_item_id LIMIT ${HISTORY_PAGE_ROWS}
+          `;
+          if (page.length === 0) return;
+          const more = yield* visit(page.map((row) => row.turn_item_id));
+          yield* Effect.yieldNow;
+          if (!more || page.length < HISTORY_PAGE_ROWS) return;
+          afterOrdinal = page.at(-1)!.ordinal;
+          afterId = page.at(-1)!.turn_item_id;
+        }
+      });
+
+    /**
+     * Bounds on one retirement delete. Freeing overflow pages costs time in proportion to bytes,
+     * and each row also updates about ten indexes.
+     */
+    const RETIRE_BATCH_BYTES = 262_144;
+    const RETIRE_BATCH_ROWS = 16;
+
+    // Groups keys so each delete stays within both bounds, yielding between deletes.
+    const deleteInBatches = <K extends string | number>(
+      rows: ReadonlyArray<{ readonly key: K; readonly bytes: number }>,
+      remove: (keys: ReadonlyArray<K>) => Effect.Effect<unknown, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        let batch: K[] = [];
+        let bytes = 0;
+        let removed = 0;
+        for (const row of rows) {
+          batch.push(row.key);
+          bytes += row.bytes;
+          if (bytes < RETIRE_BATCH_BYTES && batch.length < RETIRE_BATCH_ROWS) continue;
+          yield* remove(batch);
+          removed += bytes;
+          batch = [];
+          bytes = 0;
+          yield* Effect.yieldNow;
+        }
+        if (batch.length > 0) {
+          yield* remove(batch);
+          removed += bytes;
+          yield* Effect.yieldNow;
+        }
+        return removed;
+      });
+
+    const retireThread = Effect.fn("ProjectionMaintenance.retireThread")(function* (
+      threadId: string,
+    ) {
+      let removed = 0;
+      yield* threadEventPages(threadId, (sequences) =>
+        Effect.gen(function* () {
+          const rows = yield* sql<{ readonly key: number; readonly bytes: number }>`
+            SELECT sequence AS key, octet_length(payload_json) AS bytes FROM orchestration_events
+            WHERE sequence IN ${sql.in(sequences)} AND event_type = 'turn-item.updated'
+          `;
+          removed += yield* deleteInBatches(
+            rows,
+            (keys) => sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(keys)}`,
+          );
+        }),
+      );
+      // Pages restart at the front because each one deletes what it read.
+      while (true) {
+        const rows = yield* sql<{ readonly key: string; readonly bytes: number }>`
+          SELECT turn_item_id AS key, octet_length(payload_json) AS bytes FROM orchestration_v2_projection_turn_items
+          WHERE thread_id = ${threadId} LIMIT ${HISTORY_PAGE_ROWS}
+        `;
+        if (rows.length === 0) break;
+        removed += yield* deleteInBatches(rows, (keys) =>
+          Effect.gen(function* () {
+            yield* sql`DELETE FROM orchestration_v2_turn_item_positions WHERE thread_id = ${threadId} AND turn_item_id IN ${sql.in(keys)}`;
+            yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id IN ${sql.in(keys)}`;
+          }),
+        );
+      }
+      return removed;
+    });
+
+    // One row per statement, with a yield after each: a single tool output can be a megabyte,
+    // so a page of them read at once would hold the event loop for tens of milliseconds.
+    const trimEach = <K extends string | number>(
+      keys: ReadonlyArray<K>,
+      read: (key: K) => Effect.Effect<ReadonlyArray<{ readonly payload_json: string }>, SqlError>,
+      write: (key: K, payload: string) => Effect.Effect<unknown, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        let saved = 0;
+        let trimmed = 0;
+        for (const key of keys) {
+          const [row] = yield* read(key);
+          const item = row === undefined ? undefined : decodePayloadObject(row.payload_json);
+          const next = item === undefined ? null : trimHistoryItem(item);
+          if (row !== undefined && next !== null) {
+            const json = encodePayloadObject(next);
+            yield* write(key, json);
+            saved += row.payload_json.length - json.length;
+            trimmed++;
+          }
+          yield* Effect.yieldNow;
+        }
+        return { saved, trimmed };
+      });
+
+    const trimThread = Effect.fn("ProjectionMaintenance.trimThread")(function* (
+      threadId: string,
+      wanted: number,
+    ) {
+      let saved = 0;
+      let trimmed = 0;
+      yield* threadEventPages(threadId, (sequences) =>
+        Effect.gen(function* () {
+          const keys = yield* sql<{ readonly sequence: number }>`
+            SELECT sequence FROM orchestration_events
+            WHERE sequence IN ${sql.in(sequences)} AND event_type = 'turn-item.updated'
+              AND octet_length(payload_json) > ${ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES}
+          `;
+          const result = yield* trimEach(
+            keys.map((row) => row.sequence),
+            (sequence) =>
+              sql<{
+                readonly payload_json: string;
+              }>`SELECT payload_json FROM orchestration_events WHERE sequence = ${sequence}`,
+            (sequence, payload) =>
+              sql`UPDATE orchestration_events SET payload_json = ${payload} WHERE sequence = ${sequence}`,
+          );
+          saved += result.saved;
+          trimmed += result.trimmed;
+        }),
+      );
+      yield* threadItemPages(threadId, (ids) =>
+        Effect.gen(function* () {
+          const keys = yield* sql<{ readonly turn_item_id: string }>`
+            SELECT turn_item_id FROM orchestration_v2_projection_turn_items
+            WHERE turn_item_id IN ${sql.in(ids)}
+              AND type IN ('command_execution', 'dynamic_tool', 'reasoning')
+              AND octet_length(payload_json) > ${ORCHESTRATION_HISTORY_TRIM_FIELD_BYTES}
+          `;
+          const result = yield* trimEach(
+            keys.map((row) => row.turn_item_id),
+            (id) =>
+              sql<{
+                readonly payload_json: string;
+              }>`SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${id}`,
+            (id, payload) =>
+              sql`UPDATE orchestration_v2_projection_turn_items SET payload_json = ${payload} WHERE turn_item_id = ${id}`,
+          );
+          saved += result.saved;
+          trimmed += result.trimmed;
+          return saved < wanted;
+        }),
+      );
+      return { saved, trimmed };
+    });
+
+    // Oldest first; visit returns false to stop the walk.
+    const idleThreads = (
+      idleBeforeMs: number,
+      visit: (threadId: string) => Effect.Effect<boolean, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        const idleBefore = DateTime.formatIso(DateTime.makeUnsafe(idleBeforeMs));
+        let afterAt = "";
+        let afterId = "";
+        while (true) {
+          const page = yield* sql<{ readonly thread_id: string; readonly updated_at: string }>`
+            SELECT thread_id, updated_at FROM orchestration_v2_projection_threads
+            WHERE updated_at < ${idleBefore} AND (updated_at, thread_id) > (${afterAt}, ${afterId})
+            ORDER BY updated_at, thread_id LIMIT ${HISTORY_PAGE_ROWS}
+          `;
+          for (const row of page) if (!(yield* visit(row.thread_id))) return;
+          if (page.length < HISTORY_PAGE_ROWS) return;
+          afterAt = page.at(-1)!.updated_at;
+          afterId = page.at(-1)!.thread_id;
+        }
+      });
+
+    const retireHistory = Effect.fn("ProjectionMaintenance.retireHistory")(function* (
+      policy: HistoryRetentionPolicy,
+    ) {
+      const memory = yield* memoryBytes;
+      const historyBytes = Effect.map(allocatedBytes, (bytes) => Math.max(0, bytes - memory));
+      const before = yield* historyBytes;
+      let reclaimedBytes = 0;
+      let retiredThreads = 0;
+      let trimmedRows = 0;
+      if (policy.retireThreadsAfterDays !== null)
+        yield* idleThreads(policy.now - policy.retireThreadsAfterDays * 86_400_000, (threadId) =>
+          retireThread(threadId).pipe(
+            Effect.map((removed) => {
+              if (removed > 0) retiredThreads++;
+              reclaimedBytes += removed;
+              return true;
+            }),
+          ),
+        );
+      // Payload bytes overstate the pages a trim frees, so the walk re-measures after each thread.
+      let current = reclaimedBytes > 0 ? yield* historyBytes : before;
+      if (current > policy.budgetBytes)
+        yield* idleThreads(policy.now - ORCHESTRATION_HISTORY_TRIM_IDLE_MS, (threadId) =>
+          Effect.gen(function* () {
+            const { saved, trimmed } = yield* trimThread(threadId, current - policy.budgetBytes);
+            reclaimedBytes += saved;
+            trimmedRows += trimmed;
+            if (trimmed > 0) current = yield* historyBytes;
+            return current > policy.budgetBytes;
+          }),
+        );
+      return { historyBytes: before, retiredThreads, trimmedRows, reclaimedBytes };
+    });
+
     return ProjectionMaintenanceV2.of({
       verify: mapError("verify")(verify),
       rebuild: mapError("rebuild")(rebuild),
       compactEventStore: mapError("compact event store")(compactEventStore),
+      retireHistory: (policy) => mapError("retire history")(retireHistory(policy)),
     });
   }),
 );
+
