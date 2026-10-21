@@ -1,5 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, FirstRunPromptId } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useContext, useEffect, useState } from "react";
 
@@ -75,17 +75,21 @@ function HubFirstRunPrompts({
     goatclawOn: hubOn || goatclaw.enabled,
     canConfigure,
   });
-  const answeredElsewhere = plan.answeredElsewhere.join(",");
+  // Turn on changes the very settings the plan reads, so the open dialog stays until it closes.
+  const [open, setOpen] = useState<FirstRunPromptId | null>(null);
+  if (open === null && (plan.show === "opencodex" || plan.show === "goatclaw")) setOpen(plan.show);
+  const show = open ?? plan.show;
+  const answeredElsewhere = plan.answeredElsewhere.filter((id) => id !== open).join(",");
   useEffect(() => {
     for (const id of answeredElsewhere.split(",")) {
       if (id === "opencodex" || id === "goatclaw") void recordFirstRunPrompt(id, "answered");
     }
   }, [answeredElsewhere]);
 
-  if (plan.show === "computerUse")
+  if (show === "computerUse")
     return <ComputerUseFirstRunPrompt environmentId={environmentId} onClosed={onClosed} />;
   if (situation === "loading" || situation === null) return null;
-  if (plan.show === "opencodex")
+  if (show === "opencodex")
     return (
       <OpenCodexFirstRunDialog
         hostLabel={hostLabel()}
@@ -99,7 +103,7 @@ function HubFirstRunPrompts({
         }}
       />
     );
-  if (plan.show === "goatclaw" && situation.kind !== "linked")
+  if (show === "goatclaw" && situation.kind !== "linked")
     return (
       <GoatclawFirstRunDialog
         hostLabel={hostLabel()}
