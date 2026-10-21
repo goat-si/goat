@@ -61,6 +61,7 @@ import * as Claims from "../orchestration-v2/AttachmentClaims.ts";
 import * as ServerConfig from "../config.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import { AcpMcpBridgeError, callAcpMcpTool, listAcpMcpTools } from "../mcp/AcpMcpStdioBridge.ts";
+import { remoteDeadlineMessage, remoteUnavailableMessage } from "./remoteFailureCopy.ts";
 import {
   buildRemoteBrowseScript,
   parseRemoteBrowseOutput,
@@ -1908,7 +1909,7 @@ const make = Effect.gen(function* () {
             );
           return Effect.fail(
             error.kind === "transport" || error.kind === "http"
-              ? failure("host_unavailable", `GOAT on ${alias} is unavailable: ${describe(error)}`)
+              ? failure("host_unavailable", remoteUnavailableMessage(alias, error))
               : failure(
                   "remote_refused",
                   `GOAT on ${alias} could not run ${call.tool}: ${describe(error)}`,
@@ -1919,7 +1920,7 @@ const make = Effect.gen(function* () {
       if (Option.isNone(answer))
         return yield* failure(
           "host_unavailable",
-          `${alias} did not answer ${call.tool} within ${Math.round(call.timeoutMs / 1000)}s.`,
+          remoteDeadlineMessage(alias, call.tool, call.timeoutMs),
         );
       const result = readRemoteToolResult(call.tool, answer.value);
       if (!result.ok)
@@ -2003,7 +2004,7 @@ const make = Effect.gen(function* () {
         if (Option.isNone(answer)) {
           return yield* failure(
             "host_unavailable",
-            `${target.alias} did not answer ${call.tool} within ${Math.round(call.timeoutMs / 1000)}s.`,
+            remoteDeadlineMessage(target.alias, call.tool, call.timeoutMs),
           );
         }
         const result = readRemoteToolResult(call.tool, answer.value);
@@ -2051,10 +2052,7 @@ const make = Effect.gen(function* () {
           }
           return Effect.fail(
             error.kind === "transport" || error.kind === "http"
-              ? failure(
-                  "host_unavailable",
-                  `GOAT on ${target.alias} is unavailable: ${describe(error)}`,
-                )
+              ? failure("host_unavailable", remoteUnavailableMessage(target.alias, error))
               : failure(
                   "remote_refused",
                   `GOAT on ${target.alias} could not run ${call.tool}: ${describe(error)}`,

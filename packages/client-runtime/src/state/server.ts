@@ -1065,6 +1065,18 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverRunStorageCleanup,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    /** Runs that machine's history compaction now; Fleet offers it when storage is over budget. */
+    compactStorage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:compact-storage",
+      tag: WS_METHODS.serverCompactStorage,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    /** Stops the stray GOAT servers that machine's host status lists. */
+    cleanUpStrayProcesses: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:clean-up-stray-processes",
+      tag: WS_METHODS.serverCleanUpStrayProcesses,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     databaseStorage,
     databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {

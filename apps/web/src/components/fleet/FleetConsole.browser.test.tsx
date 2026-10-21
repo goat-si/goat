@@ -45,6 +45,7 @@ vi.mock(import("./fleetConsoleTelemetry"), async () => {
         lastSeen: new Map(),
         loading: false,
         failed: [],
+        pendingSince: new Map(),
         sampledAt: SAMPLED_AT,
         observedAt: SAMPLED_AT,
       };
@@ -210,7 +211,7 @@ describe("FleetConsoleSlot", () => {
       item.textContent?.includes(version),
     )!;
     const detail = alert.querySelector<HTMLElement>("[tabindex]")!;
-    expect(detail.textContent).toBe("Runs GOAT " + version);
+    expect(detail.textContent).toBe("box Runs GOAT " + version);
     const line = Number.parseFloat(getComputedStyle(detail).lineHeight);
     const height = detail.getBoundingClientRect().height;
     expect(height).toBeGreaterThan(line * 1.5);

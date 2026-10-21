@@ -87,6 +87,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetStorageCleanupReport]: "server",
   [WS_METHODS.serverGetWorktreesDirectoryStatus]: "server",
   [WS_METHODS.serverGetDatabaseStorage]: "server",
+  [WS_METHODS.serverCompactStorage]: "server",
+  [WS_METHODS.serverCleanUpStrayProcesses]: "server",
   [WS_METHODS.serverGetSettings]: "server",
   [WS_METHODS.serverUpdateSettings]: "server",
   [WS_METHODS.serverSearchAcpRegistry]: "server",

@@ -239,6 +239,7 @@ import {
 } from "./orchestration-v2/threadHistoryPaging.ts";
 import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -1425,6 +1426,7 @@ export const layerWsRpc = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
+      const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const memory = yield* MemoryService.MemoryService;
       const memorySync = yield* MemorySyncService.MemorySyncService;
@@ -2761,6 +2763,8 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
+        [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
+        [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:

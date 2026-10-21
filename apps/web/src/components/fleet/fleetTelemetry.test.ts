@@ -318,11 +318,156 @@ describe("fleetAlerts", () => {
     ).toEqual([
       ["mini", "destructive", "Tailscale is off"],
       ["broken", "destructive", "Incompatible, runs GOAT 0.1.0"],
-      ["remote", "warning", "Could not read host status"],
+      ["remote", "warning", "Could not read its host status; showing what it last reported"],
       ["box", "warning", "Unreachable, last known 4m ago"],
       ["old", "warning", "Runs GOAT 0.1.0"],
       ["legacy", "muted", "Compatibility unknown, runs GOAT 0.1.0"],
       ["ancient", "muted", "Update GOAT to report status"],
+    ]);
+  });
+
+  const GB = 1024 ** 3;
+  const withMetrics = (
+    base: HostStatusEntry,
+    extra: Partial<NonNullable<HostStatusEntry["metrics"]>>,
+  ): HostStatusEntry => ({ ...base, metrics: { ...base.metrics!, ...extra } });
+  const oneMachine = (hosts: ReadonlyArray<HostStatusEntry>) =>
+    fleetHostRows({
+      machines: [machine("studio", { environmentId: studio })],
+      sshAliases: new Map(),
+      reports: reportsOf({ environmentId: studio, hosts }),
+      primaryEnvironmentId: studio,
+    });
+  const environmentOf = new Map([["studio", studio]]);
+  const view = (alerts: ReadonlyArray<ReturnType<typeof fleetAlerts>[number]>) =>
+    alerts.map((alert) => [alert.tone, alert.detail, alert.action?.kind ?? null]);
+
+  it("times a connection attempt and offers a retry once it is slow", () => {
+    const rows = oneMachine([]);
+    const connecting = (since: number): FleetConnection => ({
+      state: "connecting",
+      label: "Connecting",
+      reason: null,
+      step: "Opening connection",
+      since,
+    });
+    expect(
+      view(
+        fleetAlerts(rows, new Map([["studio", connecting(NOW - 12_000)]]), NOW, { environmentOf }),
+      ),
+    ).toEqual([["warning", "Connecting · 12s · Opening connection", null]]);
+    expect(
+      view(
+        fleetAlerts(rows, new Map([["studio", connecting(NOW - 72_000)]]), NOW, { environmentOf }),
+      ),
+    ).toEqual([["warning", "Still connecting · 1m 12s · Opening connection", "retry"]]);
+  });
+
+  it("says how long a host has been unreachable and why", () => {
+    const away: FleetConnection = {
+      state: "unreachable",
+      label: "Unreachable",
+      reason: "No route to host",
+      since: NOW - 4 * 60_000,
+    };
+    expect(
+      view(fleetAlerts(oneMachine([]), new Map([["studio", away]]), NOW, { environmentOf })),
+    ).toEqual([["muted", "Unreachable for 4m 0s · No route to host", "retry"]]);
+  });
+
+  it("blames a silent host's oversized history in one alert that offers to compact", () => {
+    const rows = oneMachine([
+      withMetrics(entry(null), {
+        storage: {
+          databaseBytes: 6.8 * GB,
+          memoryBytes: 12 * 1024 ** 2,
+          historyBytes: 6.7 * GB,
+          reclaimableBytes: 0,
+          measuredAt: new Date(NOW).toISOString(),
+        },
+      }),
+    ]);
+    const connected = new Map<string, FleetConnection>([
+      ["studio", { state: "connected", label: "Connected", reason: null }],
+    ]);
+    expect(
+      view(
+        fleetAlerts(rows, connected, NOW, {
+          environmentOf,
+          pendingSince: new Map([[studio, NOW - 18_000]]),
+        }),
+      ),
+    ).toEqual([
+      [
+        "destructive",
+        "Not answering · 18s · Thread history is 6.7 GB, 3.4× its 2 GB budget; this slows GOAT down there.",
+        "compact",
+      ],
+    ]);
+    // While it answers, the oversized history is its own alert.
+    expect(view(fleetAlerts(rows, connected, NOW, { environmentOf }))).toEqual([
+      [
+        "destructive",
+        "Thread history is 6.7 GB, 3.4× its 2 GB budget; this slows GOAT down there",
+        "compact",
+      ],
+    ]);
+  });
+
+  it("shows a compaction in progress instead of offering another", () => {
+    const rows = oneMachine([
+      withMetrics(entry(null), {
+        storage: {
+          databaseBytes: 3 * GB,
+          memoryBytes: 0,
+          historyBytes: 3 * GB,
+          reclaimableBytes: 0,
+          measuredAt: new Date(NOW).toISOString(),
+          compactingSince: new Date(NOW - 14_000).toISOString(),
+        },
+      }),
+    ]);
+    expect(view(fleetAlerts(rows, new Map(), NOW, { environmentOf }))).toEqual([
+      ["warning", "Thread history is 3 GB, over its 2 GB budget · Compacting history · 14s", null],
+    ]);
+  });
+
+  it("lists stray servers as one quiet item with a clean-up action", () => {
+    const rows = oneMachine([
+      withMetrics(entry(null), {
+        strays: {
+          scannedAt: new Date(NOW).toISOString(),
+          processes: [
+            {
+              pid: 72341,
+              startedAt: new Date(NOW - 63 * 3_600_000).toISOString(),
+              kind: "orphaned_server",
+              reason: "home_deleted",
+              baseDir: "/private/tmp/goat-test-7kyqAJ/.goat",
+            },
+          ],
+        },
+      }),
+    ]);
+    const [alert] = fleetAlerts(rows, new Map(), NOW, { environmentOf });
+    expect(alert).toMatchObject({
+      tone: "muted",
+      detail: "1 stray GOAT server · 2d 15h",
+      action: { kind: "clean_up", environmentId: studio },
+      lines: ["PID 72341 · 2d 15h · home deleted: /private/tmp/goat-test-7kyqAJ/.goat"],
+    });
+  });
+
+  it("rewords an older server's bare fetch failure", () => {
+    const rows = oneMachine([
+      entry(null),
+      {
+        ...entry("box", { reachability: "unreachable", noMetrics: true }),
+        message: "GOAT on box is unavailable: fetch failed",
+      },
+    ]);
+    expect(view(fleetAlerts(rows, new Map(), NOW))).toEqual([
+      ["warning", "GOAT on box did not answer; the connection failed before a reply.", null],
     ]);
   });
 });

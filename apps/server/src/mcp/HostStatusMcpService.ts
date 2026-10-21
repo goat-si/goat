@@ -22,9 +22,11 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as StrayProcesses from "../diagnostics/StrayProcesses.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
 import * as HubParity from "../hub/HubParity.ts";
+import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
@@ -103,6 +105,9 @@ const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const opencodex = yield* OpenCodexInventory.OpenCodexInventory;
   const parity = yield* HubParity.HubParity;
+  // Optional so layers built for one tool need not run storage passes or process scans.
+  const storage = yield* Effect.serviceOption(DatabaseStorage.DatabaseStorage);
+  const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
   const clock = yield* Clock.Clock;
   const lastRefreshAt = yield* Ref.make(Number.NEGATIVE_INFINITY);
   const known = yield* Ref.make(new Map<string | null, HostStatusEntry>());
@@ -157,6 +162,9 @@ const make = Effect.gen(function* () {
           failure("orchestration_error", "Could not count threads on this machine."),
         ),
       );
+    // Both are the last periodic reading; neither measures anything on this call.
+    const storageHealth = Option.isSome(storage) ? yield* storage.value.health : null;
+    const strayScan = Option.isSome(strays) ? yield* strays.value.latest : null;
     const entry = {
       host: null,
       reachability: "ok" as const,
@@ -168,6 +176,8 @@ const make = Effect.gen(function* () {
         threads: countHostThreads(shells),
         ...(yield* readQuotas()),
         opencodex: yield* parityEvidence ? parity.readLocal : opencodex.read,
+        ...(storageHealth === null ? {} : { storage: storageHealth }),
+        ...(strayScan === null ? {} : { strays: strayScan }),
       },
     } satisfies HostStatusEntry;
     yield* remember(null, entry);

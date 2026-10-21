@@ -410,7 +410,13 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { GoatHostStatusResult, ServerGetHostStatusInput } from "./hostStatus.ts";
+import {
+  GoatHostStatusResult,
+  HostMaintenanceError,
+  HostStorageHealth,
+  HostStrayCleanupResult,
+  ServerGetHostStatusInput,
+} from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import {
   UsageLimitSourceError,
@@ -656,6 +662,8 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  serverCompactStorage: "server.compactStorage",
+  serverCleanUpStrayProcesses: "server.cleanUpStrayProcesses",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -1004,6 +1012,19 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   success: Schema.NullOr(DatabaseStorageStatus),
   stream: true,
   error: EnvironmentAuthorizationError,
+});
+
+/** Runs the scheduled history compaction now; a call during a run joins it. */
+const WsServerCompactStorageRpc = Rpc.make(WS_METHODS.serverCompactStorage, {
+  payload: Schema.Struct({}),
+  success: HostStorageHealth,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
+});
+
+const WsServerCleanUpStrayProcessesRpc = Rpc.make(WS_METHODS.serverCleanUpStrayProcesses, {
+  payload: Schema.Struct({}),
+  success: HostStrayCleanupResult,
+  error: Schema.Union([HostMaintenanceError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
@@ -2451,6 +2472,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,
+  WsServerCompactStorageRpc,
+  WsServerCleanUpStrayProcessesRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,

@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleOptional, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { RuntimeProtocolRanges } from "./environment.ts";
 import { HostCondition } from "./fleetHealth.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -57,6 +63,84 @@ export const HostThreadCounts = Schema.Struct({
 export type HostThreadCounts = typeof HostThreadCounts.Type;
 
 /**
+ * Per-host storage budgets. Memory is the memory store's tables; history is everything else in
+ * the state database, almost all orchestration events and projections. They grow for different
+ * reasons and are fixed differently, so each has its own budget.
+ */
+export const HOST_STORAGE_BUDGETS = {
+  memoryBytes: 100 * 1024 ** 2,
+  historyBytes: 2 * 1024 ** 3,
+} as const;
+
+/** The last on-demand or scheduled history compaction this server finished. */
+export const HostStorageCompactionResult = Schema.Struct({
+  finishedAt: IsoDateTime,
+  removedEvents: NonNegativeInt,
+  /** How much smaller the database file got. */
+  freedBytes: NonNegativeInt,
+  /**
+   * The database predates incremental auto_vacuum, so removed history stays allocated in the file
+   * until an offline `goat doctor` runs on that machine.
+   */
+  needsOfflineCompaction: Schema.Boolean,
+});
+export type HostStorageCompactionResult = typeof HostStorageCompactionResult.Type;
+
+/** The state database of the machine that answered, from its once-a-minute storage pass. */
+export const HostStorageHealth = Schema.Struct({
+  databaseBytes: NonNegativeInt,
+  /** Null when the memory tables could not be measured on this SQLite build. */
+  memoryBytes: Schema.NullOr(NonNegativeInt),
+  /** Database bytes that are neither memory nor free pages. */
+  historyBytes: NonNegativeInt,
+  /** Free pages inside the file. */
+  reclaimableBytes: NonNegativeInt,
+  measuredAt: IsoDateTime,
+  /** Set while a history compaction runs. */
+  compactingSince: Schema.optional(IsoDateTime),
+  lastCompaction: Schema.optional(HostStorageCompactionResult),
+});
+export type HostStorageHealth = typeof HostStorageHealth.Type;
+
+/**
+ * A GOAT server this machine's user started that nothing can use any more: its launcher exited
+ * (it was reparented to PID 1), and its GOAT home was deleted or is a temporary home, as test
+ * runs leave behind. A server with a real home is never one, whatever version it runs.
+ */
+export const HostStrayProcess = Schema.Struct({
+  pid: PositiveInt,
+  startedAt: IsoDateTime,
+  kind: Schema.Literal("orphaned_server"),
+  reason: Schema.Literals(["home_deleted", "temporary_home"]),
+  baseDir: Schema.String,
+});
+export type HostStrayProcess = typeof HostStrayProcess.Type;
+
+export const HostStrayProcesses = Schema.Struct({
+  scannedAt: IsoDateTime,
+  processes: Schema.Array(HostStrayProcess),
+});
+export type HostStrayProcesses = typeof HostStrayProcesses.Type;
+
+/** `server.cleanUpStrayProcesses`: what was stopped, and what is left after a fresh scan. */
+export const HostStrayCleanupResult = Schema.Struct({
+  stopped: NonNegativeInt,
+  /** Of those stopped, how many ignored SIGTERM and needed SIGKILL. */
+  forced: NonNegativeInt,
+  failed: Schema.Array(Schema.Struct({ pid: PositiveInt, message: Schema.String })),
+  remaining: HostStrayProcesses,
+});
+export type HostStrayCleanupResult = typeof HostStrayCleanupResult.Type;
+
+export class HostMaintenanceError extends Schema.TaggedError<HostMaintenanceError>()(
+  "HostMaintenanceError",
+  {
+    operation: Schema.Literals(["compact_storage", "clean_up_strays"]),
+    message: Schema.String,
+  },
+) {}
+
+/**
  * One provider account's subscription quota. `fromCache` is true when this
  * call did not refresh that account. `limits.checkedAt` is when the provider
  * last reported the windows.
@@ -91,6 +175,10 @@ export const HostStatusMetrics = Schema.Struct({
   quotaPool: Schema.optional(QuotaPool),
   /** Read-only inventory of this host's OpenCodex. Older hosts omit it. */
   opencodex: ForwardCompatibleOptional(OpenCodexInventorySnapshot),
+  /** Older hosts omit it; a host that sends it also serves `server.compactStorage`. */
+  storage: ForwardCompatibleOptional(HostStorageHealth),
+  /** Older hosts omit it; a host that sends it also serves `server.cleanUpStrayProcesses`. */
+  strays: ForwardCompatibleOptional(HostStrayProcesses),
 });
 export type HostStatusMetrics = typeof HostStatusMetrics.Type;
 
