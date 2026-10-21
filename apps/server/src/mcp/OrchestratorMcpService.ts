@@ -132,7 +132,11 @@ import {
 import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 
-const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
+// Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
+// HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
+// coordinator's exports can still be undefined while this module evaluates.
+const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
+  Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
 const ReviewExportCursor = Schema.fromJsonString(

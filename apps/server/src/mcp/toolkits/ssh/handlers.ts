@@ -30,7 +30,10 @@ import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { admitLaunch } from "../../pressureAdmission.ts";
 import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 
-const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
+// Resolved per call: the coordinator sits on an import cycle through LaunchWatchService and
+// the MCP services, so its exports can still be undefined while this module evaluates.
+const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
+  Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 
 /**
  * The remote's local branches are usually behind origin, so a dispatched
