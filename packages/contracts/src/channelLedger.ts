@@ -241,6 +241,8 @@ export const ChannelTaskReview = Schema.Struct({
   verdict: Schema.optional(Schema.Literals(["pass", "blockers", "failed", "skipped"])),
   summary: Schema.optional(Schema.String),
   finishedAt: Schema.optional(IsoDateTime),
+  /** The pending requester question must survive a crash after recording this failure. */
+  identityTimeout: Schema.optional(Schema.Literal(true)),
   // Orchestration also imports channel chips; resolve its shared finding contract lazily.
   findings: Schema.Array(Schema.suspend(() => ReviewLedgerEntry)),
 }).check(

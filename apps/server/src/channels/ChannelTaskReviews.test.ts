@@ -158,6 +158,122 @@ const provide = (harness: ReturnType<typeof harnessFor>) =>
   harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory));
 
 describe("independent channel review", () => {
+  it.effect("identity-timeout question recovers after its separate ledger write failed", () => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const original = ledger.applyTaskEvent;
+      let failed = false;
+      const mutable: { applyTaskEvent: typeof original } = ledger;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          mutable.applyTaskEvent = (input) => {
+            if (!failed && input.write.event.type === "task.question.opened") {
+              failed = true;
+              return Effect.fail(
+                new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "Synthetic failed question commit",
+                }),
+              );
+            }
+            return original(input);
+          };
+        }),
+        () =>
+          Effect.sync(() => {
+            mutable.applyTaskEvent = original;
+          }),
+      );
+      harness.world.recordFailures.add(task.worker!.threadId);
+      yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+      const before = yield* (yield* ChannelTaskReviews.ChannelTaskReviews)
+        .reconcile(runtime.ownerToken)
+        .pipe(Effect.result);
+      assert.strictEqual(before._tag, "Failure");
+      assert.strictEqual((yield* onlyTask).status, "reviewing");
+      assert.strictEqual((yield* onlyTask).review?.identityTimeout, true);
+      const restarted = yield* ChannelTaskReviews.ChannelTaskReviews.pipe(
+        Effect.provide(ChannelTaskReviews.layer.pipe(Layer.provide(layerNoSshHosts))),
+      );
+      yield* restarted.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      assert.strictEqual((yield* onlyTask).status, "waiting_input");
+      assert.lengthOf((yield* onlyTask).openQuestions, 1);
+      assert.lengthOf(resultsTo(harness.slackSent, "result"), 0);
+    }).pipe(Effect.provide(provide(harness)));
+  });
+
+  it.effect.each([false, true])(
+    "decided local review survives an identity outage beyond timeout: blockers=%s",
+    (blocked) => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* start(harness);
+        yield* finishReviewer(harness, task, blocked ? blockers : pass);
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        harness.world.recordFailures.add(task.worker!.threadId);
+        yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, "reviewing");
+        assert.lengthOf((yield* onlyTask).openQuestions, 0);
+        assert.lengthOf(harness.world.sends, 0);
+        harness.world.recordFailures.delete(task.worker!.threadId);
+        yield* runtime.drain;
+        assert.strictEqual((yield* onlyTask).status, blocked ? "running" : "completed");
+        assert.lengthOf(harness.world.sends, blocked ? 1 : 0);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), blocked ? 0 : 1);
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+  it.effect(
+    "a failure to record prelaunch refusal cannot resurrect retired cleanup ownership",
+    () => {
+      const harness = harnessFor();
+      return Effect.gen(function* () {
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const original = ledger.applyTaskEvent;
+        let failed = false;
+        const mutable: { applyTaskEvent: typeof original } = ledger;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            mutable.applyTaskEvent = (input) => {
+              if (!failed && input.write.event.type === "task.review.finished") {
+                failed = true;
+                return Effect.fail(
+                  new ChannelLedger.ChannelLedgerError({
+                    reason: "persistence",
+                    detail: "Synthetic failed outcome commit",
+                  }),
+                );
+              }
+              return original(input);
+            };
+          }),
+          () =>
+            Effect.sync(() => {
+              mutable.applyTaskEvent = original;
+            }),
+        );
+        const result = yield* start(harness, (running) => {
+          harness.world.prelaunchFailures.add(
+            reviewLaunchIdsFor(running.taskId, running.generation, running.worker!.runId!).threadId,
+          );
+        }).pipe(Effect.result);
+        assert.strictEqual(result._tag, "Failure");
+        const task = yield* onlyTask;
+        harness.world.prelaunchFailures.delete(task.review!.threadId);
+        yield* (yield* ChannelRuntime.ChannelRuntime).drain;
+        assert.strictEqual((yield* onlyTask).status, "completed");
+        assert.strictEqual((yield* onlyTask).review?.verdict, "failed");
+        assert.lengthOf(harness.world.launches, 2);
+        assert.isUndefined(harness.world.latestRun(task.review!.threadId));
+      }).pipe(Effect.provide(provide(harness)));
+    },
+  );
+
   it.effect(
     "unknown local worker identity times out to a question without applying a verdict",
     () => {

@@ -5104,4 +5104,47 @@ describe("independent remote channel review", () => {
       assert.lengthOf(machine.interrupts, 0);
     }).pipe(Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))));
   });
+  it.effect.each([false, true])(
+    "decided remote review resumes after an identity outage and restart: blockers=%s",
+    (blocked) => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task, writes } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        const correlation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(correlation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(blocked),
+        });
+        yield* (yield* ChannelTaskReviews.ChannelTaskReviews).reconcile(runtime.ownerToken);
+        machine.threadReadDown = true;
+        yield* TestClock.adjust(ChannelTaskReviews.REVIEW_TIMEOUT_MS);
+        const restarted = yield* ChannelTaskReviews.ChannelTaskReviews.pipe(
+          Effect.provide(ChannelTaskReviews.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.strictEqual((yield* onlyTask).status, "reviewing");
+        assert.lengthOf((yield* onlyTask).openQuestions, 0);
+        assert.lengthOf(machine.sends, 0);
+        machine.threadReadDown = false;
+        yield* restarted.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        if (blocked)
+          yield* writes.waitFor(
+            (current) =>
+              current.status === "running" && current.worker?.runId !== task.worker!.runId,
+          );
+        assert.strictEqual((yield* onlyTask).status, blocked ? "running" : "completed");
+        assert.lengthOf(machine.sends, blocked ? 1 : 0);
+        assert.lengthOf(resultsTo(harness.slackSent, "result"), blocked ? 0 : 1);
+      }).pipe(
+        Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
+      );
+    },
+  );
 });

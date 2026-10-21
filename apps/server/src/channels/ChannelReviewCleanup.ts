@@ -70,6 +70,9 @@ export class ChannelReviewCleanup extends Context.Service<
       reviewThreadId: ThreadId,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    readonly retired: (
+      reviewThreadId: ThreadId,
+    ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
     readonly reconcile: (owner: string) => Effect.Effect<number, ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelReviewCleanup") {}
@@ -298,6 +301,17 @@ const make = Effect.gen(function* () {
     }
     return changed;
   });
-  return ChannelReviewCleanup.of({ track, reserveRemote, bindRemote, notStarted, reconcile });
+  const retired = Effect.fn("ChannelReviewCleanup.retired")(function* (reviewThreadId: ThreadId) {
+    const value = yield* ledger.getReviewDispatch("cleanup:" + reviewThreadId);
+    return value !== undefined && decode(value).done;
+  });
+  return ChannelReviewCleanup.of({
+    track,
+    reserveRemote,
+    bindRemote,
+    notStarted,
+    retired,
+    reconcile,
+  });
 });
 export const layer = Layer.effect(ChannelReviewCleanup, make);

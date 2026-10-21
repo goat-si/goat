@@ -179,6 +179,7 @@ const make = Effect.gen(function* () {
     verdict: NonNullable<ChannelTaskReview["verdict"]>,
     summary: string,
     findings: ChannelTaskReview["findings"] = [],
+    identityTimeout = false,
   ) {
     const latest = yield* ledger.getTask(stored.task.taskId);
     if (
@@ -201,6 +202,7 @@ const make = Effect.gen(function* () {
             summary,
             findings,
             finishedAt: DateTime.formatIso(yield* DateTime.now),
+            ...(identityTimeout ? { identityTimeout: true as const } : {}),
           },
         },
       },
@@ -363,6 +365,13 @@ const make = Effect.gen(function* () {
   ) {
     const task = stored.task;
     const review = task.review!;
+    if (yield* cleanup.retired(review.threadId))
+      return yield* finish(
+        stored,
+        owner,
+        "failed",
+        "The independent reviewer launch was already refused.",
+      );
     const ids = reviewLaunchIdsFor(task.taskId, task.generation, review.workerRunId);
     const existing = yield* threads
       .getThreadRecords(review.threadId, ["runs", "providerThreads"])
@@ -537,6 +546,13 @@ const make = Effect.gen(function* () {
   ) {
     const task = stored.task;
     const review = task.review!;
+    if (yield* cleanup.retired(review.threadId))
+      return yield* finish(
+        stored,
+        owner,
+        "failed",
+        "The independent reviewer launch was already refused.",
+      );
     const target = task.target!.remote!;
     const ids = reviewLaunchIdsFor(task.taskId, task.generation, review.workerRunId);
     const call = (tool: string, args: Readonly<Record<string, unknown>>) =>
@@ -735,6 +751,7 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const review = stored.task.review!;
+    if (review.verdict !== undefined && review.identityTimeout !== true) return 0;
     if (
       DateTime.toEpochMillis(yield* DateTime.now) - Date.parse(review.startedAt) <
       REVIEW_TIMEOUT_MS
@@ -746,6 +763,8 @@ const make = Effect.gen(function* () {
         owner,
         "failed",
         "The independent review timed out while the worker's current run could not be verified.",
+        [],
+        true,
       );
     const current = yield* ledger.getTask(stored.task.taskId);
     if (
