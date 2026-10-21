@@ -8,7 +8,10 @@ it.effect("upgrades 090 with empty hub tables and retains their data on restart"
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* runMigrations({ toMigrationInclusive: 93 });
-    expect(yield* runMigrations()).toEqual([[94, "HubNodes"]]);
+    expect(yield* runMigrations()).toEqual([
+      [94, "HubNodes"],
+      [95, "PermissionProfiles"],
+    ]);
     const tables = yield* sql<{
       name: string;
     }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'hub_node_%' ORDER BY name`;
