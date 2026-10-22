@@ -2820,7 +2820,7 @@ it.effect.each([" /COMPACT "])(
     }),
 );
 
-it("reports a stalled worktree checkout as retryable, not as a bad request", () => {
+it("reports a stalled or timed-out Git command as retryable, not as a bad request", () => {
   const launchError = (cause: unknown) =>
     new ThreadLaunch.ThreadLaunchError({
       operation: "provision-worktree",
@@ -2828,7 +2828,7 @@ it("reports a stalled worktree checkout as retryable, not as a bad request", () 
       projectId: ProjectId.make("project-stall"),
       cause,
     });
-  const gitError = (reason?: "stalled" | "ref_not_found") =>
+  const gitError = (reason?: "stalled" | "timed_out" | "ref_not_found") =>
     new GitCommandError({
       operation: "GitVcsDriver.createWorktree",
       command: "git worktree add",
@@ -2840,6 +2840,12 @@ it("reports a stalled worktree checkout as retryable, not as a bad request", () 
   assert.deepStrictEqual(ThreadLaunch.preparationFailureClass(launchError(gitError("stalled"))), {
     class: "unknown",
     code: "git_stalled",
+    retryable: true,
+  });
+  // A launch killed by the old 30 s fetch timeout used to read as a bad request.
+  assert.deepStrictEqual(ThreadLaunch.preparationFailureClass(launchError(gitError("timed_out"))), {
+    class: "unknown",
+    code: "git_timed_out",
     retryable: true,
   });
   for (const cause of [gitError("ref_not_found"), gitError(), new Error("boom")]) {
