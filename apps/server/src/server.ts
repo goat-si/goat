@@ -1349,7 +1349,6 @@ const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
 );
 
 const layerNotes = NotesLayers.layer.pipe(
-  Layer.provide(ProjectionStoreV2.layer),
   Layer.provide(RuntimeLayer.layerEventSink),
   Layer.provide(
     HostThreadsMcpService.layer.pipe(

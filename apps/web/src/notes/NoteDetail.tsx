@@ -178,7 +178,7 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
             environment.sshAliases.includes(thread.host!) || environment.label === thread.host,
         )?.environmentId;
   const related = latest.related ?? [];
-  const fileName = state.document.path.split("/").at(-1)!;
+  const fileName = state.document.path.slice(state.document.path.lastIndexOf("/") + 1);
   return (
     <article className="flex min-w-0 flex-1 flex-col" aria-label="Selected note">
       <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 px-4 pt-3 pb-1 md:px-8 md:pt-5">

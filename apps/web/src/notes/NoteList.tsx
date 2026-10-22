@@ -46,7 +46,8 @@ export function NoteList(props: {
       focusRow(index + (event.key === "ArrowDown" ? 1 : -1));
     } else if (event.key === "Enter" || event.key === "ArrowRight") {
       event.preventDefault();
-      const path = event.currentTarget.dataset.noteRow!;
+      const path = event.currentTarget.dataset.noteRow;
+      if (path === undefined) return;
       props.onSelect(path);
       props.onOpenEditor(path);
     }

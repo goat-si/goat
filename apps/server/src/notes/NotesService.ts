@@ -70,7 +70,8 @@ const bodySummary = (body: string, fallback: string) => {
   const titleIndex = heading
     ? body.slice(0, heading.index).split("\n").length - 1
     : lines.findIndex((line) => line.trim().length > 0);
-  const title = heading?.[1] ?? (titleIndex < 0 ? fallback : stripMarkers(lines[titleIndex]!));
+  const firstLine = lines[titleIndex];
+  const title = heading?.[1] ?? (firstLine === undefined ? fallback : stripMarkers(firstLine));
   const preview = lines
     .filter((line, index) => index !== titleIndex && !/^\s*(?:`{3,}|~{3,})/u.test(line))
     .map(stripMarkers)
@@ -700,7 +701,10 @@ const make = Effect.gen(function* () {
             if (
               pinned === source.contents.pinned &&
               related.length === source.contents.related.length &&
-              related.every((entry, index) => sameRef(entry, source.contents.related[index]!))
+              related.every((entry, index) => {
+                const before = source.contents.related[index];
+                return before !== undefined && sameRef(entry, before);
+              })
             )
               return source.document;
             return yield* persist(

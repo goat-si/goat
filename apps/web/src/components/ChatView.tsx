@@ -105,7 +105,6 @@ import { resolveThreadReferenceCopyTarget } from "@goat/shared/threadReference";
 import { resolveTerminalSessionLabel } from "@goat/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
 import { type SetStateAction, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ThreadNotesButton } from "../notes/ThreadNotesButton";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
@@ -3554,17 +3553,6 @@ export default function ChatView(props: ChatViewProps) {
               onOpenScopedThread={onOpenScopedThread}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
-              notesButton={
-                isServerThread ? (
-                  <ThreadNotesButton
-                    environmentId={activeThread.environmentId}
-                    threadId={activeThread.id}
-                    projectTitle={
-                      activeProject && !activeProject.isScratch ? activeProject.title : null
-                    }
-                  />
-                ) : null
-              }
               {...(sideChatAvailable
                 ? {
                     onToggleSideChat: toggleSideChat,

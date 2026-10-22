@@ -61,7 +61,6 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
-  FileTextIcon,
   FolderGitIcon as FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -91,6 +90,7 @@ import {
 } from "react";
 import type { LegendListRef } from "@legendapp/list/react";
 import { notesRpc } from "../rpc/notes/atoms";
+import { notesPaletteItems } from "../notes/notesPaletteItems";
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
@@ -1621,28 +1621,7 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  actionItems.push({
-    kind: "action",
-    value: "action:notes",
-    searchTerms: ["notes", "markdown", "ideas", "notebook"],
-    title: "Open notes",
-    icon: <FileTextIcon className={ITEM_ICON_CLASS} />,
-    run: async () => {
-      await navigate({ to: "/notes", search: {} });
-    },
-  });
-  if (canCreateNote) {
-    actionItems.push({
-      kind: "action",
-      value: "action:new-note",
-      searchTerms: ["new note", "create note", "idea", "markdown"],
-      title: "New note",
-      icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        await navigate({ to: "/notes", search: { create: true } });
-      },
-    });
-  }
+  actionItems.push(...notesPaletteItems((to) => navigate(to), canCreateNote));
 
   actionItems.push({
     kind: "action",

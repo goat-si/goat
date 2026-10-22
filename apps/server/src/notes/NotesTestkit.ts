@@ -51,3 +51,24 @@ export const notesLayer = (
       ),
     ),
   );
+
+/** A layer whose next note write runs the armed effect just before replacing the file. */
+export const racing = () => {
+  let race: Effect.Effect<void> | undefined;
+  return {
+    arm: (effect: Effect.Effect<void>) => {
+      race = effect;
+    },
+    layer: notesLayer(undefined, undefined, (fs) => ({
+      ...fs,
+      makeTempDirectoryScoped: Effect.fn("NotesTestkit.racingTempDirectory")(function* (
+        options?: Parameters<FileSystem.FileSystem["makeTempDirectoryScoped"]>[0],
+      ) {
+        const pending = options?.prefix === ".note-" ? race : undefined;
+        race = undefined;
+        if (pending) yield* pending;
+        return yield* fs.makeTempDirectoryScoped(options);
+      }),
+    })),
+  };
+};

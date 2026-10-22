@@ -285,6 +285,8 @@
       "scope": "Markdown notes on disk, revision conflicts, git commits, start-work and automatic done, and the clients that edit them.",
       "documents": [
         "packages/contracts/src/notes.ts",
+        "packages/contracts/src/notesRpc.ts",
+        "packages/contracts/src/agentSurface/notes.ts",
         "apps/server/src/notes/",
         "apps/server/src/mcp/toolkits/note/",
         "apps/server/src/config.ts",
