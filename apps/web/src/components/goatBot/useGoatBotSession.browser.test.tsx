@@ -390,7 +390,8 @@ beforeEach(() => {
   items = [];
   permission = true;
   dual = false;
-  useGlobalAgentStore.setState({ ref: null, botRef: null });
+  // The sidebar row only appears once someone picks GOAT Bot as the logo's mode.
+  useGlobalAgentStore.setState({ ref: null, botRef: null, mode: "bot" });
   port = {
     // Like ChannelBotRegistry: only an active candidate can cause legacy_active.
     ensureBot: vi.fn(async (_env, input) => {
