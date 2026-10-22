@@ -37,23 +37,23 @@ const every30s = (count: number) =>
   });
 
 describe("HostPressureMonitor", () => {
-  it.effect("raises the level after two minutes of load on the clock", () =>
+  it.effect("raises the level after three minutes of load on the clock", () =>
     Effect.gen(function* () {
-      expect(yield* every30s(5)).toEqual(["ok", "ok", "ok", "ok", "elevated"]);
+      expect(yield* every30s(7)).toEqual(["ok", "ok", "ok", "ok", "ok", "ok", "elevated"]);
       const current = yield* Effect.flatMap(
         HostPressureMonitor.HostPressureMonitor,
         (monitor) => monitor.current,
       );
       expect(current).toEqual({
         level: "elevated",
-        since: "1970-01-01T00:02:00.000Z",
+        since: "1970-01-01T00:03:00.000Z",
         reasons: [
           { signal: "load", level: "elevated", message: "load 2 per core (threshold 1.5)" },
         ],
         loadPerCore: 2,
         eventLoopDelayMs: null,
       });
-    }).pipe(Effect.provide(layer(Array.from({ length: 5 }, () => reading(2))))),
+    }).pipe(Effect.provide(layer(Array.from({ length: 7 }, () => reading(2))))),
   );
 
   it.effect("reports nothing when fleet.pressure.enabled is false", () =>
