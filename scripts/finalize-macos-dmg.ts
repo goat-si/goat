@@ -17,6 +17,7 @@ import {
   releaseAssetKey,
   requireReleaseCommand,
   runReleaseCommand,
+  updateManifestPrefix,
   writeReleaseReport,
   type ReleaseAsset,
   type ReleaseCommandRunner,
@@ -70,7 +71,10 @@ export const finalizeMacosDmgs = Effect.fn("finalizeMacosDmgs")(function* (
   if (!dmgs.length)
     return yield* new ReleaseVerificationError({ problems: ["no DMGs to finalize"] });
   const manifests: Array<{ name: string; manifest: UpdateManifest }> = [];
-  for (const name of names.filter((name) => /^nightly-mac.*\.yml$/.test(name))) {
+  const prefix = updateManifestPrefix(report.version);
+  for (const name of names.filter(
+    (name) => name.startsWith(`${prefix}-mac`) && name.endsWith(".yml"),
+  )) {
     const source = yield* fs.readFileString(path.join(dir, name));
     const manifest = yield* Effect.try({
       try: () => parseUpdateManifest(source, name, "macOS"),

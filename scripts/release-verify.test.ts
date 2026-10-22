@@ -68,8 +68,8 @@ const asset = (name: string, sha256 = "a".repeat(64)): ReleaseAsset => ({
   sha512: "digest",
   size: 10,
 });
-const manifest = (assets: readonly ReleaseAsset[]): UpdateManifest => ({
-  version,
+const manifest = (assets: readonly ReleaseAsset[], forVersion = version): UpdateManifest => ({
+  version: forVersion,
   releaseDate: "2026-10-12T00:00:00Z",
   files: assets.map(({ name, sha512, size }) => ({ url: name, sha512, size })),
   extras: {},
@@ -78,10 +78,11 @@ const report = (
   key: string,
   assets: readonly ReleaseAsset[],
   mode: "payload" | "mac" = "payload",
+  forVersion = version,
 ): ReleaseReport => ({
   key,
   mode,
-  version,
+  version: forVersion,
   inputs: assets.map(({ name, sha256 }) => ({ name, sha256 })),
   ok: true,
   checks: mode === "mac" ? ["require-signing", "exposure-scan"] : ["exposure-scan"],
@@ -226,6 +227,22 @@ describe("release payload helpers", () => {
     expect(
       archiveMemberProblems("../escape\n/absolute\nD:\\a\\file\nroot/.git/config\nroot/a.map\n"),
     ).toHaveLength(5);
+  });
+  it("requires each channel's own update manifests", () => {
+    const manifests = (v: string) =>
+      requiredReleaseAssets(v).filter((name) => name.endsWith(".yml"));
+    expect(manifests(version)).toEqual([
+      "nightly-linux-arm64.yml",
+      "nightly-linux.yml",
+      "nightly-mac.yml",
+      "nightly.yml",
+    ]);
+    expect(manifests("0.1.1")).toEqual([
+      "latest-linux-arm64.yml",
+      "latest-linux.yml",
+      "latest-mac.yml",
+      "latest.yml",
+    ]);
   });
   it("checks required assets, explicit dry-run globs and unexpected files", () => {
     const names = requiredReleaseAssets(version);
@@ -569,9 +586,14 @@ describe("release payload filesystem verification", () => {
   );
 });
 
-it.effect(
-  "builder report -> DMG finalize -> manifest rename and merge -> assemble passes; substituted ZIP or DMG fails",
-  () =>
+// Stable has its own update manifests (latest*.yml); both channels go through the same pipeline.
+const releaseChannels = [
+  { channel: "nightly", prefix: "nightly", version },
+  { channel: "stable", prefix: "latest", version: "0.1.1" },
+] as const;
+it.effect.each(releaseChannels)(
+  "$channel: builder report -> DMG finalize -> manifest rename and merge -> assemble passes; substituted ZIP or DMG fails",
+  ({ prefix, version }) =>
     run(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -587,7 +609,7 @@ it.effect(
         for (const key of new Set(all.map((entry) => releaseAssetKey(entry.name)))) {
           const payloads = all.filter((entry) => releaseAssetKey(entry.name) === key);
           const builderPath = path.join(reportsDir, `${key}.json`);
-          yield* writeReleaseReport(builderPath, report(key!, payloads));
+          yield* writeReleaseReport(builderPath, report(key!, payloads, "payload", version));
           if (key!.startsWith("desktop-mac-")) {
             const stage = path.join(root, key!);
             yield* fs.makeDirectory(stage);
@@ -596,8 +618,8 @@ it.effect(
             const dmg = payloads.find((entry) => entry.name.endsWith(".dmg"))!;
             yield* fs.writeFileString(path.join(stage, dmg.name + ".blockmap"), "stale");
             yield* fs.writeFileString(
-              path.join(stage, "nightly-mac.yml"),
-              serializeUpdateManifest(manifest(payloads), { platformLabel: "macOS" }),
+              path.join(stage, `${prefix}-mac.yml`),
+              serializeUpdateManifest(manifest(payloads, version), { platformLabel: "macOS" }),
             );
             const commands: Array<{ program: string; args: readonly string[] }> = [];
             const runner: ReleaseCommandRunner = (program, args) =>
@@ -630,39 +652,39 @@ it.effect(
             const current = yield* releaseInputs(stage);
             yield* writeReleaseReport(
               path.join(reportsDir, `${key}-mac.json`),
-              report(key!, current, "mac"),
+              report(key!, current, "mac", version),
             );
-            yield* fs.copyFile(path.join(stage, "nightly-mac.yml"), path.join(dir, `${key}.yml`));
+            yield* fs.copyFile(path.join(stage, `${prefix}-mac.yml`), path.join(dir, `${key}.yml`));
           }
         }
         // Collector renames each architecture's manifest; assembler merges then removes them.
         yield* fs.rename(
           path.join(dir, "desktop-mac-arm64.yml"),
-          path.join(dir, "nightly-mac.yml"),
+          path.join(dir, `${prefix}-mac.yml`),
         );
         yield* fs.rename(
           path.join(dir, "desktop-mac-x64.yml"),
-          path.join(dir, "nightly-mac-x64.yml"),
+          path.join(dir, `${prefix}-mac-x64.yml`),
         );
         yield* mergeUpdateManifestFiles(
           "mac",
-          path.join(dir, "nightly-mac.yml"),
-          path.join(dir, "nightly-mac-x64.yml"),
+          path.join(dir, `${prefix}-mac.yml`),
+          path.join(dir, `${prefix}-mac-x64.yml`),
           undefined,
         );
-        yield* fs.remove(path.join(dir, "nightly-mac-x64.yml"));
+        yield* fs.remove(path.join(dir, `${prefix}-mac-x64.yml`));
         const final = yield* releaseInputs(dir);
         for (const [name, selected] of [
-          ["nightly.yml", final.filter((entry) => entry.name.endsWith(".exe"))],
-          ["nightly-linux.yml", final.filter((entry) => entry.name.endsWith("-x86_64.AppImage"))],
+          [`${prefix}.yml`, final.filter((entry) => entry.name.endsWith(".exe"))],
+          [`${prefix}-linux.yml`, final.filter((entry) => entry.name.endsWith("-x86_64.AppImage"))],
           [
-            "nightly-linux-arm64.yml",
+            `${prefix}-linux-arm64.yml`,
             final.filter((entry) => entry.name.endsWith("-arm64.AppImage")),
           ],
         ] as const)
           yield* fs.writeFileString(
             path.join(dir, name),
-            serializeUpdateManifest(manifest(selected), { platformLabel: "release" }),
+            serializeUpdateManifest(manifest(selected, version), { platformLabel: "release" }),
           );
         const runtimeName = runtimeManifestAssetName(version);
         const runtime = releaseRuntimeManifest(
@@ -693,7 +715,7 @@ it.effect(
           const original = yield* fs.readFile(path.join(dir, name));
           yield* fs.writeFileString(path.join(dir, name), "substituted");
           // Even a newly matching manifest cannot legitimize replacement bytes.
-          const macPath = path.join(dir, "nightly-mac.yml");
+          const macPath = path.join(dir, `${prefix}-mac.yml`);
           const originalManifest = yield* fs.readFileString(macPath);
           const changed = yield* readReleaseAsset(dir, name);
           const parsed = parseUpdateManifest(originalManifest, macPath, "macOS");
