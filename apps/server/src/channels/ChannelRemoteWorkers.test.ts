@@ -63,6 +63,7 @@ import { commitTransition } from "./channelTaskWrites.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import {
   botMessages,
+  latestCard,
   defaultScript,
   goatInput,
   linkSlackUser,
@@ -1723,10 +1724,9 @@ describe("copies of remote work and host failover", () => {
         assert.strictEqual(destination.scripts[0]?.kind, "apply");
         assert.lengthOf(destination.launches, 0);
         yield* runtime.drain;
-        assert.isTrue(
-          (yield* botMessages).messages.some((message) =>
-            message.text.includes(REMOTE_COPY.resumeBaseMissing(destination.host, machine.host)),
-          ),
+        assert.strictEqual(
+          (yield* latestCard)?.summary,
+          REMOTE_COPY.resumeBaseMissing(destination.host, machine.host),
         );
       }).pipe(
         Effect.provide(harness.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory))),
@@ -1851,10 +1851,9 @@ describe("memory grants on another machine", () => {
         assert.strictEqual(machine.launches[0]!.memoryGrantCeiling, "read");
         assert.lengthOf(harness.world.launches, 0);
         const records = yield* botMessages;
-        assert.isTrue(
-          records.messages.some((message) =>
-            message.text.includes(REMOTE_COPY.memoryUnsupported(machine.host)),
-          ),
+        assert.strictEqual(
+          (yield* latestCard)?.summary,
+          REMOTE_COPY.memoryUnsupported(machine.host),
         );
         assert.notInclude(JSON.stringify([task, records.messages]), "do-not-show");
       }).pipe(
