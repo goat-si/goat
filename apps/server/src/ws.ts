@@ -11,6 +11,7 @@ import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
 import { installRelayClient } from "./cloud/installRelayClient.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
@@ -2473,6 +2474,22 @@ export const layerWsRpc = (
         [WS_METHODS.cloudAgentsListRuns]: (input) =>
           CloudAgentService.listCloudRuns(input).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
+          ),
+        [WS_METHODS.cloudAgentsListFolderTrust]: () =>
+          CloudFolderTrust.listFolderTrust().pipe(
+            Effect.provideService(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              providerInstances,
+            ),
+            Effect.provideService(ProjectStore.ProjectStoreV2, projectStore),
+          ),
+        [WS_METHODS.cloudAgentsAcceptFolderTrust]: (input) =>
+          CloudFolderTrust.acceptFolderTrust(input).pipe(
+            Effect.provideService(
+              ProviderInstanceRegistry.ProviderInstanceRegistry,
+              providerInstances,
+            ),
+            Effect.provideService(ProjectStore.ProjectStoreV2, projectStore),
           ),
         [WS_METHODS.cloudMachinesConfigure]: (input) => cloudMachines.configure(input),
         [WS_METHODS.cloudMachinesDisconnect]: () => cloudMachines.disconnect(),

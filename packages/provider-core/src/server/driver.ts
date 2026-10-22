@@ -82,6 +82,17 @@ export interface ProviderInstance {
       readonly providerId: string;
     }) => Effect.Effect<void, AcpRegistryOperationError>;
   };
+  /** A provider that asks to trust each folder it opens, and that GOAT can answer for. */
+  readonly folderTrust?: {
+    /** One answer per folder, in order. */
+    readonly states: (cwds: ReadonlyArray<string>) => Effect.Effect<
+      ReadonlyArray<{
+        readonly trusted: boolean | null;
+        readonly acceptedByGoatAt: string | null;
+      }>
+    >;
+    readonly accept: (cwd: string) => Effect.Effect<void, ProviderDriverError>;
+  };
 }
 
 export interface ProviderContinuationIdentity {

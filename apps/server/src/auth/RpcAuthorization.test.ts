@@ -102,6 +102,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.cloudMachinesForget,
       WS_METHODS.cloudMachinesDismissUnconfirmed,
       WS_METHODS.cloudMachinesEnsureReady,
+      WS_METHODS.cloudAgentsAcceptFolderTrust,
     ])
       expect(requiredScopeForRpcMethod(method), method).toBe(AuthSettingsWriteScope);
   });

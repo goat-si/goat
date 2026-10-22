@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import { ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
@@ -27,6 +28,8 @@ import {
 import { resolveClaudeCloudLogin } from "./ClaudeCloudLogin.ts";
 import * as PullRequests from "../../pullRequest/PullRequestService.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import { makeClaudeCloudFolderTrust } from "./ClaudeCloudFolderTrust.ts";
 
 const DRIVER = ProviderDriverKind.make("claudeCloud");
 const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
@@ -37,7 +40,9 @@ export type ClaudeCloudDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | PtyAdapter.PtyAdapter
   | PullRequests.PullRequestService
-  | Projection.ProjectionStoreV2;
+  | Projection.ProjectionStoreV2
+  | ProjectStore.ProjectStoreV2
+  | SqlClient.SqlClient;
 
 export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudDriverEnv> = {
   driverKind: DRIVER,
@@ -53,6 +58,8 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const host = yield* ProviderHost.ProviderHost;
       const pullRequests = yield* PullRequests.PullRequestService;
       const projection = yield* Projection.ProjectionStoreV2;
+      const projectStore = yield* ProjectStore.ProjectStoreV2;
+      const sql = yield* SqlClient.SqlClient;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -160,10 +167,21 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
             }),
         ),
       );
+      const folderTrust = makeClaudeCloudFolderTrust({
+        instanceId,
+        sql,
+        projects: projectStore,
+        projection,
+        fileSystem,
+        path,
+        resolveLogin,
+        cli: operations,
+      });
       const orchestrationAdapter = yield* makeClaudeCloudAdapter({
         instanceId,
         resolveLogin,
         resolveControlCwd,
+        folderTrust: folderTrust.policy,
         observe: (input) =>
           pullRequests.findCloudSessionPullRequest(input).pipe(
             Effect.mapError(
@@ -217,6 +235,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
         },
         snapshot,
         orchestrationAdapter,
+        folderTrust: folderTrust.capability,
         textGeneration: {
           generateCommitMessage: () => unsupportedText("commitMessage"),
           generatePrContent: () => unsupportedText("prContent"),

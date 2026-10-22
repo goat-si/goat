@@ -517,7 +517,14 @@ import {
   HubNodesSnapshot,
   HubNodesSubscribeInput,
 } from "./hubNodes.ts";
-import { CloudRunListInput, CloudRunListResult } from "./cloudAgents.ts";
+import {
+  CloudFolderTrust,
+  CloudFolderTrustAcceptInput,
+  CloudFolderTrustListInput,
+  CloudFolderTrustListResult,
+  CloudRunListInput,
+  CloudRunListResult,
+} from "./cloudAgents.ts";
 import {
   HubProxyEnrollInput,
   HubProxyEnrollResult,
@@ -737,6 +744,8 @@ export const WS_METHODS = {
   // Boat cloud machines this environment manages as SSH hosts
   cloudMachinesList: "cloudMachines.list",
   cloudAgentsListRuns: "cloudAgents.listRuns",
+  cloudAgentsListFolderTrust: "cloudAgents.listFolderTrust",
+  cloudAgentsAcceptFolderTrust: "cloudAgents.acceptFolderTrust",
   cloudMachinesConfigure: "cloudMachines.configure",
   cloudMachinesDisconnect: "cloudMachines.disconnect",
   cloudMachinesCreate: "cloudMachines.create",
@@ -2243,6 +2252,18 @@ const WsCloudAgentsListRunsRpc = Rpc.make(WS_METHODS.cloudAgentsListRuns, {
   success: CloudRunListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
+/** Claude Code folder trust for this environment's projects, for the cloud agents panel. */
+const WsCloudAgentsListFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsListFolderTrust, {
+  payload: CloudFolderTrustListInput,
+  success: CloudFolderTrustListResult,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+/** Answers a project folder's Claude Code trust prompt now, without starting a cloud session. */
+const WsCloudAgentsAcceptFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsAcceptFolderTrust, {
+  payload: CloudFolderTrustAcceptInput,
+  success: CloudFolderTrust,
+  error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
 
 const CloudMachineRpcError = Schema.Union([CloudMachineError, EnvironmentAuthorizationError]);
 const WsCloudMachinesListRpc = Rpc.make(WS_METHODS.cloudMachinesList, {
@@ -2562,6 +2583,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsRemoteLaunchesListRpc,
   WsCloudMachinesListRpc,
   WsCloudAgentsListRunsRpc,
+  WsCloudAgentsListFolderTrustRpc,
+  WsCloudAgentsAcceptFolderTrustRpc,
   WsCloudMachinesConfigureRpc,
   WsCloudMachinesDisconnectRpc,
   WsCloudMachinesCreateRpc,

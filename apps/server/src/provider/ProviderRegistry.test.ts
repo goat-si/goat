@@ -4,6 +4,8 @@ import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/ins
 import * as CloudPty from "@goat/shared/PtyAdapter";
 import * as CloudPullRequests from "../pullRequest/PullRequestService.ts";
 import * as CloudProjection from "../orchestration-v2/ProjectionStore.ts";
+import * as CloudProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -338,6 +340,8 @@ const layerCloudServices = Layer.mergeAll(
   Layer.mock(CloudPty.PtyAdapter)({}),
   Layer.mock(CloudPullRequests.PullRequestService)({}),
   Layer.mock(CloudProjection.ProjectionStoreV2)({}),
+  Layer.mock(CloudProjectStore.ProjectStoreV2)({}),
+  SqlitePersistence.layerMemory,
 );
 
 const layerTestNodeServices = Layer.mergeAll(
