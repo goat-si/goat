@@ -70,6 +70,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 - [Development and local builds](./operations/development.md)
 - [Merging pull requests](./operations/merging.md)
+- [Development discipline](./operations/discipline.md)
 - [T3 Connect setup](./operations/connect-setup.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
