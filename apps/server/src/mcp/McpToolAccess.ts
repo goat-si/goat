@@ -116,6 +116,9 @@ const orchestratingCaller = refuseReadOnlyClient.pipe(
   Effect.tap(assertLiveCaller),
 );
 
+/** What a read that uses this machine's SSH keys to reach another host must pass first. */
+export const hostReachingCaller = orchestratingCaller;
+
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
 );

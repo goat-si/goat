@@ -88,6 +88,8 @@ const readUpdateBlockers = Effect.fn("SshToolkit.readUpdateBlockers")(
   function* (host: string) {
     const statusService = yield* Effect.serviceOption(HostStatusMcpService.HostStatusMcpService);
     if (statusService._tag === "None") return [];
+    // Same gate as goat_host_status reaching a host; a refused caller keeps the plain status.
+    yield* McpToolAccess.hostReachingCaller;
     const scope = yield* McpInvocationContext.McpInvocationContext;
     // Ready-only reads refuse update_waiting, the one state this explains. This reads like
     // goat_host_status for the host: busy waiting keeps the old runtime attached, so it answers there.
