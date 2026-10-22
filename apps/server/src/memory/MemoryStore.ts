@@ -1,18 +1,14 @@
-import { MemoryHubSettingsSnapshot } from "./MemoryHubSettings.ts";
 import { checkpointBound, CHECKPOINT_PAGE_OVERHEAD } from "./MemoryCheckpointBound.ts";
 import { refreshCheckpointAccounting } from "./MemoryCheckpointAccounting.ts";
 import {
   checkpointKeys,
   emptyCheckpointInventory,
   selectCheckpointMemory,
-  encodeCheckpointPage,
 } from "./MemoryCheckpointInventory.ts";
 import * as NodeUtil from "node:util";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned hashes.
-import * as NodeCrypto from "node:crypto";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import * as M from "@goat/contracts";
-import { MemoryRevertSlot, revertSlotFromReceipt } from "./MemoryRevertSlot.ts";
+import { revertSlotFromReceipt } from "./MemoryRevertSlot.ts";
 import { reportMetadataBytes } from "./MemoryReportAccounting.ts";
 import type { ImportStorePorts, ImportItem } from "./imports/MemoryImportTypes.ts";
 import * as DateTime from "effect/DateTime";
@@ -25,2236 +21,215 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import type * as Scope from "effect/Scope";
-import { SqlError } from "effect/sql/SqlError";
 import * as SqlClient from "effect/sql/SqlClient";
-
-export class MemoryStorageError extends Schema.TaggedError<MemoryStorageError>()(
-  "MemoryStorageError",
-  {
-    stage: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return "Memory storage failed.";
-  }
-}
-export class MemoryStoreConflict extends Schema.TaggedError<MemoryStoreConflict>()(
-  "MemoryStoreConflict",
-  {
-    code: M.MemoryFailureCode,
-  },
-) {
-  override get message() {
-    return "Memory storage state changed.";
-  }
-}
-type CheckpointStageIdentity = {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly hubEnvironmentId: M.EnvironmentId;
-  readonly checkpointId: string;
-  readonly expectedSnapshotToken: string;
-  readonly expectedCheckpointSequence: number;
-};
-
-export class MemoryCapacityError extends Schema.TaggedError<MemoryCapacityError>()(
-  "MemoryCapacityError",
-  {
-    dimension: Schema.String,
-    limit: Schema.Int,
-    current: Schema.optionalKey(Schema.Int),
-    reclaimable: Schema.optionalKey(Schema.Int),
-  },
-) {
-  override get message() {
-    return "Memory capacity exceeded.";
-  }
-}
-
-// These contexts are constructed inside the server, never decoded from a transport.
-const admissionBrand: unique symbol = Symbol("memory-admission");
-export type MemoryAdmissionContext = {
-  /** Local final CAS only; the v1 wire operation keeps expectedHeads equal to revision parents. */
-  readonly localExpectedHeads?: readonly M.MemoryRevisionId[];
-  readonly [admissionBrand]: true;
-  readonly kind: "localIntent" | "hubAdmission" | "approvedReplica";
-};
-export const localIntent: MemoryAdmissionContext = { [admissionBrand]: true, kind: "localIntent" };
-export const hubAdmission: MemoryAdmissionContext = {
-  [admissionBrand]: true,
-  kind: "hubAdmission",
-};
-export const approvedReplica: MemoryAdmissionContext = {
-  [admissionBrand]: true,
-  kind: "approvedReplica",
-};
-
-const sameHeadSet = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((id) => b.includes(id));
-const hashText = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
-const hasBatchim = (ch: string) => {
-  const code = ch.charCodeAt(0);
-  return code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0;
-};
-const hasRieulBatchim = (ch: string) => {
-  const code = ch.charCodeAt(0);
-  return code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 === 8;
-};
-const HANGUL_PARTICLE_PATTERN =
-  "에게서|한테서|으로부터|로부터|으로서|으로써|으로는|으로도|으로만|에게는|에게도|한테는|한테도|이라고|이라며|이라서|이랑은|이랑도|입니다|입니까|이에요|께서도|께서는|에서도|에서는|께서|에서|에게|한테|으로|로서|로써|로만|로는|로도|부터|까지|마저|조차|이나|이라|이랑|하고|보다|처럼|같이|대로|마다|밖에|커녕|인들|라고|라며|라서|이란|랑은|랑도|예요|이다|이야|은|는|이|가|을|를|의|에|로|와|과|도|만|께|란|랑";
-const HANGUL_SUFFIX_RE = new RegExp(
-  `^([\\uAC00-\\uD7A3]{2,}?)(?:(님|씨)(?:${HANGUL_PARTICLE_PATTERN})?|(${HANGUL_PARTICLE_PATTERN}))$`,
-  "u",
-);
-const BATCHIM_PARTICLES = new Set([
-  "은",
-  "이",
-  "을",
-  "과",
-  "으로",
-  "으로서",
-  "으로써",
-  "으로부터",
-  "으로는",
-  "으로도",
-  "으로만",
-  "이나",
-  "이라",
-  "이랑",
-  "이라고",
-  "이라며",
-  "이라서",
-  "이란",
-  "이랑은",
-  "이랑도",
-  "이에요",
-]);
-const VOWEL_PARTICLES = new Set([
-  "는",
-  "가",
-  "를",
-  "와",
-  "랑",
-  "라고",
-  "라며",
-  "라서",
-  "란",
-  "랑은",
-  "랑도",
-  "예요",
-]);
-const RO_PARTICLES = new Set(["로", "로서", "로써", "로부터", "로는", "로도", "로만"]);
-const stripHangulParticle = (word: string) => {
-  const match = HANGUL_SUFFIX_RE.exec(word);
-  if (!match) return word;
-  const [, stem, honorific, bareParticle] = match;
-  if (!stem) return word;
-  if (honorific) return stem;
-  const last = stem[stem.length - 1]!;
-  if (bareParticle && BATCHIM_PARTICLES.has(bareParticle)) {
-    if (!hasBatchim(last) || (bareParticle.startsWith("으로") && hasRieulBatchim(last)))
-      return word;
-  } else if (bareParticle && VOWEL_PARTICLES.has(bareParticle)) {
-    if (hasBatchim(last)) return word;
-  } else if (bareParticle && RO_PARTICLES.has(bareParticle)) {
-    if (hasBatchim(last) && !hasRieulBatchim(last)) return word;
-  }
-  return stem;
-};
-const ftsQuote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
-// unicode61 splits only on whitespace/punctuation, so Hangul nouns stay glued to
-// trailing particles in both stored bodies and queries.
-const ftsMatchQuery = (text: string) => {
-  const exact = ftsQuote(text);
-  if (!/[\uAC00-\uD7A3]/u.test(text)) return exact;
-  const clauses = (text.match(/[\p{L}\p{N}_]+/gu) ?? []).map((token) => {
-    if (!/[\uAC00-\uD7A3]/u.test(token)) return ftsQuote(token);
-    const stemmed = token.replace(/[\uAC00-\uD7A3]+/gu, stripHangulParticle);
-    // A one-syllable prefix such as 이 would match nearly every Korean body.
-    return stemmed.length < 2 ? ftsQuote(stemmed) : `${ftsQuote(stemmed)}*`;
-  });
-  if (!clauses.length) return exact;
-  const expanded = clauses.length === 1 ? clauses[0]! : `(${clauses.join(" ")})`;
-  return `${exact} OR ${expanded}`;
-};
-const strict = { onExcessProperty: "error" } as const;
-const digest = Schema.String.check(Schema.makeFilter((s) => /^[a-f0-9]{64}$/.test(s)));
-const Metadata = Schema.Struct({
-  protocolVersion: Schema.Literal(1),
-  operationId: M.MemoryOperationId,
-  memorySpaceId: M.MemorySpaceId,
-  memoryId: M.MemoryId,
-  originEnvironmentId: M.EnvironmentId,
-  kind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
-  expectedHeads: Schema.Array(M.MemoryRevisionId),
-  revision: Schema.optionalKey(M.MemoryRevision),
-  tombstone: Schema.optionalKey(M.MemoryTombstone),
-  resolution: Schema.optionalKey(M.MemoryResolution),
-  conflictId: Schema.optionalKey(M.MemoryConflictId),
-  fencingToken: Schema.optionalKey(Schema.Int),
-  revertsResolutionId: Schema.optionalKey(M.MemoryResolutionId),
-  restoredRevisionId: Schema.optionalKey(M.MemoryRevisionId),
-});
-const Receipt = Schema.Union([M.MemoryHubReceipt, M.MemoryMutationReceipt]);
-export const StoredReceipt = Schema.Struct({
-  operationDigest: digest,
-  receipt: Receipt,
-});
-export type StoredReceipt = typeof StoredReceipt.Type;
-export const LocalMemoryIntent = Schema.Struct({
-  intentId: Schema.String,
-  memoryId: M.MemoryId,
-  environmentId: M.EnvironmentId,
-  scope: M.MemoryScope,
-  provenance: M.MemoryProvenance,
-  assertionKind: M.MemoryAssertionKind,
-  createdAtUtc: M.MemoryUtcTimestamp,
-  payload: M.MemoryPayload,
-});
-export type LocalMemoryIntent = typeof LocalMemoryIntent.Type;
-const LocalIntentMetadata = Schema.Struct({
-  kind: Schema.Literal("localIntent"),
-  intentId: Schema.String,
-  memoryId: M.MemoryId,
-  environmentId: M.EnvironmentId,
-  scope: M.MemoryScope,
-  provenance: M.MemoryProvenance,
-  assertionKind: M.MemoryAssertionKind,
-  createdAtUtc: M.MemoryUtcTimestamp,
-  mapping: Schema.NullOr(
-    Schema.Struct({
-      memorySpaceId: M.MemorySpaceId,
-      operationId: M.MemoryOperationId,
-      revisionId: M.MemoryRevisionId,
-    }),
-  ),
-});
-const threadHookId = "memory:thread-hook:v1";
-const ThreadHookMetadata = Schema.Struct({
-  kind: Schema.Literal("threadHook"),
-  watermark: Schema.Int.check(Schema.makeFilter((n) => n >= 0)),
-});
-// One body-free cumulative set per native context owner, never one receipt per run.
-const ThreadLineageMetadata = Schema.Struct({
-  kind: Schema.Literal("threadLineage"),
-  sourceThread: M.ScopedThreadRef,
-  memorySpaceId: M.MemorySpaceId,
-  state: Schema.Literals(["tracked", "unknown", "overflow"]),
-  revisions: Schema.Array(M.MemoryRevisionId).check(Schema.isMaxLength(100)),
-});
-type ThreadLineage = typeof ThreadLineageMetadata.Type;
-const threadLineageId = (thread: M.ScopedThreadRef) =>
-  `memory:thread-lineage:${JSON.stringify([thread.environmentId, thread.threadId])}`;
-const WorkMetadata = Schema.Union([
-  ThreadLineageMetadata,
-  ThreadHookMetadata,
+import { encodeCompactReceipt } from "./store/CompactReceipt.ts";
+import { ftsMatchQuery } from "./store/SearchText.ts";
+import {
+  ImportBatchCodec,
+  ImportCompletedNoopCodec,
+  adminActionCodec,
+  adminCodec,
+  adminReplayCodec,
+  adminReplayJson,
+  availabilityCodec,
+  boundaryCodec,
+  checkpointCodec,
+  claimCodec,
+  codec,
+  compactCodec,
+  contentCodec,
+  decodeAssertionKind,
+  decodeBinding,
+  decodeCheckpoint,
+  decodeConflict,
+  decodeFailureCode,
+  decodeFailureEnvironment,
+  decodeFtsState,
+  decodeHistoryRevision,
+  decodeHoldClass,
+  decodeItem,
+  decodeLocalIntent,
+  decodeMemoryId,
+  decodeMemorySpaceId,
+  decodeOperation,
+  decodePendingForget,
+  decodeReceipt,
+  decodeReport,
+  decodeRevertResult,
+  decodeRevision,
+  decodeScope,
+  decodeTicket,
+  decodeTombstone,
+  decodeWork,
+  deferredCodec,
+  deferredRowCodec,
+  encodeSearchItem,
+  environmentOrdinalCodec,
+  exclusionsCodec,
+  executionCodec,
+  fenceCodec,
+  handleCodec,
+  headsCodec,
+  holdRearmResult,
+  hubEntryCodec,
+  hubReceiptCodec,
+  identityCodec,
+  importBatchCodec,
+  importDigestsCodec,
+  importId,
+  importItemCodec,
+  importNoopResultCodec,
+  importRegistrationCodec,
+  importTime,
+  isSqlError,
+  keyCodec,
+  lineageCodec,
+  lineageForRevision,
+  localMetadataCodec,
+  metadataCodec,
+  metadataOf,
+  payloadCodec,
+  projectionCodec,
+  provenanceCodec,
+  pullRetryCodec,
+  receiptCodec,
+  resolutionCodec,
+  resolutionPayloadCodec,
+  resolutionReasonsCodec,
+  revertSlotCodec,
+  rulesCodec,
+  sampleCodec,
+  scopeCodec,
+  scopeKey,
+  selectionCodec,
+  snapshotId,
+  sourceKeysCodec,
+  stagedCheckpointCodec,
+  stored,
+  storedTicketRowCodec,
+  stringArrayCodec,
+  suppressionCodec,
+  suppressionKeyCodec,
+  threadCodec,
+  threadHookCodec,
+  threadLineageCodec,
+  workMetadataCodec,
+  workRows,
+} from "./store/StoreCodecs.ts";
+import type { HistoryRevisionRow, WorkRow } from "./store/StoreCodecs.ts";
+import {
+  AdminRecordSchema,
+  CheckpointTokenGuardSchema,
+  HoldClass,
+  HubAttemptReplay,
+  LocalMemoryIntent,
+  MemoryCapacityError,
+  MemoryStorageError,
+  MemoryStoreConflict,
+  MemoryWork,
   Metadata,
-  LocalIntentMetadata,
-  Schema.Struct({
-    kind: Schema.Literal("summary"),
-    sourceThread: M.ScopedThreadRef,
-    sourceWatermark: M.MemorySourceWatermark,
-    completedAt: Schema.optionalKey(Schema.Int),
-    fromSequence: Schema.optionalKey(Schema.Int),
-    observedThroughSequence: Schema.optionalKey(Schema.Int),
-    memoryId: M.MemoryId,
-    operationId: M.MemoryOperationId,
-    revisionId: M.MemoryRevisionId,
-    modelSelection: M.MemoryModelSelection,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("claim"),
-    generation: Schema.optionalKey(Schema.Int),
-    conflictId: M.MemoryConflictId,
-    sortedHeads: Schema.Array(M.MemoryRevisionId),
-    headSetDigest: digest,
-    attemptId: Schema.optionalKey(M.MemoryOperationId),
-    leaseExpiresAt: Schema.optionalKey(Schema.Int),
-    coordinatorEpoch: Schema.optionalKey(Schema.Int),
-  }),
-  Schema.Struct({ kind: Schema.Literal("resolve"), ticket: M.MemoryResolutionLease }),
-  Schema.Struct({
-    kind: Schema.Literal("binding"),
-    requestDigest: digest,
-    result: M.MemoryProjectBindingUpdateResult,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("rebuild"),
-    revisionId: Schema.NullOr(M.MemoryRevisionId),
-    generation: Schema.Int,
-  }),
-]);
-export const MemoryWork = Schema.Struct({
-  id: Schema.String,
-  space: Schema.String,
-  memoryId: Schema.NullOr(M.MemoryId),
-  kind: Schema.Literals([
-    "sync",
-    "revert_intent",
-    "summary",
-    "consolidate",
-    "claim",
-    "resolve",
-    "rebuild",
-    "admin",
-  ]),
-  status: Schema.Literals(["pending", "running", "retry", "completed", "cancelled", "failed"]),
-  metadata: WorkMetadata,
-  payloadRef: Schema.NullOr(Schema.String),
-  attempt: Schema.Int,
-  nextAttemptAt: Schema.Int,
-  claimedBy: Schema.NullOr(Schema.String),
-  claimedUntil: Schema.NullOr(Schema.Int),
-});
-// Cursor follows inspected rows, including unrelated or protected work. `more` is conservative:
-// a full page may require one empty final page. No lookahead exceeds the inspection budget.
-export type HoldRearmPage = {
-  readonly changedIds: readonly string[];
-  readonly inspected: number;
-  readonly next: string | null;
-  readonly more: boolean;
-};
-
-export type MemoryWork = typeof MemoryWork.Type;
-const DeferredRow = Schema.Struct({
-  scannerCursor: Schema.optionalKey(Schema.String),
-  kind: Schema.Literals(["index", "scanner", "parent", "projection", "cleanup", "report"]),
-  state: Schema.Literals(["pending", "held", "ready"]),
-  reason: Schema.NullOr(M.MemoryDeferredReason),
-  revisionId: Schema.NullOr(M.MemoryRevisionId),
-  generation: Schema.Int,
-  sinceAtUtc: Schema.NullOr(M.MemoryUtcTimestamp),
-  attempt: Schema.Int,
-  dueAt: Schema.Int,
-  lastAttemptAt: Schema.NullOr(Schema.Int),
-  claimedBy: Schema.NullOr(Schema.String),
-  claimedUntil: Schema.NullOr(Schema.Int),
-});
-export type MemoryDeferredWork = typeof DeferredRow.Type & {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly memoryId: M.MemoryId;
-  readonly payloadBytes: number;
-};
-export const PendingForgetIntent = Schema.Struct({
-  memorySpaceId: M.MemorySpaceId,
-  memoryId: M.MemoryId,
-  operationId: M.MemoryOperationId,
-  requestedAtUtc: M.MemoryUtcTimestamp,
-  attempts: Schema.Int,
-  lastFailureCode: Schema.NullOr(M.MemoryFailureCode),
-  operationDigest: Schema.NullOr(digest),
-  submissionState: Schema.Literals(["unsubmitted", "uncertain", "rejected"]),
-});
-export type PendingForgetIntent = typeof PendingForgetIntent.Type;
-export type ResolutionSnapshot = {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly memoryId: M.MemoryId;
-  readonly status: M.MemoryItem["status"] | null;
-  readonly heads: readonly M.MemoryRevisionId[];
-  readonly generation: number;
-  readonly reasons: M.MemoryLocalAvailability["reasons"];
-  readonly tombstone: boolean;
-  readonly pendingForget: boolean;
-  readonly fence: M.MemoryFenceRecord | undefined;
-};
-export type MemoryAggregate = {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly memoryId: M.MemoryId;
-  readonly item: M.MemoryItem | undefined;
-  readonly heads: ReadonlyArray<M.MemoryRevisionId>;
-  readonly revisions: ReadonlyArray<{
-    readonly revision: M.MemoryRevision;
-    readonly payload: M.MemoryPayload | null;
-  }>;
-  readonly tombstone: M.MemoryTombstone | undefined;
-  readonly conflicts: ReadonlyArray<M.MemoryConflict>;
-  readonly resolutions: ReadonlyArray<M.MemoryResolution>;
-  readonly identity: M.MemoryIdentityRecord | undefined;
-  readonly fence: M.MemoryFenceRecord | undefined;
-  readonly pendingForget: PendingForgetIntent | undefined;
-  readonly generation: number;
-};
-/**
- * Narrows which revision payloads `loadAggregate` reads and decodes. The revision DAG is
- * always complete; payloads outside the selection read as `null`, so pass one only when the
- * caller never reads those payloads. Omit it to decode every payload.
- */
-export type MemoryPayloadSelection = {
-  /** Current heads, which admission uses for the live payload. */
-  readonly heads?: boolean;
-  readonly revisionIds?: ReadonlyArray<M.MemoryRevisionId>;
-  readonly when?: (revision: M.MemoryRevision) => boolean;
-};
-/**
- * Admission needs at most the claimed conflict, the reverted resolution, and the incoming
- * revision's frontier/parent metadata. Omit this selection for full history; `{}` skips
- * historical rows that are not explicitly selected.
- */
-export type MemoryHistorySelection = {
-  readonly conflictId?: M.MemoryConflictId;
-  readonly resolutionId?: M.MemoryResolutionId;
-  /** Incoming revision whose admission DAG checks need its direct parents and any active ancestry. */
-  readonly revision?: M.MemoryRevision;
-  readonly metadataRevisionIds?: ReadonlyArray<M.MemoryRevisionId>;
-  /** Also retain import-attributed revision metadata when computing forget reservations. */
-  readonly importLineage?: boolean;
-};
-/** A published boundary is not proof that an arbitrary unknown UUID was compacted. */
-export type MemoryParentState =
-  | {
-      readonly revisionId: M.MemoryRevisionId;
-      readonly status: "retained";
-      readonly parents: ReadonlyArray<M.MemoryRevisionId>;
-    }
-  | {
-      readonly revisionId: M.MemoryRevisionId;
-      readonly status: "crossMemory";
-      readonly memoryId: M.MemoryId;
-    }
-  | {
-      readonly revisionId: M.MemoryRevisionId;
-      readonly status: "compacted";
-      readonly boundary: M.MemoryCausalBoundary;
-    }
-  | {
-      readonly revisionId: M.MemoryRevisionId;
-      readonly status: "parked";
-      readonly missingParents: ReadonlyArray<M.MemoryRevisionId>;
-    }
-  | { readonly revisionId: M.MemoryRevisionId; readonly status: "missing" };
-export type MemoryAncestry = {
-  readonly causalBoundary: M.MemoryCausalBoundary | undefined;
-  readonly retentionFloor: number;
-  readonly parents: ReadonlyArray<MemoryParentState>;
-};
-/** Only these revisions contribute payload evidence to forget reservations and exclusions. */
-export const hasSourceEvidence = (revision: M.MemoryRevision) =>
-  Boolean(revision.provenance.sourceThread && revision.provenance.sourceWatermark);
-/** Expanded wire exclusions are stored and admitted per message. */
-export const memorySuppressionRecords = (t: M.MemoryTombstone): M.MemorySuppressionRecord[] => [
-  ...t.suppressedSourceKeys.map((sourceKey) => ({
-    memorySpaceId: t.memorySpaceId,
-    memoryId: t.memoryId,
-    deleteOperationId: t.deleteOperationId,
-    kind: "sourceKey" as const,
-    sourceKey,
-  })),
-  ...t.suppressedContent.map((content) => ({
-    memorySpaceId: t.memorySpaceId,
-    memoryId: t.memoryId,
-    deleteOperationId: t.deleteOperationId,
-    kind: "content" as const,
-    content,
-  })),
-  ...t.sourceExclusions.flatMap((exclusion) =>
-    exclusion.messageIds.map((messageId) => ({
-      memorySpaceId: t.memorySpaceId,
-      memoryId: t.memoryId,
-      deleteOperationId: t.deleteOperationId,
-      kind: "sourceExclusion" as const,
-      exclusion: { ...exclusion, messageIds: [messageId] },
-    })),
-  ),
-];
-export type MemoryDecision = {
-  readonly operation: M.MemoryOperation;
-  readonly operationDigest: string;
-  readonly admission: MemoryAdmissionContext;
-  readonly receipt: M.MemoryHubReceipt | M.MemoryMutationReceipt;
-  readonly item?: M.MemoryItem;
-  readonly heads?: ReadonlyArray<M.MemoryRevisionId>;
-  readonly conflict?: M.MemoryConflict;
-  readonly identity?: M.MemoryIdentityRecord;
-  readonly fence?: M.MemoryFenceRecord;
-  readonly execution?: M.MemoryGenerationExecution;
-  readonly work?: ReadonlyArray<MemoryWork>;
-  readonly pending?: {
-    readonly missingParents: ReadonlyArray<M.MemoryRevisionId>;
-    readonly reason: M.MemoryDeferredReason;
-  };
-  readonly signals?: ReadonlyArray<M.MemoryChangeSignal>;
-};
-/** Fixed-width UUID/digest fields; environment strings are admitted once in the SQL dictionary. */
-export function encodeCompactReceipt(
-  record: M.MemoryCompactReceipt,
-  environmentOrdinal: (id: M.EnvironmentId) => number,
-): Uint8Array {
-  const bytes: number[] = [record.upsertRequestDigest === undefined ? 2 : 3];
-  const byte = (value: number) => bytes.push(value);
-  const number = (value: number) => {
-    let remaining = BigInt(value);
-    do {
-      const part = Number(remaining & 127n);
-      remaining >>= 7n;
-      byte(part | (remaining ? 128 : 0));
-    } while (remaining);
-  };
-  const uuid = (value: string | null) => {
-    byte(value === null ? 0 : 1);
-    if (value !== null)
-      for (const pair of value.replaceAll("-", "").match(/../g) ?? []) byte(parseInt(pair, 16));
-  };
-  const hash = (value: string) => {
-    for (const pair of value.match(/../g) ?? []) byte(parseInt(pair, 16));
-  };
-  byte(["upsert", "forget", "resolve", "revert"].indexOf(record.operationKind));
-  byte(["accepted", "conflicted", "deleted", "rejected"].indexOf(record.receipt.outcome));
-  uuid(record.receipt.operationId);
-  uuid(record.receipt.memoryId);
-  hash(record.receipt.operationDigest);
-  number(record.receipt.hubSequence!);
-  number(environmentOrdinal(record.originEnvironmentId));
-  uuid(record.revisionId);
-  uuid(record.resolutionId);
-  uuid(record.attemptId);
-  number(record.fencingToken ?? 0);
-  byte(record.revertsResolutionId === null ? 0 : 1);
-  byte(record.reportGuard === null ? 0 : 1);
-  if (record.reportGuard) {
-    hash(record.reportGuard.reportId);
-    number(environmentOrdinal(record.reportGuard.resolvingEnvironmentId));
-    byte(record.reportGuard.outcome === "resolved" ? 0 : 1);
-  }
-  byte(
-    record.receipt.failureCode === undefined
-      ? 0
-      : M.MemoryFailureCode.literals.indexOf(record.receipt.failureCode) + 1,
-  );
-  byte(record.receipt.capacity === undefined ? 0 : 1);
-  if (record.receipt.capacity) {
-    byte(M.MemoryCapacityDimension.literals.indexOf(record.receipt.capacity.dimension));
-    number(record.receipt.capacity.current);
-    number(record.receipt.capacity.limit);
-    number(record.receipt.capacity.reclaimable);
-  }
-  byte(record.receipt.resolutionApproval === undefined ? 0 : 1);
-  if (record.receipt.resolutionApproval) {
-    const appliedAt = Date.parse(record.receipt.resolutionApproval.appliedAtUtc);
-    byte(appliedAt < 0 ? 1 : 0);
-    number(Math.abs(appliedAt));
-  }
-  byte(record.receipt.forgetExpansion === undefined ? 0 : 1);
-  if (record.receipt.forgetExpansion) {
-    hash(record.receipt.forgetExpansion.requestDigest);
-    uuid(record.receipt.forgetExpansion.operationId);
-    hash(record.receipt.forgetExpansion.operationDigest);
-    byte(["accepted", "pending", "rejected"].indexOf(record.receipt.forgetExpansion.status));
-  }
-  byte(record.receipt.forgetRetryOf === undefined ? 0 : 1);
-  if (record.receipt.forgetRetryOf) {
-    uuid(record.receipt.forgetRetryOf.operationId);
-    hash(record.receipt.forgetRetryOf.operationDigest);
-  }
-  if (record.upsertRequestDigest !== undefined) hash(record.upsertRequestDigest);
-  return Uint8Array.from(bytes);
-}
-
-/** Decode stored v1/v2/v3 rows without granting old resolve rows authoritative approval. */
-export function decodeCompactReceipt(
-  bytes: Uint8Array,
-  space: M.MemorySpaceId,
-  environmentAt: (ordinal: number) => M.EnvironmentId,
-): M.MemoryCompactReceipt {
-  let offset = 0;
-  const byte = () => {
-    if (offset >= bytes.length) throw new RangeError("Truncated compact receipt");
-    return bytes[offset++]!;
-  };
-  const version = byte();
-  if (version !== 1 && version !== 2 && version !== 3)
-    throw new RangeError("Unsupported compact receipt");
-  const number = () => {
-    let value = 0n;
-    let shift = 0n;
-    for (let i = 0; i < 8; i++) {
-      const part = byte();
-      value |= BigInt(part & 127) << shift;
-      if (!(part & 128)) {
-        if (value > BigInt(Number.MAX_SAFE_INTEGER))
-          throw new RangeError("Invalid compact integer");
-        return Number(value);
-      }
-      shift += 7n;
-    }
-    throw new RangeError("Invalid compact integer");
-  };
-  const hash = () =>
-    Array.from({ length: 32 }, () => byte().toString(16).padStart(2, "0")).join("");
-  const uuid = () => {
-    const present = byte();
-    if (present === 0) return null;
-    if (present !== 1) throw new RangeError("Invalid compact marker");
-    const hex = Array.from({ length: 16 }, () => byte().toString(16).padStart(2, "0")).join("");
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  };
-  const operationKind = ["upsert", "forget", "resolve", "revert"][byte()];
-  const outcome = ["accepted", "conflicted", "deleted", "rejected"][byte()];
-  const operationId = uuid(),
-    memoryId = uuid(),
-    operationDigest = hash();
-  const hubSequence = number(),
-    originEnvironmentId = environmentAt(number());
-  const revisionId = uuid(),
-    resolutionId = uuid(),
-    attemptId = uuid(),
-    fencingToken = number() || null;
-  const revertsResolutionId = byte() ? resolutionId : null;
-  const reportGuard = byte()
-    ? {
-        reportId: hash(),
-        resolvingEnvironmentId: environmentAt(number()),
-        resolutionId,
-        outcome: byte() ? "reverted" : "resolved",
-      }
-    : null;
-  const failure = byte();
-  const capacity = byte()
-    ? {
-        code: "capacity_exceeded",
-        dimension: M.MemoryCapacityDimension.literals[byte()],
-        current: number(),
-        limit: number(),
-        reclaimable: number(),
-      }
-    : undefined;
-  const appliedAt = version >= 2 && byte() ? (byte() ? -1 : 1) * number() : undefined;
-  const forgetExpansion =
-    version >= 2 && byte()
-      ? {
-          requestDigest: hash(),
-          operationId: uuid(),
-          operationDigest: hash(),
-          status: ["accepted", "pending", "rejected"][byte()],
-        }
-      : undefined;
-  const forgetRetryOf =
-    version >= 2 && byte() ? { operationId: uuid(), operationDigest: hash() } : undefined;
-  const upsertRequestDigest = version === 3 ? hash() : undefined;
-  if (offset !== bytes.length) throw new RangeError("Trailing compact receipt bytes");
-  // Legacy storage accepts approval-free resolves. It must not pass the current wire decoder.
-  const storedSchema =
-    version === 1
-      ? Schema.Struct({
-          memorySpaceId: M.MemorySpaceId,
-          originEnvironmentId: M.EnvironmentId,
-          operationKind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
-          receipt: M.MemoryHubReceipt,
-          revisionId: Schema.NullOr(M.MemoryRevisionId),
-          resolutionId: Schema.NullOr(M.MemoryResolutionId),
-          revertsResolutionId: Schema.NullOr(M.MemoryResolutionId),
-          attemptId: Schema.NullOr(M.MemoryOperationId),
-          fencingToken: Schema.NullOr(Schema.Int),
-          reportGuard: Schema.NullOr(M.MemoryCheckpointReportGuard),
-        })
-      : M.MemoryCompactReceipt;
-  return Schema.decodeUnknownSync(storedSchema)(
-    {
-      memorySpaceId: space,
-      originEnvironmentId,
-      operationKind,
-      ...(upsertRequestDigest !== undefined ? { upsertRequestDigest } : {}),
-      receipt: {
-        operationId,
-        memoryId,
-        operationDigest,
-        hubSequence,
-        outcome,
-        ...(failure ? { failureCode: M.MemoryFailureCode.literals[failure - 1] } : {}),
-        ...(capacity ? { capacity } : {}),
-        ...(appliedAt !== undefined
-          ? {
-              resolutionApproval: {
-                resolutionId,
-                appliedAtUtc: DateTime.formatIso(DateTime.makeUnsafe(appliedAt)),
-                revertDeadlineUtc: DateTime.formatIso(
-                  DateTime.makeUnsafe(appliedAt + M.MEMORY_REVERT_WINDOW_MS),
-                ),
-              },
-            }
-          : {}),
-        ...(forgetExpansion ? { forgetExpansion } : {}),
-        ...(forgetRetryOf ? { forgetRetryOf } : {}),
-      },
-      revisionId,
-      resolutionId,
-      revertsResolutionId,
-      attemptId,
-      fencingToken,
-      reportGuard,
-    },
-    strict,
-  );
-}
-
-export type InTx<A, E = MemoryStorageError | MemoryStoreConflict> = Effect.Effect<
-  A,
-  E,
-  Transaction
->;
-export type HubMember = {
-  memorySpaceId: M.MemorySpaceId;
-  environmentId: M.EnvironmentId;
-  credentialDigest: string;
-  credentialVersion: number;
-  status: "active" | "revoked";
-  joinedAt: number | null;
-};
-export type HubAuthority = {
-  principal: M.MemoryHubPrincipal;
-  now: InTx<number, MemoryStorageError>;
-  reauthorize: InTx<
-    void,
-    M.MemoryHubUnauthorizedError | M.MemoryHubForbiddenError | MemoryStorageError
-  >;
-};
-export type HubLedgerRecord = { entry: M.MemoryHubEntry; committedAt: number };
-export type Settlement = {
-  receipt: M.MemoryHubReceipt;
-  incorporated: boolean;
-  intent: "none" | "completed" | "rejected" | "review";
-};
-const HoldClass = Schema.Literals(["authorization", "protocol", "identity", "availability"]);
-export type MemoryHoldClass = typeof HoldClass.Type;
-const PullRetry = Schema.Struct({
-  version: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2147483647 })),
-  attempts: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 2147483647 })),
-  nextAttemptAt: Schema.Int.check(
-    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  ),
-  failureCode: Schema.NullOr(M.MemoryFailureCode),
-  holdClass: Schema.NullOr(HoldClass),
-});
-export type PullRetryState = typeof PullRetry.Type;
-const emptyPullRetry: PullRetryState = {
-  version: 0,
-  attempts: 0,
-  nextAttemptAt: 0,
-  failureCode: null,
-  holdClass: null,
-};
-export type WorkHold = {
-  holdClass: MemoryHoldClass | null;
-  failureCode: M.MemoryFailureCode | null;
-};
-export type SyncWorkCandidate = {
-  work: MemoryWork;
-  operationId: M.MemoryOperationId;
-  operationDigest: string;
-  version: number;
-};
-export type SyncWorkOwner = {
-  workId: string;
-  operationId: M.MemoryOperationId;
-  operationDigest: string;
-  owner: string;
-  version: number;
-  ownedUntil: number;
-};
-export type IntentIdentityInput = {
-  environmentId: M.EnvironmentId;
-  intentId: string;
-  memorySpaceId: M.MemorySpaceId;
-  operationId: M.MemoryOperationId;
-  revisionId: M.MemoryRevisionId;
-};
-export type MaterializedIntent = {
-  readonly operation: M.MemoryOperation;
-  readonly operationDigest: string;
-};
-export type AssignedIntent = {
-  intent: LocalMemoryIntent;
-  memorySpaceId: M.MemorySpaceId;
-  operationId: M.MemoryOperationId;
-  revisionId: M.MemoryRevisionId;
-};
-export type TicketState =
-  | "recoverable"
-  | "running"
-  | "submitting"
-  | "approved"
-  | "finalizing"
-  | "terminal";
-const TicketRowSchema = Schema.Struct({
-  ticket: M.MemoryResolutionLease,
-  version: Schema.Int,
-  state: Schema.Literals([
-    "recoverable",
-    "running",
-    "submitting",
-    "approved",
-    "finalizing",
-    "terminal",
-  ]),
-  owner: Schema.NullOr(Schema.String),
-  coordinatorEpoch: Schema.Int,
-  ownedUntil: Schema.NullOr(Schema.Int),
-  nextAttemptAt: Schema.Int,
-  submission: Schema.NullOr(M.MemoryHubApplyResolutionInput),
-  submissionDigest: Schema.NullOr(digest),
-  approval: Schema.NullOr(M.MemoryHubReceipt),
-  reconcileRequired: Schema.optionalKey(Schema.Boolean),
-});
-// SQL stores only immutable submission metadata; bodies live in purgeable payload rows.
-const HubAttemptReplay = Schema.Struct({
-  requestDigest: digest,
-  claimedAt: Schema.Int,
-  deadline: Schema.Int,
-  fencingToken: Schema.Int,
-});
-const StoredTicketRowSchema = Schema.Struct({
-  ...TicketRowSchema.fields,
-  submission: Schema.NullOr(
-    Schema.Struct({
-      protocolVersion: Schema.Literal(1),
-      memorySpaceId: M.MemorySpaceId,
-      holderEnvironmentId: M.EnvironmentId,
-      attemptId: M.MemoryOperationId,
-      operation: Metadata,
-    }),
-  ),
-});
-export type TicketRow = typeof TicketRowSchema.Type;
-export type SubmissionReconciliation =
-  | { readonly outcome: "admitted"; readonly row: TicketRow; readonly receipt: M.MemoryHubReceipt }
-  | { readonly outcome: "retired"; readonly row: TicketRow }
-  | { readonly outcome: "uncertain"; readonly row: TicketRow };
-export type TicketKey = { memorySpaceId: M.MemorySpaceId; attemptId: M.MemoryOperationId };
-export type TicketOwner = TicketKey & { owner: string; coordinatorEpoch: number; version: number };
-export type { Transaction };
-/** Shared key for ACK, pull, checkpoint and local delivery. */
-export const resolutionReportId = (
-  space: M.MemorySpaceId,
-  operation: M.MemoryOperationId,
-  resolution: M.MemoryResolutionId,
-): M.MemoryReportDelivery["reportId"] => hashText(`${space}:${operation}:${resolution}`);
-
-const adminBase = {
-  requestId: M.MemoryOperationId,
-  expectedVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-};
-const PersistedAdminActionSchema = Schema.Union([
-  Schema.Struct({
-    ...adminBase,
-    action: Schema.Literal("configure"),
-    settings: M.MemoryHubSettings,
-  }),
-  Schema.Struct({
-    ...adminBase,
-    action: Schema.Literals(["provisionMember", "rotateMemberCredential", "revokeMember"]),
-    environmentId: M.EnvironmentId,
-  }),
-  Schema.Struct({
-    ...adminBase,
-    action: Schema.Literal("installCredential"),
-    hubEnvironmentId: M.EnvironmentId,
-    endpoint: M.MemoryHubEndpoint,
-    memorySpaceId: M.MemorySpaceId,
-  }),
-  Schema.Struct({
-    ...adminBase,
-    action: Schema.Literal("acknowledgeCredential"),
-    credentialRequestId: M.MemoryOperationId,
-  }),
-]);
-export type PersistedAdminAction =
-  | Exclude<M.MemoryHubSettingsUpdateInput, { action: "installCredential" }>
-  | Omit<Extract<M.MemoryHubSettingsUpdateInput, { action: "installCredential" }>, "credential">;
-const AdminRecordSchema = Schema.Struct({
-  initialization: Schema.optionalKey(Schema.Literal("auto-initialized")),
-  requestId: M.MemoryOperationId,
-  requestDigest: digest,
-  expectedVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  stage: Schema.Literals(["prepared", "activated", "ready", "acknowledged"]),
-  action: PersistedAdminActionSchema,
-  secretName: Schema.NullOr(
-    Schema.String.check(Schema.makeFilter((v) => /^[a-z0-9-]{1,128}$/.test(v))),
-  ),
-  result: Schema.NullOr(Schema.Struct({ view: MemoryHubSettingsSnapshot })),
-  memberVersion: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
-}).check(
-  Schema.makeFilter(
-    (v) => v.requestId === v.action.requestId && v.expectedVersion === v.action.expectedVersion,
-  ),
-);
-export type AdminRecord = typeof AdminRecordSchema.Type;
-const AdminReplaySchema = Schema.Struct({
-  initialization: Schema.optionalKey(Schema.Literal("auto-initialized")),
-  requestId: M.MemoryOperationId,
-  requestDigest: digest,
-  expectedVersion: Schema.Int,
-  stage: Schema.Literal("acknowledged"),
-  actionDigest: digest,
-  secretName: AdminRecordSchema.fields.secretName,
-  result: AdminRecordSchema.fields.result,
-  memberVersion: AdminRecordSchema.fields.memberVersion,
-});
-export type AdminReplay = typeof AdminReplaySchema.Type;
-
-const HubCheckpointHandleSchema = Schema.Struct({
-  checkpointId: Schema.String,
-  snapshotToken: Schema.String,
-  memorySpaceId: M.MemorySpaceId,
-  hubEnvironmentId: M.EnvironmentId,
-  memberEnvironmentId: M.EnvironmentId,
-  credentialVersion: Schema.Int,
-  checkpointSequence: Schema.Int,
-  retentionFloor: Schema.Int,
-  firstIssuedAt: Schema.Int,
-  expiresAt: Schema.Int,
-  pageCount: Schema.Int,
-});
-export type HubCheckpointHandle = typeof HubCheckpointHandleSchema.Type;
-// A pin is transient; its first issue and retirement are permanent replay knowledge.
-const CheckpointTokenGuardSchema = Schema.Struct({
-  handle: HubCheckpointHandleSchema,
-  retired: Schema.Boolean,
-});
-export type HubRetention = {
-  memorySpaceId: M.MemorySpaceId;
-  checkpointId: string | null;
-  checkpointSequence: number;
-  retentionFloor: number;
-  causalBoundary: M.MemoryCausalBoundary | null;
-  compaction: M.MemoryCompactionStatus;
-};
-export type HubUsage = {
-  tables: readonly M.MemoryStorageTableUsage[];
-  tailRows: number;
-  tailBytes: number;
-  permanentMetadataBytes: number;
-  activeMembers: number;
-  liveHandles: number;
-  stagingBytes: number;
-  checkpointBytes: number;
-  requiredCheckpointBoundBytes: number;
-  lastSnapshotBytes: number;
-  checkpointReservationConsumedBytes: number;
-  publishedPinnedBytes: number;
-  liveSourceReads: number;
-  sourcePayloadBytes: number;
-};
-export type MemoryUsage = {
-  readonly scopeItems: number;
-  readonly scopeSummaries: number;
-  readonly scopeExplicit: number;
-  readonly environmentItems: number;
-  readonly environmentLiveBytes: number;
-  readonly environmentHistoryBytes: number;
-  readonly environmentPermanentBytes: number;
-  readonly environmentReceipts: number;
-  readonly environmentLifetimeIds: number;
-  readonly spaceItems: number;
-  readonly lifetimeIds: number;
-  readonly permanentBytes: number;
-  readonly receipts: number;
-  readonly liveBytes: number;
-  readonly historyBytes: number;
-  readonly logicalBytes: number;
-  readonly keys: number;
-  readonly workItems: number;
-  readonly workBytes: number;
-  readonly reportItems: number;
-  readonly reportBytes: number;
-  readonly logRows: number;
-  readonly logBytes: number;
-};
-export type MemoryQuotaCharge = {
-  readonly space: string;
-  readonly dimension: string;
-  readonly scopeKey: string;
-  readonly delta: number;
-  readonly current?: number;
-  readonly limit: number;
-};
-export type MemoryReadFilter = {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly scope: M.MemoryScope;
-  readonly afterMemoryId?: M.MemoryId;
-  readonly limit: number;
-};
-const FtsState = Schema.Struct({
-  environment: M.EnvironmentId,
-  state: Schema.Literals(["open", "braked"]),
-  changedAt: Schema.NullOr(Schema.Int),
-  allocatedBytes: Schema.NullOr(Schema.Int),
-  measuredAt: Schema.NullOr(Schema.Int),
-  measurementStatus: Schema.Literals(["available", "unavailable"]),
-  mergePending: Schema.Boolean,
-  changedRows: Schema.Int,
-  lastMergeAt: Schema.NullOr(Schema.Int),
-});
-export type MemoryFtsState = typeof FtsState.Type;
-export type MemoryIndexTarget = {
-  readonly memorySpaceId: M.MemorySpaceId;
-  readonly memoryId: M.MemoryId;
-  readonly revisionId: M.MemoryRevisionId;
-  readonly generation: number;
-};
-
-class Transaction extends Context.Service<
+  PendingForgetIntent,
+  StoredReceipt,
+  TicketRowSchema,
   Transaction,
-  { readonly signals: M.MemoryChangeSignal[]; runnable: boolean }
->()("goat/memory/MemoryStore/Transaction") {}
+  emptyPullRetry,
+  hasSourceEvidence,
+  hashText,
+  memorySuppressionRecords,
+  resolutionReportId,
+  sameHeadSet,
+  strict,
+  threadHookId,
+  threadLineageId,
+} from "./store/StoreModel.ts";
+import type {
+  CheckpointStageIdentity,
+  HubAuthority,
+  HubCheckpointHandle,
+  HubMember,
+  IntentIdentityInput,
+  MemoryAdmissionContext,
+  MemoryAggregate,
+  MemoryDecision,
+  MemoryDeferredWork,
+  MemoryFtsState,
+  MemoryHistorySelection,
+  MemoryHoldClass,
+  MemoryIndexTarget,
+  MemoryPayloadSelection,
+  MemoryQuotaCharge,
+  MemoryReadFilter,
+  SyncWorkCandidate,
+  ThreadLineage,
+  TicketKey,
+  TicketOwner,
+  TicketRow,
+} from "./store/StoreModel.ts";
+import type { MemoryStoreShape } from "./store/StoreShape.ts";
 
-export class MemoryStore extends Context.Service<
-  MemoryStore,
-  {
-    readonly transact: <A, E, R>(
-      effect: Effect.Effect<A, E, R>,
-      options?: { requireOuter?: boolean; finalGuard?: Effect.Effect<void, E> },
-    ) => Effect.Effect<A, E | MemoryStorageError, Exclude<R, Transaction>>;
-    readonly readThreadLineage: (
-      thread: M.ScopedThreadRef,
-      space: M.MemorySpaceId,
-    ) => Effect.Effect<ThreadLineage, MemoryStorageError>;
-    readonly appendThreadLineage: (
-      thread: M.ScopedThreadRef,
-      space: M.MemorySpaceId,
-      revisions: ReadonlyArray<M.MemoryRevisionId>,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly deleteThreadLineage: (
-      thread: M.ScopedThreadRef,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly acquireSyncWorkTx: (input: {
-      workId: string;
-      operationId: M.MemoryOperationId;
-      operationDigest: string;
-      owner: string;
-      expectedVersion: number;
-      now: number;
-      ownedUntil: number;
-    }) => InTx<SyncWorkOwner | null>;
-    readonly retrySyncWorkTx: (input: {
-      ownership: SyncWorkOwner;
-      now: number;
-      nextAttemptAt: number;
-      failureCode: M.MemoryFailureCode | null;
-      holdClass?: MemoryHoldClass;
-    }) => InTx<boolean>;
-    readonly readPullRetry: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => Effect.Effect<PullRetryState, MemoryStorageError>;
-    readonly readPersistedHoldClasses: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => Effect.Effect<readonly MemoryHoldClass[], MemoryStorageError>;
-    readonly writePullRetryTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-      expectedVersion: number;
-      retry: Omit<PullRetryState, "version">;
-    }) => InTx<PullRetryState | null>;
-    readonly readWorkHold: (workId: string) => Effect.Effect<WorkHold | null, MemoryStorageError>;
-    readonly rearmSyncHoldsTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      holdClass: MemoryHoldClass;
-      now: number;
-      afterId: string;
-      limit: number;
-    }) => InTx<HoldRearmPage>;
-    readonly prepareClaimAttemptTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      candidateId: string;
-      expectedGeneration: number;
-      conflictHeads: readonly M.MemoryRevisionId[];
-      proposedClaim?: M.MemoryHubClaimInput;
-    }) => InTx<{ claim: M.MemoryHubClaimInput; generation: number } | null>;
-    readonly readRecoverableResolutionTickets: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      now: number;
-      limit: number;
-    }) => Effect.Effect<readonly TicketRow[], MemoryStorageError>;
-    readonly acquireResolutionTicketTx: (input: {
-      key: TicketKey;
-      expectedVersion: number;
-      owner: string;
-      coordinatorEpoch: number;
-      now: number;
-      ownedUntil: number;
-    }) => InTx<TicketRow | null>;
-    readonly transitionResolutionTicketTx: (input: {
-      ownership: TicketOwner;
-      nextState: TicketState;
-      now: number;
-      ownedUntil: number | null;
-      nextAttemptAt: number;
-      approval?: M.MemoryHubReceipt;
-      retireClaim?: { candidateId?: string; expectedGeneration: number; attemptId: string };
-    }) => InTx<TicketRow | null>;
-    readonly reconcileResolutionSubmissionTx: (input: {
-      ownership: TicketOwner;
-      now: number;
-      rejection?: M.MemoryHubReceipt;
-    }) => InTx<SubmissionReconciliation | null>;
-    readonly retireRejectedSubmissionTx: (input: {
-      ownership: TicketOwner;
-      candidateId: string;
-      expectedGeneration: number;
-      rejection: M.MemoryHubReceipt;
-      now: number;
-      nextAttemptAt: number;
-    }) => InTx<TicketRow | null>;
-    readonly renewResolutionTicketTx: (input: {
-      ownership: TicketOwner;
-      now: number;
-      expectedExpiresAtHubTime: M.MemoryResolutionLease["expiresAtHubTime"];
-      renewedLease: M.MemoryResolutionLease;
-    }) => InTx<TicketRow | null>;
-    readonly failResolutionTicketTx: (input: {
-      ownership: TicketOwner;
-      now: number;
-      failureCode: M.MemoryFailureCode;
-      nextAttemptAt: number;
-      holdClass?: MemoryHoldClass;
-      reportConflictFailure: boolean;
-    }) => InTx<TicketRow | null>;
-    readonly holdClaimCandidateTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      candidateId: string;
-      expectedGeneration: number;
-      expectedAttempt: number;
-      attemptId: M.MemoryOperationId;
-      coordinatorEpoch: number;
-      now: number;
-      failureCode: M.MemoryFailureCode;
-      holdClass: MemoryHoldClass;
-    }) => InTx<boolean>;
-    readonly holdResolutionAttemptTx: (input: {
-      ownership: TicketOwner;
-      candidateId: string;
-      expectedGeneration: number;
-      expectedAttempt: number;
-      now: number;
-      failureCode: M.MemoryFailureCode;
-      holdClass: MemoryHoldClass;
-    }) => InTx<TicketRow | null>;
-    readonly rearmResolutionHoldsTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      holdClass: MemoryHoldClass;
-      now: number;
-      afterId: string;
-      limit: number;
-    }) => InTx<HoldRearmPage>;
-    readonly persistResolutionSubmissionTx: (input: {
-      ownership: TicketOwner;
-      submission: M.MemoryHubApplyResolutionInput;
-      digest: string;
-    }) => InTx<TicketRow>;
-    readonly listMaterializableIntents: (
-      environment: M.EnvironmentId,
-      limit: number,
-    ) => Effect.Effect<readonly LocalMemoryIntent[], MemoryStorageError>;
-    readonly assignIntentIdentityTx: (input: {
-      environmentId: M.EnvironmentId;
-      intentId: string;
-      memorySpaceId: M.MemorySpaceId;
-      operationId: M.MemoryOperationId;
-      revisionId: M.MemoryRevisionId;
-    }) => InTx<AssignedIntent>;
-    readonly readHubMembers: (
-      space: M.MemorySpaceId,
-    ) => Effect.Effect<readonly M.MemoryHubMemberView[], MemoryStorageError>;
-    readonly readHubMember: (
-      space: M.MemorySpaceId,
-      environment: M.EnvironmentId,
-    ) => Effect.Effect<HubMember | undefined, MemoryStorageError>;
-    readonly findHubMemberByCredential: (
-      credentialDigest: string,
-    ) => Effect.Effect<HubMember | undefined, MemoryStorageError>;
-    readonly requireHubMemberTx: (
-      principal: M.MemoryHubPrincipal,
-    ) => InTx<
-      HubMember,
-      MemoryStorageError | M.MemoryHubUnauthorizedError | M.MemoryHubForbiddenError
-    >;
-    readonly readHubReceiptTx: (
-      space: M.MemorySpaceId,
-      operationId: M.MemoryOperationId,
-    ) => InTx<HubLedgerRecord | undefined>;
-    readonly appendHubEntryTx: (input: {
-      operation: M.MemoryOperation;
-      operationDigest: string;
-      outcome: M.MemoryHubReceipt["outcome"];
-      failureCode?: M.MemoryFailureCode;
-      capacity?: M.MemoryCapacityExceeded;
-      resolutionApproval?: M.MemoryResolutionApproval;
-      now: number;
-    }) => InTx<HubLedgerRecord, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly readHubTailTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      afterSequence: number;
-      highWatermark: number | null;
-      limit: number;
-      maxBytes: number;
-    }) => InTx<M.MemoryHubPullResult, MemoryStorageError | MemoryStoreConflict | M.MemoryHubError>;
-    readonly transitionHubLeaseTx: (input: {
-      authority: HubAuthority;
-      action:
-        | { kind: "claim"; request: M.MemoryHubClaimInput }
-        | { kind: "renew"; request: M.MemoryHubRenewInput }
-        | { kind: "release"; request: M.MemoryHubReleaseInput }
-        | {
-            kind: "invalidate";
-            memoryId: M.MemoryId;
-            expectedToken: number;
-            reason: "heads" | "forget" | "revoke";
-          };
-    }) => InTx<
-      M.MemoryResolutionLease | M.MemoryHubReleaseResult | null,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | MemoryCapacityError
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly readHubAdminTx: (
-      requestId: M.MemoryOperationId,
-    ) => InTx<AdminRecord | AdminReplay | undefined>;
-    readonly writeHubAdminTx: (input: {
-      record: AdminRecord;
-      expectedStage: AdminRecord["stage"] | null;
-    }) => InTx<AdminRecord, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly activateHubMemberTx: (input: {
-      requestId: M.MemoryOperationId;
-      requestDigest: string;
-      memorySpaceId: M.MemorySpaceId;
-      environmentId: M.EnvironmentId;
-      expectedCredentialVersion: number | null;
-      next: { credentialDigest: string } | "revoked";
-      now: number;
-    }) => InTx<HubMember, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly hasHubAdministrationTx: () => InTx<boolean, MemoryStorageError>;
-    readonly readActivatedHubAdminTx: () => InTx<AdminRecord | undefined, MemoryStorageError>;
-    readonly readPendingHubAdmins: (
-      limit: number,
-    ) => Effect.Effect<readonly AdminRecord[], MemoryStorageError>;
-    readonly readProcessing: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => Effect.Effect<
-      {
-        processing: M.MemoryProcessingStatus;
-        pendingSync: number;
-        quarantined: number;
-        parked: number;
-      },
-      MemoryStorageError
-    >;
-    readonly readLocalProcessingStatus: (input: {
-      environmentId: M.EnvironmentId;
-      memorySpaceId: M.MemorySpaceId | null;
-      hubEnvironmentId: M.EnvironmentId | null;
-    }) => Effect.Effect<
-      {
-        processing: M.MemoryProcessingStatus;
-        pendingSync: number;
-        quarantined: number;
-        parked: number;
-      },
-      MemoryStorageError
-    >;
-    readonly readBootstrap: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => Effect.Effect<
-      {
-        state: "unbound" | "staging" | "ready";
-        checkpointId: string | null;
-        snapshotToken: string | null;
-        checkpointSequence: number;
-        cursor: string | null;
-        pageCount: number;
-        afterSequence: number;
-        lastSuccessAt: number | null;
-      },
-      MemoryStorageError
-    >;
-    readonly discardBootstrapTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-      expectedSnapshotToken: string;
-      expectedCheckpointId: string;
-      expectedCheckpointSequence: number;
-    }) => InTx<boolean>;
-    readonly retireFrozenClaimTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      candidateId: string;
-      expectedGeneration: number;
-      attemptId: M.MemoryOperationId;
-      frozenHeads: readonly M.MemoryRevisionId[];
-      nextAttemptAt: number;
-    }) => InTx<boolean>;
-    readonly advanceBootstrapTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      hubEnvironmentId: M.EnvironmentId;
-      expectedState: "unbound" | "staging" | "ready";
-      nextState: "staging" | "ready";
-      checkpointId: string;
-      snapshotToken: string | null;
-      checkpointSequence: number;
-      nextCursor: string | null;
-    }) => InTx<void>;
-    readonly purgeHubTransientTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      memoryId?: M.MemoryId;
-      now: number;
-      limit: number;
-    }) => InTx<{ removedRows: number; cleanupPending: boolean }>;
-    readonly requestHubSourceReadTx: (
-      authority: HubAuthority,
-      input: M.MemoryHubSourceReadRequestInput,
-    ) => InTx<
-      M.MemoryHubSourceReadRequestResult,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | MemoryCapacityError
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly collectHubSourceReadsTx: (
-      authority: HubAuthority,
-      input: M.MemoryHubSourceReadCollectInput,
-    ) => InTx<
-      M.MemoryHubSourceReadCollectResult,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly respondHubSourceReadTx: (
-      authority: HubAuthority,
-      input: M.MemoryHubSourceReadRespondInput,
-    ) => InTx<
-      M.MemoryHubSourceReadRespondResult,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | MemoryCapacityError
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly resultHubSourceReadTx: (
-      authority: HubAuthority,
-      input: M.MemoryHubSourceReadResultInput,
-    ) => InTx<
-      M.MemoryHubSourceReadResultResult,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly prepareHubCheckpointTx: (input: {
-      authority: HubAuthority;
-      checkpointId: string;
-      snapshotToken: string;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => InTx<
-      HubCheckpointHandle,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | MemoryCapacityError
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly prepareHubProducerCheckpointTx: (input: {
-      authority: HubAuthority;
-      checkpointId: string;
-      hubEnvironmentId: M.EnvironmentId;
-    }) => InTx<
-      { readonly checkpointId: string; readonly checkpointSequence: number },
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | MemoryCapacityError
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly readHubCheckpointPageTx: (input: {
-      authority: HubAuthority;
-      snapshotToken: string;
-      cursor: string | null;
-    }) => InTx<
-      M.MemoryHubCheckpointPage,
-      | MemoryStorageError
-      | MemoryStoreConflict
-      | M.MemoryHubError
-      | M.MemoryHubUnauthorizedError
-      | M.MemoryHubForbiddenError
-    >;
-    readonly publishCheckpointAndFloorTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      checkpointId: string;
-      expectedFloor: number;
-      nextFloor: number;
-      now: number;
-    }) => InTx<HubRetention, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly compactEligibleHistoryTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      expectedFloor: number;
-      now: number;
-      limit: number;
-    }) => InTx<M.MemoryCompactionStatus>;
-    readonly readHubRetentionTx: (space: M.MemorySpaceId) => InTx<HubRetention>;
-    readonly readHubUsageTx: (space: M.MemorySpaceId) => InTx<HubUsage>;
-    readonly readHubInventoryTx: (space: M.MemorySpaceId) => InTx<{
-      reserved: Partial<Record<M.MemoryCapacityDimension, number>>;
-      reclaimable: Partial<Record<M.MemoryCapacityDimension, number>>;
-    }>;
-    readonly reserveHubCheckpointTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      checkpointDeltaBytes: number;
-      publishedPinnedDeltaBytes: number;
-    }) => InTx<HubUsage, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly settleMetadataEntryTx: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      entry: Extract<M.MemoryHubEntry, { kind: "metadata" }>;
-    }) => InTx<void>;
-    readonly normalizeForeignReportIntentsTx: (
-      localEnvironmentId: M.EnvironmentId,
-      after?: string | null,
-    ) => InTx<{ examined: number; nextCursor: string | null }>;
-    readonly reconcileOperationReportTx: (input: {
-      operation: M.MemoryOperation;
-      receipt: M.MemoryHubReceipt;
-      localEnvironmentId: M.EnvironmentId;
-    }) => InTx<void>;
-    readonly reconcileResolutionReportTx: (input: {
-      record: M.MemoryCompactReceipt;
-      localEnvironmentId: M.EnvironmentId;
-    }) => InTx<{ reportId: M.MemoryReportDelivery["reportId"] | null; deliverable: boolean }>;
-    readonly receipt: (
-      space: M.MemorySpaceId,
-      id: M.MemoryOperationId,
-    ) => Effect.Effect<StoredReceipt | undefined, MemoryStorageError>;
-    readonly readResolutionInputsPage: (
-      input: M.MemoryHistoryInput & { resolutionInputsFor: M.MemoryResolutionId },
-    ) => Effect.Effect<
-      { scope: M.MemoryScope | null; page: M.MemoryHistoryPage },
-      MemoryStorageError | MemoryStoreConflict
-    >;
-    readonly readResolutionSnapshot: (
-      space: M.MemorySpaceId,
-      memoryId: M.MemoryId,
-    ) => Effect.Effect<ResolutionSnapshot, MemoryStorageError>;
-    readonly readResolutionHeads: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      memoryId: M.MemoryId;
-      heads: readonly M.MemoryRevisionId[];
-      expectedGeneration: number;
-      maxItems: number;
-      maxBytes: number;
-    }) => Effect.Effect<MemoryAggregate["revisions"], MemoryStorageError | MemoryStoreConflict>;
-    readonly readAccess: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-    ) => Effect.Effect<
-      {
-        item: M.MemoryItem | undefined;
-        identity: M.MemoryIdentityRecord | undefined;
-      },
-      MemoryStorageError
-    >;
-    readonly historyPage: (
-      input: M.MemoryHistoryInput,
-      item: M.MemoryItem,
-      owner: M.EnvironmentId,
-    ) => Effect.Effect<
-      {
-        page: M.MemoryHistoryPage;
-        consumed: MemoryAggregate["revisions"];
-      },
-      MemoryStorageError | MemoryStoreConflict
-    >;
-    readonly recordRevertResultTx: (input: {
-      space: M.MemorySpaceId;
-      memoryId: M.MemoryId;
-      resolutionId: M.MemoryResolutionId;
-      operationId: M.MemoryOperationId;
-      slot: MemoryRevertSlot;
-      settlement?: boolean;
-    }) => InTx<void>;
-    readonly loadAggregate: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-      payloads?: MemoryPayloadSelection,
-      history?: MemoryHistorySelection,
-    ) => Effect.Effect<MemoryAggregate, MemoryStorageError>;
-    readonly apply: (
-      decision: MemoryDecision,
-    ) => Effect.Effect<
-      StoredReceipt,
-      MemoryStorageError | MemoryStoreConflict | MemoryCapacityError
-    >;
-    readonly readAncestry: (
-      space: M.MemorySpaceId,
-      memoryId: M.MemoryId,
-      parents: ReadonlyArray<M.MemoryRevisionId>,
-    ) => Effect.Effect<MemoryAncestry, MemoryStorageError>;
-    /** Recompute under transact; expectedGeneration fences the projection used by the decider. */
-    readonly reconnectParked: (
-      decision: MemoryDecision,
-      expectedGeneration: number,
-    ) => Effect.Effect<
-      StoredReceipt,
-      MemoryStorageError | MemoryStoreConflict | MemoryCapacityError
-    >;
-    readonly withReceivedCursor: <A, E, R>(
-      input: {
-        readonly memorySpaceId: M.MemorySpaceId;
-        readonly hubEnvironmentId: M.EnvironmentId;
-        readonly afterSequence: number;
-        readonly expectedSequence: number;
-      },
-      effect: Effect.Effect<A, E, R>,
-    ) => Effect.Effect<A, E | MemoryStorageError | MemoryStoreConflict, Exclude<R, Transaction>>;
-    readonly readOperation: (
-      space: M.MemorySpaceId,
-      id: M.MemoryOperationId,
-    ) => Effect.Effect<M.MemoryOperation | undefined, MemoryStorageError>;
-    readonly readWorkOperation: (
-      id: string,
-    ) => Effect.Effect<M.MemoryOperation | undefined, MemoryStorageError>;
-    readonly pendingReceived: (
-      space: M.MemorySpaceId,
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryOperation | undefined>, MemoryStorageError>;
-    readonly stageRevertIntent: (input: {
-      readonly operation: Extract<M.MemoryOperation, { kind: "revert" }>;
-      readonly requestDigest: string;
-    }) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly readCursor: (
-      space: M.MemorySpaceId,
-      hub: M.EnvironmentId,
-    ) => Effect.Effect<number, MemoryStorageError>;
-    readonly list: (
-      filter: MemoryReadFilter,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryItem>, MemoryStorageError | MemoryStoreConflict>;
-    readonly searchCoverage: (
-      filter: MemoryReadFilter,
-    ) => Effect.Effect<
-      { ready: boolean; eligible: number; indexed: number; textBytes: number },
-      MemoryStorageError
-    >;
-    readonly search: (
-      filter: MemoryReadFilter,
-      text: string,
-      mode: "fts" | "substring",
-    ) => Effect.Effect<
-      M.MemorySearchPage,
-      MemoryStorageError | MemoryStoreConflict | MemoryCapacityError
-    >;
-    readonly dueWork: (
-      now: number,
-      limit: number,
-      kinds?: ReadonlyArray<"summary" | "consolidate" | "rebuild">,
-    ) => Effect.Effect<ReadonlyArray<MemoryWork>, MemoryStorageError>;
-    readonly readWork: (id: string) => Effect.Effect<MemoryWork | undefined, MemoryStorageError>;
-    /** Snapshot ownership prevents a timed-out worker from postponing a newer claim. */
-    readonly retryWork: (
-      work: MemoryWork,
-      nextAttemptAt: number,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    /** Extends a live claim held by the same owner and attempt; undefined once it lapsed or moved. */
-    readonly renewWork: (
-      work: MemoryWork,
-      now: number,
-      until: number,
-    ) => Effect.Effect<MemoryWork | undefined, MemoryStorageError>;
-    /**
-     * Moves a live summary claim to another model before generation. Undefined once the
-     * claim lapsed or moved; ids and space are kept so receipts stay idempotent.
-     */
-    readonly rebindWorkModel: (
-      work: MemoryWork,
-      modelSelection: M.MemoryModelSelection,
-    ) => Effect.Effect<MemoryWork | undefined, MemoryStorageError>;
-    readonly cancelThreadWork: (
-      thread: M.ScopedThreadRef,
-    ) => Effect.Effect<number, MemoryStorageError>;
-    readonly readThreadHookWatermark: () => Effect.Effect<number, MemoryStorageError>;
-    readonly commitThreadHook: (input: {
-      readonly expectedWatermark: number;
-      readonly throughWatermark: number;
-      readonly work: ReadonlyArray<MemoryWork>;
-    }) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly readParked: (
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryOperation>, MemoryStorageError>;
-    readonly enqueueWork: (work: MemoryWork) => Effect.Effect<void, MemoryStorageError>;
-    /** Makes summary and consolidation retries due now, after the model they waited on changed. */
-    readonly rearmGenerationWork: (now: number) => Effect.Effect<number, MemoryStorageError>;
-    readonly claimWork: (
-      id: string,
-      owner: string,
-      now: number,
-      until: number,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly finishWork: (
-      id: string,
-      status: "completed" | "cancelled" | "failed",
-      receipt?: M.MemoryHubReceipt,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly readEligibleOutbox: (
-      space: M.MemorySpaceId,
-      now: number,
-      limit: number,
-    ) => Effect.Effect<readonly SyncWorkCandidate[], MemoryStorageError>;
-    readonly acknowledgeOutbox: (
-      id: string,
-      receipt: M.MemoryHubReceipt,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly enqueuePendingForget: (input: {
-      readonly operation: Extract<M.MemoryOperation, { kind: "forget" }>;
-      readonly operationDigest: string;
-    }) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly forgetLocalIntent: (
-      environmentId: M.EnvironmentId,
-      intentId: string,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly preserveForgetIntent: (
-      intent: PendingForgetIntent,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryCapacityError>;
-    readonly pendingForgetIntents: (
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<PendingForgetIntent>, MemoryStorageError>;
-    readonly settleForgetIntent: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly readDeferred: (
-      now: number,
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<MemoryDeferredWork>, MemoryStorageError>;
-    readonly readScannerChunk: (target: MemoryDeferredWork) => Effect.Effect<
-      {
-        readonly payloads: ReadonlyArray<M.MemoryPayload | M.MemoryResolutionPayload>;
-        readonly nextCursor: string | null;
-      },
-      MemoryStorageError
-    >;
-    readonly claimDeferred: (
-      target: MemoryDeferredWork,
-      owner: string,
-      now: number,
-      until: number,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly recoverDeferred: (
-      scannerPolicyVersion: number,
-      now: number,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly finishOwnedDeferred: (
-      target: MemoryDeferredWork,
-      owner: string,
-      until: number,
-      outcome: {
-        readonly now: number;
-        readonly failure?: M.MemoryDeferredReason;
-        readonly scannerPolicyVersion?: number;
-        readonly scannerCursor?: string;
-        readonly ruleIds?: ReadonlyArray<string>;
-      },
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly completeSummaryWork: (work: MemoryWork) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly finishDeferred: (
-      target: MemoryDeferredWork,
-      outcome: {
-        readonly now: number;
-        readonly failure?: M.MemoryDeferredReason;
-        readonly scannerPolicyVersion?: number;
-        readonly scannerCursor?: string;
-        readonly ruleIds?: ReadonlyArray<string>;
-      },
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly getProjectBinding: (
-      space: M.MemorySpaceId,
-      project: M.ScopedProjectRef,
-    ) => Effect.Effect<M.MemoryProjectBinding | undefined, MemoryStorageError>;
-    readonly putProjectBinding: (
-      binding: M.MemoryProjectBinding,
-      expectedVersion: number | null,
-      now: number,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly changes: (
-      space: M.MemorySpaceId,
-    ) => Effect.Effect<
-      Stream.Stream<M.MemoryChangeSignal, MemoryStorageError>,
-      MemoryStorageError,
-      Scope.Scope
-    >;
-    readonly persistCompactReceipt: (
-      record: M.MemoryCompactReceipt,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly prunePayloads: (
-      now: number,
-      limit: number,
-    ) => Effect.Effect<number, MemoryStorageError>;
-    readonly operationMetadataBytes: (
-      operation: M.MemoryOperation,
-    ) => Effect.Effect<number, MemoryStorageError>;
-    readonly settleForgetExpansion: (
-      space: M.MemorySpaceId,
-      result: StoredReceipt,
-    ) => Effect.Effect<StoredReceipt, MemoryStorageError | MemoryStoreConflict>;
-    readonly firstForgetReservation: (
-      operation: M.MemoryOperation,
-    ) => Effect.Effect<{ bytes: number; keys: number }, MemoryStorageError>;
-    readonly readForgetReservation: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-    ) => Effect.Effect<{ bytes: number; keys: number }, MemoryStorageError>;
-    readonly usage: (
-      space: M.MemorySpaceId,
-      scope: M.MemoryScope,
-    ) => Effect.Effect<MemoryUsage, MemoryStorageError>;
-    readonly readImportRegistrationTx: ImportStorePorts["readImportRegistrationTx"];
-    readonly writeImportRegistrationTx: ImportStorePorts["writeImportRegistrationTx"];
-    readonly readImportBatchTx: ImportStorePorts["readImportBatchTx"];
-    readonly readImportReceiptTx: ImportStorePorts["readImportReceiptTx"];
-    readonly readImportItemTx: ImportStorePorts["readImportItemTx"];
-    readonly commitImportItemTx: ImportStorePorts["commitImportItemTx"];
-    readonly findImportMatchTx: ImportStorePorts["findImportMatchTx"];
-    readonly requireImportLineageCompleteTx: (
-      space: M.MemorySpaceId,
-    ) => InTx<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly readImportLineage: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryImportLineageRecord>, MemoryStorageError>;
-    readonly unionImportLineageTx: (
-      records: ReadonlyArray<M.MemoryImportLineageRecord>,
-      admission: MemoryAdmissionContext,
-    ) => InTx<void, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly readSuppressions: (
-      space: M.MemorySpaceId,
-      id: M.MemoryId,
-    ) => Effect.Effect<ReadonlyArray<M.MemorySuppressionRecord>, MemoryStorageError>;
-    readonly logicalBytes: Effect.Effect<number, MemoryStorageError>;
-    readonly reserve: (
-      context: MemoryAdmissionContext,
-      charges: ReadonlyArray<MemoryQuotaCharge>,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryCapacityError>;
-    readonly counters: (space: string) => Effect.Effect<
-      ReadonlyArray<{
-        readonly dimension: string;
-        readonly scope_key: string;
-        readonly value: number;
-      }>,
-      MemoryStorageError
-    >;
-    readonly ftsState: (
-      environment: M.EnvironmentId,
-    ) => Effect.Effect<MemoryFtsState, MemoryStorageError>;
-    readonly putFtsState: (state: MemoryFtsState) => Effect.Effect<void, MemoryStorageError>;
-    readonly index: (
-      target: MemoryIndexTarget,
-    ) => Effect.Effect<boolean, MemoryStorageError | MemoryCapacityError>;
-    readonly measureAllocation: () => Effect.Effect<
-      {
-        readonly memoryBytes: number | null;
-        readonly ftsBytes: number | null;
-        readonly dbFileBytes: number;
-        readonly freelistBytes: number;
-        readonly tables: ReadonlyArray<M.MemoryStorageTableUsage>;
-      },
-      MemoryStorageError
-    >;
-    readonly cleanupDerived: (limit: number) => Effect.Effect<number, MemoryStorageError>;
-    /** Memory btree bytes from the current storage sample, or null before the first one. */
-    readonly measuredMemoryBytes: (
-      environment: M.EnvironmentId,
-    ) => Effect.Effect<number | null, MemoryStorageError>;
-    /**
-     * Deletes summary work rows that no scan or summary can read again, among the pageRows
-     * outbox rows after afterRowId. nextRowId is null once the page reached the end.
-     */
-    readonly pruneSettledSummaryWork: (
-      environment: M.EnvironmentId,
-      afterRowId: number,
-      pageRows: number,
-    ) => Effect.Effect<
-      { readonly removed: number; readonly nextRowId: number | null },
-      MemoryStorageError
-    >;
-    readonly mergeFts: () => Effect.Effect<boolean, MemoryStorageError>;
-    readonly recordSample: (
-      environment: M.EnvironmentId,
-      sample: M.MemoryStorageSample,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly samples: (
-      environment: M.EnvironmentId,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryStorageSample>, MemoryStorageError>;
-    readonly putLocalIntent: (
-      input: LocalMemoryIntent,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly readLocalSummaryPayload: (
-      environmentId: M.EnvironmentId,
-      intentId: string,
-    ) => Effect.Effect<M.MemoryPayload | undefined, MemoryStorageError>;
-    readonly refreshLocalSummaryIntent: (
-      intent: LocalMemoryIntent,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly materializeLocalIntent: (
-      input: IntentIdentityInput,
-    ) => Effect.Effect<MaterializedIntent, MemoryStorageError | MemoryStoreConflict>;
-    readonly materializeLocalIntentTx: (input: IntentIdentityInput) => InTx<MaterializedIntent>;
-    readonly completeLocalIntentTx: (input: {
-      environmentId: M.EnvironmentId;
-      intentId: string;
-      materialized: MaterializedIntent;
-      now: number;
-    }) => InTx<void>;
-    readonly installCheckpointPage: (
-      input: CheckpointStageIdentity & {
-        readonly page: M.MemoryHubCheckpointPage;
-      },
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly completeCheckpoint: (
-      input: CheckpointStageIdentity & {
-        readonly pageCount: number;
-        readonly localEnvironmentId?: M.EnvironmentId;
-      },
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    readonly readDueClaimCandidates: (
-      limit: number,
-      now: number,
-      memorySpaceId: M.MemorySpaceId,
-    ) => Effect.Effect<ReadonlyArray<MemoryWork>, MemoryStorageError>;
-    readonly findClaimCandidate: (input: {
-      memorySpaceId: M.MemorySpaceId;
-      candidateId?: string;
-      attemptId: M.MemoryOperationId;
-    }) => Effect.Effect<MemoryWork | null, MemoryStorageError>;
-    readonly recoverClaimCandidates: (now: number) => Effect.Effect<void, MemoryStorageError>;
-    readonly claimCandidate: (
-      id: string,
-      epoch: number,
-      now: number,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly retryClaimCandidate: (
-      id: string,
-      nextAttemptAt: number,
-      failureCode: M.MemoryFailureCode,
-      leaseExpiresAt?: number,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly completeClaimCandidate: (id: string) => Effect.Effect<void, MemoryStorageError>;
-    readonly persistResolutionTicket: (
-      ticket: M.MemoryResolutionLease,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly readReportTarget: (reportId: string) => Effect.Effect<
-      {
-        memorySpaceId: M.MemorySpaceId;
-        memoryId: M.MemoryId;
-        deliveryEnvironmentId: M.EnvironmentId;
-      } | null,
-      MemoryStorageError
-    >;
-    readonly nextReportWakeAt: (
-      now: number,
-      owner: M.EnvironmentId,
-    ) => Effect.Effect<number | null, MemoryStorageError>;
-    readonly acquireReports: (input: {
-      owner: M.EnvironmentId;
-      now: number;
-      until: number;
-      limit: number;
-    }) => Effect.Effect<ReadonlyArray<M.MemoryReportDelivery>, MemoryStorageError>;
-    readonly acknowledgeClaimedReport: (input: {
-      delivery: M.MemoryReportDelivery;
-      owner: M.EnvironmentId;
-      claimUntil: number;
-    }) => Effect.Effect<boolean, MemoryStorageError | MemoryStoreConflict | MemoryCapacityError>;
-    readonly deferClaimedReport: (input: {
-      reportId: string;
-      owner: M.EnvironmentId;
-      claimUntil: number;
-      failureCode: M.MemoryFailureCode;
-      nextAttemptAt: number;
-    }) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly normalizeExpiredReports: (
-      now: number,
-      owner?: M.EnvironmentId,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly resetReportAttemptsTx: (
-      input: M.MemoryResetReportAttemptsInput,
-      now: number,
-    ) => InTx<M.MemoryResetReportAttemptsResult>;
-    readonly purgeDeliveredReportDetailsTx: (input: {
-      memorySpaceId?: M.MemorySpaceId;
-      environmentId?: M.EnvironmentId;
-      now: number;
-      limit: number;
-    }) => InTx<{ removedRows: number; reclaimedLogicalBytes: number }>;
-    readonly nextReportMaintenanceAt: (
-      owner: M.EnvironmentId,
-    ) => Effect.Effect<number | null, MemoryStorageError>;
-    readonly pendingReports: (
-      limit: number,
-    ) => Effect.Effect<ReadonlyArray<M.MemoryReportDelivery>, MemoryStorageError>;
-    readonly claimReport: (
-      id: string,
-      owner: string,
-      now: number,
-      until: number,
-    ) => Effect.Effect<boolean, MemoryStorageError>;
-    readonly acknowledgeReport: (
-      input: M.MemoryReportDelivery,
-    ) => Effect.Effect<void, MemoryStorageError | MemoryStoreConflict>;
-    /** Failure intent and retry/termination share one ownership-fenced transaction. */
-    readonly failGenerationAttempt: (input: {
-      readonly work: MemoryWork;
-      readonly environmentId: M.EnvironmentId;
-      readonly failureCode: M.MemoryFailureCode;
-      readonly now: number;
-      readonly retryAt: number | null;
-    }) => Effect.Effect<boolean, MemoryStorageError | MemoryStoreConflict>;
-    readonly failReport: (
-      id: string,
-      failure: M.MemoryFailureCode,
-    ) => Effect.Effect<void, MemoryStorageError>;
-    readonly wake: Effect.Effect<void>;
-    readonly subscribeWake: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>;
-  }
->()("goat/memory/MemoryStore") {}
+export { decodeCompactReceipt, encodeCompactReceipt } from "./store/CompactReceipt.ts";
+export { ImportCompletedNoopCodec, ImportNoopResultCodec } from "./store/StoreCodecs.ts";
+export {
+  LocalMemoryIntent,
+  MemoryCapacityError,
+  MemoryStorageError,
+  MemoryStoreConflict,
+  MemoryWork,
+  PendingForgetIntent,
+  StoredReceipt,
+  approvedReplica,
+  hasSourceEvidence,
+  hubAdmission,
+  localIntent,
+  memorySuppressionRecords,
+  resolutionReportId,
+} from "./store/StoreModel.ts";
+export type {
+  AdminRecord,
+  AdminReplay,
+  AssignedIntent,
+  HoldRearmPage,
+  HubAuthority,
+  HubCheckpointHandle,
+  HubLedgerRecord,
+  HubMember,
+  HubRetention,
+  HubUsage,
+  InTx,
+  IntentIdentityInput,
+  MaterializedIntent,
+  MemoryAdmissionContext,
+  MemoryAggregate,
+  MemoryAncestry,
+  MemoryDecision,
+  MemoryDeferredWork,
+  MemoryFtsState,
+  MemoryHistorySelection,
+  MemoryHoldClass,
+  MemoryIndexTarget,
+  MemoryParentState,
+  MemoryPayloadSelection,
+  MemoryQuotaCharge,
+  MemoryReadFilter,
+  MemoryUsage,
+  PersistedAdminAction,
+  PullRetryState,
+  ResolutionSnapshot,
+  Settlement,
+  SubmissionReconciliation,
+  SyncWorkCandidate,
+  SyncWorkOwner,
+  TicketKey,
+  TicketOwner,
+  TicketRow,
+  TicketState,
+  Transaction,
+  WorkHold,
+} from "./store/StoreModel.ts";
 
-type HistoryRevisionRow = {
-  revision_id: string;
-  operation_id: string;
-  parents_json: string;
-  scope_json: string;
-  assertion_kind: string;
-  provenance_json: string;
-  payload_ref: string | null;
-  created_at: number;
-  body_json: string | null;
-};
-
-// All JSON goes through Effect codecs, including values reconstructed from SQL rows.
-const codec = <S extends Schema.Constraint>(schema: S) => {
-  const json = Schema.fromJsonString(schema);
-  const encode = Schema.encodeEffect(json);
-  const decode = Schema.decodeUnknownEffect(json);
-  return {
-    encode: (value: S["Type"]) => stored("encode", encode(value)),
-    decode: (value: unknown, options?: typeof strict) => stored("decode", decode(value, options)),
-  };
-};
-const decodeFailureCode = Schema.decodeUnknownEffect(M.MemoryFailureCode);
-const decodeHoldClass = Schema.decodeUnknownEffect(HoldClass);
-const pullRetryCodec = codec(PullRetry);
-const resolutionReasonsCodec = codec(Schema.Array(M.MemoryDeferredReason));
-const hubReceiptCodec = codec(M.MemoryHubReceipt);
-const decodeFailureEnvironment = Schema.decodeUnknownEffect(M.EnvironmentId);
-const threadHookCodec = codec(ThreadHookMetadata);
-const threadLineageCodec = codec(ThreadLineageMetadata);
-const deferredRowCodec = codec(DeferredRow);
-const decodeLocalIntent = Schema.decodeUnknownEffect(LocalMemoryIntent);
-const localMetadataCodec = codec(LocalIntentMetadata);
-const decodeTicket = Schema.decodeUnknownEffect(M.MemoryResolutionLease);
-const decodeReport = Schema.decodeUnknownEffect(M.MemoryReportDelivery);
-const decodeRevertResult = Schema.decodeUnknownEffect(M.MemoryRevertResult);
-const revertSlotCodec = codec(MemoryRevertSlot);
-const threadCodec = codec(M.ScopedThreadRef);
-const decodeCheckpoint = Schema.decodeUnknownEffect(M.MemoryHubCheckpointPage);
-const checkpointCodec = {
-  ...codec(M.MemoryHubCheckpointPage),
-  encode: (page: M.MemoryHubCheckpointPage) =>
-    stored("checkpoint-encode", encodeCheckpointPage(page)),
-};
-const importId = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-const importKey = Schema.String.check(
-  Schema.makeFilter(
-    (s) =>
-      s.length > 0 &&
-      new TextEncoder().encode(s).length <= 512 &&
-      !Array.from(s).some((c) => c.charCodeAt(0) < 32),
-  ),
-);
-const importLabel = Schema.String.check(
-  Schema.makeFilter((s) => s.length > 0 && new TextEncoder().encode(s).length <= 512),
-);
-const importCount = Schema.Int.check(Schema.makeFilter((n) => n >= 0));
-const importAddress = { memorySpaceId: M.MemorySpaceId, environmentId: M.EnvironmentId };
-const importSourceAddress = { ...importAddress, sourceId: M.MemoryImportSourceId };
-const importDigestsCodec = codec(Schema.Array(digest));
-const ImportSlotCodec = Schema.Struct({
-  format: M.MemoryImportFormat,
-  rootSlot: importKey,
-  selection: Schema.NullOr(importKey),
-});
-const ImportSessionCodec = Schema.Struct({
-  sessionId: importLabel,
-  parserVersion: importLabel,
-  profile: importLabel,
-  snapshotDigest: digest,
-  createdAtUtc: M.MemoryUtcTimestamp,
-  expiresAtUtc: M.MemoryUtcTimestamp,
-  newItems: importCount,
-  bodyBytes: importCount,
-  applied: Schema.Array(
-    Schema.Struct({ sourceItemKey: importKey, sourceFingerprint: digest, bodyBytes: importCount }),
-  ),
-});
-const ImportRegistrationCodec = Schema.Struct({
-  ...importSourceAddress,
-  codecVersion: Schema.Literal(1),
-  version: importCount,
-  slot: ImportSlotCodec,
-  source: M.MemoryImportSource,
-  sourceLocator: importLabel.check(
-    Schema.makeFilter((s) => !s.startsWith("/") && !/^[a-zA-Z]:[\\/]/.test(s)),
-  ),
-  session: Schema.NullOr(ImportSessionCodec),
-}).check(
-  Schema.makeFilter((r) => r.sourceId === r.source.sourceId && r.slot.format === r.source.format),
-);
-const ImportSelectorCodec = Schema.Struct({
-  sourceItemKey: importKey,
-  sourceFingerprint: digest,
-  scope: M.MemoryScope,
-  project: Schema.optionalKey(M.ScopedProjectRef),
-});
-const ImportObservationCodec = Schema.Struct({
-  sourceFingerprint: digest,
-  contentFingerprint: digest,
-  revisionId: M.MemoryRevisionId,
-  operationId: M.MemoryOperationId,
-});
-const ImportBatchCodec = Schema.Struct({
-  ...importAddress,
-  operationId: M.MemoryOperationId,
-  kind: Schema.Literal("detailed"),
-  codecVersion: Schema.Literal(1),
-  selectionDigest: digest,
-  sourceId: M.MemoryImportSourceId,
-  sessionId: importLabel,
-  selections: Schema.Array(
-    Schema.Struct({
-      observation: Schema.optionalKey(ImportObservationCodec),
-      settled: Schema.optionalKey(Schema.Boolean),
-      selector: ImportSelectorCodec,
-      memoryId: M.MemoryId,
-      operationId: M.MemoryOperationId,
-      revisionId: M.MemoryRevisionId,
-      result: Schema.NullOr(M.MemoryImportItemResult),
-    }),
-  ),
-  receipt: M.MemoryImportReceipt,
-  createdAtUtc: M.MemoryUtcTimestamp,
-}).check(
-  Schema.makeFilter(
-    (b) =>
-      b.selections.length > 0 &&
-      b.selections.length <= M.MEMORY_IMPORT_APPLY_MAX_ITEMS &&
-      new Set(b.selections.map((s) => s.selector.sourceItemKey)).size === b.selections.length &&
-      new Set(b.selections.map((s) => s.operationId)).size === b.selections.length &&
-      new Set(b.selections.map((s) => s.revisionId)).size === b.selections.length &&
-      b.receipt.operationId === b.operationId &&
-      b.receipt.sourceId === b.sourceId &&
-      b.receipt.sessionId === b.sessionId &&
-      b.receipt.remaining === b.selections.filter((s) => s.result === null).length &&
-      NodeUtil.isDeepStrictEqual(
-        b.receipt.items,
-        b.selections.flatMap((s) => (s.result ? [s.result] : [])),
-      ) &&
-      b.selections.every(
-        (s) =>
-          s.result === null ||
-          (s.result.sourceItemKey === s.selector.sourceItemKey &&
-            (s.result.memoryId === null || s.result.memoryId === s.memoryId) &&
-            (s.result.revisionId === null ||
-              s.result.outcome === "noop" ||
-              s.result.revisionId === s.observation?.revisionId ||
-              s.result.revisionId === s.revisionId)),
-      ),
-  ),
-);
-// Only fully settled noop results may leave the mutable detailed settlement path.
-export const ImportCompletedNoopCodec = Schema.Struct({
-  ...importSourceAddress,
-  kind: Schema.Literal("completed-noop-ref"),
-  codecVersion: Schema.Literal(1),
-  operationId: M.MemoryOperationId,
-  selectionDigest: digest,
-  sessionId: importLabel.check(Schema.makeFilter((s) => new TextEncoder().encode(s).length <= 64)),
-  resultRef: digest,
-  sessionNewItems: importCount,
-  sessionBodyBytes: importCount,
-  createdAtUtc: M.MemoryUtcTimestamp,
-});
-export const ImportNoopResultCodec = Schema.Struct({
-  codecVersion: Schema.Literal(1),
-  items: Schema.Array(M.MemoryImportItemResult).check(
-    Schema.makeFilter(
-      (items) =>
-        items.length > 0 &&
-        items.length <= M.MEMORY_IMPORT_APPLY_MAX_ITEMS &&
-        items.every((i) => i.outcome === "noop"),
-    ),
-  ),
-});
-const ImportRetiredCodec = Schema.Struct({
-  kind: Schema.Literal("retired"),
-  codecVersion: Schema.Literal(1),
-  selectionDigest: digest,
-});
-const ImportItemCodec = Schema.Struct({
-  ...importSourceAddress,
-  codecVersion: Schema.Literal(1),
-  sourceItemKey: importKey,
-  scope: M.MemoryScope,
-  memoryId: M.MemoryId,
-  accepted: Schema.NullOr(ImportObservationCodec),
-  pending: Schema.NullOr(ImportObservationCodec),
-  rejected: Schema.NullOr(Schema.Struct({ sourceFingerprint: digest, issue: M.MemoryImportIssue })),
-  outcome: M.MemoryImportOutcome,
-});
-const privateImportCodec = <S extends Schema.Constraint>(schema: S) => {
-  const c = codec(schema);
-  return {
-    ...c,
-    encode: (value: S["Type"]) =>
-      stored("import-codec", Schema.decodeUnknownEffect(schema)(value, strict)).pipe(
-        Effect.flatMap(c.encode),
-      ),
-  };
-};
-const importRegistrationCodec = privateImportCodec(ImportRegistrationCodec);
-const importBatchCodec = privateImportCodec(
-  Schema.Union([ImportBatchCodec, ImportCompletedNoopCodec, ImportRetiredCodec]),
-);
-const importNoopResultCodec = privateImportCodec(ImportNoopResultCodec);
-const importItemCodec = privateImportCodec(ImportItemCodec);
-const lineageCodec = codec(M.MemoryImportLineageRecord);
-const stagedCheckpointCodec = codec(
-  Schema.Struct({
-    page: M.MemoryHubCheckpointPage,
-    heads: Schema.Array(
-      Schema.Struct({ memoryId: M.MemoryId, heads: Schema.Array(M.MemoryRevisionId) }),
-    ),
-  }),
-);
-const environmentOrdinalCodec = codec(Schema.Int.check(Schema.makeFilter((n) => n > 0)));
-const compactCodec = codec(M.MemoryCompactReceipt);
-const boundaryCodec = codec(M.MemoryCausalBoundary);
-const suppressionKeyCodec = codec(
-  Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("sourceKey"), value: M.MemorySourceKey }),
-    Schema.Struct({ kind: Schema.Literal("content"), value: M.MemoryContentSuppression }),
-    Schema.Struct({ kind: Schema.Literal("sourceExclusion"), value: M.MemorySourceExclusion }),
-  ]),
-);
-const metadataCodec = codec(Metadata);
-const workMetadataCodec = codec(WorkMetadata);
-const receiptCodec = codec(Receipt);
-const Projection = Schema.Union([
-  Schema.Struct({
-    memorySpaceId: M.MemorySpaceId,
-    memoryId: M.MemoryId,
-    pendingSync: Schema.Boolean,
-    localAvailability: M.MemoryLocalAvailability,
-    status: Schema.Literal("active"),
-    scope: M.MemoryScope,
-    revision: M.MemoryRevision,
-  }),
-  M.MemoryItem.check(Schema.makeFilter((item) => item.status !== "active")),
-]);
-const projectionCodec = codec(Projection);
-const decodeItem = Schema.decodeUnknownEffect(M.MemoryItem);
-const encodeSearchItem = Schema.encodeEffect(Schema.fromJsonString(M.MemoryItem));
-const payloadCodec = codec(M.MemoryPayload);
-const resolutionPayloadCodec = codec(M.MemoryResolutionPayload);
-const scopeCodec = codec(M.MemoryScope);
-const headsCodec = codec(Schema.Array(M.MemoryRevisionId));
-const provenanceCodec = codec(M.MemoryProvenance);
-const availabilityCodec = codec(M.MemoryLocalAvailability);
-const deferredCodec = codec(Schema.Array(DeferredRow));
-const identityCodec = codec(M.MemoryIdentityRecord);
-const fenceCodec = codec(M.MemoryFenceRecord);
-const rulesCodec = codec(
-  Schema.Array(Schema.String).check(
-    Schema.makeFilter(
-      (values) => values.length <= 64 && values.every((value) => value.length <= 128),
-    ),
-  ),
-);
-const sourceKeysCodec = codec(Schema.Array(M.MemorySourceKey));
-const contentCodec = codec(Schema.Array(M.MemoryContentSuppression));
-const exclusionsCodec = codec(Schema.Array(M.MemorySourceExclusion));
-const selectionCodec = codec(M.MemoryModelSelection);
-const executionCodec = codec(M.MemoryGenerationExecution);
-const resolutionCodec = codec(M.MemoryResolution);
-const sampleCodec = codec(M.MemoryStorageSample);
-const keyCodec = codec(M.MemoryProjectKey);
-const decodeOperation = Schema.decodeUnknownEffect(M.MemoryOperation);
-const decodeWork = Schema.decodeUnknownEffect(MemoryWork);
-const decodePendingForget = Schema.decodeUnknownEffect(PendingForgetIntent);
-const decodeBinding = Schema.decodeUnknownEffect(M.MemoryProjectBinding);
-const decodeTombstone = Schema.decodeUnknownEffect(M.MemoryTombstone);
-const decodeConflict = Schema.decodeUnknownEffect(M.MemoryConflict);
-const decodeRevision = Schema.decodeUnknownEffect(M.MemoryRevision);
-const isSqlError = Schema.is(SqlError);
-const decodeMemoryId = Schema.decodeUnknownEffect(M.MemoryId);
-const decodeMemorySpaceId = Schema.decodeUnknownEffect(M.MemorySpaceId);
-const decodeAssertionKind = Schema.decodeUnknownEffect(M.MemoryAssertionKind);
-const decodeReceipt = Schema.decodeUnknownEffect(Receipt);
-const decodeFtsState = Schema.decodeUnknownEffect(FtsState);
-const suppressionCodec = codec(M.MemorySuppressionRecord);
-const decodeScope = Schema.decodeUnknownEffect(M.MemoryScope);
-const stored = <A, E, R>(stage: string, effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.mapError((cause) => new MemoryStorageError({ stage, cause })));
-const scopeKey = (scope: M.MemoryScope) => {
-  if (scope.kind === "user") return "user";
-  if (scope.kind === "thread")
-    return `thread:${scope.thread.environmentId.length}:${scope.thread.environmentId}:${scope.thread.threadId}`;
-  return scope.projectKey.kind === "repository"
-    ? `repository:${scope.projectKey.groupingKey}`
-    : `explicit:${scope.projectKey.sharedProjectId}`;
-};
-const metadataOf = (operation: M.MemoryOperation): typeof Metadata.Type => {
-  if (operation.kind === "forget") return operation;
-  const { payload: _payload, ...metadata } = operation;
-  if (metadata.kind === "resolve") {
-    const { resolutionPayload: _judgment, ...safe } = metadata;
-    return safe;
-  }
-  return metadata;
-};
-
-const lineageForRevision = (revision: M.MemoryRevision): readonly M.MemoryImportLineageRecord[] => {
-  const source = revision.provenance.importSource;
-  if (!source) return [];
-  const base = { memorySpaceId: revision.memorySpaceId, memoryId: revision.memoryId };
-  return [
-    ...[
-      {
-        environmentId: revision.provenance.environmentId,
-        sourceId: source.sourceId,
-        sourceItemKey: source.sourceItemKey,
-      },
-      ...source.sourceAliases,
-    ].map((sourceKey) => ({ ...base, kind: "sourceKey" as const, sourceKey })),
-    ...[source.contentFingerprint, ...source.acceptedContentFingerprints].map(
-      (contentFingerprint) => ({
-        ...base,
-        kind: "content" as const,
-        content: {
-          scope: revision.scope,
-          assertionKind: revision.assertionKind,
-          contentFingerprint,
-        },
-      }),
-    ),
-  ];
-};
-
-const importTime = (ms: number) => Effect.succeed(DateTime.formatIso(DateTime.makeUnsafe(ms)));
+export class MemoryStore extends Context.Service<MemoryStore, MemoryStoreShape>()(
+  "goat/memory/MemoryStore",
+) {}
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -2897,39 +872,6 @@ const make = Effect.gen(function* () {
         settlement: true,
       });
   });
-  const decodeHistoryRevision = (
-    row: HistoryRevisionRow,
-    space: M.MemorySpaceId,
-    id: M.MemoryId,
-    visible: boolean,
-  ) =>
-    Effect.gen(function* () {
-      const revision = yield* stored(
-        "revision-codec",
-        decodeRevision(
-          {
-            memorySpaceId: space,
-            memoryId: id,
-            revisionId: row.revision_id,
-            operationId: row.operation_id,
-            parents: yield* headsCodec.decode(row.parents_json),
-            scope: yield* scopeCodec.decode(row.scope_json),
-            assertionKind: row.assertion_kind,
-            provenance: yield* provenanceCodec.decode(row.provenance_json),
-            payloadRef: row.payload_ref ?? row.revision_id,
-            createdAtUtc: yield* importTime(row.created_at),
-          },
-          strict,
-        ),
-      );
-      return {
-        revision,
-        payload:
-          row.body_json && visible
-            ? yield* stored("payload-codec", payloadCodec.decode(row.body_json, strict))
-            : null,
-      };
-    });
 
   const readHistoryRevision = Effect.fnUntraced(function* (
     space: M.MemorySpaceId,
@@ -4365,51 +2307,6 @@ const make = Effect.gen(function* () {
     }
     return { items, examinedAfterMemoryId, exhausted: rows.length < 1000 };
   });
-  const workRows = Effect.fnUntraced(function* (
-    rows: ReadonlyArray<{
-      id: string;
-      space: string;
-      memory_id: string | null;
-      kind: string;
-      status: string;
-      metadata_json: string;
-      payload_ref: string | null;
-      attempt: number;
-      next_attempt_at: number;
-      claimed_by: string | null;
-      claimed_until: number | null;
-      sync_version?: number;
-    }>,
-  ) {
-    return yield* stored(
-      "work-codec",
-      Effect.forEach(rows, (row) =>
-        Effect.gen(function* () {
-          const decodedMetadata = yield* workMetadataCodec.decode(row.metadata_json, strict);
-          return yield* decodeWork(
-            {
-              id: row.id,
-              space: row.space,
-              memoryId: row.memory_id,
-              kind: row.kind,
-              status: row.status,
-              metadata:
-                decodedMetadata.kind === "claim"
-                  ? { ...decodedMetadata, generation: row.sync_version ?? 0 }
-                  : decodedMetadata,
-              payloadRef: row.payload_ref,
-              attempt: row.attempt,
-              nextAttemptAt: row.next_attempt_at,
-              claimedBy: row.claimed_by,
-              claimedUntil: row.claimed_until,
-            },
-            strict,
-          );
-        }),
-      ),
-    );
-  });
-  type WorkRow = Parameters<typeof workRows>[0][number];
   const readWork = Effect.fn("MemoryStore.readWork")(function* (id: string) {
     const rows = yield* stored(
       "read-work",
@@ -8627,16 +6524,6 @@ const make = Effect.gen(function* () {
       }>`SELECT id,space,kind,status,next_attempt_at,hold_class
       FROM memory_outbox WHERE id>${afterId} ORDER BY id LIMIT ${Math.max(0, Math.min(limit, M.MEMORY_PAGE_MAX_ITEMS))}`,
     );
-  const holdRearmResult = (
-    rows: readonly { id: string }[],
-    changedIds: readonly string[],
-    limit: number,
-  ): HoldRearmPage => ({
-    changedIds,
-    inspected: rows.length,
-    next: rows.at(-1)?.id ?? null,
-    more: rows.length > 0 && rows.length === Math.max(0, Math.min(limit, M.MEMORY_PAGE_MAX_ITEMS)),
-  });
   const rearmSyncHoldsTx: MemoryStore["Service"]["rearmSyncHoldsTx"] = Effect.fn(
     "MemoryStore.rearmSyncHoldsTx",
   )(function* (input) {
@@ -8661,8 +6548,6 @@ const make = Effect.gen(function* () {
     return holdRearmResult(rows, changed, input.limit);
   });
 
-  const claimCodec = codec(M.MemoryHubClaimInput);
-  const storedTicketRowCodec = codec(StoredTicketRowSchema);
   const encodeTicketRow = (row: TicketRow) =>
     storedTicketRowCodec.encode({
       ...row,
@@ -9391,10 +7276,7 @@ const make = Effect.gen(function* () {
     if (!principal.scopes.includes("memory:sync")) return yield* new M.MemoryHubForbiddenError({});
     return member;
   });
-  const adminCodec = codec(AdminRecordSchema);
   const adminDecode = Schema.decodeUnknownEffect(AdminRecordSchema);
-  const adminActionCodec = codec(PersistedAdminActionSchema);
-  const adminReplayCodec = codec(AdminReplaySchema);
   const readHubAdminTx: MemoryStore["Service"]["readHubAdminTx"] = Effect.fn(
     "MemoryStore.readHubAdminTx",
   )(function* (requestId) {
@@ -10130,14 +8012,6 @@ const make = Effect.gen(function* () {
     const digest = hashText(yield* sourceInputCodec.encode({ protocolVersion: 1, ...locator }));
     return digest === row.request_digest ? request : null;
   });
-  const adminReplayJson = Effect.fnUntraced(function* (record: AdminRecord) {
-    const { action, ...replay } = record;
-    return yield* adminReplayCodec.encode({
-      ...replay,
-      stage: "acknowledged" as const,
-      actionDigest: hashText(yield* adminActionCodec.encode(action)),
-    });
-  });
   const compactTerminalAdmins = Effect.fnUntraced(function* (now: number, limit: number) {
     const rows = yield* stored(
       "hub-admin-sweep",
@@ -10540,7 +8414,6 @@ const make = Effect.gen(function* () {
     yield* eraseRelayPayload(input.memorySpaceId, row);
     return { state: "completed", outcome };
   });
-  const hubEntryCodec = codec(M.MemoryHubEntry);
   const hubReceiptDecode = Schema.decodeUnknownEffect(M.MemoryHubReceipt);
   const hubEntryDecode = Schema.decodeUnknownEffect(M.MemoryHubEntry);
   const submissionDecode = Schema.decodeUnknownEffect(M.MemoryHubApplyResolutionInput);
@@ -10625,8 +8498,6 @@ const make = Effect.gen(function* () {
         : emptyCompaction,
     };
   });
-  const stringArrayCodec = codec(Schema.Array(Schema.String));
-  const handleCodec = codec(Schema.Array(HubCheckpointHandleSchema));
   const handlesFor = Effect.fnUntraced(function* (space: M.MemorySpaceId) {
     const rows = yield* stored(
       "hub-handles-read",
@@ -10636,7 +8507,6 @@ const make = Effect.gen(function* () {
     );
     return rows[0] ? yield* handleCodec.decode(rows[0].handles_json, strict) : [];
   });
-  const snapshotId = (id: string) => `hub:${id}`;
   const snapshotPages = Effect.fnUntraced(function* (space: M.MemorySpaceId, id: string) {
     const rows = yield* stored(
       "hub-snapshot-pages",
