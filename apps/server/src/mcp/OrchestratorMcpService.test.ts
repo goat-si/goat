@@ -4001,6 +4001,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
         } as unknown as OrchestrationV2ThreadProjection;
         const retries: Array<ThreadLaunchService.ThreadLaunchPreparationInput> = [];
         const layer = OrchestratorMcpService.layer.pipe(
+          Layer.provide(layerNoFleetSync),
           Layer.provide(
             Layer.mock(ThreadLaunchService.ThreadLaunchService)({
               retryPreparation: (input) =>
