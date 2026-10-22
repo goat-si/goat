@@ -60,6 +60,7 @@ import {
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
@@ -205,6 +206,7 @@ const make = Effect.gen(function* () {
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const permissions = yield* Profiles.PermissionProfiles;
+  const reviewCleanup = yield* ChannelReviewCleanup.ChannelReviewCleanup;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1104,6 +1106,31 @@ const make = Effect.gen(function* () {
         event.payload.expectedWorkerRunId === undefined
           ? undefined
           : turnSteerIdsFor(event.payload.inputId).commandId;
+      if (correctionId !== undefined && !(yield* ledger.isOwner(owner))) return;
+      const correctionCleanup =
+        correctionId === undefined
+          ? undefined
+          : yield* reviewCleanup.trackLocalCorrection({
+              task: stored.task,
+              owner,
+              commandId: correctionId,
+              workerRunId: event.payload.expectedWorkerRunId!,
+            });
+      if (
+        correctionCleanup !== undefined &&
+        (yield* reviewCleanup.retired(correctionCleanup.key))
+      ) {
+        if (newest === undefined) return;
+        const lifted = yield* commitTransition(
+          ledger,
+          stored,
+          { type: "task.worker.bound", payload: { worker: { ...worker, runId: newest.id } } },
+          { owner, pendingAnswerMessageId: null },
+        );
+        if (lifted !== undefined)
+          yield* ledger.completeForward({ owner, sequence: pending.sequence });
+        return;
+      }
       if (correctionId !== undefined) {
         const admission = yield* Effect.gen(function* () {
           const requester = yield* requesterForDispatch(stored.task).pipe(
@@ -1139,16 +1166,8 @@ const make = Effect.gen(function* () {
           return claimed.runtimeMode;
         }).pipe(Effect.option);
         if (Option.isNone(admission) || admission.value === undefined) {
-          yield* permissions.release(correctionId).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ChannelLedger.ChannelLedgerError({
-                  reason: "persistence",
-                  detail: "Could not release correction admission.",
-                  cause,
-                }),
-            ),
-          );
+          if (correctionCleanup?.inserted && (yield* ledger.isOwner(owner)))
+            yield* reviewCleanup.notStarted(correctionCleanup.key, owner);
           const asked = yield* askRequester(
             (yield* ledger.getTask(event.taskId)) ?? stored,
             "Independent review found blockers, but current requester permission or the bot's permission profile does not permit an automatic correction. Choose how to continue in GOAT.",
@@ -1197,22 +1216,20 @@ const make = Effect.gen(function* () {
       if (correctionId !== undefined) {
         // Keep uncertain admission reserved for the same receipt's retry; only a
         // successful send or a definitive refusal can settle its pending slot.
-        const settled =
-          sent._tag === "Success"
-            ? permissions.complete(correctionId, worker.threadId)
-            : rejected(sent.failure)
-              ? permissions.release(correctionId)
-              : Effect.void;
-        yield* settled.pipe(
-          Effect.mapError(
-            (cause) =>
-              new ChannelLedger.ChannelLedgerError({
-                reason: "persistence",
-                detail: "Could not settle correction admission.",
-                cause,
-              }),
-          ),
-        );
+        if (sent._tag === "Success") {
+          yield* permissions.complete(correctionId, worker.threadId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "Could not settle correction admission.",
+                  cause,
+                }),
+            ),
+          );
+        } else if (rejected(sent.failure)) {
+          yield* reviewCleanup.notStarted(correctionCleanup!.key, owner);
+        }
       }
       // A rejected command id is refused for good, so a definite rejection gets one more attempt
       // under its own ids rather than retrying the same ones forever.

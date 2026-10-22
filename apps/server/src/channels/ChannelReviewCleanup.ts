@@ -37,6 +37,7 @@ const Cleanup = Schema.Struct({
       memoryGrantCeiling: MemoryTaskGrantCeiling,
     }),
   ),
+  localCorrection: Schema.optional(Schema.Struct({ commandId: CommandId, threadId: ThreadId })),
   runtimeMode: RuntimeMode,
   createdAt: Schema.String,
   nextAttemptAt: Schema.String,
@@ -74,6 +75,15 @@ export class ChannelReviewCleanup extends Context.Service<
       readonly readKey: string;
       readonly runtimeMode: RuntimeMode;
       readonly memoryGrantCeiling: MemoryTaskGrantCeiling;
+    }) => Effect.Effect<
+      { readonly key: ThreadId; readonly inserted: boolean },
+      ChannelLedger.ChannelLedgerError
+    >;
+    readonly trackLocalCorrection: (input: {
+      readonly task: ChannelTask;
+      readonly owner: string;
+      readonly commandId: CommandId;
+      readonly workerRunId: RunId;
     }) => Effect.Effect<
       { readonly key: ThreadId; readonly inserted: boolean },
       ChannelLedger.ChannelLedgerError
@@ -163,6 +173,34 @@ const make = Effect.gen(function* () {
     });
     return { key, inserted };
   });
+  const trackLocalCorrection = Effect.fn("ChannelReviewCleanup.trackLocalCorrection")(function* ({
+    task,
+    owner,
+    commandId,
+    workerRunId,
+  }: Parameters<ChannelReviewCleanup["Service"]["trackLocalCorrection"]>[0]) {
+    const key = ThreadId.make("channel-correction:" + commandId);
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const inserted = yield* ledger.reserveReviewDispatch({
+      owner,
+      key: "cleanup:" + key,
+      now,
+      value: encode({
+        taskId: task.taskId,
+        generation: task.generation,
+        workerRunId,
+        projectId: task.target!.projectId,
+        threadId: key,
+        localCorrection: { commandId, threadId: task.worker!.threadId },
+        runtimeMode: task.requester.runtimeModeCeiling,
+        createdAt: now,
+        nextAttemptAt: now,
+        attempts: 0,
+        done: false,
+      }),
+    });
+    return { key, inserted };
+  });
   const reserveRemote = Effect.fn("ChannelReviewCleanup.reserveRemote")(function* (
     task: ChannelTask,
     owner: string,
@@ -205,16 +243,18 @@ const make = Effect.gen(function* () {
     const entry = decode(value);
     if (entry.remoteThreadId !== undefined && entry.correction === undefined) return;
     const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
-    yield* permissions.release(entry.correction?.commandId ?? ids.commandId).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ChannelLedger.ChannelLedgerError({
-            reason: "persistence",
-            detail: "Could not release the review lane.",
-            cause,
-          }),
-      ),
-    );
+    yield* permissions
+      .release(entry.correction?.commandId ?? entry.localCorrection?.commandId ?? ids.commandId)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new ChannelLedger.ChannelLedgerError({
+              reason: "persistence",
+              detail: "Could not release the review lane.",
+              cause,
+            }),
+        ),
+      );
     yield* ledger.updateReviewCleanup({
       owner,
       key: reviewThreadId,
@@ -313,8 +353,9 @@ const make = Effect.gen(function* () {
       // An accepted interrupt is not termination; keep ownership until a later observation.
       return false;
     }
+    const localThreadId = entry.localCorrection?.threadId ?? entry.threadId;
     const records = yield* threads
-      .getThreadRecords(entry.threadId, ["runs", "providerThreads"])
+      .getThreadRecords(localThreadId, ["runs", "providerThreads"])
       .pipe(Effect.result);
     if (records._tag === "Failure") {
       // A missing thread may still be a reserved launch in flight. Retain its identity.
@@ -324,6 +365,9 @@ const make = Effect.gen(function* () {
     if (
       latest !== undefined &&
       terminal.has(latest.status) &&
+      (entry.localCorrection === undefined ||
+        (latest.id !== entry.workerRunId &&
+          records.success.runs.every((run) => terminal.has(run.status)))) &&
       completionHoldCount({
         current: latest,
         runs: records.success.runs,
@@ -331,10 +375,13 @@ const make = Effect.gen(function* () {
         pullRequests: records.success.thread.pullRequests,
       }) === 0 &&
       !(yield* threads
-        .delegatedTaskResultPending(entry.threadId)
+        .delegatedTaskResultPending(localThreadId)
         .pipe(Effect.orElseSucceed(() => true)))
     )
       return true;
+    // Correction ownership reserves capacity, never control of the person's worker.
+    // The already-terminal reviewed run cannot prove an ambiguous send has settled.
+    if (entry.localCorrection !== undefined) return false;
     const interrupted = yield* threads
       .interruptThread({
         projectId: entry.projectId,
@@ -367,16 +414,18 @@ const make = Effect.gen(function* () {
       const done = yield* stop(entry, owner);
       if (done) {
         const ids = reviewLaunchIdsFor(entry.taskId, entry.generation, entry.workerRunId);
-        yield* permissions.release(entry.correction?.commandId ?? ids.commandId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ChannelLedger.ChannelLedgerError({
-                reason: "persistence",
-                detail: "Could not release the review lane.",
-                cause,
-              }),
-          ),
-        );
+        yield* permissions
+          .release(entry.correction?.commandId ?? entry.localCorrection?.commandId ?? ids.commandId)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ChannelLedger.ChannelLedgerError({
+                  reason: "persistence",
+                  detail: "Could not release the review lane.",
+                  cause,
+                }),
+            ),
+          );
       }
       const persisted = yield* ledger.getReviewDispatch("cleanup:" + entry.threadId);
       const latest = persisted === undefined ? entry : decode(persisted);
@@ -407,6 +456,7 @@ const make = Effect.gen(function* () {
   return ChannelReviewCleanup.of({
     track,
     trackCorrection,
+    trackLocalCorrection,
     reserveRemote,
     bindRemote,
     notStarted,

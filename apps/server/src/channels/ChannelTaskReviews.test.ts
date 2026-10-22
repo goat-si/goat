@@ -18,6 +18,8 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ReviewService from "../review/ReviewService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -28,7 +30,7 @@ import * as ChannelTaskReviews from "./ChannelTaskReviews.ts";
 import * as ChannelReviewCleanup from "./ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { reviewLaunchIdsFor } from "./channelIds.ts";
+import { reviewLaunchIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import {
   layerNoSshHosts,
   linkSlackUser,
@@ -811,6 +813,126 @@ it.effect(
         pending: number;
       }>`SELECT pending FROM goatclaw_lane_reservations WHERE child_thread_id = ${task.worker!.threadId}`;
       assert.deepStrictEqual(reservations, [{ pending: 0 }]);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect.each(["precommit-new-run", "accepted-revoked", "precommit-cancelled"] as const)(
+  "retains abandoned local correction ownership through restart until terminal proof: %s",
+  (scenario) => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      const { runtime, task } = yield* start(harness);
+      const workerId = task.worker!.threadId;
+      harness.world.shells.set(workerId, { runtimeMode: "approval-required" });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${workerId}, ${task.target!.projectId}, 'Worker', 'codex', 'approval-required', 'default', ${now}, ${now}, '{}')`;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        goatclaw: { enabled: true, defaultProfile: "worker" },
+      });
+      yield* finishReviewer(harness, task, blockers);
+      const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+      yield* reviews.reconcile(runtime.ownerToken);
+      yield* reviews.reconcile(runtime.ownerToken);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const pending = (yield* ledger.listPendingForwards(50))[0]!;
+      if (pending.event.type !== "task.followup.received") throw new Error("expected correction");
+      const ids = turnSteerIdsFor(pending.event.payload.inputId);
+      const slots = () =>
+        sql<{
+          id: string;
+          pending: number;
+        }>`SELECT id, pending FROM goatclaw_lane_reservations WHERE id = ${ids.commandId}`;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const original = threads.sendToThread;
+      const mutable: { sendToThread: typeof original } = threads;
+      let loseReply = true;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          mutable.sendToThread = (input) => {
+            if (!loseReply || input.commandId !== ids.commandId) return original(input);
+            loseReply = false;
+            const failure = Effect.fail(
+              new Orchestrator.OrchestratorDispatchError({
+                commandId: input.commandId,
+                commandType: "message.dispatch",
+              }),
+            );
+            return scenario === "accepted-revoked"
+              ? original(input).pipe(Effect.andThen(failure))
+              : failure;
+          };
+        }),
+        () =>
+          Effect.sync(() => {
+            mutable.sendToThread = original;
+          }),
+      );
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      yield* (yield* ChannelReviewCleanup.ChannelReviewCleanup).reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      assert.notInclude(harness.world.interrupts, workerId);
+      yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, pending)
+        VALUES ('unrelated-admission', 'unrelated-owner', ${workerId}, 1)`;
+      if (scenario === "accepted-revoked") {
+        yield* ledger.unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" });
+      } else {
+        harness.world.addRun(workerId, MessageId.make("unrelated-after-ambiguous-correction"));
+        if (scenario === "precommit-cancelled") {
+          yield* commitTransition(
+            ledger,
+            (yield* ledger.getTask(task.taskId))!,
+            { type: "task.cancelled", payload: { reason: "Stopped" } },
+            { owner: runtime.ownerToken },
+          );
+        }
+      }
+      const active = harness.world.latestRun(workerId)!;
+      const beforeRetry = harness.world.runs.get(workerId)!.slice();
+      yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.deepStrictEqual(harness.world.runs.get(workerId), beforeRetry);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      assert.isEmpty(yield* ledger.listPendingForwards(50));
+      if (scenario === "accepted-revoked") {
+        assert.strictEqual((yield* onlyTask).status, "waiting_input");
+        assert.include((yield* onlyTask).openQuestions[0]!.text, "permission");
+      }
+      const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+        Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(layerNoSshHosts))),
+      );
+      harness.world.recordFailures.add(workerId);
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+      yield* restarted.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      harness.world.recordFailures.delete(workerId);
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 2);
+      yield* restarted.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      assert.notInclude(harness.world.interrupts, workerId);
+      harness.world.setStatus(workerId, active.ordinal, "completed");
+      harness.world.background.add(workerId);
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 4);
+      yield* restarted.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      harness.world.background.delete(workerId);
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS * 8);
+      yield* restarted.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), []);
+      assert.notInclude(harness.world.interrupts, workerId);
+      yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), []);
+      assert.lengthOf(harness.world.runs.get(workerId)!, 2);
+      assert.deepStrictEqual(
+        yield* sql<{
+          id: string;
+          pending: number;
+        }>`SELECT id, pending FROM goatclaw_lane_reservations WHERE id = 'unrelated-admission'`,
+        [{ id: "unrelated-admission", pending: 1 }],
+      );
     }).pipe(Effect.provide(harness.layer));
   },
 );

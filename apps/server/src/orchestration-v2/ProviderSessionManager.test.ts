@@ -13,6 +13,7 @@ import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
+import * as ChannelReviewCleanup from "../channels/ChannelReviewCleanup.ts";
 import * as SlackChannelSettings from "../channels/SlackChannelSettings.ts";
 import * as Receipts from "./CommandReceiptStore.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -5248,6 +5249,7 @@ it.effect.each(turnStartMemoryCases)(
                   Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
                   Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
                   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
+                  Layer.mock(ChannelReviewCleanup.ChannelReviewCleanup)({}),
                   Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),
                   Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment),
                   settingsLayer,
