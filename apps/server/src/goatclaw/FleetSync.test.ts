@@ -146,4 +146,20 @@ describe("GoatclawFleetSync", () => {
       }
     }),
   );
+  it.effect("connects like the launch or send it precedes, while the reconcile wakes nothing", () =>
+    Effect.gen(function* () {
+      const remote = yield* machine({});
+      const calls: Array<SshRemoteDispatch.SshHostToolCall> = [];
+      const local = yield* machine({ enabled: true }, (call) => {
+        calls.push(call);
+        return connectedTo(remote)(call);
+      });
+      yield* local.sync.reconcile;
+      yield* local.settings.updateSettings({ goatclaw: { defaultProfile: "manager" } });
+      yield* local.sync.ensure("box");
+      // A launcher on another build sees a compatible runtime as not ready; the send's own
+      // connection must decide, or every profiled send is refused until the host updates.
+      expect(calls.map((call) => call.requireReady)).toEqual([true, undefined]);
+    }),
+  );
 });

@@ -168,7 +168,15 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const syncHost = Effect.fn("GoatclawFleetSync.syncHost")(function* (host: string) {
+  /**
+   * `connect` is for a launch or send that is about to reach the host anyway: it uses the same
+   * connection it will, so a compatible runtime of another build still answers. The background
+   * reconcile never starts or wakes a runtime.
+   */
+  const syncHost = Effect.fn("GoatclawFleetSync.syncHost")(function* (
+    host: string,
+    connect = false,
+  ) {
     const checkedAt = yield* Clock.currentTimeMillis;
     const outcome = yield* local.pipe(
       Effect.flatMap((mine) =>
@@ -181,7 +189,7 @@ export const make = Effect.gen(function* () {
               // Starts no thread there; the remote session only needs to change settings.
               writes: true,
               settingsWrite: true,
-              requireReady: true,
+              ...(connect ? {} : { requireReady: true as const }),
               timeoutMs: CALL_TIMEOUT_MS,
             },
             Effect.succeed("approval-required" as const),
@@ -229,7 +237,7 @@ export const make = Effect.gen(function* () {
           record.version === versionOf(mine.value)
         )
           return { sync: record.sync, enforcesCeilings: record.enforcesCeilings };
-        return yield* syncHost(host);
+        return yield* syncHost(host, true);
       }),
     );
 
