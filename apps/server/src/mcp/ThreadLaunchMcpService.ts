@@ -1,5 +1,9 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import { goatclawRoleBrief, goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
+import {
+  goatclawRoleBrief,
+  missingRoleCapabilities,
+  roleRefusal,
+} from "../goatclaw/RoleTemplates.ts";
 import {
   OrchestratorMcpFailure,
   MessageId,
@@ -208,6 +212,8 @@ const make = Effect.gen(function* () {
             code: "capability_denied",
             message: "goatclaw is off, so role launches are unavailable.",
           });
+        const missing = role === undefined ? [] : missingRoleCapabilities(role, effective.profile);
+        if (role !== undefined && missing.length > 0) return yield* roleRefusal(role, missing);
         if (role !== undefined && nativeInput.message === undefined)
           return yield* new OrchestratorMcpFailure({
             code: "invalid_request",
@@ -486,7 +492,7 @@ const make = Effect.gen(function* () {
                 runtimeMode: startedRuntimeMode,
                 worktree: input.workspaceStrategy?.type === "worktree",
                 forwarded: input.permissionProfileCeiling,
-                ...(role === undefined ? {} : { profileId: goatclawRoleTemplate(role).profileId }),
+                ...(role === undefined ? {} : { role }),
               });
               const launch = ThreadMessageIntake.launchThread({
                 commandId,
