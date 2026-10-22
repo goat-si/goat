@@ -34,6 +34,10 @@
     "./agentSurface/html": {
       "types": "./src/agentSurface/html.ts",
       "import": "./src/agentSurface/html.ts"
+    },
+    "./agentSurface/llms": {
+      "types": "./src/agentSurface/llms.ts",
+      "import": "./src/agentSurface/llms.ts"
     }
   },
   "scripts": {

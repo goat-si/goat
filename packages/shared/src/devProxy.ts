@@ -13,6 +13,7 @@ export const DEV_PROXIED_PATH_PREFIXES = [
   "/ws",
   "/mcp",
   "/hub",
+  "/llms.txt",
 ] as const;
 
 /**

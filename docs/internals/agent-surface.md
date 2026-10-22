@@ -534,17 +534,23 @@ Composed runs add their `evalRunId` to each step. Spans are named
 ## Reference documentation
 
 **Now.** [agent-surface-audit.md](./agent-surface-audit.md) is generated from the
-registries; `pnpm agent-surface:check` checks it for drift but is not yet wired into CI. Tool reference prose is
-still hand-written in
+registries, and goat-ci's check task runs `pnpm agent-surface:check`, so a change that
+moves the registry, a toolkit, or a cited line fails until `pnpm agent-surface:audit`
+regenerates the page. The server serves `/llms.txt`, one line per registry path
+([llms.ts](../../packages/contracts/src/agentSurface/llms.ts)). Without a credential it
+lists every path; with a credential `/mcp` accepts, it drops paths that credential's kind
+cannot reach (thread-only, client-only, and writes for a read-only client). Permission
+profiles are still checked only when a tool runs. Tool reference prose is still
+hand-written in
 [orchestrator-mcp-server.md](../orchestration-v2/orchestrator-mcp-server.md).
 
 **Proposed.** The running server is the reference. `goat_describe`, `/llms.txt`
-filtered to what the calling credential can use, and generated `--help` all read
+filtered by the caller's permission profile too, and generated `--help` all read
 the registry, so they cannot drift from it, and they show what this caller on this
 version can do. Per-resource reference pages are not committed to the repository:
 the [documentation rules](../../AGENTS.md#documentation) allow one catalog, which
 the registry already is. CI fails when an entry's effect disagrees with its access
-declaration, when the audit page drifts, or when an example fails against the toolkit test harness. The
+declaration or when an example fails against the toolkit test harness. The
 hand-written tool sections in `orchestrator-mcp-server.md` shrink to lifecycle
 and policy once describe ships.
 
