@@ -74,6 +74,8 @@ const ContinuationPayload = Schema.Struct({
   approvedBySessionId: Schema.optional(AuthSessionId),
   sshProgress: Schema.optional(SshProgressBinding),
   namespace: Schema.optional(Schema.Literals(PROVIDER_CONTINUATION_PATHS)),
+  /** What an approved provider change has done so far; its owning service decodes it. */
+  progress: Schema.optional(Schema.Unknown),
 });
 const PrivatePayload = Schema.fromJsonString(
   Schema.Union([
@@ -82,6 +84,14 @@ const PrivatePayload = Schema.fromJsonString(
       version: Schema.Literal(1),
       kind: Schema.Literal("progress_only"),
       sshProgress: SshProgressBinding,
+      retainUntil: Schema.Number,
+    }),
+    // A finished provider change keeps what it did, apart from the arguments it ran with.
+    Schema.Struct({
+      version: Schema.Literal(1),
+      kind: Schema.Literal("provider_outcome"),
+      namespace: Schema.Literals(PROVIDER_CONTINUATION_PATHS),
+      progress: Schema.Unknown,
       retainUntil: Schema.Number,
     }),
     // Legacy non-SSH payloads remain readable, but are never resumed as SSH work.
@@ -167,12 +177,27 @@ export class Handoffs extends Context.Service<
         readonly handoff: Handoff;
         readonly args: Readonly<Record<string, unknown>>;
         readonly approvedBySessionId: AuthSessionId;
+        readonly progress?: unknown;
       }>,
       HandoffError
     >;
+    /** Replaces the progress an approved provider change has recorded. */
+    readonly recordProviderProgress: (
+      input: HandoffReadInput,
+      progress: unknown,
+    ) => Effect.Effect<void, HandoffError>;
+    /**
+     * Ends a provider continuation. With progress, that record stays readable for a day after
+     * the approval resolved, so approved and applied remain separate facts.
+     */
     readonly finishProviderContinuation: (
       input: HandoffReadInput,
+      progress?: unknown,
     ) => Effect.Effect<void, HandoffError>;
+    /** The progress an approved provider change recorded, while unfinished or retained after. */
+    readonly readProviderProgress: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<unknown, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -500,6 +525,7 @@ const make = Effect.gen(function* () {
         args: Readonly<Record<string, unknown>>;
         approvedBySessionId: AuthSessionId;
         sshProgress?: SshProgressBinding;
+        progress?: unknown;
       }> = [];
       for (const row of rows) {
         const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
@@ -522,19 +548,60 @@ const make = Effect.gen(function* () {
             args: payload.args,
             approvedBySessionId: payload.approvedBySessionId,
             ...(payload.sshProgress === undefined ? {} : { sshProgress: payload.sshProgress }),
+            ...(payload.progress === undefined ? {} : { progress: payload.progress }),
           });
       }
       return results;
     });
   const completedSshContinuations = completedContinuations("ssh");
   const completedProviderHomeContinuations = completedContinuations("provider.home_request");
-  const finishProviderContinuation = (input: HandoffReadInput) =>
+  const recordProviderProgress = (input: HandoffReadInput, progress: unknown) =>
     Effect.gen(function* () {
       const handoff = yield* read(input);
-      if (!isProviderContinuationPath(handoff.target.path) || isHandoffPending(handoff.state))
-        return;
-      yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+      if (!isProviderContinuationPath(handoff.target.path) || handoff.state !== "completed")
+        return yield* new HandoffError({ reason: "invalid_request" });
+      const payload = yield* loadPrivate(input.handoffId);
+      if (
+        payload === null ||
+        payload.kind !== "continuation" ||
+        payload.approvedBySessionId === undefined
+      )
+        return yield* new HandoffError({ reason: "unavailable" });
+      yield* savePrivate(input.handoffId, { ...payload, progress }, true);
     }).pipe(lock.withPermits(1));
+  const finishProviderContinuation = (input: HandoffReadInput, progress?: unknown) =>
+    Effect.gen(function* () {
+      const handoff = yield* read(input);
+      const path = handoff.target.path;
+      if (!isProviderContinuationPath(path) || isHandoffPending(handoff.state)) return;
+      if (progress === undefined) {
+        yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
+        return;
+      }
+      const retainedFrom = handoff.resolvedAt ?? handoff.createdAt;
+      yield* savePrivate(
+        input.handoffId,
+        {
+          version: 1,
+          kind: "provider_outcome",
+          namespace: path,
+          progress,
+          retainUntil: DateTime.toEpochMillis(DateTime.add(retainedFrom, { hours: 24 })),
+        },
+        true,
+      );
+    }).pipe(lock.withPermits(1));
+  const readProviderProgress = (input: HandoffReadInput) =>
+    Effect.gen(function* () {
+      const payload = yield* loadPrivate(input.handoffId);
+      if (payload?.kind === "continuation") return payload.progress;
+      if (
+        payload?.kind === "provider_outcome" &&
+        payload.retainUntil > DateTime.toEpochMillis(yield* DateTime.now)
+      )
+        return payload.progress;
+      return undefined;
+    });
   const resolvedSshOutcomes = Effect.gen(function* () {
     const since = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 24 }));
     const rows = yield* sql<{
@@ -679,7 +746,9 @@ const make = Effect.gen(function* () {
     completedProviderHomeContinuations,
     finishProviderHomeContinuation: finishProviderContinuation,
     completedProviderContinuations: completedContinuations,
+    recordProviderProgress,
     finishProviderContinuation,
+    readProviderProgress,
     resolvedSshOutcomes,
     finishSshContinuation,
     bindSshContinuation,

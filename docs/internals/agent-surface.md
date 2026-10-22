@@ -720,6 +720,12 @@ boundary.
   applies that request under the approver's session. `provider.diagnose` fixes that a
   settings change resolves carry a `call` and become `actor: "agent"` for a caller
   allowed to make it.
+  An approved change records each effect (install, save, link, or the call to a remote)
+  in its handoff's continuation before and after it runs, and keeps the outcome for a day
+  after, apart from the approval itself. A restart repeats only effects proven safe to
+  repeat; one that may have run without a recorded outcome ends as `unknown_outcome`
+  naming the `provider.diagnose` call that settles it
+  ([ProviderSettingsProgress](../../apps/server/src/provider/ProviderSettingsProgress.ts)).
 
 Asking for any of these approvals needs only a running, writable thread
 credential. What runs after approval is authorized against the approving person's

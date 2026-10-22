@@ -20,9 +20,12 @@ import {
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -67,6 +70,18 @@ interface Fixture {
   /** Scopes the approving person's session holds. */
   readonly approverScopes?: ReadonlyArray<string>;
   readonly instances?: Record<string, ProviderInstanceConfig>;
+  /**
+   * Stops the server at the first progress record this matches: the record is stored when
+   * `store` is set, then the call never returns, as if the process died there.
+   */
+  readonly crashAt?: { readonly when: (progress: Recorded) => boolean; readonly store: boolean };
+  readonly remoteFailure?: Dispatch.SshRemoteDispatchError;
+}
+
+/** The encoded progress the fake handoff store holds. */
+interface Recorded {
+  readonly effects: Readonly<Record<string, string | undefined>>;
+  readonly outcome?: { readonly state: string };
 }
 
 const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixture = {}) {
@@ -75,6 +90,10 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
   const prepared: string[] = [];
   const remote: Array<Parameters<Dispatch.SshRemoteDispatch["Service"]["callHostTool"]>[0]> = [];
   const finished: string[] = [];
+  const progress = new Map<string, unknown>();
+  const retained = new Map<string, unknown>();
+  const crashed = yield* Deferred.make<void>();
+  let crashUsed = false;
   const handoffOf = (input: Parameters<Handoffs.Handoffs["Service"]["create"]>[0]): Handoff => ({
     handoffId: TurnItemId.make(`handoff:${created.length}`),
     kind: input.kind,
@@ -112,124 +131,146 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
     ],
   };
   const capabilities = fixture.capabilities ?? ["providers.manage"];
-  const context = yield* Layer.build(
-    ProviderSettings.layer.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.mock(Profiles.PermissionProfiles)({
-            check: (_scope, capability) => {
-              const profile = {
-                id: "fixture",
-                runtimeModeCeiling: "full-access" as const,
-                capabilities,
-                maxLanes: 1,
-              };
-              return Effect.succeed(
-                capabilities.includes(capability)
-                  ? {
-                      ok: true as const,
-                      effective: { enabled: true, profile, runtimeMode: "full-access" as const },
-                    }
-                  : { ok: false as const, reason: `Profile fixture does not allow ${capability}.` },
-              );
-            },
+  const dependencies = yield* Layer.build(
+    Layer.mergeAll(
+      Layer.mock(Profiles.PermissionProfiles)({
+        check: (_scope, capability) => {
+          const profile = {
+            id: "fixture",
+            runtimeModeCeiling: "full-access" as const,
+            capabilities,
+            maxLanes: 1,
+          };
+          return Effect.succeed(
+            capabilities.includes(capability)
+              ? {
+                  ok: true as const,
+                  effective: { enabled: true, profile, runtimeMode: "full-access" as const },
+                }
+              : { ok: false as const, reason: `Profile fixture does not allow ${capability}.` },
+          );
+        },
+      }),
+      Layer.mock(Threads.ThreadManagementService)({
+        getThreadShell: (id) =>
+          Effect.succeed(
+            liveThreadShell(id, {
+              activeRunId: RunId.make("run-1"),
+              runtimeMode: fixture.runtimeMode ?? "full-access",
+            }),
+          ),
+        getThreadSnapshot: () =>
+          Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection }),
+      }),
+      Layer.mock(Handoffs.Handoffs)({
+        create: (input) =>
+          Effect.sync(() => {
+            created.push(input);
+            return handoffSummary(handoffOf(input));
           }),
-          Layer.mock(Threads.ThreadManagementService)({
-            getThreadShell: (id) =>
-              Effect.succeed(
-                liveThreadShell(id, {
-                  activeRunId: RunId.make("run-1"),
-                  runtimeMode: fixture.runtimeMode ?? "full-access",
-                }),
-              ),
-            getThreadSnapshot: () =>
-              Effect.succeed({ schemaVersion: 1, snapshotSequence: 0, projection }),
+        respond: (input) =>
+          Effect.sync(() => ({
+            ...handoffOf(created[Number(input.handoffId.split(":")[1]) - 1]!),
+            handoffId: input.handoffId,
+            state: "completed" as const,
+          })),
+        completedProviderContinuations: (path) =>
+          Effect.succeed(
+            created.flatMap((input, index) =>
+              input.target.path === path && !finished.includes(`handoff:${index + 1}`)
+                ? [
+                    {
+                      handoff: {
+                        ...handoffOf(input),
+                        handoffId: TurnItemId.make(`handoff:${index + 1}`),
+                        state: "completed" as const,
+                      },
+                      args: input.args,
+                      approvedBySessionId: "person-session" as never,
+                      ...(progress.has(`handoff:${index + 1}`)
+                        ? { progress: progress.get(`handoff:${index + 1}`) }
+                        : {}),
+                    },
+                  ]
+                : [],
+            ),
+          ),
+        recordProviderProgress: (input, next) =>
+          Effect.gen(function* () {
+            const crash =
+              !crashUsed && fixture.crashAt !== undefined && fixture.crashAt.when(next as Recorded);
+            if (!crash || fixture.crashAt?.store === true) progress.set(input.handoffId, next);
+            if (!crash) return;
+            crashUsed = true;
+            yield* Deferred.succeed(crashed, undefined);
+            return yield* Effect.never;
           }),
-          Layer.mock(Handoffs.Handoffs)({
-            create: (input) =>
-              Effect.sync(() => {
-                created.push(input);
-                return handoffSummary(handoffOf(input));
-              }),
-            respond: (input) =>
-              Effect.sync(() => ({
-                ...handoffOf(created[Number(input.handoffId.split(":")[1]) - 1]!),
-                handoffId: input.handoffId,
-                state: "completed" as const,
-              })),
-            completedProviderContinuations: (path) =>
-              Effect.succeed(
-                created.flatMap((input, index) =>
-                  input.target.path === path && !finished.includes(`handoff:${index + 1}`)
-                    ? [
-                        {
-                          handoff: {
-                            ...handoffOf(input),
-                            handoffId: TurnItemId.make(`handoff:${index + 1}`),
-                            state: "completed" as const,
-                          },
-                          args: input.args,
-                          approvedBySessionId: "person-session" as never,
-                        },
-                      ]
-                    : [],
-                ),
-              ),
-            finishProviderContinuation: (input) =>
-              Effect.sync(() => {
-                finished.push(input.handoffId);
-              }),
+        finishProviderContinuation: (input, outcome) =>
+          Effect.sync(() => {
+            finished.push(input.handoffId);
+            if (outcome !== undefined) retained.set(input.handoffId, outcome);
           }),
-          Layer.mock(SessionStore.SessionStore)({
-            cookieName: "goat_session",
-            legacyCookieName: undefined,
-            listActive: () =>
-              Effect.succeed([
-                {
-                  sessionId: "person-session",
-                  scopes: fixture.approverScopes ?? ["orchestration:operate", "providers:manage"],
-                  client: { label: "Person" },
-                } as never,
-              ]),
+        readProviderProgress: (input) =>
+          Effect.sync(() => retained.get(input.handoffId) ?? progress.get(input.handoffId)),
+      }),
+      Layer.mock(SessionStore.SessionStore)({
+        cookieName: "goat_session",
+        legacyCookieName: undefined,
+        listActive: () =>
+          Effect.succeed([
+            {
+              sessionId: "person-session",
+              scopes: fixture.approverScopes ?? ["orchestration:operate", "providers:manage"],
+              client: { label: "Person" },
+            } as never,
+          ]),
+      }),
+      Layer.mock(Dispatch.SshRemoteDispatch)({
+        callHostTool: (call, authorize) =>
+          Effect.flatMap(authorize, () => {
+            remote.push(call);
+            if (fixture.remoteFailure !== undefined) return Effect.fail(fixture.remoteFailure);
+            return Effect.succeed({
+              kind: "applied",
+              action: "update",
+              instance: {
+                instanceId: "cursorCloud",
+                driver: "cursorCloud",
+                enabled: true,
+                environment: [],
+                configKeys: [],
+              },
+              next: { call: "goat_provider_diagnose" },
+            });
           }),
-          Layer.mock(Dispatch.SshRemoteDispatch)({
-            callHostTool: (call, authorize) =>
-              Effect.map(authorize, () => {
-                remote.push(call);
-                return {
-                  kind: "applied",
-                  action: "update",
-                  instance: {
-                    instanceId: "cursorCloud",
-                    driver: "cursorCloud",
-                    enabled: true,
-                    environment: [],
-                    configKeys: [],
-                  },
-                  next: { call: "goat_provider_diagnose" },
-                };
-              }),
+      }),
+      Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
+        prepare: ({ agentId }) =>
+          Effect.sync(() => {
+            prepared.push(agentId);
+            return { agentId, version: "3000.11.1", distribution: "binary", prepared: true };
           }),
-          Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
-            prepare: ({ agentId }) =>
-              Effect.sync(() => {
-                prepared.push(agentId);
-                return { agentId, version: "3000.11.1", distribution: "binary", prepared: true };
-              }),
-          }),
-        ),
-      ),
+      }),
+    ).pipe(
       Layer.provideMerge(
         Settings.ServerSettingsService.layerTest({ providerInstances: fixture.instances ?? {} }),
       ),
       Layer.provideMerge(Sqlite.layerMemory),
     ),
   );
-  const service = Context.get(context, ProviderSettings.ProviderSettings);
-  const settings = Context.get(context, Settings.ServerSettingsService);
-  const sql = Context.get(context, SqlClient.SqlClient);
+  /** A server start: a new ProviderSettings over the same settings, handoffs, and database. */
+  const boot = Layer.build(Layer.fresh(ProviderSettings.layer)).pipe(
+    Effect.provideContext(dependencies),
+    Effect.map((context) => Context.get(context, ProviderSettings.ProviderSettings)),
+  );
+  const service = yield* boot;
+  const settings = Context.get(dependencies, Settings.ServerSettingsService);
+  const sql = Context.get(dependencies, SqlClient.SqlClient);
   return {
     service,
+    boot,
+    settings,
+    crashed,
     created,
     prepared,
     remote,
@@ -537,6 +578,218 @@ it.effect("hands diagnosis fixes with a call to permitted callers only", () =>
         threadScope,
       );
       expect(other).toEqual(diagnosis);
+    }),
+  ),
+);
+
+const devin = ProviderInstanceId.make("devin");
+const devinCloud = ProviderInstanceId.make("devinCloud");
+const handoff1 = { threadId, handoffId: TurnItemId.make("handoff:1") };
+const addDevin = {
+  action: "add" as const,
+  input: { acpAgentId: "devin", linkTo: devinCloud },
+};
+
+/** Asks for an add, then approves it on a server that stops where the fixture says. */
+const approveUntilCrash = Effect.fn("ProviderSettingsTest.approveUntilCrash")(function* (
+  fixture: Effect.Success<ReturnType<typeof setup>>,
+  request: Parameters<ProviderSettings.ProviderSettings["Service"]["manage"]>[0] = addDevin,
+) {
+  assert.strictEqual((yield* fixture.service.manage(request, threadScope)).kind, "needs_human");
+  const approving = yield* fixture.service
+    .respond({ ...handoff1, action: "completed" }, "person-session" as never)
+    .pipe(Effect.forkChild);
+  yield* Deferred.await(fixture.crashed);
+  yield* Fiber.interrupt(approving);
+});
+
+it.effect("an add stopped between install and save resumes without installing again", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.install === "done", store: true },
+      });
+      yield* approveUntilCrash(fixture);
+      expect(fixture.prepared).toEqual(["devin"]);
+      expect((yield* fixture.instances)[devin]).toBeUndefined();
+
+      // A change already under way finishes even after its approval clock ran out.
+      yield* TestClock.adjust("1 hour");
+      const restarted = yield* fixture.boot;
+      yield* restarted.resumeContinuations;
+      yield* restarted.resumeContinuations;
+
+      expect(fixture.prepared).toEqual(["devin"]);
+      const instances = yield* fixture.instances;
+      expect(Object.keys(instances).toSorted()).toEqual(["devin", "devinCloud"]);
+      expect(instances[devinCloud]?.config).toEqual({ siblingInstanceId: "devin" });
+      const change = yield* restarted.readChange(handoff1);
+      expect(change?.effects).toEqual({ install: "done", save: "done", link: "done" });
+      assert(change?.outcome?.state === "applied");
+      expect(change.outcome.result).toMatchObject({
+        kind: "applied",
+        installed: { agentId: "devin", version: "3000.11.1" },
+        linked: { instanceId: "devinCloud" },
+      });
+      expect((yield* fixture.audit).map((row) => [row.actor, row.outcome])).toEqual([
+        [`thread:${threadId}`, "needs_human"],
+        ["client:person-session", "applied"],
+      ]);
+    }),
+  ),
+);
+
+it.effect(
+  "an add stopped between save and link links the saved instance instead of a new one",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* setup({
+          capabilities: [],
+          crashAt: { when: (p) => p.effects.save === "done", store: true },
+        });
+        yield* approveUntilCrash(fixture);
+        expect(Object.keys(yield* fixture.instances)).toEqual(["devin"]);
+
+        const restarted = yield* fixture.boot;
+        yield* restarted.resumeContinuations;
+        const instances = yield* fixture.instances;
+        expect(Object.keys(instances).toSorted()).toEqual(["devin", "devinCloud"]);
+        expect(instances[devinCloud]?.config).toEqual({ siblingInstanceId: "devin" });
+        expect(fixture.prepared).toEqual(["devin"]);
+        expect((yield* restarted.readChange(handoff1))?.outcome?.state).toBe("applied");
+      }),
+    ),
+);
+
+it.effect("a save that may have landed is repeated only while the entry matches the plan", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      // The process dies after the create committed and before its outcome was recorded.
+      const landed = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.save === "done", store: false },
+      });
+      yield* approveUntilCrash(landed);
+      yield* (yield* landed.boot).resumeContinuations;
+      expect(Object.keys(yield* landed.instances).toSorted()).toEqual(["devin", "devinCloud"]);
+
+      // Someone changed the entry before the restart: GOAT cannot tell whose it is.
+      const changed = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.save === "done", store: false },
+      });
+      yield* approveUntilCrash(changed);
+      yield* changed.settings.updateProviderInstance({
+        operation: "upsert",
+        instanceId: devin,
+        instance: { driver: ProviderDriverKind.make("acpRegistry"), enabled: false },
+      });
+      const restarted = yield* changed.boot;
+      yield* restarted.resumeContinuations;
+      expect((yield* changed.instances)[devinCloud]).toBeUndefined();
+      const change = yield* restarted.readChange(handoff1);
+      expect(change?.outcome).toEqual({
+        state: "unknown_outcome",
+        effect: "save",
+        reason: "instance_changed",
+        message: expect.stringContaining("devin changed after GOAT began saving it"),
+        reconcile: { call: "goat_provider_diagnose", arguments: { instanceId: "devin" } },
+      });
+      expect((yield* changed.audit).at(-1)?.outcome).toBe("unknown_outcome");
+    }),
+  ),
+);
+
+it.effect("an install or link left at started is repeated, since repeating them is safe", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const install = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.install === "started", store: true },
+      });
+      yield* approveUntilCrash(install);
+      yield* (yield* install.boot).resumeContinuations;
+      expect(install.prepared).toEqual(["devin"]);
+      expect(Object.keys(yield* install.instances).toSorted()).toEqual(["devin", "devinCloud"]);
+
+      const link = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.link === "started", store: true },
+      });
+      yield* approveUntilCrash(link);
+      const restarted = yield* link.boot;
+      yield* restarted.resumeContinuations;
+      expect((yield* link.instances)[devinCloud]?.config).toEqual({ siblingInstanceId: "devin" });
+      expect((yield* restarted.readChange(handoff1))?.outcome?.state).toBe("applied");
+    }),
+  ),
+);
+
+it.effect(
+  "a settled outcome found after a restart is reported again without running anything",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* setup({
+          capabilities: [],
+          crashAt: { when: (p) => p.outcome !== undefined, store: true },
+        });
+        yield* approveUntilCrash(fixture);
+        const before = yield* fixture.instances;
+        const restarted = yield* fixture.boot;
+        yield* restarted.resumeContinuations;
+        expect(yield* fixture.instances).toEqual(before);
+        expect(fixture.prepared).toEqual(["devin"]);
+        expect((yield* restarted.readChange(handoff1))?.outcome?.state).toBe("applied");
+        expect((yield* fixture.audit).map((row) => row.outcome)).toEqual(["needs_human"]);
+      }),
+    ),
+);
+
+it.effect("a host add that may have been sent is never sent again and names the read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const request = { action: "add" as const, input: { acpAgentId: "devin", host: "box" } };
+      const stopped = yield* setup({
+        capabilities: [],
+        crashAt: { when: (p) => p.effects.remote === "started", store: true },
+      });
+      yield* approveUntilCrash(stopped, request);
+      const restarted = yield* stopped.boot;
+      yield* restarted.resumeContinuations;
+      expect(stopped.remote).toEqual([]);
+      expect((yield* restarted.readChange(handoff1))?.outcome).toMatchObject({
+        state: "unknown_outcome",
+        effect: "remote",
+        reason: "effect_unconfirmed",
+        reconcile: {
+          call: "goat_provider_diagnose",
+          arguments: { driver: "acpRegistry", host: "box" },
+        },
+      });
+
+      // The connection dropped mid-call: the dispatch reason stays as the domain reason.
+      const dropped = yield* setup({
+        capabilities: [],
+        remoteFailure: new Dispatch.SshRemoteDispatchError({
+          reason: "ssh_failed",
+          message: "Calling goat_provider_add on box failed: connection reset",
+        }),
+      });
+      assert.strictEqual((yield* dropped.service.manage(request, threadScope)).kind, "needs_human");
+      const refused = yield* Effect.flip(
+        dropped.service.respond({ ...handoff1, action: "completed" }, "person-session" as never),
+      );
+      expect(refused).toBeInstanceOf(HandoffError);
+      yield* dropped.service.resumeContinuations;
+      expect(dropped.remote).toHaveLength(1);
+      expect((yield* dropped.service.readChange(handoff1))?.outcome).toMatchObject({
+        state: "unknown_outcome",
+        effect: "remote",
+        reason: "ssh_failed",
+      });
     }),
   ),
 );
