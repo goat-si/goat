@@ -18,14 +18,14 @@ Each release carries the same set of files on both channels:
 
 ## Channels
 
-|                  | Nightly                                                            | Stable                             |
-| ---------------- | ------------------------------------------------------------------ | ---------------------------------- |
-| Starts from      | a successful manual goat-ci `lane=all` run on dev, or a manual run | a manual run with `channel=stable` |
-| Version          | `X.Y.Z-nightly.YYYYMMDD.N`                                         | `X.Y.Z`                            |
-| GitHub release   | prerelease, never latest                                           | full release, marked latest        |
-| Update manifests | `nightly*.yml`                                                     | `latest*.yml`                      |
-| Desktop app      | "GOAT (Nightly)", its own app ID                                   | "GOAT"                             |
-| Retention        | pruned once outside the newest 30 and older than 30 days           | kept                               |
+|                  | Nightly                                                  | Stable                                   |
+| ---------------- | -------------------------------------------------------- | ---------------------------------------- |
+| Built from       | dev: its daily schedule or a manual run                  | main: a manual run with `channel=stable` |
+| Version          | `X.Y.Z-nightly.YYYYMMDD.N`                               | `X.Y.Z`                                  |
+| GitHub release   | prerelease, never latest                                 | full release, marked latest              |
+| Update manifests | `nightly*.yml`                                           | `latest*.yml`                            |
+| Desktop app      | "GOAT (Nightly)", its own app ID                         | "GOAT"                                   |
+| Retention        | pruned once outside the newest 30 and older than 30 days | kept                                     |
 
 `X.Y.Z` is the version in the four release manifests that `scripts/check-release-version.ts` keeps in step. Everything else follows from the version string: `resolveDesktopUpdateChannel` picks the branding and the feed channel, and `cliReleaseChannelOf` picks the runtime channel. A build therefore cannot ship with a feed that disagrees with its name.
 
@@ -33,7 +33,9 @@ Both channels share one workflow because they differ only in version, manifest p
 
 ## Cutting a stable release
 
-Stable is a promotion of a commit that already ran as a nightly. Run the workflow with `channel=stable` and `sha` set to that nightly's commit. The release uses the plain version from the manifests.
+Stable ships main, and main changes only by promotion: merge dev into main with a merge commit titled `Merge dev into main: release <date> (GOAT X.Y.Z)`, from a dev commit that already shipped as a nightly. Then run the workflow on main with `channel=stable` (`sha` defaults to the main tip and must be on main). The release uses the plain version from the manifests.
+
+A hotfix lands on dev first like any other change, then is cherry-picked onto main and released from there; the next promotion carries dev forward again, so the two branches never disagree for long. Never patch main alone.
 
 After a stable `vX.Y.Z` is published, bump the release manifests to the next version. A nightly is a prerelease of `X.Y.Z` and sorts below it, so nightly installs would never move past the stable release and the no-downgrade rule would strand them. The prepare job enforces this: it refuses to build a nightly or a stable release while `vX.Y.Z` already exists in goat-releases, and its error names the bump command (see the version rule below).
 
@@ -60,10 +62,10 @@ Three checks hold the rule:
 
 Building and publishing are separate decisions:
 
-goat-ci does not run when commits land on dev. A maintainer starts it by hand (`gh workflow run goat-ci.yml --ref dev`, lane `all` by default), and only a full `lane=all` run can start a nightly: the nightly's prepare job requires the run name `goat-ci all on dev`.
+goat-ci does not run when commits land on dev. A maintainer starts it by hand (`gh workflow run goat-ci.yml --ref dev`, lane `all` by default); a run named `goat-ci all on dev` that succeeds marks its commit green. The nightly's daily schedule builds the newest green dev commit and does nothing when that commit is already a published nightly, so merges that land while goat-ci runs no longer cost the day's nightly. A manual run builds the newest green commit too, or any dev commit given as `sha` (`gh workflow run goat-nightly.yml --ref dev -f sha=<commit> -f publish=true`), which is how to ship a fix before its full run finishes. A schedule runs the workflow file on the default branch, main, so a trigger change takes effect at the next promotion.
 
-- With the repository variable `GOAT_RELEASES_PUBLISH` unset, a goat-ci run on dev starts nothing, and a manual run of the nightly workflow builds, signs and verifies everything, then stops. The verified files stay for 72 hours in the run's draft release `goat-nightly-staging-<run id>--release-assets` in goat-si/goat (`node scripts/nightly-staging.ts get --repo goat-si/goat --tag goat-nightly-staging-<run id> --names release-assets --dir release` with `GOAT_RELEASES_TOKEN` set to a token with push access), which is how to dry-run a channel.
-- With `GOAT_RELEASES_PUBLISH=true`, every successful manual `lane=all` goat-ci run on dev publishes a nightly, and a manual run of the nightly workflow publishes when its `publish` input is checked.
+- With the repository variable `GOAT_RELEASES_PUBLISH` unset, the schedule starts nothing, and a manual run of the nightly workflow builds, signs and verifies everything, then stops. The verified files stay for 72 hours in the run's draft release `goat-nightly-staging-<run id>--release-assets` in goat-si/goat (`node scripts/nightly-staging.ts get --repo goat-si/goat --tag goat-nightly-staging-<run id> --names release-assets --dir release` with `GOAT_RELEASES_TOKEN` set to a token with push access), which is how to dry-run a channel.
+- With `GOAT_RELEASES_PUBLISH=true`, the schedule publishes a nightly of each new green dev commit, and a manual run of the nightly workflow publishes when its `publish` input is checked.
 
 The nightly's jobs pass their outputs to each other through such drafts, one per hand-off so parallel jobs never upload into the same release, not through Actions artifacts. goat-si is on the free plan, whose 0.5 GB Actions and Packages storage fills quickly and then fails every artifact upload; release assets do not count toward it. Each hand-off is a tar stream split into 256 MiB parts with a manifest of their sizes and SHA-256 hashes, the producer reads back what GitHub stored, and a consumer refuses any part that does not match. The cleanup job deletes the drafts when the run ends, so re-run a failed nightly with "Re-run all jobs". The pre-push guard refuses `actions/upload-artifact` and `actions/download-artifact` in both GOAT workflows.
 

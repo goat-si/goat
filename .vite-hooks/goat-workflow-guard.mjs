@@ -46,7 +46,7 @@ const selfHostedRunners = [
   ["self-hosted", "macos", "arm64", "goat", "mac-studio"],
 ];
 const prepareGate =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title == 'goat-ci all on dev' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))";
 const downstreamGate = "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const verifiedRef = "${{ needs.prepare.outputs.sha }}";
 const prepareRef = "${{ steps.resolve.outputs.sha }}";
@@ -270,23 +270,22 @@ function validateNightlyWorkflow(source, yaml) {
   if (workflow === undefined) return fail("invalid YAML");
   if (!isMapping(workflow)) return fail("root must be a mapping");
 
+  // Nightly runs on its schedule or by hand; prepare picks and verifies the commit.
   const on = workflow.on;
-  const run = isMapping(on) ? on.workflow_run : undefined;
-  const sameList = (value, expected) =>
-    Array.isArray(value) &&
-    value.length === expected.length &&
-    value.every((v, i) => v === expected[i]);
+  const schedule = isMapping(on) ? on.schedule : undefined;
   if (
     !isMapping(on) ||
-    Object.keys(on).some((event) => !["workflow_run", "workflow_dispatch"].includes(event)) ||
-    !isMapping(run) ||
-    !sameList(run.workflows, ["goat-ci"]) ||
-    !sameList(run.types, ["completed"]) ||
-    !sameList(run.branches, ["dev"])
+    Object.keys(on).some((event) => !["schedule", "workflow_dispatch"].includes(event)) ||
+    !Object.hasOwn(on, "workflow_dispatch") ||
+    (schedule !== undefined &&
+      (!Array.isArray(schedule) ||
+        schedule.length === 0 ||
+        schedule.some(
+          (entry) =>
+            !isMapping(entry) || Object.keys(entry).length !== 1 || typeof entry.cron !== "string",
+        )))
   ) {
-    return fail(
-      "on must be workflow_run of goat-ci (completed, branches [dev]) plus optional workflow_dispatch",
-    );
+    return fail("on must be workflow_dispatch plus an optional schedule of cron entries");
   }
   if (
     !isMapping(workflow.permissions) ||
@@ -342,10 +341,10 @@ function validateNightlyWorkflow(source, yaml) {
     }
     if (name === "prepare") {
       if (normalizeExpression(job.if) !== prepareGate)
-        fail("jobs.prepare.if must be the manual dev run gate");
+        fail("jobs.prepare.if must be the manual or scheduled run gate");
       if (Object.hasOwn(job, "needs")) fail("jobs.prepare must not need other jobs");
       // Downstream checkouts trust needs.prepare.outputs.sha, so it must come from
-      // the resolve step that checks the commit against dev.
+      // the resolve step that checks the commit against its branch.
       const outputs = isMapping(job.outputs) ? job.outputs : {};
       if (
         outputs.sha !== "${{ steps.resolve.outputs.sha }}" ||
@@ -443,10 +442,10 @@ function mentionsSecrets(value, key = "") {
   return false;
 }
 
-// prepare's resolve step is what checks the commit against dev; every checkout
+// prepare's resolve step is what picks and checks the commit (dev or main); every checkout
 // trusts its sha output. Changing that step means updating this pin on purpose.
 // The whole step is pinned (any added key such as if or continue-on-error changes it).
-const pinnedResolveSha256 = "7e2fda2ab95f3ce5626b6e0fcc95eb39f3d9c99e19590a610a6e0e9996543fd0";
+const pinnedResolveSha256 = "6fb945d95a5266693efa8c6e9ad2acbed7e46cada427b728672a2488e43561c5";
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {

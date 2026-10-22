@@ -817,7 +817,7 @@ exit 1
 
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const prepareGateText =
-  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (vars.GOAT_RELEASES_PUBLISH == 'true' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title == 'goat-ci all on dev' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))";
+  "github.repository == 'goat-si/goat' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))";
 const downstreamGateText =
   "needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'";
 const macRunner = ["self-hosted", "macOS", "ARM64", "goat", "mac-studio"];
@@ -887,10 +887,7 @@ function nightlyJobs(): NightlyJobs {
 }
 function nightly(jobs: NightlyJobs = nightlyJobs(), on: unknown = undefined) {
   return JSON.stringify({
-    on: on ?? {
-      workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
-      workflow_dispatch: null,
-    },
+    on: on ?? { schedule: [{ cron: "0 18 * * *" }], workflow_dispatch: null },
     permissions: { contents: "read" },
     jobs,
   });
@@ -965,7 +962,7 @@ describe("goat pre-push nightly workflow guard", () => {
   it("refuses a YAML alias that copies the publish job under another name", () => {
     const yamlText = [
       "on:",
-      "  workflow_run: { workflows: [goat-ci], types: [completed], branches: [dev] }",
+      "  workflow_dispatch:",
       "permissions: { contents: read }",
       "jobs:",
       `  prepare: ${JSON.stringify(nightlyJobs().prepare)}`,
@@ -985,37 +982,52 @@ describe("goat pre-push nightly workflow guard", () => {
   it.each<[string, string, string]>([
     [
       "a pull_request trigger",
+      nightly(undefined, { workflow_dispatch: null, pull_request: null }),
+      "on must be workflow_dispatch plus an optional schedule",
+    ],
+    ["a push trigger", nightly(undefined, { push: null }), "on must be workflow_dispatch plus"],
+    [
+      "the old goat-ci workflow_run trigger",
       nightly(undefined, {
         workflow_run: { workflows: ["goat-ci"], types: ["completed"], branches: ["dev"] },
-        pull_request: null,
+        workflow_dispatch: null,
       }),
-      "on must be workflow_run of goat-ci",
-    ],
-    ["a push trigger", nightly(undefined, { push: null }), "on must be workflow_run of goat-ci"],
-    [
-      "a gate that accepts pull request runs",
-      withJob("prepare", {
-        if: prepareGateText.replace(
-          " && github.event.workflow_run.event == 'workflow_dispatch'",
-          "",
-        ),
-      }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "on must be workflow_dispatch plus",
     ],
     [
-      "a gate that accepts a partial manual lane",
+      "a schedule without a manual trigger",
+      nightly(undefined, { schedule: [{ cron: "0 18 * * *" }] }),
+      "on must be workflow_dispatch plus",
+    ],
+    [
+      "a schedule entry with extra keys",
+      nightly(undefined, {
+        schedule: [{ cron: "0 18 * * *", branches: ["main"] }],
+        workflow_dispatch: null,
+      }),
+      "on must be workflow_dispatch plus",
+    ],
+    [
+      "a gate that publishes scheduled runs without the repository variable",
+      withJob("prepare", {
+        if: prepareGateText.replace(" && vars.GOAT_RELEASES_PUBLISH == 'true'", ""),
+      }),
+      "jobs.prepare.if must be the manual or scheduled run gate",
+    ],
+    [
+      "a gate that also accepts pushes",
       withJob("prepare", {
         if: prepareGateText.replace(
-          " && github.event.workflow_run.display_title == 'goat-ci all on dev'",
-          "",
+          "github.event_name == 'workflow_dispatch' ||",
+          "github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||",
         ),
       }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "jobs.prepare.if must be the manual or scheduled run gate",
     ],
     [
       "a missing gate",
       withJob("prepare", { if: undefined }),
-      "jobs.prepare.if must be the manual dev run gate",
+      "jobs.prepare.if must be the manual or scheduled run gate",
     ],
     [
       "a job without needs: prepare",

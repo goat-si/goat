@@ -1,17 +1,18 @@
 name: goat-nightly
 
 # GOAT release channels (docs/internals/release-channels.md).
-# goat-ci does not run on push, so a nightly starts when a maintainer runs goat-ci
-# by hand on dev (gh workflow run goat-ci.yml --ref dev) and that run succeeds.
-# Only the full lane counts: goat-ci names a manual run "goat-ci <lane> on
-# <branch>", and prepare requires "goat-ci all on dev". It builds every platform
-# from that commit, signs and notarizes macOS
-# on the Mac Studio, verifies everything, and publishes a nightly prerelease to
-# the public goat-si/goat-releases repository. A manual run of this workflow
-# builds a nightly or a stable release of a dev commit. Nothing publishes
-# unless the repository variable GOAT_RELEASES_PUBLISH is 'true'; a manual run
-# also needs its publish input. Only the hosted publish job can read the
-# goat-releases App credentials. The pre-push guard
+# Nightly builds dev: on its schedule, or by hand, prepare picks the newest dev commit
+# whose full manual goat-ci run ("goat-ci all on dev") succeeded, skips it when that commit
+# is already a published nightly, and versions it as a prerelease of the next stable
+# (<base>-nightly.<date>.<run>). A manual run may name any dev commit, green or not.
+# Stable builds main: only a manual run with channel=stable, from a main commit (the
+# "Merge dev into main: release ..." promotion). Both build every platform from the
+# chosen commit, sign and notarize macOS on the Mac Studio, verify everything, and
+# publish to the public goat-si/goat-releases repository. Nothing publishes unless the
+# repository variable GOAT_RELEASES_PUBLISH is 'true'; a manual run also needs its
+# publish input. A schedule runs the workflow file on the default branch (main), so a
+# trigger change takes effect there at the next promotion. Only the hosted publish job
+# can read the goat-releases App credentials. The pre-push guard
 # (.vite-hooks/goat-workflow-guard.mjs) enforces the gates below.
 #
 # Jobs hand their outputs to each other through draft releases in goat-si/goat,
@@ -23,14 +24,13 @@ name: goat-nightly
 # cleanup job deletes the drafts when the run ends, whatever its outcome. Re-running only the failed jobs after
 # that finds no hand-off; re-run all jobs instead.
 on:
-  workflow_run:
-    workflows: [goat-ci]
-    types: [completed]
-    branches: [dev]
+  # 03:00 KST. A day without a newer green dev commit publishes nothing.
+  schedule:
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       sha:
-        description: dev commit to build (default dev tip)
+        description: commit to build (nightly default the newest green dev commit; stable default the main tip)
         required: false
         type: string
       channel:
@@ -59,15 +59,14 @@ jobs:
     if: >-
       github.repository == 'goat-si/goat' &&
       (github.event_name == 'workflow_dispatch' ||
-      (vars.GOAT_RELEASES_PUBLISH == 'true' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'workflow_dispatch' &&
-      github.event.workflow_run.display_title == 'goat-ci all on dev' &&
-      github.event.workflow_run.head_branch == 'dev' &&
-      github.event.workflow_run.head_repository.full_name == 'goat-si/goat'))
+      (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))
     # Hosted: the resolve step needs gh, which the EPYC runners do not carry.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Reading goat-ci runs needs actions: read; nothing here writes.
+    permissions:
+      actions: read
+      contents: read
     outputs:
       skip: ${{ steps.resolve.outputs.skip }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -77,37 +76,54 @@ jobs:
       channel: ${{ steps.release.outputs.channel }}
       manifest: ${{ steps.release.outputs.manifest }}
     steps:
-      # A merge that landed while goat-ci ran makes this run stale; the newer
-      # run publishes instead (latest one wins).
+      # Nightly: the newest dev commit whose full manual goat-ci run succeeded, or a
+      # given dev commit; already published means skip. Stable: a commit on main
+      # (default its tip). Every checkout trusts this sha.
       - name: Resolve commit
         id: resolve
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
           INPUT_SHA: ${{ inputs.sha }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          CHANNEL: ${{ inputs.channel || 'nightly' }}
         run: |
           set -euo pipefail
-          tip="$(gh api repos/goat-si/goat/commits/dev --jq .sha)"
           skip=false
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            sha="$(gh api "repos/goat-si/goat/commits/${INPUT_SHA:-$tip}" --jq .sha)"
-            status="$(gh api "repos/goat-si/goat/compare/${sha}...${tip}" --jq .status)"
-            case "$status" in
-              identical | ahead) ;;
-              *) echo "::error::$sha is not on dev ($status)"; exit 1 ;;
-            esac
-          else
-            sha="$RUN_SHA"
-            if [ "$sha" != "$tip" ]; then
-              echo "dev moved to $tip after goat-ci started on $sha; skipping"
+          runs='repos/goat-si/goat/actions/workflows/goat-ci.yml/runs'
+          green='[.workflow_runs[] | select(.display_title == "goat-ci all on dev" and .head_branch == "dev" and .head_repository.full_name == "goat-si/goat")]'
+          case "$CHANNEL" in
+            nightly)
+              branch=dev
+              if [ -n "$INPUT_SHA" ]; then
+                sha="$(gh api "repos/goat-si/goat/commits/$INPUT_SHA" --jq .sha)"
+              else
+                sha="$(gh api "$runs?branch=dev&event=workflow_dispatch&status=success&per_page=100" --jq "$green | .[0].head_sha // empty")"
+              fi
+              ;;
+            stable)
+              branch=main
+              sha="$(gh api "repos/goat-si/goat/commits/${INPUT_SHA:-main}" --jq .sha)"
+              ;;
+            *)
+              echo "::error::unknown channel '$CHANNEL'"
+              exit 1
+              ;;
+          esac
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::no commit to build ('$sha')"
+            exit 1
+          fi
+          status="$(gh api "repos/goat-si/goat/compare/${sha}...${branch}" --jq .status)"
+          case "$status" in
+            identical | ahead) ;;
+            *) echo "::error::$sha is not on $branch ($status)"; exit 1 ;;
+          esac
+          if [ "$branch" = dev ]; then
+            published="$(gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[] | select(.prerelease) | .name')"
+            if grep -Fq "(${sha:0:12})" <<<"$published"; then
+              echo "$sha is already a published nightly; skipping"
               skip=true
             fi
-          fi
-          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "::error::unexpected commit '$sha'"
-            exit 1
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
@@ -805,7 +821,7 @@ jobs:
             --name release-assets --dir release
 
   # Publishing is opt-in twice: the repository variable turns the channel on,
-  # and a manual run must also ask for it.
+  # and a manual run must also ask for it; a scheduled nightly publishes.
   publish:
     name: Publish to goat-releases
     needs: [prepare, assemble]
@@ -813,7 +829,7 @@ jobs:
       needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
       (!cancelled() && needs.assemble.result == 'success' &&
       vars.GOAT_RELEASES_PUBLISH == 'true' &&
-      (github.event_name == 'workflow_run' || inputs.publish))
+      (github.event_name == 'schedule' || inputs.publish))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     # Reading the draft hand-off needs push access to goat-si/goat.

@@ -16,8 +16,8 @@ name: goat-ci
 # check and typecheck. Labels widen a run as soon as they are added: ci:full (everything), ci:server
 # (the full server suite), ci:memory (the memory growth suite). Nothing runs on push, so merging into
 # dev starts no CI. Run the workflow by hand for a lane of any branch
-# (gh workflow run goat-ci.yml --ref dev, lane all by default); a successful lane=all run on dev is
-# what starts goat-nightly. goat-ci-result is the one check to read: it fails when any selected task
+# (gh workflow run goat-ci.yml --ref dev, lane all by default); a successful lane=all run on dev
+# marks its commit green for goat-nightly's schedule. goat-ci-result is the one check to read: it fails when any selected task
 # failed or was cancelled.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('goat-ci {0} on {1}', inputs.lane, github.ref_name) || github.event.pull_request.title }}

@@ -64,9 +64,9 @@ selected task failed or was cancelled.
 A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
 (the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
 typecheck). Each manual run has a concurrency group of its own, so a merge into `dev` or another
-dispatch cannot cancel it. A successful `lane=all` run on `dev` is what starts a nightly
-([release channels](../docs/internals/release-channels.md)); goat-ci names manual runs
-`goat-ci <lane> on <branch>` and the nightly checks that name.
+dispatch cannot cancel it. A successful `lane=all` run on `dev` marks its commit green, and the scheduled nightly builds the
+newest green commit ([release channels](../docs/internals/release-channels.md)); goat-ci names
+manual runs `goat-ci <lane> on <branch>` and the nightly checks that name.
 
 Path selection trades a little coverage for runner time, so `dev` needs a full run regularly. A
 GitHub `schedule` trigger would run only from the default branch, `main`, whose goat-ci is an older
