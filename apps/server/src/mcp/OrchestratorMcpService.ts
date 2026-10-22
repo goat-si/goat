@@ -3915,6 +3915,14 @@ const make = Effect.gen(function* () {
           creationSource: "mcp",
         })
         .pipe(
+          Effect.tapError((error) =>
+            input.expectedLatestRunId !== undefined &&
+            admitted?.enabled &&
+            (error._tag === "OrchestratorCommandRejectedError" ||
+              error._tag === "OrchestratorCommandPreviouslyRejectedError")
+              ? permissions.release(admissionId)
+              : Effect.void,
+          ),
           Effect.mapError((error) =>
             isThreadManagementError(error)
               ? threadManagementFailure(error)
@@ -3924,7 +3932,10 @@ const make = Effect.gen(function* () {
                 ),
           ),
         );
-      if (admitted?.enabled) yield* permissions.complete(admissionId);
+      // A successful fenced receipt replay can acknowledge an earlier ambiguous send
+      // even when its now-active target did not need another admission claim.
+      if (admitted?.enabled || input.expectedLatestRunId !== undefined)
+        yield* permissions.complete(admissionId);
       return {
         threadId: input.threadId,
         messageId,

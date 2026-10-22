@@ -2688,6 +2688,46 @@ const make = Effect.gen(function* () {
       const ids = answerForwardIdsFor(event.eventId);
       const expected =
         event.type === "task.followup.received" ? event.payload.expectedWorkerRunId : undefined;
+      const correctionAuthority = Effect.fn("ChannelRemoteWorkers.correctionAuthority")(
+        function* () {
+          const checked = yield* authorityFor(
+            stored.task.taskId,
+            stored.task.generation,
+            owner,
+            false,
+            false,
+            state,
+          ).pipe(Effect.result);
+          if (checked._tag === "Success") return checked.success;
+          if (
+            expected !== undefined &&
+            (yield* ledger.isOwner(owner).pipe(Effect.orElseSucceed(() => false)))
+          ) {
+            const current = yield* ledger.getTask(event.taskId).pipe(Effect.option);
+            const latestState = yield* readState(event.taskId).pipe(Effect.option);
+            if (
+              Option.isSome(current) &&
+              Option.isSome(latestState) &&
+              latestState.value !== undefined &&
+              latestState.value.correlationId === state.correlationId &&
+              sameWorker(current.value, latestState.value)
+            ) {
+              const requester = yield* requesterForDispatch(current.value!.task).pipe(
+                Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+                Effect.option,
+              );
+              if (Option.isSome(requester) && requester.value === undefined)
+                return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                  reason: "caller_changed",
+                  remoteCode: "channel_correction_permission_denied",
+                  launchMayHaveStarted: false,
+                  message: "The correction requester no longer permits this operation.",
+                });
+            }
+          }
+          return yield* checked.failure;
+        },
+      );
       const readWorkerIdentity = () =>
         callHost(
           {
@@ -2698,7 +2738,7 @@ const make = Effect.gen(function* () {
             writes: false,
             timeoutMs: READ_TIMEOUT_MS,
           },
-          authorityFor(stored.task.taskId, stored.task.generation, owner),
+          correctionAuthority(),
         ).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(
@@ -2709,6 +2749,11 @@ const make = Effect.gen(function* () {
                 }),
               }),
             ),
+          ),
+          Effect.tapError((error) =>
+            remoteCode(error) === "channel_correction_permission_denied"
+              ? refuseCorrection()
+              : Effect.void,
           ),
           Effect.option,
         );
@@ -2756,7 +2801,7 @@ const make = Effect.gen(function* () {
             writes: false,
             timeoutMs: READ_TIMEOUT_MS,
           },
-          authorityFor(stored.task.taskId, stored.task.generation, owner),
+          correctionAuthority(),
         ).pipe(
           Effect.flatMap(
             Schema.decodeUnknownEffect(
@@ -2770,10 +2815,14 @@ const make = Effect.gen(function* () {
               }),
             ),
           ),
-          Effect.option,
+          Effect.result,
         );
-        if (capabilities._tag === "None") return;
-        if (capabilities.value.features?.runFencedThreadSend !== true) {
+        if (capabilities._tag === "Failure") {
+          if (remoteCode(capabilities.failure) === "channel_correction_permission_denied")
+            return yield* refuseCorrection();
+          return;
+        }
+        if (capabilities.success.features?.runFencedThreadSend !== true) {
           yield* askAgain(
             owner,
             stored,
@@ -2791,14 +2840,7 @@ const make = Effect.gen(function* () {
           return yield* discardCorrection(current.value.thread.latestRunId);
         }
         const admission = yield* Effect.gen(function* () {
-          const ceiling = yield* authorityFor(
-            stored.task.taskId,
-            stored.task.generation,
-            owner,
-            false,
-            false,
-            state,
-          );
+          const ceiling = yield* correctionAuthority();
           const bot = yield* ledger.getBot(stored.ownerId);
           if (bot === undefined) return undefined;
           const scope: McpInvocationScope = {
@@ -2822,7 +2864,7 @@ const make = Effect.gen(function* () {
           });
           if (
             effective.enabled &&
-            (capabilities.value.features?.profileFencedThreadSend !== true ||
+            (capabilities.success.features?.profileFencedThreadSend !== true ||
               current.value.thread.runtimeMode === undefined ||
               lowerRuntimeMode(current.value.thread.runtimeMode, effective.runtimeMode) !==
                 current.value.thread.runtimeMode)
@@ -2887,14 +2929,7 @@ const make = Effect.gen(function* () {
           timeoutMs: SEND_TIMEOUT_MS,
         },
         Effect.gen(function* () {
-          const ceiling = yield* authorityFor(
-            stored.task.taskId,
-            stored.task.generation,
-            owner,
-            false,
-            false,
-            state,
-          );
+          const ceiling = yield* correctionAuthority();
           if (origin !== undefined) {
             const admitted = origin;
             yield* Effect.gen(function* () {

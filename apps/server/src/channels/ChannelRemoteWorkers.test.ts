@@ -165,6 +165,9 @@ class RemoteMachine {
   unreachableWaitCount = 0;
   /** A test observes the persisted brief before SSH accepts the launch. */
   beforeReviewAuthorization: Effect.Effect<void> = Effect.void;
+  beforeAuthorization:
+    | ((call: SshRemoteDispatch.SshHostToolCall) => Effect.Effect<void>)
+    | undefined;
   beforeLaunch: ((input: SshRemoteDispatch.SshLaunchInput) => Effect.Effect<void>) | undefined;
   /** While true, every call fails as if SSH could not reach the host. */
   down = false;
@@ -498,6 +501,7 @@ class RemoteMachine {
         ) =>
           Effect.gen(function* () {
             const machine = machineFor(call.host);
+            if (machine.beforeAuthorization !== undefined) yield* machine.beforeAuthorization(call);
             const ceiling = yield* authorize.pipe(
               Effect.tapError(() => Deferred.succeed(machine.authorizationDenied, undefined)),
             );
@@ -4714,7 +4718,73 @@ describe("independent remote channel review", () => {
         : [],
     });
 
-  it.effect.each([false, true])(
+  it.effect.each(["before-probe", "during-send"] as const)(
+    "asks and releases only new correction ownership when requester revoked %s",
+    (when) => {
+      const { machine, harness } = reviewHarness();
+      return Effect.gen(function* () {
+        const { runtime, task } = yield* startReview(machine);
+        yield* Fiber.await(machine.observerFiber!);
+        yield* runtime.drain;
+        machine.threadMode = "approval-required";
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          goatclaw: { enabled: true, defaultProfile: "manager" },
+        });
+        const reviewCorrelation = reviewLaunchIdsFor(
+          task.taskId,
+          task.generation,
+          task.worker!.runId!,
+        ).correlationId;
+        machine.finishRun(reviewCorrelation, "completed", null, {
+          outcome: "succeeded",
+          summary: verdict(true),
+        });
+        const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+        yield* reviews.reconcile(runtime.ownerToken);
+        yield* reviews.reconcile(runtime.ownerToken);
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const [pending] = yield* ledger.listPendingForwards(50);
+        const entered = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+        const revoke = ledger
+          .unlinkIdentity({ connectionId: "slack-1", externalActorId: "U1" })
+          .pipe(Effect.asVoid, Effect.orDie);
+        machine.beforeAuthorization = (call) =>
+          Effect.gen(function* () {
+            if (
+              call.tool !==
+              (when === "before-probe" ? "orchestrator_capabilities" : "goat_thread_send")
+            )
+              return;
+            yield* Deferred.succeed(entered, yield* Effect.withFiberSucceed((fiber) => fiber));
+            if (when === "before-probe") yield* revoke;
+          });
+        if (when === "during-send")
+          machine.beforeHostCall = (call) =>
+            call.tool === "goat_thread_send" ? revoke : Effect.void;
+        yield* (yield* ChannelRemoteWorkers).forward(pending!, runtime.ownerToken);
+        yield* Fiber.await(yield* Deferred.await(entered));
+        const refused = yield* onlyTask;
+        assert.strictEqual(refused.status, "waiting_input");
+        assert.include(refused.openQuestions[0]?.text ?? "", "permission");
+        assert.lengthOf(machine.sends, 0);
+        assert.lengthOf(yield* ledger.listPendingForwards(50), 0);
+        assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+        const sql = yield* SqlClient.SqlClient;
+        assert.deepStrictEqual(
+          yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM goatclaw_lane_reservations`,
+          [{ count: 0 }],
+        );
+        const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+          Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(machine.layer))),
+        );
+        yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+        yield* restarted.reconcile(runtime.ownerToken);
+        assert.lengthOf(yield* ledger.listReviewCleanup("2099-01-01T00:00:00.000Z"), 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect.each([false, true, "revoked"] as const)(
     "retains one remote correction lane across accepted replay, lost reply=%s",
     (lostReply) => {
       const { machine, harness } = reviewHarness();
@@ -4746,7 +4816,7 @@ describe("independent remote channel review", () => {
             if (call.tool === "goat_thread_send" && ++sendCalls === 2)
               yield* Deferred.succeed(replayed, undefined);
           });
-        machine.loseNextSendAnswer = lostReply;
+        machine.loseNextSendAnswer = lostReply !== false;
         yield* runtime.drain;
         yield* writes.waitFor((next) => next.worker?.runId !== task.worker!.runId);
         const sql = yield* SqlClient.SqlClient;
@@ -4764,8 +4834,27 @@ describe("independent remote channel review", () => {
             Effect.provide(machine.layer),
           );
           const restarted = Context.get(restored, ChannelRemoteWorkers);
-          yield* restarted.forward(pending!, runtime.ownerToken);
-          yield* Deferred.await(replayed);
+          if (lostReply === "revoked") {
+            yield* (yield* ChannelLedger.ChannelLedger).unlinkIdentity({
+              connectionId: "slack-1",
+              externalActorId: "U1",
+            });
+            const entered = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+            machine.beforeAuthorization = (call) =>
+              call.tool === "orchestrator_capabilities"
+                ? Effect.withFiberSucceed((fiber) => Deferred.succeed(entered, fiber)).pipe(
+                    Effect.flatten,
+                    Effect.asVoid,
+                  )
+                : Effect.void;
+            yield* restarted.forward(pending!, runtime.ownerToken);
+            yield* Fiber.await(yield* Deferred.await(entered));
+            assert.strictEqual((yield* onlyTask).status, "waiting_input");
+            assert.lengthOf(machine.sends, 1);
+          } else {
+            yield* restarted.forward(pending!, runtime.ownerToken);
+            yield* Deferred.await(replayed);
+          }
         } else {
           yield* (yield* ChannelRemoteWorkers).forward(pending!, runtime.ownerToken);
           yield* writes.waitForForward(pending!.sequence);
