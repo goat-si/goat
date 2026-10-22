@@ -163,6 +163,14 @@ An agent can ask you to add or sign in to a provider. Its request appears as a
 card in the thread; **Review request** opens the same window, and the agent never
 sees what you enter.
 
+An agent in a full-access thread can also change provider settings itself:
+turn providers on or off, add one (including ACP Registry agents such as Devin),
+choose which local provider Cursor Cloud, Claude Cloud, or Devin Cloud signs in
+with, or remove one. With [permission profiles](./hub.md#permission-profiles) on,
+its profile must allow managing providers; **Owner** does. Any other agent asks
+first, and approving its card makes the change. Signing in to a provider's
+account always stays with you.
+
 | Provider    | Install and authenticate                                                                                                                                  |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Codex       | [Connect with ChatGPT](./providers-codex.md#connect-with-chatgpt), or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`. |
