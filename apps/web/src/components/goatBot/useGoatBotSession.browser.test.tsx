@@ -74,6 +74,7 @@ vi.mock("./useGoatBotHome", () => ({
   useGoatBotHome: () => undefined,
   useGoatBotHomeSettings: () => ({ moveTarget: null, busy: false, error: null }),
 }));
+vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
 vi.mock("./goatBotHooks", () => ({
   useGoatBotEnvironments: () => {
     useTick();
