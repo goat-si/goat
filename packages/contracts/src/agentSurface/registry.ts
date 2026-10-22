@@ -2360,7 +2360,7 @@ export const agentSurfaceRegistry = {
     toolkit: "ssh",
     summary: "Read SSH runtime status",
     description:
-      "Read the runtime state on an existing SSH host using this machine's SSH configuration. This does not install or start GOAT. Returns the same state names as Settings → Connections.",
+      "Read the runtime state on an existing SSH host using this machine's SSH configuration. This does not install or start GOAT. Returns the same state names as Settings → Connections. When an update waits because the host is busy, blockers names the threads holding it (id, title, reason, since) when the host reports them.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

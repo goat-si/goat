@@ -215,6 +215,8 @@ it.effect(
           getQuestionEscalationCandidates: () =>
             Effect.die("unused getQuestionEscalationCandidates"),
           getServerActivity: () => Effect.die("unused getServerActivity"),
+          getServerActivityBlockers: () => Effect.die("unused getServerActivityBlockers"),
+          getIgnoredActivity: () => Effect.die("unused getIgnoredActivity"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           readShellSnapshot: () => Effect.die("unused readShellSnapshot"),

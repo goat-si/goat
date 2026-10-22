@@ -8,6 +8,8 @@ import {
   type CloudMachineError,
   OrchestratorMcpFailure,
   RunId,
+  type ServerActivityBlocker,
+  type SshHostResult,
   SshWorkspaceError,
   type SshLaunchWorkspace,
   ThreadId,
@@ -26,6 +28,7 @@ import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
 import { admitLaunch } from "../../pressureAdmission.ts";
@@ -56,6 +59,42 @@ const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
         : "orchestration_error",
     message: Array.from(error.message).slice(0, 2000).join(""),
   });
+
+/** Names what a busy host is running, so a waiting update says what it waits for. */
+export const withUpdateBlockers = (
+  result: SshHostResult,
+  blockers: ReadonlyArray<ServerActivityBlocker>,
+): SshHostResult => {
+  if (result.kind !== "ok" || blockers.length === 0) return result;
+  const shown = blockers
+    .slice(0, 3)
+    .map(
+      (blocker) =>
+        `${blocker.title === null ? blocker.threadId : `"${blocker.title}" (${blocker.threadId})`} ${blocker.reason} since ${blocker.since}`,
+    );
+  const more = blockers.length > shown.length ? `, and ${blockers.length - shown.length} more` : "";
+  return {
+    ...result,
+    status: {
+      ...result.status,
+      blockers,
+      detail: `Update to ${result.status.requestedVersion} waits for ${shown.join("; ")}${more}. goat_ssh_runtime_update with mode now stops that work after a person approves.`,
+    },
+  };
+};
+
+/** The host's own activity check, read through its goat_host_status; empty when it cannot say. */
+const readUpdateBlockers = Effect.fn("SshToolkit.readUpdateBlockers")(
+  function* (host: string) {
+    const statusService = yield* Effect.serviceOption(HostStatusMcpService.HostStatusMcpService);
+    if (statusService._tag === "None") return [];
+    const scope = yield* McpInvocationContext.McpInvocationContext;
+    const result = yield* statusService.value.read(scope, { host });
+    const entry = result.hosts.find((candidate) => candidate.host === host);
+    return entry?.reachability === "ok" ? (entry.metrics?.threads.blockers ?? []) : [];
+  },
+  (effect) => effect.pipe(Effect.orElseSucceed((): ReadonlyArray<ServerActivityBlocker> => [])),
+);
 
 /** The server always provides it; a test layer without it has no links. */
 const linkedHostsService = Effect.serviceOption(LinkedHosts.LinkedHosts).pipe(
@@ -139,7 +178,14 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     Effect.gen(function* () {
       yield* requireOrchestration;
       const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup.status(input);
+      const result = yield* setup.status(input);
+      if (
+        result.kind !== "ok" ||
+        result.status.state !== "update_waiting" ||
+        result.status.waitingReason !== "busy"
+      )
+        return result;
+      return withUpdateBlockers(result, yield* readUpdateBlockers(input.host));
     }),
   ),
   goat_ssh_host_add: addDevice,

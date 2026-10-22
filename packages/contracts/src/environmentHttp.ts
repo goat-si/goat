@@ -57,6 +57,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
 import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadBoundedSnapshot,
@@ -566,6 +567,8 @@ export const SshServerActivity = Schema.Struct({
   activity: Schema.Literals(["idle", "busy"]),
   serverVersion: Schema.String,
   pid: Schema.Int,
+  /** Older servers omit it. */
+  blockers: Schema.optionalKey(Schema.Array(ServerActivityBlocker)),
 });
 
 export const GOAT_RUNTIME_DRAIN_PATH = "/.well-known/goat/runtime/drain";

@@ -28,10 +28,12 @@ import {
   type ThreadPullRequestLink,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
@@ -6677,6 +6679,260 @@ it.effect.each([
     }).pipe(Effect.provide(layer)),
 );
 
+/** A thread whose only turn completed, as every leftover in the stuck-update reports had. */
+const addFinishedTurn = Effect.fn("addFinishedTurn")(function* (suffix: string) {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = yield* addRolledBackRecoveryCandidate(suffix);
+  const now = yield* DateTime.now;
+  const projection = yield* store.getThreadProjection(threadId);
+  const run = projection.runs[0]!;
+  const item = projection.turnItems[0]!;
+  if (run.rootNodeId === null) throw new Error("Root node missing");
+  yield* store.apply({
+    id: EventId.make(`${suffix}:item-ended`),
+    type: "turn-item.updated",
+    threadId,
+    occurredAt: now,
+    payload: { ...item, status: "completed", completedAt: now },
+  });
+  yield* store.apply({
+    id: EventId.make(`${suffix}:run-ended`),
+    type: "run.updated",
+    threadId,
+    occurredAt: now,
+    payload: { ...run, status: "completed", completedAt: now },
+  });
+  return { threadId, run, rootNodeId: run.rootNodeId, now };
+});
+
+const openNode = (input: {
+  readonly id: string;
+  readonly threadId: ThreadId;
+  readonly runId: RunId | null;
+  readonly rootNodeId: NodeId;
+  readonly kind: "todo_list" | "tool_call" | "user_input_request" | "subagent";
+  readonly status: "running" | "waiting";
+  readonly startedAt: DateTime.Utc;
+}) => ({
+  id: NodeId.make(input.id),
+  threadId: input.threadId,
+  runId: input.runId,
+  parentNodeId: input.rootNodeId,
+  rootNodeId: input.rootNodeId,
+  kind: input.kind,
+  status: input.status,
+  countsForRun: false,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  runtimeRequestId: null,
+  checkpointScopeId: null,
+  startedAt: input.startedAt,
+  completedAt: null,
+});
+
+it.effect.each([
+  { name: "SQLite", layer: layerTest },
+  { name: "replay", layer: ProjectionStore.layerMemory },
+])("$name lets nothing a finished turn left open hold runtime updates", ({ layer }) =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const live = yield* addRolledBackRecoveryCandidate("activity-live");
+    const rolledBack = (yield* store.getThreadProjection(live)).runs[0]!;
+    const liveRun = { ...rolledBack, status: "running" as const, completedAt: null };
+    yield* store.apply({
+      id: EventId.make("activity-live:running"),
+      type: "run.updated",
+      threadId: live,
+      occurredAt: rolledBack.startedAt!,
+      payload: liveRun,
+    });
+    assert.deepStrictEqual(yield* store.getServerActivityBlockers(5), [
+      {
+        threadId: live,
+        title: "Rolled-back recovery candidate",
+        reason: "running",
+        since: DateTime.formatIso(liveRun.startedAt!),
+      },
+    ]);
+    yield* store.apply({
+      id: EventId.make("activity-live:interrupted"),
+      type: "run.updated",
+      threadId: live,
+      occurredAt: liveRun.startedAt!,
+      payload: { ...liveRun, status: "interrupted", completedAt: liveRun.startedAt },
+    });
+    assert.strictEqual(yield* store.getServerActivity(), "idle");
+
+    const { threadId, run, rootNodeId, now } = yield* addFinishedTurn("activity-leftovers");
+    // Codex turn-plan and exec items, a question the turn outlived, and a node whose run is gone.
+    for (const node of [
+      { id: "leftover:plan", runId: run.id, kind: "todo_list", status: "running" },
+      { id: "leftover:exec", runId: run.id, kind: "tool_call", status: "running" },
+      { id: "leftover:question", runId: run.id, kind: "user_input_request", status: "waiting" },
+      {
+        id: "leftover:orphan",
+        runId: RunId.make("run:missing"),
+        kind: "subagent",
+        status: "running",
+      },
+    ] as const) {
+      yield* store.apply({
+        id: EventId.make(`${node.id}:open`),
+        type: "node.updated",
+        threadId,
+        occurredAt: now,
+        payload: openNode({ ...node, threadId, rootNodeId, startedAt: now }),
+      });
+    }
+    yield* store.apply({
+      id: EventId.make("leftover:provider-turn"),
+      type: "provider-turn.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: ProviderTurnId.make("leftover:provider-turn"),
+        providerThreadId: ProviderThreadId.make("leftover:provider"),
+        nodeId: rootNodeId,
+        runAttemptId: null,
+        nativeTurnRef: null,
+        ordinal: 1,
+        status: "running",
+        startedAt: now,
+        completedAt: null,
+      },
+    });
+    yield* store.apply({
+      id: EventId.make("leftover:request"),
+      type: "runtime-request.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: RuntimeRequestId.make("leftover:request"),
+        nodeId: rootNodeId,
+        providerTurnId: null,
+        nativeRequestRef: null,
+        kind: "user_input",
+        status: "pending",
+        responseCapability: { type: "message" },
+        createdAt: now,
+        resolvedAt: null,
+      },
+    });
+    assert.strictEqual(yield* store.getServerActivity(), "idle");
+    assert.deepStrictEqual(yield* store.getServerActivityBlockers(5), []);
+    if (layer === layerTest) {
+      const ignored = yield* store.getIgnoredActivity(5);
+      assert.deepStrictEqual(ignored.find((entry) => entry.threadId === threadId)?.openRecords, 4);
+    }
+
+    // A native child that outlived its completed turn is real work, until that turn is interrupted.
+    const task = {
+      id: NodeId.make("leftover:task"),
+      threadId,
+      runId: run.id,
+      parentNodeId: rootNodeId,
+      origin: "provider_native" as const,
+      createdBy: "agent" as const,
+      driver,
+      providerInstanceId,
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Background work",
+      title: null,
+      model: null,
+      status: "running" as const,
+      result: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    };
+    yield* store.apply({
+      id: EventId.make("leftover:task"),
+      type: "subagent.updated",
+      threadId,
+      occurredAt: now,
+      payload: task,
+    });
+    assert.deepStrictEqual(
+      (yield* store.getServerActivityBlockers(5)).map((blocker) => [
+        blocker.threadId,
+        blocker.reason,
+      ]),
+      [[threadId, "background"]],
+    );
+    yield* store.apply({
+      id: EventId.make("leftover:run-interrupted"),
+      type: "run.updated",
+      threadId,
+      occurredAt: now,
+      payload: { ...run, status: "interrupted", completedAt: now },
+    });
+    assert.strictEqual(yield* store.getServerActivity(), "idle");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  { name: "SQLite", layer: layerTest },
+  { name: "replay", layer: ProjectionStore.layerMemory },
+])("$name stops counting background work with no sign of life past the stale bound", ({ layer }) =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId, rootNodeId, now } = yield* addFinishedTurn("activity-stale");
+    yield* store.apply({
+      id: EventId.make("activity-stale:child"),
+      type: "node.updated",
+      threadId,
+      occurredAt: now,
+      payload: openNode({
+        id: "activity-stale:child",
+        threadId,
+        runId: null,
+        rootNodeId,
+        kind: "subagent",
+        status: "running",
+        startedAt: now,
+      }),
+    });
+    assert.strictEqual(yield* store.getServerActivity(), "busy");
+    yield* TestClock.adjust(ProjectionStore.STALE_BACKGROUND_WORK_MS);
+    assert.strictEqual(yield* store.getServerActivity(), "busy");
+    yield* TestClock.adjust(1);
+    assert.strictEqual(yield* store.getServerActivity(), "idle");
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("SQLite drops background work recorded before the server started", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const { threadId, rootNodeId, now } = yield* addFinishedTurn("activity-restart");
+    yield* store.apply({
+      id: EventId.make("activity-restart:child"),
+      type: "node.updated",
+      threadId,
+      occurredAt: now,
+      payload: openNode({
+        id: "activity-restart:child",
+        threadId,
+        runId: null,
+        rootNodeId,
+        kind: "subagent",
+        status: "running",
+        startedAt: now,
+      }),
+    });
+    assert.strictEqual(yield* store.getServerActivity(), "busy");
+    yield* TestClock.adjust(1);
+    // The provider process that ran it exited with the previous server.
+    const restarted = Context.get(
+      yield* Layer.build(Layer.fresh(ProjectionStore.layer)),
+      ProjectionStore.ProjectionStoreV2,
+    );
+    assert.deepStrictEqual(yield* restarted.getServerActivityBlockers(5), []);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
 it.effect("uses indexed activity predicates on populated projections", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -6725,12 +6981,13 @@ it.effect("uses indexed activity predicates on populated projections", () =>
     yield* sql`ANALYZE`;
     const { statements, tracer } = traceSqlStatements();
     assert.strictEqual(yield* store.getServerActivity().pipe(Effect.withTracer(tracer)), "idle");
-    const query = statements.find((statement) => statement.includes("AS busy"));
+    const query = statements.find((statement) => statement.includes("WITH blockers"));
     assert.isDefined(query);
     const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`);
     const details = plan.map((row) => row.detail);
     assert.isFalse(
-      details.some((detail) => /^SCAN (?!CONSTANT ROW)/.test(detail)),
+      // The blockers CTE holds at most a row per live thread; every table read must use an index.
+      details.some((detail) => /^SCAN (?!CONSTANT ROW|blockers)/.test(detail)),
       details.join("\n"),
     );
     for (const name of [

@@ -19,6 +19,7 @@ import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
 import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
+import { ServerActivityBlocker } from "./serverActivity.ts";
 import { GoatclawHostSync } from "./permissionProfiles.ts";
 
 /**
@@ -67,6 +68,17 @@ export const HostThreadCounts = Schema.Struct({
   subagentsRunning: Schema.optional(
     NonNegativeInt.annotate({
       description: "Subagent threads running a turn. Older hosts omit it.",
+    }),
+  ),
+  activity: Schema.optional(
+    Schema.Literals(["idle", "busy"]).annotate({
+      description:
+        "Whether runtime updates on that machine wait for work, from the same check they use. Older hosts omit it.",
+    }),
+  ),
+  blockers: Schema.optional(
+    Schema.Array(ServerActivityBlocker).annotate({
+      description: "The oldest threads that keep activity busy, at most five. Older hosts omit it.",
     }),
   ),
 });
