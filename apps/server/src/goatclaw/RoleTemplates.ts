@@ -11,7 +11,29 @@ import {
   OrchestratorMcpFailure,
   type PermissionCapability,
   type PermissionProfile,
+  type PermissionProfileView,
+  type ThreadId,
 } from "@goat/contracts";
+
+/**
+ * The brief a delegated task gets in front of its task when goatclaw is on: the authority it was
+ * admitted with and how its reports reach the parent that delegated it.
+ */
+export const goatclawDelegatedTaskBrief = (
+  admitted: PermissionProfileView,
+  parentThreadId: ThreadId,
+  task: string,
+): string =>
+  admitted.enabled
+    ? [
+        "goatclaw delegated task:",
+        `You are a delegated child of thread ${parentThreadId}, running under profile ${admitted.profile.id} in runtime mode ${admitted.runtimeMode} (ceiling: ${admitted.profile.runtimeModeCeiling}).`,
+        `Your lanes, including delegate_task and goat_thread_launch, count against the shared lane limit of the thread that started this delegation (maxLanes: ${admitted.profile.maxLanes}). You cannot widen the permission profile or runtime ceiling you were given.`,
+        "Your origin is the thread that delegated you: goat_origin_report reaches it, needs_input wakes it, and it reports to its own origin. Finish with goat_thread_report_result and your final answer. Raise decisions you may not make through goat_decision_request.",
+        "Task:",
+        task,
+      ].join("\n\n")
+    : task;
 
 export interface GoatclawRoleTemplate {
   readonly role: GoatclawRole;
