@@ -565,7 +565,7 @@ describe("PendingQuestionsMcpService", () => {
         expect(run.result).toMatchObject({
           failure: {
             code: "invalid_request",
-            message: expect.stringContaining('Allowed options: "yes-id", "No".'),
+            message: expect.stringContaining('Allowed options: "yes-id" (Yes), "No".'),
           },
         });
         expect(run.commands).toEqual([]);
@@ -574,7 +574,7 @@ describe("PendingQuestionsMcpService", () => {
   it.effect.each([
     { answer: "Yes", multiSelect: false, allowCustomAnswer: false },
     { answer: "yes-id", multiSelect: false, allowCustomAnswer: false },
-    { answer: ["yes-id", "No"], multiSelect: true, allowCustomAnswer: false },
+    { answer: ["yes-id", " NO "], multiSelect: true, allowCustomAnswer: false },
     { answer: "  custom text\n", multiSelect: false, allowCustomAnswer: true },
     { answer: ["Yes", "custom"], multiSelect: true, allowCustomAnswer: undefined },
   ])(

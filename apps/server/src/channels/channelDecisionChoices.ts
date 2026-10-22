@@ -53,13 +53,15 @@ export const choiceAt = (choices: DeliveredChoices, number: number): string | un
   choices.options[number - 1];
 
 /**
- * The option whose label equals `text`, ignoring case and surrounding space. The returned
- * label is the one that was offered, so a project question matches the real name.
+ * The option whose label equals `text`, ignoring case, surrounding space, and Unicode form
+ * (Hangul typed on a Mac can arrive decomposed). The returned label is the one that was offered,
+ * so a project question matches the real name.
  */
 const matchingOption = (text: string, options: ReadonlyArray<string>): string | undefined => {
-  const wanted = text.trim().toLowerCase();
+  const loose = (value: string) => value.normalize("NFC").trim().toLowerCase();
+  const wanted = loose(text);
   if (wanted === "") return undefined;
-  return options.find((option) => option.toLowerCase() === wanted);
+  return options.find((option) => loose(option) === wanted);
 };
 
 /** How Slack, iMessage, and other non-button transports list choices under the card text. */
@@ -81,8 +83,8 @@ export interface OpenQuestionChoice {
 }
 
 /**
- * A typed label answers a question only when the conversation has one open question and the
- * text is one of its options. Two open questions stay with the model, which can ask which.
+ * A typed or tapped label answers the one open question that offers it. A label offered by two
+ * open questions stays with the model, which can ask which.
  */
 export const singleQuestionChoice = (
   text: string,
@@ -94,12 +96,12 @@ export const singleQuestionChoice = (
       readonly answer: string;
     }
   | undefined => {
-  if (questions.length !== 1) return undefined;
-  const question = questions[0];
-  if (question === undefined || question.options === undefined || question.options.length === 0) {
-    return undefined;
-  }
-  const answer = matchingOption(text, question.options);
-  if (answer === undefined) return undefined;
-  return { taskId: question.taskId, questionId: question.questionId, answer };
+  const matches = questions.flatMap((question) => {
+    const answer =
+      question.options === undefined ? undefined : matchingOption(text, question.options);
+    return answer === undefined
+      ? []
+      : [{ taskId: question.taskId, questionId: question.questionId, answer }];
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 };

@@ -113,6 +113,7 @@ import {
   singleQuestionChoice,
   type DeliveredChoices,
 } from "./channelDecisionChoices.ts";
+import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 import {
@@ -1634,14 +1635,10 @@ const make = Effect.gen(function* () {
 
       if (action.type === "answer_question") {
         const answerer = yield* judgedNow;
-        const stored = yield* ledger.getTask(action.taskId);
-        const open =
-          stored !== undefined &&
-          stored.task.conversationId === conversationId &&
-          stored.task.openQuestions.some((question) => question.questionId === action.questionId);
-        if (stored === undefined || !open) {
-          replyText = "I couldn't match that to an open question. Which task do you mean?";
-          finalDecision = { replyText, action: { type: "clarify", question: replyText } };
+        const { stored, refused } = yield* openQuestionTask(ledger, { ...action, conversationId });
+        if (refused !== undefined) {
+          finalDecision = refused;
+          replyText = finalDecision.replyText;
         } else if (answerer === undefined || !mayAnswerFor(answerer, stored.task.requester)) {
           replyText = CHANNEL_COPY.answerNotAllowed;
           finalDecision = { replyText, action: { type: "report_only" } };

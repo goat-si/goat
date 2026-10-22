@@ -3,7 +3,10 @@ import {
   resolvePendingUserInputAnswer,
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
-import type { ThreadContextRecord, UserInputQuestion } from "@goat/contracts";
+import type {
+  ThreadContextRecord,
+  UserInputQuestion as ProviderUserInputQuestion,
+} from "@goat/contracts";
 import {
   projectComposerContextForProvider,
   replaceComposerContextReferences,
@@ -19,6 +22,8 @@ export {
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 
 import { collectInlineContextIds } from "./lib/composerContextReferences";
+
+type UserInputQuestion = ProviderUserInputQuestion & { readonly required?: boolean | undefined };
 
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
@@ -130,7 +135,9 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   const unansweredIndex = questions.findIndex(
-    (question) => resolvePendingUserInputAnswer(question, draftAnswers[question.id]) === null,
+    (question) =>
+      question.required !== false &&
+      resolvePendingUserInputAnswer(question, draftAnswers[question.id]) === null,
   );
 
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
@@ -166,6 +173,6 @@ export function derivePendingUserInputProgress(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: resolvedAnswer !== null,
+    canAdvance: resolvedAnswer !== null || activeQuestion?.required === false,
   };
 }

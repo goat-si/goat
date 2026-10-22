@@ -159,6 +159,7 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import { canonicalUserInputAnswers, userInputAnswerText } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -312,12 +313,12 @@ export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError
 ) {
   override get message(): string {
     const description = describeUserInputResponder(this);
-    const outcome =
-      this.decision === "cancel" || this.status === "expired" || this.status === "cancelled"
-        ? description
-        : `answered by ${description}`;
     const time = this.resolvedAt === null ? "an unknown time" : DateTime.formatIso(this.resolvedAt);
-    return `This question was already ${outcome} at ${time}.`;
+    if (this.status === "expired")
+      return `This question expired at ${time}, so it can no longer be answered.`;
+    if (this.decision === "cancel" || this.status === "cancelled")
+      return `This question was ${description} at ${time}, so it can no longer be answered.`;
+    return `This question was already answered by ${description} at ${time}.`;
   }
 }
 
@@ -8380,12 +8381,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       let answers = command.answers;
       if (runtimeRequest.kind === "user_input" && answers !== undefined) {
         const decoded = yield* decodeUserInputAnswers(answers).pipe(mapDispatchError(command));
-        answers = Object.fromEntries(
+        const flattened = Object.fromEntries(
           Object.entries(decoded).map(([questionId, answer]) => [
             questionId,
             typeof answer === "object" && "answers" in answer ? answer.answers : answer,
           ]),
         );
+        // Every answer path lands here, so a label, a differently cased pick, or a relayed
+        // answer resolves to the option value the provider offered.
+        answers =
+          context.item?.type === "user_input_request"
+            ? canonicalUserInputAnswers(context.item.questions, flattened)
+            : flattened;
       }
 
       const now = yield* DateTime.now;
@@ -8496,8 +8503,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         const replies: string[] = [];
         for (const question of approvalTurnItem.questions) {
-          const answer = answers?.[question.id];
-          if (typeof answer !== "string" || answer.trim().length === 0) {
+          const raw = answers?.[question.id];
+          const answer = userInputAnswerText(
+            question,
+            typeof raw === "string" || Array.isArray(raw) ? raw : undefined,
+          );
+          if (answer.length === 0) {
             if (question.required === false) continue;
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
@@ -8505,7 +8516,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               cause: "Answer each question before sending.",
             });
           }
-          replies.push(`${question.question}\n${answer.trim()}`);
+          replies.push(`${question.question}\n${answer}`);
         }
         if (replies.length === 0) {
           return yield* new OrchestratorDispatchError({
