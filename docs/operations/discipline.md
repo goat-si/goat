@@ -3,22 +3,21 @@
 This page says how much process a change needs and what counts as proof that it works.
 [AGENTS.md](../../AGENTS.md#development-discipline) carries the short form. The
 [testing policy](testing.md) says what a test must prove, [code budgets](code-quality.md) limit
-file growth, and [merging](merging.md) says when a pull request lands. GOAT sends a compact, repository-agnostic version of these rules to every agent it runs, so a
-rule changed here should change there too.
+file growth, and [merging](merging.md) says when a pull request lands.
 
 ## Classify the work
 
 Classify a change before deciding how deep to go, and reclassify it when it grows. When two
 classes fit, take the higher one.
 
-| Class | Looks like                                                                        | Process                                                                                                                                  | Verification floor                                                                                                                               |
-| ----- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| C0    | Text only: docs, comments, copy. No behavior changes.                             | Edit directly.                                                                                                                           | Read it back. Links, names, and commands it mentions still resolve.                                                                              |
-| C1    | Local behavior in one file, no new abstraction.                                   | Fix directly.                                                                                                                            | One focused check: the test beside the change, or an observed reproduction with its limits stated.                                               |
-| C2    | A conventional slice, such as route to service to storage in one package.         | A short plan naming the files and the commands that verify them. Follow sibling conventions.                                             | Tests for the behavior, `vp run check:changed`, and one pass in a real client when the change is visible.                                        |
-| C3    | Crosses module boundaries, changes shared types, or alters what many callers see. | A written plan that walks [Hit every surface](../../AGENTS.md#hit-every-surface). An independent review lane when the risk warrants one. | The affected suites, the contract tests at each boundary, and the docs that describe the behavior.                                               |
-| C4    | See the escalation list below.                                                    | A full plan, an independent review before merging, and explicit approval for anything destructive.                                       | Every relevant gate plus the negative cases (the denied request, the failed migration, the older client), with the evidence in the pull request. |
-| C5    | Still ambiguous after one round of questions or research.                         | Clarify or research first.                                                                                                               | Reclassify as C0 to C4 before building.                                                                                                          |
+| Class | Looks like                                                                        | Process                                                                                                                                  | Verification floor                                                                                                                                             |
+| ----- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C0    | Text only: docs, comments, copy. No behavior changes.                             | Edit directly.                                                                                                                           | Read it back. Links, names, and commands it mentions still resolve.                                                                                            |
+| C1    | Local behavior in one file, no new abstraction.                                   | Fix directly.                                                                                                                            | One focused check: the test beside the change, or an observed reproduction with its limits stated.                                                             |
+| C2    | A conventional slice, such as route to service to storage in one package.         | A short plan naming the files and the commands that verify them. Follow sibling conventions.                                             | Integration or contract tests for the behavior at the boundaries it crosses, `vp run check:changed`, and one pass in a real client when the change is visible. |
+| C3    | Crosses module boundaries, changes shared types, or alters what many callers see. | A written plan that walks [Hit every surface](../../AGENTS.md#hit-every-surface). An independent review lane when the risk warrants one. | The affected suites, the contract tests at each boundary, and the docs that describe the behavior.                                                             |
+| C4    | See the escalation list below.                                                    | A full plan, an independent review before merging, and explicit approval for anything destructive.                                       | Every relevant gate plus the negative cases (the denied request, the failed migration, the older client), with the evidence in the pull request.               |
+| C5    | Still ambiguous after one round of questions or research.                         | Clarify or research first.                                                                                                               | Reclassify as C0 to C4 before building.                                                                                                                        |
 
 These promote the part of a change they touch to C4, however small it looks:
 
@@ -30,7 +29,7 @@ These promote the part of a change they touch to C4, however small it looks:
 - permissions: permission profiles, goatclaw role profiles, and `CLIENT_GUARDED_RPC_SCOPES`
 - a new dependency or framework
 
-Split the C4 part into its own commit, or its own pull request when it stands alone. A class grants
+Split the C4 part into its own commit, and into its own pull request only when a maintainer asks. A class grants
 no authority: destructive and outward actions still need the approval described under
 [Safety](#safety).
 
@@ -39,8 +38,9 @@ no authority: destructive and outward actions still need the approval described 
 A completion claim is a claim about the system, so it needs fresh evidence.
 
 1. Name the command that proves the claim.
-2. Run it now, on the current code. An earlier run, a cached result, or a run on another head does
-   not count.
+2. Run it now, on the current code. A result you remember from earlier or a run on another head does
+   not count. A task cache that the command validates against the current files, such as
+   `vp run typecheck`, is fine.
 3. Read the whole output: the exit code and the count of failures and skips.
 4. Check that the output supports the claim as you are about to state it.
 5. Report the claim with the command and the lines that prove it.
@@ -92,7 +92,7 @@ is proven with captures, and CI owns the full suite.
 
 ## Briefing a lane
 
-A subagent, delegated task, or launched thread works from its brief alone, so the brief carries:
+A subagent, delegated task, or launched thread may not see your conversation, so its brief carries:
 
 - the problem, the base branch, and the class with its verification floor;
 - acceptance criteria and the commands that prove them;
@@ -100,10 +100,11 @@ A subagent, delegated task, or launched thread works from its brief alone, so th
   available, otherwise web search, with sources cited;
 - which native subagents it may use (gpt-6.1-sol, for example), counted against the same
   `maxLanes` limit as dispatched lanes;
-- delivery and the finish line, as far as the task authorizes: one problem per pull request to
+- delivery and the finish line, as far as the task authorizes: one request per pull request to
   `dev`, merged under [merging](merging.md) only by a lane that holds merge authority, and done
   when the pull request has merged or `goat-ci-result` is green on its exact head. A codexclaw
-  loop records that with `cxc loop pr-record`. A lane without that authority stops at a local
-  commit and reports.
+  loop records that with
+  `cxc loop pr-record --session <id> --pr <url>`. A lane without push approval stops at a local
+  commit and reports; a read-only lane, or one sharing your checkout, reports without committing.
 
 Check what a lane reports against the diff and a fresh run, as the claim table says.
