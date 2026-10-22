@@ -530,6 +530,7 @@ const REASONS = {
   grantChecked: "Checks a scope the test client does not hold, inside its handler.",
 } as const;
 // Where the runtime outcome differs from what requires and effect alone predict, and why.
+// The service checks, SSH refusal wording and codeless refusals are tracked in #791.
 const ACCESS_EXCEPTIONS: Readonly<
   Record<string, { readonly reason: keyof typeof REASONS } & Partial<Record<Caller, Outcome>>>
 > = {

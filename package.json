@@ -22,6 +22,7 @@
     "agent-surface:inventory": "node scripts/agent-surface/inventory.ts",
     "agent-surface:audit": "node scripts/agent-surface/audit.ts",
     "agent-surface:check": "node scripts/agent-surface/audit.ts --check",
+    "agent-surface:smoke": "node scripts/agent-surface/smoke.ts",
     "licenses:sync": "node scripts/sync-third-party-license-notices.ts",
     "icons:export:android": "node scripts/export-android-icons.ts",
     "build": "vp run --filter './apps/*' build",

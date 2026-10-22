@@ -68,7 +68,7 @@ const DESIGN_RENAMES = [
 ] as const;
 
 // Tools added after the naming map, or kept "unchanged" by it although their name is not the
-// projection of their path. Each needs a canonical-name decision before the listing flip.
+// projection of their path. Each needs a canonical-name decision before the listing flip (#781).
 const UNMAPPED_NAMES = [
   "goat_goatclaw_sync",
   "goat_cloud_holders",
