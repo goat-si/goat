@@ -411,6 +411,59 @@ describe("makeSlackChannelTransport", () => {
     }),
   );
 
+  const longText = Array.from({ length: 600 }, (_, index) => "step " + index + " done").join("\n");
+
+  it.effect("posts a long reply as several messages in the thread, in order", () =>
+    Effect.gen(function* () {
+      let next = 0;
+      const { transport, posts } = setup(() => {
+        next += 1;
+        return Promise.resolve({ ts: "1760000002.00010" + next });
+      });
+      const receipt = yield* transport.send({ ...message, text: longText, options: ["Yes", "No"] });
+      assert.isAbove(posts.length, 1);
+      assert.isTrue(posts[0]!.text.startsWith("<@U0ALICE> step 0 done"));
+      assert.isTrue(posts.slice(1).every((post) => !post.text.includes("U0ALICE")));
+      assert.isTrue(posts.every((post) => post.threadTs === "1760000000.000100"));
+      assert.deepEqual(
+        posts.flatMap((post) => post.text.replace("<@U0ALICE> ", "").split("\n")),
+        longText.split("\n"),
+      );
+      // Buttons go with the last part, where the question ends.
+      assert.isTrue(posts.slice(0, -1).every((post) => post.blocks === undefined));
+      assert.isDefined(posts.at(-1)!.blocks);
+      assert.equal(receipt.externalMessageId, "1760000002.000101");
+    }),
+  );
+
+  it.effect(
+    "reports a failure after the first part as unknown, so the outbox does not resend",
+    () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const { transport, posts, reports } = setup(() => {
+          calls += 1;
+          return calls === 1
+            ? Promise.resolve({ ts: "1760000002.000101" })
+            : Promise.reject(
+                new SlackSdkFailure({
+                  operation: "chat.postMessage",
+                  category: "rate_limited",
+                  retryAfterSeconds: 30,
+                }),
+              );
+        });
+        const error = yield* Effect.flip(transport.send({ ...message, text: longText }));
+        assert.equal(posts.length, 2);
+        assert.equal(error.deliveryOutcome, "unknown");
+        assert.equal(error.deliveryErrorCode, "rate_limited");
+        assert.deepEqual(
+          reports.map((report) => report.report.code),
+          ["rate_limited"],
+        );
+      }),
+  );
+
   it.effect.each([
     [
       "rate limit",

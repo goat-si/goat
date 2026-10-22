@@ -210,6 +210,11 @@ one not yet stored was never acknowledged and Slack sends it again, and one stor
 acknowledged comes back as a duplicate the inbox key absorbs. The desktop's short shutdown deadline
 can cut a socket mid-close; that only changes which of those two happens.
 
+A reply longer than one Slack message posts as several in its thread, split at lines and with
+code blocks closed in each part (`slackMessageChunking.ts`, ported from cli-jaw). The outbox
+still holds one row per reply, so a failure after the first part is recorded as unknown rather
+than retried: a retry would post the earlier parts twice.
+
 A Slack connection's default target fills only what the task left open. The project named with the
 work wins over the default project, which wins over the only project; the default model wins over
 the project's (and, on another machine, the remote project's). A default project that no longer
