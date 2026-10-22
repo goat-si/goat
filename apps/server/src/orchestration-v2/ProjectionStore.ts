@@ -9,6 +9,7 @@ import type {
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
+  ServerActivityBlocker,
 } from "@goat/contracts";
 import {
   latestExecutedRun,
@@ -85,6 +86,7 @@ import {
 } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
@@ -161,6 +163,21 @@ export class ServerActivityReadError extends Schema.TaggedError<ServerActivityRe
   override get message(): string {
     return "Failed to read server activity.";
   }
+}
+
+/**
+ * How long background work may go without a sign of life before it stops holding updates. Output
+ * from a background command is not a projection update, so a process left running after its turn,
+ * such as a dev server, holds updates for this long and then yields; status names it meanwhile and
+ * "Update now" stops it.
+ */
+export const STALE_BACKGROUND_WORK_MS = 6 * 60 * 60 * 1000;
+
+/** A thread with execution records still open under a turn that ended; they never hold updates. */
+export interface IgnoredServerActivity {
+  readonly threadId: string;
+  readonly openRecords: number;
+  readonly since: string | null;
 }
 
 export const ProjectionStoreV2Error = Schema.Union([
@@ -424,6 +441,17 @@ export interface ProjectionStoreV2Shape {
     options: ProjectionTimelinePageOptions,
   ) => Effect.Effect<ProjectionTimelinePage, ProjectionStoreV2Error>;
   readonly getServerActivity: () => Effect.Effect<"idle" | "busy", ServerActivityReadError>;
+  /**
+   * The oldest threads that make getServerActivity busy, one entry per thread and reason. Runtime
+   * updates, drains, and host status all read this one predicate.
+   */
+  readonly getServerActivityBlockers: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<ServerActivityBlocker>, ServerActivityReadError>;
+  /** Threads whose open records under ended turns the activity check skips, for an audit note. */
+  readonly getIgnoredActivity: (
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<IgnoredServerActivity>, ServerActivityReadError>;
   readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
@@ -2026,6 +2054,110 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const archiveGate = yield* ThreadArchiveGate;
+    // Background work cannot outlive this process: provider processes exit with the server. Past
+    // that, work that showed no sign of life for STALE_BACKGROUND_WORK_MS was left open by a
+    // provider that never closed it, so it no longer holds runtime updates.
+    const openedAt = yield* Clock.currentTimeMillis;
+    const activityCutoff = Clock.currentTimeMillis.pipe(
+      Effect.map((now) =>
+        DateTime.formatIso(DateTime.makeUnsafe(Math.max(openedAt, now - STALE_BACKGROUND_WORK_MS))),
+      ),
+    );
+    const getServerActivityBlockers = Effect.fn("ProjectionStore.getServerActivityBlockers")(
+      function* (limit: number) {
+        const cutoff = yield* activityCutoff;
+        // Work outside a live run counts only after a completed run (a native child that outlived
+        // its turn) or without a run. Rows left open under interrupted, failed, or missing runs,
+        // and plan or tool nodes a finished turn never closed, are not work.
+        const afterRoot = (runId: Statement.Fragment) => sql`(${runId} IS NULL OR EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_runs AS run
+          WHERE run.run_id = ${runId} AND run.status = 'completed'))`;
+        const rows = yield* sql<{
+          thread_id: string;
+          reason: ServerActivityBlocker["reason"];
+          since: string;
+          title: string | null;
+        }>`WITH blockers(thread_id, reason, since) AS (
+          SELECT thread_id,
+            CASE status WHEN 'waiting' THEN 'waiting' WHEN 'queued' THEN 'queued' ELSE 'running' END,
+            COALESCE(json_extract(payload_json, '$.startedAt'), requested_at)
+          FROM orchestration_v2_projection_runs
+          WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+            AND (status <> 'queued' OR json_extract(payload_json, '$.queueHeld') IS NOT 1)
+          UNION ALL
+          SELECT work.thread_id,
+            CASE work.kind WHEN 'subagent' THEN 'background' ELSE 'running' END, work.started_at
+          FROM orchestration_v2_projection_nodes AS work
+          WHERE work.status IN ('pending', 'running', 'waiting') AND work.started_at >= ${cutoff}
+            AND ((work.kind = 'subagent' AND ${afterRoot(sql`work.run_id`)})
+              -- A held queue whose turn already started still runs it.
+              OR EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
+                WHERE run.run_id = work.run_id AND run.status = 'queued'))
+          UNION ALL
+          SELECT work.thread_id, 'background', work.updated_at
+          FROM orchestration_v2_projection_subagents AS work
+          WHERE work.status IN ('pending', 'running', 'waiting')
+            AND work.updated_at >= ${cutoff} AND ${afterRoot(sql`work.run_id`)}
+          UNION ALL
+          SELECT work.thread_id, 'background', work.updated_at
+          FROM orchestration_v2_projection_turn_items AS work
+          WHERE work.type IN ('command_execution', 'dynamic_tool', 'subagent')
+            AND work.status IN ('pending', 'running', 'waiting')
+            AND work.updated_at >= ${cutoff} AND ${afterRoot(sql`work.run_id`)}
+          UNION ALL
+          SELECT work.thread_id, 'background', work.started_at
+          FROM orchestration_v2_projection_provider_turns AS work
+          JOIN orchestration_v2_projection_nodes AS node ON node.node_id = work.node_id
+          WHERE work.status IN ('pending', 'running') AND node.run_id IS NULL
+            AND work.started_at >= ${cutoff}
+          UNION ALL
+          SELECT work.thread_id, 'waiting', work.created_at
+          FROM orchestration_v2_projection_runtime_requests AS work
+          JOIN orchestration_v2_projection_nodes AS node ON node.node_id = work.node_id
+          WHERE work.status = 'pending' AND node.run_id IS NULL AND work.created_at >= ${cutoff}
+          UNION ALL
+          SELECT thread_id, 'background', updated_at
+          FROM orchestration_v2_projection_provider_threads
+          WHERE has_pending_background_work = 1 AND updated_at >= ${cutoff}
+            AND thread_id IS NOT NULL
+        )
+        SELECT blockers.thread_id, blockers.reason, MIN(blockers.since) AS since, thread.title
+        FROM blockers
+        LEFT JOIN orchestration_v2_projection_threads AS thread
+          ON thread.thread_id = blockers.thread_id
+        GROUP BY blockers.thread_id, blockers.reason
+        ORDER BY since, blockers.thread_id
+        LIMIT ${limit}`;
+        return rows.map((row): ServerActivityBlocker => ({
+          threadId: row.thread_id,
+          title: row.title,
+          reason: row.reason,
+          since: row.since,
+        }));
+      },
+      (effect) => effect.pipe(Effect.mapError((cause) => new ServerActivityReadError({ cause }))),
+    );
+    const getIgnoredActivity = Effect.fn("ProjectionStore.getIgnoredActivity")(
+      function* (limit: number) {
+        const rows = yield* sql<{ thread_id: string; open: number; since: string | null }>`
+          SELECT work.thread_id, COUNT(*) AS open, MIN(work.started_at) AS since
+          FROM orchestration_v2_projection_nodes AS work
+          LEFT JOIN orchestration_v2_projection_runs AS run ON run.run_id = work.run_id
+          WHERE work.status IN ('pending', 'running', 'waiting')
+            AND work.run_id IS NOT NULL
+            AND (run.run_id IS NULL
+              OR run.status IN ('completed', 'interrupted', 'failed', 'cancelled'))
+          GROUP BY work.thread_id
+          ORDER BY since, work.thread_id
+          LIMIT ${limit}`;
+        return rows.map((row) => ({
+          threadId: row.thread_id,
+          openRecords: row.open,
+          since: row.since,
+        }));
+      },
+      (effect) => effect.pipe(Effect.mapError((cause) => new ServerActivityReadError({ cause }))),
+    );
 
     // For run upserts: a snapshot without `path` keeps the value another event recorded there.
     const keepRecordedRunField = (payload: Statement.Fragment, path: string) => sql`
@@ -6880,56 +7012,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       canStartQueuedRun,
       getPendingNativeUserInputs,
       hasUnpairedRunInterruptRequest,
+      getServerActivityBlockers,
+      getIgnoredActivity,
       getServerActivity: () =>
-        sql<{ busy: number }>`SELECT EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_runs
-        WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-          AND (status <> 'queued' OR json_extract(payload_json, '$.queueHeld') IS NOT 1)
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_nodes AS work
-        WHERE work.status IN ('pending', 'running', 'waiting')
-          AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
-            WHERE run.run_id = work.run_id AND (run.status = 'rolled_back'
-              OR (work.status = 'pending' AND work.started_at IS NULL AND run.status = 'queued'
-                AND json_extract(run.payload_json, '$.queueHeld') IS 1)))
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_subagents AS work
-        WHERE work.status IN ('pending', 'running', 'waiting')
-          AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
-            WHERE run.run_id = work.run_id AND (run.status = 'rolled_back'
-              OR (work.status = 'pending' AND work.started_at IS NULL AND run.status = 'queued'
-                AND json_extract(run.payload_json, '$.queueHeld') IS 1)))
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_turn_items AS work
-        WHERE work.type IN ('command_execution', 'dynamic_tool', 'subagent')
-          AND work.status IN ('pending', 'running', 'waiting')
-          AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
-            WHERE run.run_id = work.run_id AND (run.status = 'rolled_back'
-              OR (work.status = 'pending' AND json_extract(work.payload_json, '$.startedAt') IS NULL AND run.status = 'queued'
-                AND json_extract(run.payload_json, '$.queueHeld') IS 1)))
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_provider_turns AS work
-        LEFT JOIN orchestration_v2_projection_nodes AS node ON node.node_id = work.node_id
-        WHERE work.status IN ('pending', 'running')
-          AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
-            WHERE run.run_id = node.run_id AND (run.status = 'rolled_back'
-              OR (work.status = 'pending' AND work.started_at IS NULL AND run.status = 'queued'
-                AND json_extract(run.payload_json, '$.queueHeld') IS 1)))
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_provider_threads
-        WHERE has_pending_background_work = 1
-        LIMIT 1
-      ) OR EXISTS(
-        SELECT 1 FROM orchestration_v2_projection_runtime_requests WHERE status = 'pending'
-        LIMIT 1
-      ) AS busy`.pipe(
-          Effect.map((rows) => (rows[0]?.busy === 1 ? ("busy" as const) : ("idle" as const))),
-          Effect.mapError((cause) => new ServerActivityReadError({ cause })),
+        getServerActivityBlockers(1).pipe(
+          Effect.map((blockers) => (blockers.length > 0 ? ("busy" as const) : ("idle" as const))),
         ),
       isNodeStored,
       getMessageCount,
@@ -6953,11 +7040,107 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
   }),
 );
 
+const OPEN_WORK = new Set(["pending", "running", "waiting"]);
+const LIVE_RUN = new Set(["preparing", "starting", "running", "waiting"]);
+const BACKGROUND_ITEM = new Set(["command_execution", "dynamic_tool", "subagent"]);
+
+/** The replay twin of the SQLite blockers query in `layer`; keep the two in step. */
+function replayActivityBlockers(
+  projections: Iterable<OrchestrationV2ThreadProjection>,
+  cutoff: number,
+  limit: number,
+): Array<ServerActivityBlocker> {
+  const found = new Map<string, { readonly at: number; readonly blocker: ServerActivityBlocker }>();
+  for (const projection of projections) {
+    const thread = projection.thread;
+    const add = (reason: ServerActivityBlocker["reason"], at: DateTime.Utc) => {
+      const key = `${thread.id}\0${reason}`;
+      const millis = DateTime.toEpochMillis(at);
+      const known = found.get(key);
+      if (known !== undefined && known.at <= millis) return;
+      found.set(key, {
+        at: millis,
+        blocker: {
+          threadId: thread.id,
+          title: thread.title,
+          reason,
+          since: DateTime.formatIso(at),
+        },
+      });
+    };
+    const fresh = (at: DateTime.Utc | null): at is DateTime.Utc =>
+      at !== null && DateTime.toEpochMillis(at) >= cutoff;
+    const afterRoot = (runId: string | null) =>
+      runId === null ||
+      projection.runs.some((run) => run.id === runId && run.status === "completed");
+    const rootless = (nodeId: string) =>
+      projection.nodes.some((node) => node.id === nodeId && node.runId === null);
+    for (const run of projection.runs) {
+      if (LIVE_RUN.has(run.status) || (run.status === "queued" && run.queueHeld !== true))
+        add(
+          run.status === "waiting" ? "waiting" : run.status === "queued" ? "queued" : "running",
+          run.startedAt ?? run.requestedAt,
+        );
+    }
+    for (const node of projection.nodes)
+      if (
+        OPEN_WORK.has(node.status) &&
+        fresh(node.startedAt) &&
+        ((node.kind === "subagent" && afterRoot(node.runId)) ||
+          projection.runs.some((run) => run.id === node.runId && run.status === "queued"))
+      )
+        add(node.kind === "subagent" ? "background" : "running", node.startedAt);
+    for (const task of projection.subagents)
+      if (OPEN_WORK.has(task.status) && fresh(task.updatedAt) && afterRoot(task.runId))
+        add("background", task.updatedAt);
+    for (const item of projection.turnItems)
+      if (
+        BACKGROUND_ITEM.has(item.type) &&
+        OPEN_WORK.has(item.status) &&
+        fresh(item.updatedAt) &&
+        afterRoot(item.runId)
+      )
+        add("background", item.updatedAt);
+    for (const turn of projection.providerTurns)
+      if (
+        (turn.status === "pending" || turn.status === "running") &&
+        fresh(turn.startedAt) &&
+        rootless(turn.nodeId)
+      )
+        add("background", turn.startedAt);
+    for (const request of projection.runtimeRequests)
+      if (request.status === "pending" && fresh(request.createdAt) && rootless(request.nodeId))
+        add("waiting", request.createdAt);
+    for (const providerThread of projection.providerThreads)
+      if (
+        (providerThread.pendingBackgroundTasks?.length ?? 0) > 0 &&
+        fresh(providerThread.updatedAt)
+      )
+        add("background", providerThread.updatedAt);
+  }
+  return Array.from(found.values())
+    .sort((a, b) => a.at - b.at || a.blocker.threadId.localeCompare(b.blocker.threadId))
+    .slice(0, limit)
+    .map((entry) => entry.blocker);
+}
+
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,
   Effect.gen(function* () {
     const replayState = yield* Ref.make(makeProjectionReplayState());
     const sequence = yield* Ref.make(0);
+    const openedAt = yield* Clock.currentTimeMillis;
+    const blockers = Effect.fn("ProjectionStore.getServerActivityBlockers")(function* (
+      limit: number,
+    ) {
+      const now = yield* Clock.currentTimeMillis;
+      const state = yield* Ref.get(replayState);
+      return replayActivityBlockers(
+        state.projections.values(),
+        Math.max(openedAt, now - STALE_BACKGROUND_WORK_MS),
+        limit,
+      );
+    });
 
     const service: ProjectionStoreV2Shape = {
       apply:
@@ -7333,79 +7516,11 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           );
         },
       ),
+      getServerActivityBlockers: blockers,
+      getIgnoredActivity: () => Effect.succeed([]),
       getServerActivity: () =>
-        Ref.get(replayState).pipe(
-          Effect.map((state) =>
-            Array.from(state.projections.values()).some(
-              (projection) =>
-                projection.runs.some(
-                  (run) =>
-                    ["preparing", "starting", "running", "waiting"].includes(run.status) ||
-                    (run.status === "queued" && run.queueHeld !== true),
-                ) ||
-                projection.nodes.some(
-                  (work) =>
-                    ["pending", "running", "waiting"].includes(work.status) &&
-                    !projection.runs.some(
-                      (run) =>
-                        run.id === work.runId &&
-                        (run.status === "rolled_back" ||
-                          (work.status === "pending" &&
-                            work.startedAt === null &&
-                            run.status === "queued" &&
-                            run.queueHeld === true)),
-                    ),
-                ) ||
-                projection.subagents.some(
-                  (work) =>
-                    ["pending", "running", "waiting"].includes(work.status) &&
-                    !projection.runs.some(
-                      (run) =>
-                        run.id === work.runId &&
-                        (run.status === "rolled_back" ||
-                          (work.status === "pending" &&
-                            work.startedAt === null &&
-                            run.status === "queued" &&
-                            run.queueHeld === true)),
-                    ),
-                ) ||
-                projection.turnItems.some(
-                  (work) =>
-                    ["command_execution", "dynamic_tool", "subagent"].includes(work.type) &&
-                    ["pending", "running", "waiting"].includes(work.status) &&
-                    !projection.runs.some(
-                      (run) =>
-                        run.id === work.runId &&
-                        (run.status === "rolled_back" ||
-                          (work.status === "pending" &&
-                            work.startedAt === null &&
-                            run.status === "queued" &&
-                            run.queueHeld === true)),
-                    ),
-                ) ||
-                projection.providerTurns.some(
-                  (work) =>
-                    ["pending", "running"].includes(work.status) &&
-                    !projection.runs.some(
-                      (run) =>
-                        (run.status === "rolled_back" ||
-                          (work.status === "pending" &&
-                            work.startedAt === null &&
-                            run.status === "queued" &&
-                            run.queueHeld === true)) &&
-                        projection.nodes.some(
-                          (node) => node.id === work.nodeId && node.runId === run.id,
-                        ),
-                    ),
-                ) ||
-                projection.providerThreads.some(
-                  (thread) => (thread.pendingBackgroundTasks?.length ?? 0) > 0,
-                ) ||
-                projection.runtimeRequests.some((request) => request.status === "pending"),
-            )
-              ? ("busy" as const)
-              : ("idle" as const),
-          ),
+        blockers(1).pipe(
+          Effect.map((found) => (found.length > 0 ? ("busy" as const) : ("idle" as const))),
         ),
       isNodeStored: (node) =>
         Ref.get(replayState).pipe(
