@@ -469,13 +469,17 @@ it.effect("Devin Cloud auto-resolves one enabled Devin ACP sibling", () =>
 );
 
 it.effect(
-  "automatic Devin Cloud asks for a sibling when none exists and a choice when ambiguous",
+  "automatic Devin Cloud reports auto setup when no sibling exists and a choice when ambiguous",
   () =>
     Effect.gen(function* () {
       const noSibling = yield* diagnose({ driver: driver("devinCloud") });
-      expect(failures(only(noSibling.result.diagnoses))).toContain("disabled");
-      expect(failures(only(noSibling.result.diagnoses))).toContain("sibling_missing");
-      expect(checkOf(only(noSibling.result.diagnoses), "instance")?.status).toBe("pass");
+      const pending = only(noSibling.result.diagnoses);
+      // The devin CLI on PATH is what auto setup links; nobody is asked for an instance id.
+      expect(failures(pending)).toEqual(["sibling_missing"]);
+      expect(checkOf(pending, "auto_setup")?.summary).toContain("acpRegistry_devin");
+      expect(checkOf(pending, "auto_setup")?.fix?.instruction).not.toContain("instance");
+      expect(checkOf(pending, "auth")?.status).toBe("pass");
+      expect(checkOf(pending, "instance")?.status).toBe("pass");
 
       const first = devinSibling({ source: "registry", agentId: "devin" });
       const one = yield* diagnose(

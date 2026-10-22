@@ -51,6 +51,7 @@ import {
   forbiddenClaudeCloudVariables,
   resolveClaudeCloudSibling,
 } from "./Drivers/ClaudeCloudLogin.ts";
+import { detectCloudClis, planCloudAutoSetup } from "./CloudProviderAutoSetup.ts";
 import { resolveEntryEnabled } from "./ProviderInstanceRegistry.ts";
 
 const CLAUDE_CLOUD = ProviderDriverKind.make("claudeCloud");
@@ -663,12 +664,12 @@ const devinCandidates = (settings: ServerSettings) =>
   );
 
 const devinProbeChecks = (
-  result: Result.Result<string, DevinCloudCli.DevinCloudCliError>,
+  result: Result.Result<DevinCloudCli.DevinCliReadiness, DevinCloudCli.DevinCloudCliError>,
   where: string,
 ): ProviderDiagnosisCheck[] => {
   if (Result.isSuccess(result)) {
     return [
-      check("executable", "pass", `Devin CLI ${result.success} at ${where}.`),
+      check("executable", "pass", `Devin CLI ${result.success.version} at ${where}.`),
       check("cloud", "pass", "The Devin CLI supports cloud sessions."),
       check("auth", "pass", "Signed in to Devin."),
     ];
@@ -735,7 +736,7 @@ const devinSiblingFailure = (
           `Select ACP instance ${candidates[0]} as the Devin ACP instance of ${nameOf(target)} in ${SETTINGS}.`,
         )
       : settingsChange(
-          `Add an ACP Registry provider for Devin in ${SETTINGS}, then select it as the Devin ACP instance of ${nameOf(target)}.`,
+          `Reset ${nameOf(target)} in ${SETTINGS} so GOAT sets it up again from the Devin CLI, or choose a Devin provider under Advanced.`,
         );
   switch (error.reason) {
     case "ambiguous":
@@ -846,6 +847,38 @@ const diagnoseDevinCloud = Effect.fn("ProviderDiagnosis.devinCloud")(function* (
     !configured &&
     target.instanceId === ProviderInstanceId.make("devinCloud") &&
     implicitDefaultInstance(settings, DEVIN_CLOUD).present;
+  // The same plan CloudProviderAutoSetup applies at startup and on a provider refresh.
+  const autoSetup = implicit
+    ? planCloudAutoSetup(settings, yield* detectCloudClis()).find(
+        (step) => step.provider === "devinCloud",
+      )
+    : undefined;
+  if (autoSetup) {
+    checks.push(check("instance", "pass", "Devin Cloud is available automatically."));
+    checks.push(
+      check(
+        "auto_setup",
+        "fail",
+        `GOAT sets up Devin Cloud from the Devin CLI at ${autoSetup.command}: it adds the Devin provider ${autoSetup.siblingId}, links it, and turns Devin Cloud on. This runs when GOAT starts and whenever providers refresh.`,
+        "sibling_missing",
+        human(
+          `Refresh providers in ${SETTINGS}, or restart GOAT. Setup needs no input; sign in to Devin afterwards if the next diagnosis asks.`,
+        ),
+      ),
+    );
+    const home = yield* HostProcess.HomeDirectory;
+    const probed = yield* Effect.result(
+      (yield* DevinCloudCli.DevinCloudCli).probe({
+        sourceInstanceId: target.instanceId,
+        command: autoSetup.command,
+        env: yield* HostProcess.Environment,
+        cwd: home,
+        binding: "",
+      }),
+    );
+    checks.push(...devinProbeChecks(probed, autoSetup.command));
+    return finish(target, true, checks);
+  }
   if (implicit) {
     checks.push(check("instance", "pass", "Devin Cloud is available automatically."));
     checks.push(
@@ -1070,6 +1103,25 @@ export const diagnoseProviders = Effect.fn("ProviderDiagnosis.diagnose")(functio
               ),
             );
           return finish(target, true, checks);
+        }
+        if (target.driver === ProviderDriverKind.make("cursorCloud") && !target.entry) {
+          const settings = yield* (yield* ProviderHost.ProviderHost).settings.get;
+          const step = planCloudAutoSetup(settings, yield* detectCloudClis()).find(
+            (candidate) => candidate.provider === "cursorCloud",
+          );
+          if (step)
+            return finish(target, true, [
+              check("instance", "pass", "Cursor Cloud is available automatically."),
+              check(
+                "auto_setup",
+                "fail",
+                `GOAT turns on the Cursor provider because the Cursor CLI is at ${step.command}, which turns Cursor Cloud on. This runs when GOAT starts and whenever providers refresh.`,
+                "disabled",
+                human(
+                  `Refresh providers in ${SETTINGS}, or restart GOAT. Then sign in to Cursor from the Cursor Cloud card if the next diagnosis asks.`,
+                ),
+              ),
+            ]);
         }
         if (target.snapshot) {
           return finish(target, true, snapshotChecks(target.snapshot, options.checkedBy === "cli"));

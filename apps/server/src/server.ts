@@ -12,6 +12,7 @@ import * as HomeRequests from "./provider/CodexHomeRequests.ts";
 import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as HomeRoute from "./provider/OpenCodexRoute.ts";
 import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
+import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as Clock from "effect/Clock";
@@ -1239,9 +1240,15 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
-  // pipe takes at most 20 steps, so the Cua Driver joins this merge.
+  // pipe takes at most 20 steps, so the Cua Driver and cloud auto setup join this merge.
   Layer.provideMerge(
-    Layer.mergeAll(ProjectStore.layer, ThreadSearch.layer, layerCuaDriver, ComputerUseLeases.layer),
+    Layer.mergeAll(
+      ProjectStore.layer,
+      ThreadSearch.layer,
+      layerCuaDriver,
+      ComputerUseLeases.layer,
+      CloudProviderAutoSetup.layer,
+    ),
   ),
   Layer.provideMerge(layerServerSettings),
   Layer.provideMerge(layerSourceControlProviderRegistry),

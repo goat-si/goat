@@ -1726,18 +1726,13 @@ export const implicitDefaultInstance = (
 };
 
 /**
- * Whether an enabled ACP Registry instance runs the Devin CLI, either the
- * registry's `devin` agent or a local command named `devin`. Devin Cloud can
- * borrow only such an instance's executable and sign-in.
+ * Whether an ACP Registry instance runs the Devin CLI, either the registry's
+ * `devin` agent or a local command named `devin`, whatever its enabled state.
  */
-export const isDevinAcpRegistryInstance = (
-  instance: Pick<ProviderInstanceConfig, "driver" | "enabled" | "config">,
+export const runsDevinCli = (
+  instance: Pick<ProviderInstanceConfig, "driver" | "config">,
 ): boolean => {
-  if (
-    instance.driver !== ProviderDriverKind.make("acpRegistry") ||
-    !resolveProviderInstanceEnabled(instance)
-  )
-    return false;
+  if (instance.driver !== ProviderDriverKind.make("acpRegistry")) return false;
   const config = instance.config;
   if (config === null || typeof config !== "object" || Array.isArray(config)) return false;
   const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
@@ -1747,6 +1742,14 @@ export const isDevinAcpRegistryInstance = (
   const name = text(config.commandPath).split(/[\\/]/u).pop() ?? "";
   return /^devin(?:\.exe)?$/iu.test(name);
 };
+
+/**
+ * Whether an enabled ACP Registry instance runs the Devin CLI. Devin Cloud can
+ * borrow only such an instance's executable and sign-in.
+ */
+export const isDevinAcpRegistryInstance = (
+  instance: Pick<ProviderInstanceConfig, "driver" | "enabled" | "config">,
+): boolean => resolveProviderInstanceEnabled(instance) && runsDevinCli(instance);
 
 // A cloud default slot that hydration does not run is never enabled.
 export const resolveProjectProviderInstanceEnabled = (

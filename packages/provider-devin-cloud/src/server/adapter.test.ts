@@ -35,7 +35,7 @@ const open = (
       Cli.DevinCloudCli,
       Cli.DevinCloudCli.of({
         resolve: () => Effect.succeed(launch),
-        probe: () => Effect.succeed("3000.11.3"),
+        probe: () => Effect.succeed({ version: "3000.11.3", email: undefined }),
       }),
     ),
     Effect.provideService(
@@ -128,7 +128,7 @@ it.effect("an existing Devin cloud session rejects model or platform changes", (
         Cli.DevinCloudCli,
         Cli.DevinCloudCli.of({
           resolve: () => Effect.succeed(launch),
-          probe: () => Effect.succeed("3000.11.3"),
+          probe: () => Effect.succeed({ version: "3000.11.3", email: undefined }),
         }),
       ),
       Effect.provideService(

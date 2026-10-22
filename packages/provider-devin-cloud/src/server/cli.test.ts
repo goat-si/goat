@@ -24,17 +24,17 @@ it.effect("readiness invokes only version/help/auth and ignores account output",
       { exitCode: 0, stdout: "--cloud Relay", stderr: "" },
       {
         exitCode: 0,
-        stdout: "Logged in (via Devin).\nSynthetic account: example@acme.example",
+        stdout: "Logged in (via Devin).\n\nUser:\n  Email:             example@acme.example",
         stderr: "",
       },
     ];
-    const version = yield* probeCli((args) =>
+    const readiness = yield* probeCli((args) =>
       Effect.sync(() => {
         calls.push(args);
         return results[calls.length - 1]!;
       }),
     );
-    assert.equal(version, "3000.11.3");
+    assert.deepEqual(readiness, { version: "3000.11.3", email: "example@acme.example" });
     assert.deepEqual(calls, [["--version"], ["acp", "--help"], ["auth", "status"]]);
   }),
 );

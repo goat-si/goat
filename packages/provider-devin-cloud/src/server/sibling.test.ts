@@ -322,7 +322,7 @@ it.effect("readiness probes the selected command/profile without shell or ACP cr
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
-      assert.equal(yield* cli.probe(launch), "3000.11.3");
+      assert.equal((yield* cli.probe(launch)).version, "3000.11.3");
       assert.deepEqual(commands, [["--version"], ["acp", "--help"], ["auth", "status"]]);
     }),
   ),

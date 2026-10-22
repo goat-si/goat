@@ -266,6 +266,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
@@ -1433,6 +1434,7 @@ export const layerWsRpc = (
       const modelManifest = yield* ModelManifest.ModelManifest;
       const providerLatestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+      const cloudAutoSetup = yield* CloudProviderAutoSetup.CloudProviderAutoSetup;
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const acpRegistryRuntimeCoordinator =
         yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
@@ -2645,6 +2647,8 @@ export const layerWsRpc = (
             // Awaited, not forked: the RPC scope closes on return and would
             // interrupt a fork before the hub answered.
             if (input.instanceId === undefined) {
+              // A vendor CLI installed after startup is picked up on the next full refresh.
+              yield* cloudAutoSetup.apply.pipe(Effect.ignore);
               yield* usageLimitSources.refresh;
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
