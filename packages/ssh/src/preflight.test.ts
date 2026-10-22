@@ -12,7 +12,7 @@ import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { RuntimePublishedSearch, RuntimeReleaseHead } from "./runtimeAvailability.ts";
-import type { RemoteGoatRunnerOptions } from "./tunnel.ts";
+import type { RemoteGoatRunnerOptions } from "./remoteRuntime.ts";
 import { runPreflightProcess } from "./preflightProcess.ts";
 import { runSshPreflight } from "./preflight.ts";
 import { makeSuccessfulProcess } from "./tunnel.fixture.ts";
