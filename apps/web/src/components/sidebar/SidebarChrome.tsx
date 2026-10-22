@@ -93,8 +93,6 @@ export function SidebarBrandWidthProbe({
   onWidthChange: (width: number) => void;
 }) {
   const priorityCount = useSidebarPriorityCount();
-  const channel = useBrandChannel();
-  const showChannel = useEnvironmentIdentificationMode() === "pill" && channel !== "stable";
   const observeWidth = (probe: HTMLDivElement) => {
     return observeResize(probe, ([entry]) => {
       if (entry) onWidthChange(entry.borderBoxSize[0]?.inlineSize ?? probe.offsetWidth);
@@ -102,6 +100,8 @@ export function SidebarBrandWidthProbe({
   };
 
   return (
+    // The channel pill is left out: the header wraps it onto a clipped row when the sidebar is
+    // narrow, and the channel strip still marks the build, so it must not raise the minimum width.
     <div
       aria-hidden="true"
       className="pointer-events-none invisible fixed top-0 left-0 flex w-max items-center gap-2 border-r border-transparent pr-3"
@@ -110,11 +110,6 @@ export function SidebarBrandWidthProbe({
       <div className="ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] flex px-1.5">
         <SidebarBrandContents wordmark />
       </div>
-      {showChannel ? (
-        <div className="ml-1 flex h-7 items-center">
-          <BrandChannelPill channel={channel} />
-        </div>
-      ) : null}
       <span className="flex items-center gap-1">
         <span className="size-8 sm:size-7" />
         <SidebarPriorityCountBadge priorityCount={priorityCount} />

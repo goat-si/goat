@@ -163,7 +163,7 @@ it.each([
   ["nightly", "pill", "Nightly"],
   ["dev", "none", null],
   ["stable", "pill", null],
-] as const)("shows %s in %s mode in both placements and probes", async (channel, mode, label) => {
+] as const)("shows %s in %s mode outside the expanded probe", async (channel, mode, label) => {
   brandState.channel = channel;
   brandState.mode = mode;
   await renderBrand(false);
@@ -189,7 +189,9 @@ it.each([
   expect(placements).toHaveLength(4);
   for (const placement of placements) {
     const pill = placement.querySelector('[data-environment-identification="pill"]');
-    expect(pill?.textContent ?? null).toBe(label);
+    const expectedLabel =
+      placement.getAttribute("data-placement") === "expanded-probe" ? null : label;
+    expect(pill?.textContent ?? null).toBe(expectedLabel);
     expect(placement.querySelector(".font-brand")?.textContent?.trim()).toBe("GOAT");
   }
   for (const placement of Array.from(placements).slice(0, 2)) {

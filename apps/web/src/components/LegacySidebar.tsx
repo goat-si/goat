@@ -2460,7 +2460,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 {project.displayName}
               </span>
               {project.groupedProjectCount > 1 ? (
-                <span className="shrink-0 text-secondary-label text-3xs">
+                // The count yields its width before the project name does in a narrow sidebar.
+                <span className="min-w-0 shrink-[100] truncate text-secondary-label text-3xs">
                   {project.groupedProjectCount} projects
                 </span>
               ) : null}
