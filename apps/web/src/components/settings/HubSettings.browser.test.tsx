@@ -581,3 +581,31 @@ it("turns permission profiles on with a default profile, and back off", async ()
     { goatclaw: { enabled: false } },
   ]);
 });
+
+it("lists the hosts goatclaw has not reached first and folds the rest into +N", async () => {
+  using fixture = setup();
+  const synced = (entry: HostStatusEntry, state: "applied" | "pending" | "outdated") => ({
+    ...entry,
+    goatclaw: { state },
+  });
+  fixture.registry.set(
+    fixture.source,
+    AsyncResult.success<GoatHostStatusResult>({
+      hosts: [
+        host(null),
+        synced(host("macmini-ts"), "applied"),
+        synced(host("lidge-ts"), "outdated"),
+        synced(host("studio-mini"), "pending"),
+        synced(host("mini"), "applied"),
+      ],
+    }),
+  );
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>,
+  );
+  await expect
+    .element(screen.getByText("lidge-ts needs a GOAT update · studio-mini waiting · +2"))
+    .toBeVisible();
+});
