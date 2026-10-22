@@ -228,6 +228,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Interrupt", "Interrupting", "Requested an interrupt of", "a GOAT thread"],
     "thread-interrupt",
   ),
+  goat_thread_retry: tool(
+    ["Retry", "Retrying", "Retried", "a GOAT thread's workspace preparation"],
+    "thread-send",
+  ),
   goat_worktree_handoff: tool(
     ["Hand off", "Handing off", "Handed off", "thread to a git worktree"],
     "worktree-handoff",

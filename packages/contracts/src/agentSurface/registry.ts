@@ -1567,6 +1567,25 @@ export const agentSurfaceRegistry = {
       openWorldHint: true,
     },
   }),
+  "thread.retry": entry({
+    resource: "thread",
+    verb: "retry",
+    name: "goat_thread_retry",
+    toolkit: "orchestrator",
+    summary: "Retry a GOAT thread's failed workspace preparation",
+    description:
+      "Run the workspace preparation of a GOAT thread's failed run again: the Git fetch, worktree checkout and setup script that must succeed before its agent starts. Use it after a launch report or goat_thread_status says the run failed during workspace_preparation with canRetry true, typically for a slow or stalled Git fetch; it is the same as Retry on the failure in the thread. Without runId the thread's latest run is retried. A run that failed for another reason cannot be retried this way; read it and send a new message with goat_thread_send instead. The launch watch reports the retried run when it ends. clientRequestId makes retries idempotent. Pass host (an SSH alias or linked host name, as goat_ssh_thread_launch returned it) to reach a thread on another machine's GOAT environment; its threadId belongs to that machine. That needs a caller allowed to use this machine's SSH keys. An older GOAT there answers that the tool is unknown; retry from a GOAT client connected to that host instead. host_unavailable means the machine, SSH, or its GOAT server could not be reached; it is distinct from thread_not_found.",
+    effect: "write",
+    hostRoutable: true,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Retry a GOAT thread's failed workspace preparation",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
   "thread.replication_set": entry({
     resource: "thread",
     verb: "replication_set",
