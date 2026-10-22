@@ -421,6 +421,7 @@ import {
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcp.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
+import { OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
@@ -691,6 +692,7 @@ export const WS_METHODS = {
   hubDeviceJoin: "hub.deviceJoin",
   hubDeviceLeave: "hub.deviceLeave",
   hubDeviceRepair: "hub.deviceRepair",
+  serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1170,6 +1172,16 @@ const WsHubDeviceVerifyRpc = Rpc.make(WS_METHODS.hubDeviceVerify, {
   payload: GoatHubDeviceVerifyInput,
   success: GoatHubDeviceVerifyResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Runs the managed OpenCodex update check now, Home first and then each Child. Null when this
+ * machine coordinates no managed update (hub or goatclaw off).
+ */
+const WsServerCheckOpenCodexUpdateRpc = Rpc.make(WS_METHODS.serverCheckOpenCodexUpdate, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(OpenCodexUpdateStatus),
+  error: EnvironmentAuthorizationError,
 });
 
 /** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
@@ -2537,6 +2549,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetHostResourcesRpc,
   WsServerGetHostStatusRpc,
   WsHubDeviceVerifyRpc,
+  WsServerCheckOpenCodexUpdateRpc,
   WsHubDeviceJoinRpc,
   WsHubDeviceLeaveRpc,
   WsHubDeviceRepairRpc,

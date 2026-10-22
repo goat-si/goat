@@ -15,6 +15,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
@@ -132,6 +133,11 @@ export class OpenCodexManagedUpdate extends Context.Service<
     readonly status: Effect.Effect<OpenCodexUpdateStatus | undefined>;
     /** The scheduler's due work: one plan and, when eligible, one window. */
     readonly check: Effect.Effect<void>;
+    /**
+     * A person asked from the update dialog: the same check without waiting out the retry timer.
+     * The staged rollout, idle wait and probation still apply.
+     */
+    readonly checkNow: Effect.Effect<OpenCodexUpdateStatus | undefined>;
   }
 >()("goat/hub/OpenCodexManagedUpdate") {}
 
@@ -300,6 +306,8 @@ export const make = Effect.gen(function* () {
     undefined,
   );
   const state = yield* Ref.make<State>({ members: [], failedTargets: {} });
+  // A person's check and the scheduler's must never open two windows at once.
+  const checking = yield* Semaphore.make(1);
 
   /** A file that exists but cannot be read must not erase the memory of a rolled-back target. */
   const readState = Effect.gen(function* () {
@@ -675,7 +683,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const check = Effect.gen(function* () {
+  const runCheck = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     if (now < (yield* Ref.get(nextAt))) return;
     yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
@@ -785,7 +793,12 @@ export const make = Effect.gen(function* () {
     Effect.withSpan("OpenCodexManagedUpdate.check"),
   );
 
-  return OpenCodexManagedUpdate.of({ status: Ref.get(status), check });
+  const check = checking.withPermit(runCheck);
+  const checkNow = checking
+    .withPermit(Ref.set(nextAt, 0).pipe(Effect.andThen(runCheck)))
+    .pipe(Effect.andThen(Ref.get(status)), Effect.withSpan("OpenCodexManagedUpdate.checkNow"));
+
+  return OpenCodexManagedUpdate.of({ status: Ref.get(status), check, checkNow });
 });
 
 /** Registered once on the shared Scheduler; with hub or goatclaw off it does nothing. */

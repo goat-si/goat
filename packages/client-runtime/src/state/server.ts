@@ -1245,6 +1245,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:hub:device-verify",
       tag: WS_METHODS.hubDeviceVerify,
     }),
+    /** Asks this machine's managed OpenCodex update to check now, from the update dialog. */
+    checkOpenCodexUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-opencodex-update",
+      tag: WS_METHODS.serverCheckOpenCodexUpdate,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     joinHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-join",
       tag: WS_METHODS.hubDeviceJoin,

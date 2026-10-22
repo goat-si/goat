@@ -445,6 +445,24 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
     }),
   );
 
+  it.effect("checks now when a person asks, without waiting out the retry timer", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      fleet.running.set("mac-studio", 1);
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.running.set("mac-studio", 0);
+
+      // The scheduler's next check is ten minutes away, so it does nothing yet.
+      yield* update.check;
+      expect(fleet.installs).toEqual([]);
+
+      const status = yield* update.checkNow;
+      expect(fleet.installs).toEqual(["home@2.90.0", "mac-studio@2.90.0"]);
+      expect(status).toMatchObject({ decision: "update", targetVersion: "2.90.0" });
+    }),
+  );
+
   it.effect("does nothing while the hub or goatclaw is off", () =>
     Effect.gen(function* () {
       for (const off of ["hub", "goatclaw"] as const) {

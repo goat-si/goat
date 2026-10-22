@@ -114,6 +114,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetHostResources]: "server",
   [WS_METHODS.serverGetHostStatus]: "server",
   [WS_METHODS.hubDeviceVerify]: "server",
+  [WS_METHODS.serverCheckOpenCodexUpdate]: "server",
   [WS_METHODS.hubDeviceJoin]: "server",
   [WS_METHODS.hubDeviceLeave]: "server",
   [WS_METHODS.hubDeviceRepair]: "server",
