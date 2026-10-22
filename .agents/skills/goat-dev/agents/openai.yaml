@@ -1,0 +1,4 @@
+interface:
+  display_name: "GOAT Development"
+  short_description: "Classify, verify, and deliver a GOAT code change"
+  default_prompt: "Use $goat-dev to classify this change, verify it at its floor, and deliver it."
