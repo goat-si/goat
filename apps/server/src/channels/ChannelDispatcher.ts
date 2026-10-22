@@ -1227,7 +1227,13 @@ const make = Effect.gen(function* () {
                 }),
             ),
           );
-        } else if (rejected(sent.failure)) {
+        } else if (
+          rejected(sent.failure) ||
+          (sent.failure._tag === "OrchestratorThreadAboveModeLimitError" &&
+            correctionCleanup?.inserted === true &&
+            (yield* Ref.get(refused)) !== undefined &&
+            (yield* ledger.isOwner(owner)))
+        ) {
           yield* reviewCleanup.notStarted(correctionCleanup!.key, owner);
         }
       }

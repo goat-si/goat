@@ -1,8 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChannelTaskEvent,
+  CommandId,
+  EventId,
+  ProjectId,
   MessageId,
   SlackChannelConnectionId,
+  ThreadId,
   type ChannelTask,
   type RunId,
 } from "@goat/contracts";
@@ -12,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
@@ -20,6 +25,8 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ReviewService from "../review/ReviewService.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -933,6 +940,189 @@ it.effect.each(["precommit-new-run", "accepted-revoked", "precommit-cancelled"] 
         }>`SELECT id, pending FROM goatclaw_lane_reservations WHERE id = 'unrelated-admission'`,
         [{ id: "unrelated-admission", pending: 1 }],
       );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect.each([false, true])(
+  "settles a real serialized mode refusal only for a new correction owner: prior ambiguity=%s",
+  (priorAmbiguity) => {
+    const harness = harnessFor();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* (yield* ChannelGateway.ChannelGateway).ingest(
+        slackInput("do: preserve the guard", "mode-refusal-review"),
+        slackContext,
+      );
+      yield* runtime.drain;
+      const initial = yield* onlyTask;
+      const workerId = initial.worker!.threadId;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("mode-worker-create"),
+        threadId: workerId,
+        projectId: ProjectId.make(initial.target!.projectId),
+        title: "Existing worker",
+        modelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("mode-worker-baseline"),
+        threadId: workerId,
+        messageId: MessageId.make("mode-worker-baseline"),
+        text: "Original work",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const baseline = (yield* orchestrator.getThreadProjection(workerId)).runs.at(-1)!;
+      const time = yield* DateTime.now;
+      const completed = { ...baseline, status: "completed" as const, completedAt: time };
+      yield* (yield* EventSink.EventSinkV2).write({
+        commandId: CommandId.make("mode-worker-complete"),
+        events: [
+          {
+            id: EventId.make("mode-worker-completed"),
+            type: "run.updated",
+            threadId: workerId,
+            occurredAt: time,
+            payload: completed,
+          },
+        ],
+      });
+      harness.world.runs.set(workerId, [completed]);
+      harness.world.shells.set(workerId, { runtimeMode: "approval-required" });
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(initial.taskId))!,
+        {
+          type: "task.worker.bound",
+          payload: { worker: { ...initial.worker!, runId: baseline.id } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* report(workerId, baseline.id, "Original completed work");
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      assert.strictEqual(task.review!.workerRunId, baseline.id);
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        goatclaw: { enabled: true, defaultProfile: "worker" },
+      });
+      yield* finishReviewer(harness, task, blockers);
+      const reviews = yield* ChannelTaskReviews.ChannelTaskReviews;
+      yield* reviews.reconcile(runtime.ownerToken);
+      yield* reviews.reconcile(runtime.ownerToken);
+      const pending = (yield* ledger.listPendingForwards(50))[0]!;
+      if (pending.event.type !== "task.followup.received") throw new Error("expected correction");
+      const ids = turnSteerIdsFor(pending.event.payload.inputId);
+      const sql = yield* SqlClient.SqlClient;
+      const slots = () =>
+        sql<{
+          id: string;
+          pending: number;
+        }>`SELECT id, pending FROM goatclaw_lane_reservations WHERE id = ${ids.commandId}`;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const original = threads.sendToThread;
+      const mutable: { sendToThread: typeof original } = threads;
+      let ambiguous = priorAmbiguity;
+      let actualRefusals = 0;
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          mutable.sendToThread = (input) => {
+            if (input.commandId !== ids.commandId) return original(input);
+            return Effect.gen(function* () {
+              if (ambiguous) {
+                ambiguous = false;
+                return yield* new Orchestrator.OrchestratorDispatchError({
+                  commandId: input.commandId,
+                  commandType: "message.dispatch",
+                });
+              }
+              yield* orchestrator
+                .dispatch({
+                  type: "thread.runtime-mode.set",
+                  commandId: CommandId.make("mode-worker-raise"),
+                  threadId: workerId,
+                  runtimeMode: "full-access",
+                })
+                .pipe(Effect.provideService(DispatchModeLimit, undefined));
+              const limit = yield* DispatchModeLimit;
+              const refused = yield* orchestrator
+                .dispatch({
+                  type: "message.dispatch",
+                  commandId: input.commandId,
+                  threadId: workerId,
+                  messageId: input.messageId,
+                  text: input.text,
+                  attachments: input.attachments,
+                  expectedLatestRunId: input.expectedLatestRunId!,
+                  dispatchMode: { type: "start_immediately" },
+                  createdBy: "user",
+                  creationSource: "server",
+                })
+                .pipe(Effect.result);
+              if (refused._tag !== "Failure")
+                return yield* Effect.die("Correction unexpectedly committed");
+              assert.strictEqual(refused.failure._tag, "OrchestratorThreadAboveModeLimitError");
+              assert.strictEqual((yield* Ref.get(limit!.refused!))?.runtimeMode, "full-access");
+              actualRefusals += 1;
+              return yield* Effect.fail(refused.failure);
+            });
+          };
+        }),
+        () =>
+          Effect.sync(() => {
+            mutable.sendToThread = original;
+          }),
+      );
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      if (priorAmbiguity) {
+        yield* dispatcher.forward(pending, runtime.ownerToken);
+        assert.deepStrictEqual(yield* slots(), [{ id: ids.commandId, pending: 1 }]);
+      }
+      yield* sql`INSERT INTO goatclaw_lane_reservations (id, owner_key, child_thread_id, pending)
+        VALUES ('mode-unrelated', 'unrelated-owner', ${workerId}, 1)`;
+      const before = yield* orchestrator.getThreadProjection(workerId);
+      yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.strictEqual(actualRefusals, 1);
+      const after = yield* orchestrator.getThreadProjection(workerId);
+      assert.deepStrictEqual(after.runs, before.runs);
+      assert.deepStrictEqual(after.messages, before.messages);
+      assert.strictEqual((yield* onlyTask).status, "waiting_input");
+      assert.include((yield* onlyTask).openQuestions[0]!.text, "full-access");
+      assert.isEmpty(yield* ledger.listPendingForwards(50));
+      const expected = priorAmbiguity ? [{ id: ids.commandId, pending: 1 }] : [];
+      assert.deepStrictEqual(yield* slots(), expected);
+      const restarted = yield* ChannelReviewCleanup.ChannelReviewCleanup.pipe(
+        Effect.provide(ChannelReviewCleanup.layer.pipe(Layer.provide(layerNoSshHosts))),
+      );
+      yield* TestClock.adjust(ChannelReviewCleanup.REVIEW_CLEANUP_RETRY_MS);
+      yield* restarted.reconcile(runtime.ownerToken);
+      assert.deepStrictEqual(yield* slots(), expected);
+      assert.strictEqual(
+        yield* restarted.retired(ThreadId.make("channel-correction:" + ids.commandId)),
+        !priorAmbiguity,
+      );
+      assert.notInclude(harness.world.interrupts, workerId);
+      assert.deepStrictEqual(
+        yield* sql<{
+          id: string;
+          pending: number;
+        }>`SELECT id, pending FROM goatclaw_lane_reservations WHERE id = 'mode-unrelated'`,
+        [{ id: "mode-unrelated", pending: 1 }],
+      );
+      assert.isEmpty(harness.providerCalls);
     }).pipe(Effect.provide(harness.layer));
   },
 );
